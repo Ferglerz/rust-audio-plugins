@@ -1,0 +1,23 @@
+---
+description: Plugin bundle build and CLAP install workflow
+alwaysApply: true
+---
+
+# Plugin builds
+
+Release plugin build:
+
+```bash
+cargo xtask bundle composure --release
+```
+
+After a successful bundle, install CLAP to the user plugins folder (macOS):
+
+```bash
+mkdir -p ~/Library/Audio/Plug-Ins/CLAP/
+cp -R target/bundled/composure.clap ~/Library/Audio/Plug-Ins/CLAP/
+```
+
+`cargo xtask bundle` runs this install step automatically on macOS when the CLAP bundle exists.
+
+When asked to compile or build the plugin, use the bundle command above—not plain `cargo build`.
