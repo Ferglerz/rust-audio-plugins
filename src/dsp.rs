@@ -230,9 +230,7 @@ impl VocalComp {
         let level = gain_db(self.env);
         let over = level + settings.amount;
         let knee = 6.0;
-        let target = if settings.amount <= 0.0001 {
-            0.0
-        } else if over <= -knee / 2.0 {
+        let target = if settings.amount <= 0.0001 || over <= -knee / 2.0 {
             0.0
         } else if over < knee / 2.0 {
             0.75 * (over + knee / 2.0).powi(2) / (2.0 * knee)

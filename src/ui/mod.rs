@@ -200,7 +200,7 @@ impl StripView {
             }
             Some(Target::Band(i)) => {
                 let r = band_rect(i);
-                let n = ((x - r.0 - 8.0) / (r.2 - 16.0)).clamp(0.0, 1.0) as f64;
+                let n = ((x - r.0 - 12.0) / (r.2 - 24.0)).clamp(0.0, 1.0) as f64;
                 self.change(|b| match i {
                     0 => b.freq = 20.0 * 1000.0_f64.powf(n),
                     1 => b.gain = -24.0 + 48.0 * n,
@@ -360,8 +360,29 @@ impl View for StripView {
                 }
                 WindowEvent::MouseDoubleClick(MouseButton::Left) => {
                     if inside(x, y, (GX, GY, GW, GH)) && self.drag.is_none() {
-                        self.create_band(x, y, false, cx.modifiers().alt());
-                        cx.capture();
+                        let hit = self
+                            .params
+                            .bands
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .rev()
+                            .find(|b| {
+                                ((x - freq_x(b.freq)).powi(2)
+                                    + (y - db_y(if b.shape.has_gain() { b.gain } else { 0.0 }))
+                                        .powi(2))
+                                .sqrt()
+                                    < 16.0
+                            })
+                            .map(|b| b.id);
+                        if let Some(id) = hit {
+                            self.select(Some(id));
+                            self.checkpoint();
+                            self.change(|b| b.enabled = !b.enabled);
+                        } else {
+                            self.create_band(x, y, false, cx.modifiers().alt());
+                            cx.capture();
+                        }
                     }
                 }
                 WindowEvent::MouseUp(MouseButton::Left) => {
@@ -398,14 +419,67 @@ impl View for StripView {
                     }
                 }
                 WindowEvent::MouseScroll(_, dy) => {
-                    if inside(x, y, (GX, GY, GW, GH)) && self.selected.is_some() {
-                        self.checkpoint();
-                        self.change(|b| b.q = (b.q * (1.0 + *dy as f64 * 0.08)).clamp(0.15, 18.0));
-                        cx.needs_redraw();
+                    if inside(x, y, (GX, GY, GW, GH)) {
+                        if self.selected.is_none() {
+                            let hit = self
+                                .params
+                                .bands
+                                .lock()
+                                .unwrap()
+                                .iter()
+                                .rev()
+                                .find(|b| {
+                                    ((x - freq_x(b.freq)).powi(2)
+                                        + (y - db_y(if b.shape.has_gain() { b.gain } else { 0.0 }))
+                                            .powi(2))
+                                    .sqrt()
+                                        < 18.0
+                                })
+                                .map(|b| b.id);
+                            if hit.is_some() {
+                                self.select(hit);
+                            }
+                        }
+                        if self.selected.is_some() {
+                            self.checkpoint();
+                            self.change(|b| {
+                                b.q = (b.q * (1.0 + *dy as f64 * 0.08)).clamp(0.15, 18.0)
+                            });
+                            cx.needs_redraw();
+                        }
                     }
                 }
                 WindowEvent::KeyDown(code, _) => {
-                    if *code == Code::Delete || *code == Code::Backspace {
+                    if cx.modifiers().command() && *code == Code::KeyZ {
+                        if cx.modifiers().shift() {
+                            if !self.future.is_empty() {
+                                let state = self.future.pop().unwrap();
+                                let old = std::mem::replace(
+                                    &mut *self.params.bands.lock().unwrap(),
+                                    state,
+                                );
+                                self.history.push(old);
+                                self.select(None);
+                                cx.needs_redraw();
+                            }
+                        } else if !self.history.is_empty() {
+                            let state = self.history.pop().unwrap();
+                            let old =
+                                std::mem::replace(&mut *self.params.bands.lock().unwrap(), state);
+                            self.future.push(old);
+                            self.select(None);
+                            cx.needs_redraw();
+                        }
+                    } else if cx.modifiers().command() && *code == Code::KeyY {
+                        if !self.future.is_empty() {
+                            let state = self.future.pop().unwrap();
+                            let old =
+                                std::mem::replace(&mut *self.params.bands.lock().unwrap(), state);
+                            self.history.push(old);
+                            self.select(None);
+                            cx.needs_redraw();
+                        }
+                    } else if *code == Code::Delete || *code == Code::Backspace {
                         self.delete();
                         cx.needs_redraw();
                     }
