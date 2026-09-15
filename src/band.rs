@@ -1,0 +1,118 @@
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum Shape {
+    Bell,
+    LowShelf,
+    HighShelf,
+    LowCut,
+    HighCut,
+    Notch,
+}
+impl Shape {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Bell => "Bell",
+            Self::LowShelf => "Low shelf",
+            Self::HighShelf => "High shelf",
+            Self::LowCut => "Low cut",
+            Self::HighCut => "High cut",
+            Self::Notch => "Notch",
+        }
+    }
+    pub fn next(self) -> Self {
+        match self {
+            Self::Bell => Self::LowShelf,
+            Self::LowShelf => Self::HighShelf,
+            Self::HighShelf => Self::LowCut,
+            Self::LowCut => Self::HighCut,
+            Self::HighCut => Self::Notch,
+            Self::Notch => Self::Bell,
+        }
+    }
+    pub fn has_gain(self) -> bool {
+        matches!(self, Self::Bell | Self::LowShelf | Self::HighShelf)
+    }
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Band {
+    pub id: u64,
+    pub shape: Shape,
+    pub freq: f64,
+    pub gain: f64,
+    pub q: f64,
+    pub enabled: bool,
+    pub dynamic: bool,
+    pub threshold: f64,
+    pub ratio: f64,
+    pub attack: f64,
+    pub release: f64,
+    pub range: f64,
+}
+impl Default for Band {
+    fn default() -> Self {
+        Self {
+            id: 1,
+            shape: Shape::Bell,
+            freq: 1000.0,
+            gain: 0.0,
+            q: 1.0,
+            enabled: true,
+            dynamic: false,
+            threshold: -24.0,
+            ratio: 3.0,
+            attack: 15.0,
+            release: 140.0,
+            range: 6.0,
+        }
+    }
+}
+impl Band {
+    pub fn sanitize(&mut self) {
+        fn safe(v: &mut f64, min: f64, max: f64, default: f64) {
+            *v = if v.is_finite() {
+                v.clamp(min, max)
+            } else {
+                default
+            };
+        }
+        safe(&mut self.freq, 20.0, 20000.0, 1000.0);
+        safe(&mut self.gain, -24.0, 24.0, 0.0);
+        safe(&mut self.q, 0.15, 18.0, 1.0);
+        safe(&mut self.threshold, -60.0, 0.0, -24.0);
+        safe(&mut self.ratio, 1.0, 20.0, 3.0);
+        safe(&mut self.attack, 0.1, 200.0, 15.0);
+        safe(&mut self.release, 10.0, 2000.0, 140.0);
+        safe(&mut self.range, 0.0, 24.0, 6.0);
+    }
+}
+/// Background clicks at the outer edges create cuts. Pulling the curve at its ends creates shelves.
+pub fn infer_shape(x: f32, y: f32, curve_drag: bool) -> Shape {
+    if curve_drag && x < 0.18 {
+        Shape::LowShelf
+    } else if curve_drag && x > 0.82 {
+        Shape::HighShelf
+    } else if x < 0.055 {
+        Shape::LowCut
+    } else if x > 0.945 {
+        Shape::HighCut
+    } else if y > 0.90 {
+        Shape::Notch
+    } else {
+        Shape::Bell
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn creation_zones() {
+        assert_eq!(infer_shape(0.01, 0.5, false), Shape::LowCut);
+        assert_eq!(infer_shape(0.99, 0.5, false), Shape::HighCut);
+        assert_eq!(infer_shape(0.1, 0.5, true), Shape::LowShelf);
+        assert_eq!(infer_shape(0.9, 0.5, true), Shape::HighShelf);
+        assert_eq!(infer_shape(0.5, 0.98, false), Shape::Notch);
+        assert_eq!(infer_shape(0.5, 0.4, false), Shape::Bell);
+    }
+}
