@@ -199,6 +199,12 @@ enum Target {
     Band(usize),
     Node(u64),
 }
+#[derive(Clone, Copy, PartialEq)]
+enum PendingCreate {
+    Curve,
+    Background,
+}
+const DRAG_START_THRESHOLD: f32 = 5.0;
 #[derive(Clone, Copy)]
 enum BandMenu {
     Shape,
@@ -238,7 +244,7 @@ pub fn create(params: Arc<StripParams>, shared: Arc<Shared>) -> Option<Box<dyn E
                 edit: None,
                 down: (0.0, 0.0),
                 last_drag: (0.0, 0.0),
-                pending_create: false,
+                pending_create: None,
                 menu: None,
             }
             .build(cx, |cx| {
@@ -269,7 +275,7 @@ struct StripView {
     edit: Option<ValueEdit>,
     down: (f32, f32),
     last_drag: (f32, f32),
-    pending_create: bool,
+    pending_create: Option<PendingCreate>,
     menu: Option<BandMenu>,
 }
 fn freq_x(freq: f64) -> f32 {
@@ -791,12 +797,13 @@ impl View for StripView {
             match e {
                 WindowEvent::MouseMove(_, _) => {
                     self.hover = Some((x, y));
-                    if self.pending_create
-                        && ((x - self.down.0).abs() + (y - self.down.1).abs()) > 4.0
-                    {
-                        let (dx, dy) = self.down;
-                        self.create_band(dx, dy, true, cx.modifiers().alt());
-                        self.pending_create = false;
+                    if let Some(pending) = self.pending_create {
+                        if (x - self.down.0).hypot(y - self.down.1) >= DRAG_START_THRESHOLD {
+                            let (dx, dy) = self.down;
+                            let curve = matches!(pending, PendingCreate::Curve);
+                            self.create_band(dx, dy, curve, cx.modifiers().alt());
+                            self.pending_create = None;
+                        }
                     }
                     if self.drag.is_some() {
                         let shift = cx.modifiers().shift();
@@ -1009,13 +1016,14 @@ impl View for StripView {
                                         })
                                         .sum::<f64>();
                                     if (y - db_y(db, self.graph_db)).abs() < 12.0 {
-                                        self.pending_create = true;
+                                        self.pending_create = Some(PendingCreate::Curve);
                                         cx.capture();
                                     } else if self.selected.is_none() {
                                         self.create_band(x, y, false, cx.modifiers().alt());
                                         cx.capture();
                                     } else {
-                                        self.select(None);
+                                        self.pending_create = Some(PendingCreate::Background);
+                                        cx.capture();
                                     }
                                 }
                             } else if let Some(i) = self
@@ -1105,6 +1113,7 @@ impl View for StripView {
                                 self.select(Some(id));
                                 self.change(|b| b.enabled = !b.enabled);
                             } else {
+                                self.pending_create = None;
                                 self.create_band(x, y, false, cx.modifiers().alt());
                                 cx.capture();
                             }
@@ -1115,11 +1124,11 @@ impl View for StripView {
                     if let Some(Target::Global(i)) = self.drag {
                         cx.emit(RawParamEvent::EndSetParameter(self.param(i).as_ptr()));
                     }
-                    if self.pending_create {
+                    if self.pending_create.is_some() {
                         self.select(None);
                     }
                     self.drag = None;
-                    self.pending_create = false;
+                    self.pending_create = None;
                     cx.release();
                     cx.needs_redraw();
                 }
@@ -1236,6 +1245,7 @@ impl View for StripView {
                     self.processing_menu = None;
                     self.menu = None;
                     self.scale_menu = false;
+                    self.pending_create = None;
                     cx.needs_redraw();
                 }
                 _ => {}
