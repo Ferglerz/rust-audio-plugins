@@ -509,14 +509,14 @@ impl VocalComp {
             self.env[i] = k * self.env[i] + (1.0 - k) * peaks[i];
             let level = gain_db(self.env[i]);
             let target = Self::target_reduction(level, settings);
-            let k = (-1.0
-                / (sr
-                    * if target > self.reduction[i] {
-                        0.002
-                    } else {
-                        0.120
-                    }))
-            .exp();
+            let attack_sec = (settings.attack * 0.001).max(0.00005);
+            let release_sec = (settings.release * 0.001).max(0.001);
+            let tc = if target > self.reduction[i] {
+                attack_sec
+            } else {
+                release_sec
+            };
+            let k = (-1.0 / (sr * tc)).exp();
             self.reduction[i] = k * self.reduction[i] + (1.0 - k) * target;
             let pse_gain = self.pse[i].tick(peaks[i], settings.gate, sr, settings.pse);
             gains[i] = db_gain(self.makeup - self.reduction[i]) * pse_gain;
@@ -539,6 +539,8 @@ impl VocalComp {
 pub struct CompSettings {
     pub threshold: f64,
     pub ratio: f64,
+    pub attack: f64,
+    pub release: f64,
     pub soft_knee: bool,
     pub auto_makeup: bool,
     pub stereo_link: bool,
@@ -553,6 +555,8 @@ impl Default for CompSettings {
         Self {
             threshold: 0.0,
             ratio: 4.0,
+            attack: 2.0,
+            release: 120.0,
             soft_knee: true,
             auto_makeup: true,
             stereo_link: true,
@@ -898,5 +902,37 @@ mod tests {
             gr_high = g_high;
         }
         assert!(gr_high > gr_low);
+    }
+    #[test]
+    fn vocal_comp_attack_and_release_affect_timing() {
+        let mut fast_comp = VocalComp::new();
+        let mut slow_comp = VocalComp::new();
+        let s_fast = CompSettings {
+            threshold: -20.0,
+            ratio: 4.0,
+            attack: 0.5,
+            release: 30.0,
+            auto_makeup: false,
+            ..CompSettings::default()
+        };
+        let s_slow = CompSettings {
+            threshold: -20.0,
+            ratio: 4.0,
+            attack: 50.0,
+            release: 500.0,
+            auto_makeup: false,
+            ..CompSettings::default()
+        };
+        // After 240 samples (5 ms), fast attack should have responded much more than slow attack
+        let mut gr_fast = 0.0;
+        let mut gr_slow = 0.0;
+        for i in 0..240 {
+            let v = (2.0 * PI * 1000.0 * i as f64 / 48000.0).sin() * 0.8;
+            let (_, g_f) = fast_comp.tick([v, v], s_fast, 48000.0);
+            let (_, g_s) = slow_comp.tick([v, v], s_slow, 48000.0);
+            gr_fast = g_f;
+            gr_slow = g_s;
+        }
+        assert!(gr_fast > gr_slow * 2.0);
     }
 }

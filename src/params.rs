@@ -29,6 +29,10 @@ pub struct StripParams {
     pub compression: FloatParam,
     #[id = "comp_ratio"]
     pub comp_ratio: FloatParam,
+    #[id = "comp_attack"]
+    pub comp_attack: FloatParam,
+    #[id = "comp_release"]
+    pub comp_release: FloatParam,
     #[id = "soft_knee"]
     pub soft_knee: BoolParam,
     #[id = "auto_makeup"]
@@ -49,8 +53,6 @@ pub struct StripParams {
     pub pse_time: FloatParam,
     #[id = "pse_listen"]
     pub pse_listen: BoolParam,
-    #[id = "output"]
-    pub output: FloatParam,
     #[id = "sc_hpf"]
     pub sc_hpf: FloatParam,
     #[id = "dry"]
@@ -87,6 +89,69 @@ impl Default for StripParams {
                         .map(|v| -v)
                 })),
             comp_ratio: param("Ratio", 4.0, 1.0, 20.0, ":1"),
+            comp_attack: FloatParam::new(
+                "Attack",
+                2.0,
+                FloatRange::Skewed {
+                    min: 0.1,
+                    max: 100.0,
+                    factor: FloatRange::skew_factor(-2.5),
+                },
+            )
+            .with_unit(" ms")
+            .with_step_size(0.1)
+            .with_smoother(SmoothingStyle::Linear(20.0))
+            .with_value_to_string(Arc::new(|v| format!("{:.1} ms", v)))
+            .with_string_to_value(Arc::new(|text| {
+                text.trim()
+                    .trim_end_matches("ms")
+                    .trim()
+                    .parse::<f32>()
+                    .ok()
+                    .filter(|v| v.is_finite())
+            })),
+            comp_release: FloatParam::new(
+                "Release",
+                120.0,
+                FloatRange::Skewed {
+                    min: 10.0,
+                    max: 2000.0,
+                    factor: FloatRange::skew_factor(-2.0),
+                },
+            )
+            .with_step_size(1.0)
+            .with_smoother(SmoothingStyle::Linear(20.0))
+            .with_value_to_string(Arc::new(|v| {
+                if v >= 1000.0 {
+                    format!("{:.2} s", v / 1000.0)
+                } else {
+                    format!("{:.0} ms", v)
+                }
+            }))
+            .with_string_to_value(Arc::new(|text| {
+                let text = text.trim().to_ascii_lowercase();
+                if let Some(s) = text.strip_suffix("ms") {
+                    s.trim().parse::<f32>().ok().filter(|v| v.is_finite())
+                } else if let Some(s) = text.strip_suffix('s') {
+                    s.trim()
+                        .parse::<f32>()
+                        .ok()
+                        .filter(|v| v.is_finite())
+                        .map(|v| v * 1000.0)
+                } else if let Ok(v) = text.parse::<f32>() {
+                    if v.is_finite() {
+                        if v <= 5.0 {
+                            Some(v * 1000.0)
+                        } else {
+                            Some(v)
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })),
             soft_knee: BoolParam::new("Soft knee", true),
             auto_makeup: BoolParam::new("Auto makeup", true),
             stereo_link: BoolParam::new("Linked stereo", true),
@@ -148,7 +213,6 @@ impl Default for StripParams {
                 None
             })),
             pse_listen: BoolParam::new("PSE listen sidechain", false),
-            output: param("Output", 0.0, -24.0, 24.0, " dB"),
             sc_hpf: FloatParam::new(
                 "Sidechain high pass",
                 80.0,

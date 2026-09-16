@@ -91,6 +91,8 @@ impl Plugin for Damian {
             let settings = dsp::CompSettings {
                 threshold: -(self.params.compression.smoothed.next() as f64),
                 ratio: self.params.comp_ratio.smoothed.next() as f64,
+                attack: self.params.comp_attack.smoothed.next() as f64,
+                release: self.params.comp_release.smoothed.next() as f64,
                 soft_knee: self.params.soft_knee.value(),
                 auto_makeup: self.params.auto_makeup.value(),
                 stereo_link: self.params.stereo_link.value(),
@@ -110,7 +112,6 @@ impl Plugin for Damian {
             let out = self.engine.tick(
                 x,
                 settings,
-                self.params.output.smoothed.next() as f64,
                 self.params.eq_on.value(),
                 self.params.comp_on.value(),
                 self.params.bypass.value(),

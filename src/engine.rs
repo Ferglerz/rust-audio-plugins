@@ -1,6 +1,6 @@
 use crate::{
     band::Band,
-    dsp::{db_gain, gain_db, BandRuntime, CompSettings, VocalComp},
+    dsp::{gain_db, BandRuntime, CompSettings, VocalComp},
     processing::{Config, Delay, EqPath, ProcessingMode},
 };
 use atomic_float::AtomicF32;
@@ -248,7 +248,6 @@ impl Engine {
         &mut self,
         input: [f64; 2],
         settings: CompSettings,
-        output: f64,
         eq_on: bool,
         comp_on: bool,
         bypass: bool,
@@ -327,11 +326,10 @@ impl Engine {
         });
 
         let (compressed, gr) = self.comp.tick(x, settings, self.sr);
-        let gain = db_gain(output);
         let effective_comp_mix = self.comp_mix * (1.0 - self.solo_mix);
         for i in 0..2 {
-            x[i] = (x[i] + effective_comp_mix * (compressed[i] - x[i])) * gain;
-            x[i] += self.bypass_mix * (dry[i] - x[i]);
+            let processed = x[i] + effective_comp_mix * (compressed[i] - x[i]);
+            x[i] = processed + self.bypass_mix * (dry[i] - processed);
             if let Some(s) = solo_sample {
                 x[i] = (1.0 - self.solo_mix) * x[i] + self.solo_mix * s[i];
             }
@@ -433,7 +431,7 @@ mod tests {
                     }
                     let x = (i as f64 * 0.1).sin() * 0.3;
                     let y =
-                        engine.tick([x, -x], settings, 0.0, global_bypass, false, global_bypass);
+                        engine.tick([x, -x], settings, global_bypass, false, global_bypass);
                     let expected = if i >= latency {
                         ((i - latency) as f64 * 0.1).sin() * 0.3
                     } else {
@@ -482,7 +480,7 @@ mod tests {
         engine.reset();
         for _ in 0..10000 {
             assert_eq!(
-                engine.tick([0.0; 2], CompSettings::default(), 0.0, true, true, false),
+                engine.tick([0.0; 2], CompSettings::default(), true, true, false),
                 [0.0; 2]
             );
         }
@@ -510,7 +508,7 @@ mod tests {
         };
         for i in 0..4096 {
             let x = (i as f64 * 0.1).sin() * 0.5;
-            let out = engine.tick([x, x], settings, 0.0, true, true, false);
+            let out = engine.tick([x, x], settings, true, true, false);
             assert!((out[0] - x).abs() < 1e-9);
         }
     }
@@ -531,7 +529,7 @@ mod tests {
         };
         for i in 0..24000 {
             let x = (i as f64 * 0.13).sin() * 0.1;
-            let out = engine.tick([x, x], settings, 6.0, true, true, true);
+            let out = engine.tick([x, x], settings, true, true, true);
             if i > 23000 {
                 assert!((out[0] - x).abs() < 1e-10);
             }
@@ -563,7 +561,7 @@ mod tests {
         for i in 0..4800 {
             let t = i as f64 / 48000.0;
             let x = (2.0 * std::f64::consts::PI * 100.0 * t).sin();
-            let out = engine.tick([x, x], settings, 0.0, true, true, false);
+            let out = engine.tick([x, x], settings, true, true, false);
             if i > 2400 {
                 distant_energy += out[0].powi(2);
             }

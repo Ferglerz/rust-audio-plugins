@@ -29,7 +29,7 @@ Designed with a sleek, flat charcoal UI, interactive dynamic EQ, classic vocal c
 - **Interactive EQ Controls**:
   - Drag nodes horizontally for frequency (20 Hz - 20 kHz log scale), vertically for gain (-24 dB to +24 dB).
   - Mouse scroll anywhere over a node to adjust Q / filter bandwidth (0.15 to 18.0).
-  - Click any parameter value to type an exact setting: frequency, gain, Q, band dynamics, or compressor/mix/output controls. Enter applies, Escape cancels, and Tab / Shift-Tab moves between fields. Unit suffixes such as Hz, kHz, dB, ms, s, %, and :1 are accepted where applicable.
+  - Click any parameter value to type an exact setting: frequency, gain, Q, band dynamics, or compressor/mix controls. Enter applies, Escape cancels, and Tab / Shift-Tab moves between fields. Unit suffixes such as Hz, kHz, dB, ms, s, %, and :1 are accepted where applicable.
   - Choose ±12 to ±72 dB in 12 dB steps using the scale menu below the left graph axis, or scroll over that axis. Band gain remains limited to ±24 dB.
   - The transparent selected-band card moves above or below the node to leave drag clearance. The headphone icon toggles solo audition.
   - Alt-click or double-click an existing node to toggle bypass.
@@ -48,20 +48,20 @@ Select the processing mode in the bottom bar. Mode and resolution are saved as h
 - These are independent implementations inspired by the processing choices described in [FabFilter's documentation](https://www.fabfilter.com/help/pro-q/using/processingmode); they do not claim sonic equivalence to Pro-Q.
 
 ### 2. Vocal Compressor (RVox style)
-- **Threshold & Ratio Controls**:
+- **Threshold, Ratio, Attack & Release Controls**:
   - Threshold from 0.0 down to -48.0 dB with optional automatic makeup gain compensation.
   - Variable compression Ratio from 1:1 to 20:1.
+  - Attack control (0.1 ms to 100 ms) and Release control (10 ms to 2000 ms).
   - Toggle buttons for Soft Knee, Auto Makeup, and Linked Stereo processing.
-- **Sidechain High-Pass Filter (HPF)**:
-  - Adjustable 20 Hz to 500 Hz high-pass filter in the detector sidechain to eliminate plosives and low-end rumble from triggering over-compression.
 - **Primary Source Enhancer (PSE)**:
   - Defaults to ZingZap’s RMS detector and C time constant (200 ms), with 10 dB depth, 3 dB hysteresis, and a 6 dB Hermite soft knee.
   - Right-click the PSE knob to replace the compressor strip with its detailed controls: Depth, Hysteresis, Knee, RMS/Peak detection, time constants A–F, and Listen SC. Use **Back** to return. These audio settings are saved with presets; appearance remains independent.
   - Single threshold knob: -80 dB (OFF) to -20 dB. The original gate parameter ID/range is retained for saved automation.
   - Shares SC HPF with the compressor; stereo linking uses the stronger filtered channel to avoid phase cancellation. PSE applies to the wet path and follows compressor section bypass.
-- **Parallel Dry/Wet & Master Output**:
+- **Sidechain High-Pass Filter (HPF)**:
+  - Adjustable 20 Hz to 500 Hz high-pass filter in the detector sidechain to eliminate plosives and low-end rumble from triggering over-compression.
+- **Parallel Dry/Wet**:
   - Independent Dry and Wet level controls (0% to 100%) for parallel compression.
-  - Master output trim (-24 dB to +24 dB) with peak overload indicators.
   - Large gain reduction meter and reduction bar.
 
 ### 3. Visual Styling & Branding

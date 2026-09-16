@@ -56,7 +56,7 @@ const THEME_BUTTON: (f32, f32, f32, f32) = (970.0, 750.0, 116.0, 28.0);
 const EQ_POWER: (f32, f32, f32, f32) = (1050.0, 103.0, 32.0, 28.0);
 const COMP_POWER: (f32, f32, f32, f32) = (1038.0, 592.0, 32.0, 26.0);
 const PSE_BACK_BUTTON: (f32, f32, f32, f32) = (68.0, 592.0, 88.0, 26.0);
-const PSE_COG_BUTTON: (f32, f32, f32, f32) = (334.0, 646.0, 22.0, 22.0);
+const PSE_COG_BUTTON: (f32, f32, f32, f32) = (512.0, 644.0, 20.0, 20.0);
 const PROCESS_BUTTON: (f32, f32, f32, f32) = (130.0, 750.0, 216.0, 28.0);
 fn processing_menu_rect(resolution: bool) -> (f32, f32, f32, f32) {
     let r = if resolution {
@@ -160,7 +160,9 @@ fn parse_value(text: &str, target: ValueTarget) -> Option<f64> {
         ValueTarget::Band(0) | ValueTarget::Global(2) => {
             &[("khz", 1000.0), ("hz", 1.0), ("k", 1000.0)]
         }
-        ValueTarget::Band(5 | 6) => &[("ms", 1.0), ("s", 1000.0)],
+        ValueTarget::Band(5 | 6) | ValueTarget::Global(5 | 11) => {
+            &[("ms", 1.0), ("s", 1000.0)]
+        }
         ValueTarget::Band(4) | ValueTarget::Global(6) => &[(":1", 1.0)],
         ValueTarget::Global(3 | 4) => &[("%", 1.0)],
         ValueTarget::Band(2) => &[],
@@ -184,8 +186,8 @@ fn hud_value_rect(b: &Band, range: f64, i: usize) -> (f32, f32, f32, f32) {
         _ => (x + 218.0, y + 48.0, 76.0, 24.0),
     }
 }
-fn global_value_rect(i: usize) -> (f32, f32, f32, f32) {
-    let r = global_rect(i);
+fn global_value_rect(i: usize, pse_page: bool) -> (f32, f32, f32, f32) {
+    let r = global_rect(i, pse_page);
     (r.0 + 6.0, r.1 + 63.0, r.2 - 12.0, 19.0)
 }
 fn band_value_rect(i: usize) -> (f32, f32, f32, f32) {
@@ -328,18 +330,32 @@ fn band_bar_rect(i: usize) -> (f32, f32, f32, f32) {
 fn mode_rect(i: usize) -> (f32, f32, f32, f32) {
     (420.0 + i as f32 * 142.0, 592.0, 132.0, 26.0)
 }
-fn global_rect(i: usize) -> (f32, f32, f32, f32) {
-    let x = match i {
-        0 | 7 => 44.0,
-        6 | 8 => 152.0,
-        1 => 260.0,
-        2 => 380.0,
-        3 | 9 => 500.0,
-        4 => 608.0,
-        10 => 687.0,
-        _ => 740.0,
-    };
-    (x, 638.0, 100.0, 82.0)
+fn global_rect(i: usize, pse_page: bool) -> (f32, f32, f32, f32) {
+    if pse_page {
+        let x = match i {
+            7 => 44.0,
+            8 => 152.0,
+            1 => 260.0,
+            2 => 380.0,
+            9 => 500.0,
+            10 => 687.0,
+            _ => 44.0,
+        };
+        (x, 638.0, 100.0, 82.0)
+    } else {
+        let x = match i {
+            0 => 40.0,
+            6 => 138.0,
+            5 => 236.0,
+            11 => 334.0,
+            1 => 444.0,
+            2 => 554.0,
+            3 => 664.0,
+            4 => 762.0,
+            _ => 40.0,
+        };
+        (x, 638.0, 92.0, 82.0)
+    }
 }
 fn display_range(range: f64) -> f64 {
     if range.is_finite() {
@@ -375,6 +391,12 @@ fn format_pse_time(time_val: f64, peak: bool) -> String {
     }
 }
 impl StripView {
+    fn global_rect(&self, i: usize) -> (f32, f32, f32, f32) {
+        global_rect(i, self.pse_page)
+    }
+    fn global_value_rect(&self, i: usize) -> (f32, f32, f32, f32) {
+        global_value_rect(i, self.pse_page)
+    }
     fn value_color(&self, target: ValueTarget) -> C {
         match target {
             ValueTarget::Global(2 | 3) => TEAL,
@@ -419,7 +441,7 @@ impl StripView {
             }
         }
         self.global_controls().iter().copied().find_map(|i| {
-            let r = global_value_rect(i);
+            let r = self.global_value_rect(i);
             inside(x, y, r).then_some((ValueTarget::Global(i), r))
         })
     }
@@ -538,7 +560,7 @@ impl StripView {
                     self.global_controls()
                         .iter()
                         .copied()
-                        .map(|i| (ValueTarget::Global(i), global_value_rect(i))),
+                        .map(|i| (ValueTarget::Global(i), self.global_value_rect(i))),
                 );
                 let index = fields.iter().position(|(t, _)| *t == target).unwrap_or(0);
                 let next = if cx.modifiers().shift() {
@@ -596,7 +618,7 @@ impl StripView {
         if self.pse_page {
             &[7, 8, 1, 2, 9, 10]
         } else {
-            &[0, 6, 1, 2, 3, 4, 5]
+            &[0, 6, 5, 11, 1, 2, 3, 4]
         }
     }
     fn param(&self, i: usize) -> &FloatParam {
@@ -606,12 +628,14 @@ impl StripView {
             2 => &self.params.sc_hpf,
             3 => &self.params.dry,
             4 => &self.params.wet,
-            5 => &self.params.output,
+            5 => &self.params.comp_attack,
+            6 => &self.params.comp_ratio,
             7 => &self.params.pse_depth,
             8 => &self.params.pse_hysteresis,
             9 => &self.params.pse_knee,
             10 => &self.params.pse_time,
-            _ => &self.params.comp_ratio,
+            11 => &self.params.comp_release,
+            _ => &self.params.compression,
         }
     }
     fn select(&mut self, id: Option<u64>) {
@@ -1030,7 +1054,7 @@ impl View for StripView {
                                 .global_controls()
                                 .iter()
                                 .copied()
-                                .find(|i| inside(x, y, global_rect(*i)))
+                                .find(|i| inside(x, y, self.global_rect(*i)))
                             {
                                 self.drag = Some(Target::Global(i));
                                 self.last_drag = (x, y);
@@ -1133,7 +1157,7 @@ impl View for StripView {
                     cx.needs_redraw();
                 }
                 WindowEvent::MouseDown(MouseButton::Right) => {
-                    if inside(x, y, global_rect(1)) && self.drag.is_none() {
+                    if inside(x, y, self.global_rect(1)) && self.drag.is_none() {
                         self.pse_page = true;
                         cx.needs_redraw();
                         return;
@@ -1192,7 +1216,7 @@ impl View for StripView {
                             .global_controls()
                             .iter()
                             .copied()
-                            .find(|i| inside(hx, hy, global_rect(*i)))
+                            .find(|i| inside(hx, hy, self.global_rect(*i)))
                         {
                             let p = self.param(i);
                             let cur = p.unmodulated_normalized_value();
@@ -1597,7 +1621,7 @@ impl View for StripView {
                     p.normalized_value_to_string(p.unmodulated_normalized_value(), true)
                 };
                 d.knob(
-                    global_rect(i),
+                    self.global_rect(i),
                     label,
                     &value,
                     p.unmodulated_normalized_value(),
@@ -1639,15 +1663,15 @@ impl View for StripView {
             d.outline((32.0, 634.0, 1054.0, 96.0), LINE);
 
             // Bay dividers
-            d.line(372.0, 646.0, 372.0, 718.0, LINE, 1.0);
-            d.line(492.0, 646.0, 492.0, 718.0, LINE, 1.0);
-            d.line(728.0, 646.0, 728.0, 718.0, LINE, 1.0);
+            d.line(435.0, 646.0, 435.0, 718.0, LINE, 1.0);
+            d.line(545.0, 646.0, 545.0, 718.0, LINE, 1.0);
+            d.line(655.0, 646.0, 655.0, 718.0, LINE, 1.0);
             d.line(858.0, 646.0, 858.0, 718.0, LINE, 1.0);
 
-            // Threshold, ratio, PSE, detector, parallel mix, and output:
+            // Threshold, ratio, attack, release, PSE, detector, parallel mix:
             let p0 = self.param(0);
             d.knob(
-                global_rect(0),
+                self.global_rect(0),
                 "THRESHOLD",
                 &p0.normalized_value_to_string(p0.unmodulated_normalized_value(), true),
                 1.0 - p0.unmodulated_normalized_value(),
@@ -1657,10 +1681,30 @@ impl View for StripView {
 
             let ratio = self.param(6);
             d.knob(
-                global_rect(6),
+                self.global_rect(6),
                 "RATIO",
                 &ratio.normalized_value_to_string(ratio.unmodulated_normalized_value(), true),
                 ratio.unmodulated_normalized_value(),
+                GOLD,
+                comp_bypassed,
+            );
+
+            let attack = self.param(5);
+            d.knob(
+                self.global_rect(5),
+                "ATTACK",
+                &attack.normalized_value_to_string(attack.unmodulated_normalized_value(), true),
+                attack.unmodulated_normalized_value(),
+                GOLD,
+                comp_bypassed,
+            );
+
+            let release = self.param(11);
+            d.knob(
+                self.global_rect(11),
+                "RELEASE",
+                &release.normalized_value_to_string(release.unmodulated_normalized_value(), true),
+                release.unmodulated_normalized_value(),
                 GOLD,
                 comp_bypassed,
             );
@@ -1672,7 +1716,7 @@ impl View for StripView {
                 p1.normalized_value_to_string(p1.unmodulated_normalized_value(), true)
             };
             d.knob(
-                global_rect(1),
+                self.global_rect(1),
                 "PSE",
                 &pse_val,
                 p1.unmodulated_normalized_value(),
@@ -1698,7 +1742,7 @@ impl View for StripView {
 
             let p2 = self.param(2);
             d.knob(
-                global_rect(2),
+                self.global_rect(2),
                 "SC HPF",
                 &p2.normalized_value_to_string(p2.unmodulated_normalized_value(), true),
                 p2.unmodulated_normalized_value(),
@@ -1708,7 +1752,7 @@ impl View for StripView {
 
             let p3 = self.param(3);
             d.knob(
-                global_rect(3),
+                self.global_rect(3),
                 "DRY",
                 &p3.normalized_value_to_string(p3.unmodulated_normalized_value(), true),
                 p3.unmodulated_normalized_value(),
@@ -1718,20 +1762,10 @@ impl View for StripView {
 
             let p4 = self.param(4);
             d.knob(
-                global_rect(4),
+                self.global_rect(4),
                 "WET",
                 &p4.normalized_value_to_string(p4.unmodulated_normalized_value(), true),
                 p4.unmodulated_normalized_value(),
-                GOLD,
-                comp_bypassed,
-            );
-
-            let p5 = self.param(5);
-            d.knob(
-                global_rect(5),
-                "OUTPUT",
-                &p5.normalized_value_to_string(p5.unmodulated_normalized_value(), true),
-                p5.unmodulated_normalized_value(),
                 GOLD,
                 comp_bypassed,
             );
@@ -2428,6 +2462,9 @@ mod tests {
             ("c", ValueTarget::Global(10), 2.0),
             ("1.5 s", ValueTarget::Global(10), 4.0),
             ("2.5", ValueTarget::Global(10), 2.5),
+            ("10 ms", ValueTarget::Global(5), 10.0),
+            ("1.2 s", ValueTarget::Global(11), 1200.0),
+            ("250 ms", ValueTarget::Global(11), 250.0),
         ] {
             assert_eq!(parse_value(input, target), Some(expected), "{input}");
         }
