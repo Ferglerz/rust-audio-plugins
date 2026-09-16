@@ -4,6 +4,7 @@ pub mod band;
 pub mod dsp;
 mod engine;
 mod params;
+mod processing;
 mod ui;
 use engine::{Engine, Shared};
 use params::StripParams;
@@ -54,9 +55,14 @@ impl Plugin for Damian {
         &mut self,
         _: &AudioIOLayout,
         c: &BufferConfig,
-        _: &mut impl InitContext<Self>,
+        context: &mut impl InitContext<Self>,
     ) -> bool {
+        self.shared.requested_config.store(
+            self.params.processing_config().encode(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         self.engine = Engine::new(self.shared.clone(), c.sample_rate as f64);
+        context.set_latency_samples(self.engine.latency());
         true
     }
     fn reset(&mut self) {
@@ -66,9 +72,14 @@ impl Plugin for Damian {
         &mut self,
         buffer: &mut Buffer,
         _: &mut AuxiliaryBuffers,
-        _: &mut impl ProcessContext<Self>,
+        context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
+        self.shared.requested_config.store(
+            self.params.processing_config().encode(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         self.engine.sync();
+        context.set_latency_samples(self.engine.latency());
         for mut frame in buffer.iter_samples() {
             let mut x = [0.0; 2];
             for (i, s) in frame.iter_mut().enumerate() {
@@ -78,10 +89,23 @@ impl Plugin for Damian {
                 x[1] = x[0];
             }
             let settings = dsp::CompSettings {
-                amount: self.params.compression.smoothed.next() as f64,
+                threshold: -(self.params.compression.smoothed.next() as f64),
+                ratio: self.params.comp_ratio.smoothed.next() as f64,
+                soft_knee: self.params.soft_knee.value(),
+                auto_makeup: self.params.auto_makeup.value(),
+                stereo_link: self.params.stereo_link.value(),
                 gate: self.params.gate.smoothed.next() as f64,
+                pse: dsp::PseSettings {
+                    depth: self.params.pse_depth.smoothed.next() as f64,
+                    hysteresis: self.params.pse_hysteresis.smoothed.next() as f64,
+                    knee: self.params.pse_knee.smoothed.next() as f64,
+                    peak: self.params.pse_peak.value(),
+                    time: self.params.pse_time.value(),
+                    listen: self.params.pse_listen.value(),
+                },
                 hpf: self.params.sc_hpf.smoothed.next() as f64,
-                mix: self.params.mix.smoothed.next() as f64 / 100.0,
+                dry: self.params.dry.smoothed.next() as f64 / 100.0,
+                wet: self.params.wet.smoothed.next() as f64 / 100.0,
             };
             let out = self.engine.tick(
                 x,
@@ -95,7 +119,11 @@ impl Plugin for Damian {
                 *s = out[i] as f32;
             }
         }
-        ProcessStatus::Normal
+        if self.engine.latency() > 0 {
+            ProcessStatus::Tail(self.engine.latency() * 2)
+        } else {
+            ProcessStatus::Normal
+        }
     }
 }
 impl Vst3Plugin for Damian {

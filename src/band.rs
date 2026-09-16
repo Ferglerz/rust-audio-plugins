@@ -8,8 +8,18 @@ pub enum Shape {
     LowCut,
     HighCut,
     Notch,
+    BandPass,
 }
 impl Shape {
+    pub const ALL: [Self; 7] = [
+        Self::Bell,
+        Self::LowShelf,
+        Self::HighShelf,
+        Self::LowCut,
+        Self::HighCut,
+        Self::Notch,
+        Self::BandPass,
+    ];
     pub fn name(self) -> &'static str {
         match self {
             Self::Bell => "Bell",
@@ -18,17 +28,11 @@ impl Shape {
             Self::LowCut => "Low cut",
             Self::HighCut => "High cut",
             Self::Notch => "Notch",
+            Self::BandPass => "Band pass",
         }
     }
-    pub fn next(self) -> Self {
-        match self {
-            Self::Bell => Self::LowShelf,
-            Self::LowShelf => Self::HighShelf,
-            Self::HighShelf => Self::LowCut,
-            Self::LowCut => Self::HighCut,
-            Self::HighCut => Self::Notch,
-            Self::Notch => Self::Bell,
-        }
+    pub fn is_cut(self) -> bool {
+        matches!(self, Self::LowCut | Self::HighCut)
     }
     pub fn has_gain(self) -> bool {
         matches!(self, Self::Bell | Self::LowShelf | Self::HighShelf)
@@ -39,6 +43,8 @@ impl Shape {
 pub struct Band {
     pub id: u64,
     pub shape: Shape,
+    /// High/low-pass order (6 dB/octave per pole). Ignored for other shapes.
+    pub order: u8,
     pub freq: f64,
     pub gain: f64,
     pub q: f64,
@@ -55,6 +61,7 @@ impl Default for Band {
         Self {
             id: 1,
             shape: Shape::Bell,
+            order: 2,
             freq: 1000.0,
             gain: 0.0,
             q: 1.0,
@@ -70,6 +77,7 @@ impl Default for Band {
 }
 impl Band {
     pub fn sanitize(&mut self) {
+        self.order = self.order.clamp(1, 8);
         fn safe(v: &mut f64, min: f64, max: f64, default: f64) {
             *v = if v.is_finite() {
                 v.clamp(min, max)
@@ -106,6 +114,36 @@ pub fn infer_shape(x: f32, y: f32, curve_drag: bool) -> Shape {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn old_sessions_default_to_second_order() {
+        let b: Band = serde_json::from_str(r#"{"shape":"LowCut","freq":80.0,"q":0.707}"#).unwrap();
+        assert_eq!(b.order, 2);
+        assert_eq!(b.shape, Shape::LowCut);
+    }
+    #[test]
+    fn shapes_and_orders_round_trip() {
+        for shape in Shape::ALL {
+            for order in 1..=8 {
+                let b = Band {
+                    shape,
+                    order,
+                    ..Band::default()
+                };
+                assert_eq!(
+                    b,
+                    serde_json::from_str::<Band>(&serde_json::to_string(&b).unwrap()).unwrap()
+                );
+            }
+        }
+        for (invalid, expected) in [(0, 1), (255, 8)] {
+            let mut b = Band {
+                order: invalid,
+                ..Band::default()
+            };
+            b.sanitize();
+            assert_eq!(b.order, expected);
+        }
+    }
     #[test]
     fn creation_zones() {
         assert_eq!(infer_shape(0.01, 0.5, false), Shape::LowCut);
