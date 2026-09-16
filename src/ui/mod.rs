@@ -126,6 +126,36 @@ fn parse_value(text: &str, target: ValueTarget) -> Option<f64> {
     if target == ValueTarget::Global(1) && text == "off" {
         return Some(-80.0);
     }
+    if target == ValueTarget::Global(10) {
+        match text.as_str() {
+            "a" => return Some(0.0),
+            "b" => return Some(1.0),
+            "c" => return Some(2.0),
+            "d" => return Some(3.0),
+            "e" => return Some(4.0),
+            "f" => return Some(5.0),
+            _ => {}
+        }
+        if let Some(s) = text.strip_suffix("ms") {
+            if let Ok(ms) = s.trim().parse::<f64>() {
+                return Some(crate::dsp::seconds_to_pse_time_pos(ms * 0.001));
+            }
+        }
+        if let Some(s) = text.strip_suffix("s") {
+            if let Ok(sec) = s.trim().parse::<f64>() {
+                return Some(crate::dsp::seconds_to_pse_time_pos(sec));
+            }
+        }
+        if let Ok(val) = text.parse::<f64>() {
+            if (0.0..=5.0).contains(&val) {
+                return Some(val);
+            }
+            if val > 5.0 {
+                return Some(crate::dsp::seconds_to_pse_time_pos(val * 0.001));
+            }
+        }
+        return None;
+    }
     let suffixes: &[(&str, f64)] = match target {
         ValueTarget::Band(0) | ValueTarget::Global(2) => {
             &[("khz", 1000.0), ("hz", 1.0), ("k", 1000.0)]
@@ -292,9 +322,6 @@ fn band_bar_rect(i: usize) -> (f32, f32, f32, f32) {
 fn mode_rect(i: usize) -> (f32, f32, f32, f32) {
     (420.0 + i as f32 * 142.0, 592.0, 132.0, 26.0)
 }
-fn pse_time_button_rect(i: usize) -> (f32, f32, f32, f32) {
-    (631.0 + i as f32 * 36.0, 671.0, 32.0, 24.0)
-}
 fn global_rect(i: usize) -> (f32, f32, f32, f32) {
     let x = match i {
         0 | 7 => 44.0,
@@ -303,6 +330,7 @@ fn global_rect(i: usize) -> (f32, f32, f32, f32) {
         2 => 380.0,
         3 | 9 => 500.0,
         4 => 608.0,
+        10 => 687.0,
         _ => 740.0,
     };
     (x, 638.0, 100.0, 82.0)
@@ -312,6 +340,32 @@ fn display_range(range: f64) -> f64 {
         (range / 12.0).round().clamp(1.0, 6.0) * 12.0
     } else {
         24.0
+    }
+}
+fn format_pse_time(time_val: f64, peak: bool) -> String {
+    let (attack, release) = crate::dsp::pse_time_to_times(time_val, peak);
+    if peak {
+        if release >= 10.0 {
+            format!("{:.0} ms / {:.0} s", attack * 1000.0, release)
+        } else if release >= 1.0 {
+            if (release * 10.0).fract().abs() < 1e-3 {
+                format!("{:.0} ms / {:.1} s", attack * 1000.0, release)
+            } else {
+                format!("{:.0} ms / {:.2} s", attack * 1000.0, release)
+            }
+        } else {
+            format!("{:.0} ms / {:.0} ms", attack * 1000.0, release * 1000.0)
+        }
+    } else if release >= 10.0 {
+        format!("{:.1} s", release)
+    } else if release >= 1.0 {
+        if (release * 10.0).fract().abs() < 1e-3 {
+            format!("{:.1} s", release)
+        } else {
+            format!("{:.2} s", release)
+        }
+    } else {
+        format!("{:.0} ms", release * 1000.0)
     }
 }
 impl StripView {
@@ -390,10 +444,14 @@ impl StripView {
                 ][i]
             }
         };
-        let text = format!("{value:.3}")
-            .trim_end_matches('0')
-            .trim_end_matches('.')
-            .to_string();
+        let text = if let ValueTarget::Global(10) = target {
+            format_pse_time(self.param(10).value() as f64, self.params.pse_peak.value())
+        } else {
+            format!("{value:.3}")
+                .trim_end_matches('0')
+                .trim_end_matches('.')
+                .to_string()
+        };
         self.edit = Some(ValueEdit {
             target,
             rect,
@@ -530,7 +588,7 @@ impl StripView {
 
     fn global_controls(&self) -> &'static [usize] {
         if self.pse_page {
-            &[7, 8, 1, 2, 9]
+            &[7, 8, 1, 2, 9, 10]
         } else {
             &[0, 6, 1, 2, 3, 4, 5]
         }
@@ -546,6 +604,7 @@ impl StripView {
             7 => &self.params.pse_depth,
             8 => &self.params.pse_hysteresis,
             9 => &self.params.pse_knee,
+            10 => &self.params.pse_time,
             _ => &self.params.comp_ratio,
         }
     }
@@ -843,21 +902,6 @@ impl View for StripView {
                         self.pse_page = false;
                         cx.needs_redraw();
                         return;
-                    }
-                    if self.pse_page {
-                        for i in 0..6 {
-                            if inside(x, y, pse_time_button_rect(i)) {
-                                let p = &self.params.pse_time;
-                                cx.emit(RawParamEvent::BeginSetParameter(p.as_ptr()));
-                                cx.emit(RawParamEvent::SetParameterNormalized(
-                                    p.as_ptr(),
-                                    i as f32 / 5.0,
-                                ));
-                                cx.emit(RawParamEvent::EndSetParameter(p.as_ptr()));
-                                cx.needs_redraw();
-                                return;
-                            }
-                        }
                     }
                     if let Some(i) = (0..3).find(|i| inside(x, y, mode_rect(*i))) {
                         if self.pse_page {
@@ -1493,7 +1537,13 @@ impl View for StripView {
         let comp_bypassed = !self.params.comp_on.value();
         if self.pse_page {
             d.button(PSE_BACK_BUTTON, "< BACK", false, TEXT);
-            d.text(176.0, 611.0, "PSE", 16.0, GOLD);
+            d.text(
+                176.0,
+                611.0,
+                "PSE",
+                16.0,
+                if comp_bypassed { MUTED } else { GOLD },
+            );
             d.button(
                 mode_rect(0),
                 if self.params.pse_peak.value() {
@@ -1502,13 +1552,13 @@ impl View for StripView {
                     "DETECT: RMS"
                 },
                 true,
-                GOLD,
+                if comp_bypassed { MUTED } else { GOLD },
             );
             d.button(
                 mode_rect(1),
                 "LISTEN SC",
                 self.params.pse_listen.value(),
-                TEAL,
+                if comp_bypassed { MUTED } else { TEAL },
             );
             d.bypass_button(COMP_POWER, comp_bypassed, GOLD);
             d.rect(32.0, 634.0, 1054.0, 96.0, PANEL);
@@ -1526,10 +1576,13 @@ impl View for StripView {
                 (1, "THRESHOLD"),
                 (2, "SC HPF"),
                 (9, "KNEE"),
+                (10, "TIME"),
             ] {
                 let p = self.param(i);
                 let value = if i == 1 && p.value() <= -79.9 {
                     "OFF".to_owned()
+                } else if i == 10 {
+                    format_pse_time(p.value() as f64, self.params.pse_peak.value())
                 } else {
                     p.normalized_value_to_string(p.unmodulated_normalized_value(), true)
                 };
@@ -1542,72 +1595,6 @@ impl View for StripView {
                     comp_bypassed,
                 );
             }
-
-            // 6-button radio set for Time Constant next to Knee control
-            d.text_centered(
-                737.0,
-                660.0,
-                "TIME",
-                9.2,
-                if comp_bypassed { MUTED } else { TEXT },
-            );
-            for i in 0..6 {
-                let r = pse_time_button_rect(i);
-                let selected = self.params.pse_time.value() as usize == i;
-                let hovered =
-                    !comp_bypassed && self.hover.is_some_and(|(hx, hy)| inside(hx, hy, r));
-                let lbl = ["A", "B", "C", "D", "E", "F"][i];
-                d.rect(r.0, r.1, r.2, r.3, PANEL);
-                if selected {
-                    d.rect(
-                        r.0,
-                        r.1 + r.3 - 2.0,
-                        r.2,
-                        2.0,
-                        if comp_bypassed { MUTED } else { GOLD },
-                    );
-                    d.outline(r, if comp_bypassed { LINE } else { GOLD });
-                    d.text_centered(
-                        r.0 + r.2 * 0.5,
-                        r.1 + r.3 * 0.5 + 4.0,
-                        lbl,
-                        11.0,
-                        if comp_bypassed { MUTED } else { GOLD },
-                    );
-                } else {
-                    d.outline(r, if hovered { TEXT } else { LINE });
-                    d.text_centered(
-                        r.0 + r.2 * 0.5,
-                        r.1 + r.3 * 0.5 + 4.0,
-                        lbl,
-                        11.0,
-                        if hovered { TEXT } else { MUTED },
-                    );
-                }
-            }
-            let (attack, release) = self
-                .params
-                .pse_time
-                .value()
-                .times(self.params.pse_peak.value());
-            let time_str = if self.params.pse_peak.value() {
-                if release >= 1.0 {
-                    format!("{:.0} ms / {:.1} s", attack * 1000.0, release)
-                } else {
-                    format!("{:.0} ms / {:.0} ms", attack * 1000.0, release * 1000.0)
-                }
-            } else if release >= 1.0 {
-                format!("{:.1} s", release)
-            } else {
-                format!("{:.0} ms", release * 1000.0)
-            };
-            d.text_centered(
-                737.0,
-                713.0,
-                &time_str,
-                10.0,
-                if comp_bypassed { MUTED } else { GOLD },
-            );
         } else {
             d.text(
                 32.0,
@@ -2427,6 +2414,10 @@ mod tests {
             ("80 Hz", ValueTarget::Global(2), 80.0),
             ("25 %", ValueTarget::Global(3), 25.0),
             ("OFF", ValueTarget::Global(1), -80.0),
+            ("100 ms", ValueTarget::Global(10), 1.0),
+            ("c", ValueTarget::Global(10), 2.0),
+            ("1.5 s", ValueTarget::Global(10), 4.0),
+            ("2.5", ValueTarget::Global(10), 2.5),
         ] {
             assert_eq!(parse_value(input, target), Some(expected), "{input}");
         }

@@ -100,7 +100,7 @@ impl Plugin for Damian {
                     hysteresis: self.params.pse_hysteresis.smoothed.next() as f64,
                     knee: self.params.pse_knee.smoothed.next() as f64,
                     peak: self.params.pse_peak.value(),
-                    time: self.params.pse_time.value(),
+                    time: self.params.pse_time.smoothed.next() as f64,
                     listen: self.params.pse_listen.value(),
                 },
                 hpf: self.params.sc_hpf.smoothed.next() as f64,

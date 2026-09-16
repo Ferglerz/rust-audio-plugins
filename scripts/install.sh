@@ -10,6 +10,7 @@ TARGET_DIR="$HOME/Library/Audio/Plug-Ins/VST3"
 mkdir -p "$TARGET_DIR"
 
 echo "Installing to $TARGET_DIR..."
+rm -rf "$TARGET_DIR/Damian Channel Strip.vst3"
 cp -R "target/bundled/Damian Channel Strip.vst3" "$TARGET_DIR/"
 
 echo "Installed successfully to $TARGET_DIR/Damian Channel Strip.vst3"

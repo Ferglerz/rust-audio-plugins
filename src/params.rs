@@ -46,7 +46,7 @@ pub struct StripParams {
     #[id = "pse_peak"]
     pub pse_peak: BoolParam,
     #[id = "pse_time"]
-    pub pse_time: EnumParam<crate::dsp::PseTimeConstant>,
+    pub pse_time: FloatParam,
     #[id = "pse_listen"]
     pub pse_listen: BoolParam,
     #[id = "output"]
@@ -95,7 +95,58 @@ impl Default for StripParams {
             pse_hysteresis: param("PSE hysteresis", 3.0, 0.0, 9.0, " dB"),
             pse_knee: param("PSE knee", 6.0, 0.0, 18.0, " dB"),
             pse_peak: BoolParam::new("PSE peak detection", false),
-            pse_time: EnumParam::new("PSE time constant", crate::dsp::PseTimeConstant::C),
+            pse_time: FloatParam::new(
+                "PSE time",
+                2.0,
+                FloatRange::Linear { min: 0.0, max: 5.0 },
+            )
+            .with_step_size(0.01)
+            .with_smoother(SmoothingStyle::Linear(20.0))
+            .with_value_to_string(Arc::new(|v| {
+                let (_, release) = crate::dsp::pse_time_to_times(v as f64, false);
+                if release >= 10.0 {
+                    format!("{:.1} s", release)
+                } else if release >= 1.0 {
+                    if (release * 10.0).fract().abs() < 1e-3 {
+                        format!("{:.1} s", release)
+                    } else {
+                        format!("{:.2} s", release)
+                    }
+                } else {
+                    format!("{:.0} ms", release * 1000.0)
+                }
+            }))
+            .with_string_to_value(Arc::new(|text| {
+                let text = text.trim().to_ascii_lowercase();
+                match text.as_str() {
+                    "a" => return Some(0.0),
+                    "b" => return Some(1.0),
+                    "c" => return Some(2.0),
+                    "d" => return Some(3.0),
+                    "e" => return Some(4.0),
+                    "f" => return Some(5.0),
+                    _ => {}
+                }
+                if let Some(s) = text.strip_suffix("ms") {
+                    if let Ok(ms) = s.trim().parse::<f64>() {
+                        return Some(crate::dsp::seconds_to_pse_time_pos(ms * 0.001) as f32);
+                    }
+                }
+                if let Some(s) = text.strip_suffix("s") {
+                    if let Ok(sec) = s.trim().parse::<f64>() {
+                        return Some(crate::dsp::seconds_to_pse_time_pos(sec) as f32);
+                    }
+                }
+                if let Ok(val) = text.parse::<f32>() {
+                    if (0.0..=5.0).contains(&val) {
+                        return Some(val);
+                    }
+                    if val > 5.0 {
+                        return Some(crate::dsp::seconds_to_pse_time_pos(val as f64 * 0.001) as f32);
+                    }
+                }
+                None
+            })),
             pse_listen: BoolParam::new("PSE listen sidechain", false),
             output: param("Output", 0.0, -24.0, 24.0, " dB"),
             sc_hpf: FloatParam::new(

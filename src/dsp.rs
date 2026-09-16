@@ -273,6 +273,44 @@ impl BandRuntime {
         x
     }
 }
+pub const PSE_RMS_TIMES: [f64; 6] = [0.050, 0.100, 0.200, 0.750, 1.500, 3.000];
+pub const PSE_PEAK_RELEASES: [f64; 6] = [0.020, 0.200, 1.000, 2.000, 5.000, 30.000];
+
+pub fn pse_time_to_times(pos: f64, peak: bool) -> (f64, f64) {
+    let pos = pos.clamp(0.0, 5.0);
+    let i = (pos.floor() as usize).min(4);
+    let frac = pos - i as f64;
+    if peak {
+        let r0 = PSE_PEAK_RELEASES[i];
+        let r1 = PSE_PEAK_RELEASES[i + 1];
+        let r = (r0.ln() * (1.0 - frac) + r1.ln() * frac).exp();
+        (0.020, r)
+    } else {
+        let t0 = PSE_RMS_TIMES[i];
+        let t1 = PSE_RMS_TIMES[i + 1];
+        let t = (t0.ln() * (1.0 - frac) + t1.ln() * frac).exp();
+        (t, t)
+    }
+}
+
+pub fn seconds_to_pse_time_pos(seconds: f64) -> f64 {
+    if seconds <= PSE_RMS_TIMES[0] {
+        return 0.0;
+    }
+    if seconds >= PSE_RMS_TIMES[5] {
+        return 5.0;
+    }
+    for i in 0..5 {
+        let t0 = PSE_RMS_TIMES[i];
+        let t1 = PSE_RMS_TIMES[i + 1];
+        if seconds <= t1 {
+            let frac = (seconds.ln() - t0.ln()) / (t1.ln() - t0.ln());
+            return i as f64 + frac;
+        }
+    }
+    5.0
+}
+
 #[derive(Enum, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PseTimeConstant {
     A,
@@ -288,12 +326,7 @@ impl PseTimeConstant {
         ["A", "B", "C", "D", "E", "F"][self as usize]
     }
     pub fn times(self, peak: bool) -> (f64, f64) {
-        if peak {
-            (0.020, [0.020, 0.200, 1.0, 2.0, 5.0, 30.0][self as usize])
-        } else {
-            let t = [0.050, 0.100, 0.200, 0.750, 1.500, 3.0][self as usize];
-            (t, t)
-        }
+        pse_time_to_times(self as usize as f64, peak)
     }
 }
 #[derive(Clone, Copy)]
@@ -302,7 +335,7 @@ pub struct PseSettings {
     pub hysteresis: f64,
     pub knee: f64,
     pub peak: bool,
-    pub time: PseTimeConstant,
+    pub time: f64,
     pub listen: bool,
 }
 impl Default for PseSettings {
@@ -312,7 +345,7 @@ impl Default for PseSettings {
             hysteresis: 3.0,
             knee: 6.0,
             peak: false,
-            time: PseTimeConstant::C,
+            time: 2.0,
             listen: false,
         }
     }
@@ -331,7 +364,7 @@ struct Pse {
     peak_rc: f64,
     peak_env: f64,
     mode: bool,
-    time: PseTimeConstant,
+    time: f64,
 }
 impl Default for Pse {
     fn default() -> Self {
@@ -347,19 +380,22 @@ impl Default for Pse {
             peak_rc: 0.0,
             peak_env: 0.0,
             mode: false,
-            time: PseTimeConstant::C,
+            time: 2.0,
         }
     }
 }
 impl Pse {
     fn tick(&mut self, filtered: f64, threshold: f64, sr: f64, settings: PseSettings) -> f64 {
-        if self.sample_rate != sr || self.mode != settings.peak || self.time != settings.time {
+        if self.sample_rate != sr
+            || self.mode != settings.peak
+            || (self.time - settings.time).abs() > 1e-4
+        {
             self.mode = settings.peak;
             self.time = settings.time;
             self.sample_rate = sr;
             self.rms_rc = (-1.0 / (sr * 0.010)).exp();
             self.hysteresis_rc = (-1.0 / (sr * 0.005)).exp();
-            let (attack, release) = settings.time.times(settings.peak);
+            let (attack, release) = pse_time_to_times(settings.time, settings.peak);
             self.gain_rc = (-1.0 / (sr * attack)).exp();
             self.release_rc = (-1.0 / (sr * release)).exp();
             self.peak_rc = (-1.0 / (sr * 0.0015)).exp();
@@ -744,7 +780,7 @@ mod tests {
         }
         assert!((peak.reduction_db + 18.0 * (1.0 - (-1.0_f64).exp())).abs() < 0.001);
         let mut fast = Pse::default();
-        settings.time = PseTimeConstant::A;
+        settings.time = 0.0;
         for _ in 0..48000 {
             fast.tick(0.0, -40.0, sr, settings);
         }
