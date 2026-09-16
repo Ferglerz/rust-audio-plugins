@@ -51,11 +51,12 @@ const GY: f32 = 151.0;
 const GW: f32 = 1008.0;
 // Keep node gestures above the controls while extending the frequency grid beneath them.
 const GH: f32 = 338.0;
-const GRAPH_BOTTOM: f32 = 565.0;
+const GRAPH_BOTTOM: f32 = 552.0;
 const THEME_BUTTON: (f32, f32, f32, f32) = (970.0, 750.0, 116.0, 28.0);
 const EQ_POWER: (f32, f32, f32, f32) = (1050.0, 103.0, 32.0, 28.0);
-const COMP_POWER: (f32, f32, f32, f32) = (1038.0, 597.0, 32.0, 28.0);
-const PSE_COG_BUTTON: (f32, f32, f32, f32) = (336.0, 638.0, 24.0, 24.0);
+const COMP_POWER: (f32, f32, f32, f32) = (1038.0, 592.0, 32.0, 26.0);
+const PSE_BACK_BUTTON: (f32, f32, f32, f32) = (68.0, 592.0, 88.0, 26.0);
+const PSE_COG_BUTTON: (f32, f32, f32, f32) = (334.0, 646.0, 22.0, 22.0);
 const PROCESS_BUTTON: (f32, f32, f32, f32) = (130.0, 750.0, 216.0, 28.0);
 fn processing_menu_rect(resolution: bool) -> (f32, f32, f32, f32) {
     let r = if resolution {
@@ -280,15 +281,19 @@ fn band_rect(i: usize) -> (f32, f32, f32, f32) {
         52.0,
     )
 }
-fn band_dyn_power_rect() -> (f32, f32, f32, f32) {
-    (GX + 8.0, GRAPH_BOTTOM - 48.0, 28.0, 28.0)
+fn band_dyn_power_rect(dynamic: bool) -> (f32, f32, f32, f32) {
+    let w = if dynamic { 28.0 } else { 130.0 };
+    (GX + 8.0, GRAPH_BOTTOM - 48.0, w, 28.0)
 }
 fn band_bar_rect(i: usize) -> (f32, f32, f32, f32) {
     let r = band_rect(i);
     (r.0 + 12.0, r.1 + 28.0, r.2 - 24.0, 16.0)
 }
 fn mode_rect(i: usize) -> (f32, f32, f32, f32) {
-    (420.0 + i as f32 * 142.0, 597.0, 132.0, 28.0)
+    (420.0 + i as f32 * 142.0, 592.0, 132.0, 26.0)
+}
+fn pse_time_button_rect(i: usize) -> (f32, f32, f32, f32) {
+    (631.0 + i as f32 * 36.0, 671.0, 32.0, 24.0)
 }
 fn global_rect(i: usize) -> (f32, f32, f32, f32) {
     let x = match i {
@@ -344,7 +349,7 @@ impl StripView {
                     return Some((ValueTarget::Band(i), r));
                 }
             }
-            if b.shape.has_gain() {
+            if b.shape.has_gain() && b.dynamic {
                 for i in 0..5 {
                     let r = band_value_rect(i);
                     if inside(x, y, r) {
@@ -834,26 +839,32 @@ impl View for StripView {
                         cx.needs_redraw();
                         return;
                     }
-                    if self.pse_page && inside(x, y, (68.0, 599.0, 100.0, 30.0)) {
+                    if self.pse_page && inside(x, y, PSE_BACK_BUTTON) {
                         self.pse_page = false;
                         cx.needs_redraw();
                         return;
+                    }
+                    if self.pse_page {
+                        for i in 0..6 {
+                            if inside(x, y, pse_time_button_rect(i)) {
+                                let p = &self.params.pse_time;
+                                cx.emit(RawParamEvent::BeginSetParameter(p.as_ptr()));
+                                cx.emit(RawParamEvent::SetParameterNormalized(
+                                    p.as_ptr(),
+                                    i as f32 / 5.0,
+                                ));
+                                cx.emit(RawParamEvent::EndSetParameter(p.as_ptr()));
+                                cx.needs_redraw();
+                                return;
+                            }
+                        }
                     }
                     if let Some(i) = (0..3).find(|i| inside(x, y, mode_rect(*i))) {
                         if self.pse_page {
                             match i {
                                 0 => self.toggle(cx, &self.params.pse_peak),
-                                1 => {
-                                    let p = &self.params.pse_time;
-                                    let next = (p.value() as usize + 1) % 6;
-                                    cx.emit(RawParamEvent::BeginSetParameter(p.as_ptr()));
-                                    cx.emit(RawParamEvent::SetParameterNormalized(
-                                        p.as_ptr(),
-                                        next as f32 / 5.0,
-                                    ));
-                                    cx.emit(RawParamEvent::EndSetParameter(p.as_ptr()));
-                                }
-                                _ => self.toggle(cx, &self.params.pse_listen),
+                                1 => self.toggle(cx, &self.params.pse_listen),
+                                _ => {}
                             }
                         } else {
                             let p = match i {
@@ -981,15 +992,26 @@ impl View for StripView {
                                 .iter()
                                 .any(|b| Some(b.id) == self.selected && b.shape.has_gain())
                             {
-                                if inside(x, y, band_dyn_power_rect()) {
+                                let is_dynamic = self
+                                    .params
+                                    .bands
+                                    .lock()
+                                    .unwrap()
+                                    .iter()
+                                    .find(|b| Some(b.id) == self.selected)
+                                    .map(|b| b.dynamic)
+                                    .unwrap_or(false);
+                                if inside(x, y, band_dyn_power_rect(is_dynamic)) {
                                     self.change(|b| b.dynamic = !b.dynamic);
-                                } else if let Some(i) =
-                                    (0..5).find(|i| inside(x, y, band_bar_rect(*i)))
-                                {
-                                    self.drag = Some(Target::Band(i));
-                                    self.last_drag = (x, y);
-                                    cx.capture();
-                                    self.apply_drag(cx, x, y, false, false);
+                                } else if is_dynamic {
+                                    if let Some(i) =
+                                        (0..5).find(|i| inside(x, y, band_bar_rect(*i)))
+                                    {
+                                        self.drag = Some(Target::Band(i));
+                                        self.last_drag = (x, y);
+                                        cx.capture();
+                                        self.apply_drag(cx, x, y, false, false);
+                                    }
                                 }
                             }
                         }
@@ -1202,9 +1224,8 @@ impl View for StripView {
         };
         d.rect(0.0, 0.0, 1120.0, 800.0, BG);
         d.rect(0.0, 0.0, 1120.0, 82.0, PANEL);
-        d.text(32.0, 43.0, "DB", 28.0, GOLD);
-        d.text(92.0, 39.0, "DAMIAN", 22.0, TEXT);
-        d.text(93.0, 59.0, "SIGNATURE CHANNEL STRIP", 10.0, MUTED);
+        d.text(32.0, 46.0, "dB", 28.0, GOLD);
+        d.text(88.0, 46.0, "SIGNATURE CHANNEL STRIP", 16.0, TEXT);
         d.signature(self.signature.get());
         let eq_bypassed = !self.params.eq_on.value();
         let bands = self.params.bands.lock().unwrap().clone();
@@ -1255,7 +1276,7 @@ impl View for StripView {
         ] {
             let x = freq_x(freq);
             d.line(x, GY, x, GRAPH_BOTTOM, LINE, 1.0);
-            d.text(x - 9.0, GRAPH_BOTTOM + 22.0, label, 13.0, MUTED);
+            d.text(x - 9.0, GRAPH_BOTTOM + 18.0, label, 12.0, MUTED);
         }
         let spectrum: Vec<_> = (0..128)
             .map(|i| {
@@ -1394,13 +1415,11 @@ impl View for StripView {
             .iter()
             .find(|b| Some(b.id) == self.selected && b.shape.has_gain())
         {
-            let active = !eq_bypassed && b.dynamic;
-            let color = if active {
-                COLORS[(b.id as usize - 1) % COLORS.len()]
-            } else {
-                MUTED
-            };
-            let power_rect = band_dyn_power_rect();
+            let color = COLORS[(b.id as usize - 1) % COLORS.len()];
+            let power_rect = band_dyn_power_rect(b.dynamic);
+            let hovered = self
+                .hover
+                .is_some_and(|(hx, hy)| inside(hx, hy, power_rect));
             d.rect(
                 power_rect.0,
                 power_rect.1,
@@ -1408,46 +1427,73 @@ impl View for StripView {
                 power_rect.3,
                 PANEL,
             );
-            d.outline(power_rect, if active { color } else { LINE });
-            d.power_icon(
-                power_rect.0 + power_rect.2 * 0.5,
-                power_rect.1 + power_rect.3 * 0.5,
-                if active { color } else { MUTED },
-            );
-            for (i, label, val, n) in [
-                (
-                    0,
-                    "THRESHOLD",
-                    format!("{:.1} dB", b.threshold),
-                    (b.threshold + 60.0) / 60.0,
-                ),
-                (
-                    1,
-                    "RATIO",
-                    format!("{:.1}:1", b.ratio),
-                    (b.ratio - 1.0) / 19.0,
-                ),
-                (
-                    2,
-                    "ATTACK",
-                    format!("{:.1} ms", b.attack),
-                    (b.attack / 0.1).log(2000.0),
-                ),
-                (
-                    3,
-                    "RELEASE",
-                    format!("{:.0} ms", b.release),
-                    (b.release / 10.0).log(200.0),
-                ),
-                (4, "RANGE", format!("{:.1} dB", b.range), b.range / 24.0),
-            ] {
-                d.control(band_rect(i), label, &val, n as f32, color);
+            if b.dynamic {
+                let active = !eq_bypassed;
+                let c = if active { color } else { MUTED };
+                d.outline(
+                    power_rect,
+                    if hovered {
+                        TEXT
+                    } else if active {
+                        c
+                    } else {
+                        LINE
+                    },
+                );
+                d.power_icon(
+                    power_rect.0 + power_rect.2 * 0.5,
+                    power_rect.1 + power_rect.3 * 0.5,
+                    c,
+                );
+                for (i, label, val, n) in [
+                    (
+                        0,
+                        "THRESHOLD",
+                        format!("{:.1} dB", b.threshold),
+                        (b.threshold + 60.0) / 60.0,
+                    ),
+                    (
+                        1,
+                        "RATIO",
+                        format!("{:.1}:1", b.ratio),
+                        (b.ratio - 1.0) / 19.0,
+                    ),
+                    (
+                        2,
+                        "ATTACK",
+                        format!("{:.1} ms", b.attack),
+                        (b.attack / 0.1).log(2000.0),
+                    ),
+                    (
+                        3,
+                        "RELEASE",
+                        format!("{:.0} ms", b.release),
+                        (b.release / 10.0).log(200.0),
+                    ),
+                    (4, "RANGE", format!("{:.1} dB", b.range), b.range / 24.0),
+                ] {
+                    d.control(band_rect(i), label, &val, n as f32, c);
+                }
+            } else {
+                d.outline(power_rect, if hovered { TEXT } else { LINE });
+                d.power_icon(
+                    power_rect.0 + 14.0,
+                    power_rect.1 + power_rect.3 * 0.5,
+                    if hovered { TEXT } else { MUTED },
+                );
+                d.text(
+                    power_rect.0 + 28.0,
+                    power_rect.1 + power_rect.3 * 0.5 + 4.0,
+                    "BAND DYNAMICS",
+                    11.0,
+                    if hovered { TEXT } else { MUTED },
+                );
             }
         }
         let comp_bypassed = !self.params.comp_on.value();
         if self.pse_page {
-            d.button((68.0, 599.0, 100.0, 30.0), "< BACK", false, TEXT);
-            d.text(184.0, 622.0, "PSE", 16.0, GOLD);
+            d.button(PSE_BACK_BUTTON, "< BACK", false, TEXT);
+            d.text(176.0, 611.0, "PSE", 16.0, GOLD);
             d.button(
                 mode_rect(0),
                 if self.params.pse_peak.value() {
@@ -1460,12 +1506,6 @@ impl View for StripView {
             );
             d.button(
                 mode_rect(1),
-                &format!("TIME: {} >", self.params.pse_time.value().label()),
-                true,
-                GOLD,
-            );
-            d.button(
-                mode_rect(2),
                 "LISTEN SC",
                 self.params.pse_listen.value(),
                 TEAL,
@@ -1473,6 +1513,13 @@ impl View for StripView {
             d.bypass_button(COMP_POWER, comp_bypassed, GOLD);
             d.rect(32.0, 634.0, 1054.0, 96.0, PANEL);
             d.outline((32.0, 634.0, 1054.0, 96.0), LINE);
+
+            // Bay dividers
+            d.line(372.0, 646.0, 372.0, 718.0, LINE, 1.0);
+            d.line(492.0, 646.0, 492.0, 718.0, LINE, 1.0);
+            d.line(615.0, 646.0, 615.0, 718.0, LINE, 1.0);
+            d.line(858.0, 646.0, 858.0, 718.0, LINE, 1.0);
+
             for (i, label) in [
                 (7, "DEPTH"),
                 (8, "HYSTERESIS"),
@@ -1495,30 +1542,83 @@ impl View for StripView {
                     comp_bypassed,
                 );
             }
-            d.text(650.0, 667.0, "PRIMARY SOURCE ENHANCER", 13.0, GOLD);
-            d.text(650.0, 688.0, "SC HPF SHARED WITH COMPRESSOR", 11.0, MUTED);
-            d.text(
-                650.0,
-                709.0,
-                if self.params.pse_listen.value() {
-                    "SIDECHAIN AUDITION ACTIVE"
+
+            // 6-button radio set for Time Constant next to Knee control
+            d.text_centered(
+                737.0,
+                660.0,
+                "TIME",
+                9.2,
+                if comp_bypassed { MUTED } else { TEXT },
+            );
+            for i in 0..6 {
+                let r = pse_time_button_rect(i);
+                let selected = self.params.pse_time.value() as usize == i;
+                let hovered =
+                    !comp_bypassed && self.hover.is_some_and(|(hx, hy)| inside(hx, hy, r));
+                let lbl = ["A", "B", "C", "D", "E", "F"][i];
+                d.rect(r.0, r.1, r.2, r.3, PANEL);
+                if selected {
+                    d.rect(
+                        r.0,
+                        r.1 + r.3 - 2.0,
+                        r.2,
+                        2.0,
+                        if comp_bypassed { MUTED } else { GOLD },
+                    );
+                    d.outline(r, if comp_bypassed { LINE } else { GOLD });
+                    d.text_centered(
+                        r.0 + r.2 * 0.5,
+                        r.1 + r.3 * 0.5 + 4.0,
+                        lbl,
+                        11.0,
+                        if comp_bypassed { MUTED } else { GOLD },
+                    );
                 } else {
-                    "TIME BUTTON CYCLES A THROUGH F"
-                },
-                11.0,
-                MUTED,
+                    d.outline(r, if hovered { TEXT } else { LINE });
+                    d.text_centered(
+                        r.0 + r.2 * 0.5,
+                        r.1 + r.3 * 0.5 + 4.0,
+                        lbl,
+                        11.0,
+                        if hovered { TEXT } else { MUTED },
+                    );
+                }
+            }
+            let (attack, release) = self
+                .params
+                .pse_time
+                .value()
+                .times(self.params.pse_peak.value());
+            let time_str = if self.params.pse_peak.value() {
+                if release >= 1.0 {
+                    format!("{:.0} ms / {:.1} s", attack * 1000.0, release)
+                } else {
+                    format!("{:.0} ms / {:.0} ms", attack * 1000.0, release * 1000.0)
+                }
+            } else if release >= 1.0 {
+                format!("{:.1} s", release)
+            } else {
+                format!("{:.0} ms", release * 1000.0)
+            };
+            d.text_centered(
+                737.0,
+                713.0,
+                &time_str,
+                10.0,
+                if comp_bypassed { MUTED } else { GOLD },
             );
         } else {
             d.text(
                 32.0,
-                622.0,
+                610.0,
                 "02",
                 13.0,
                 if comp_bypassed { MUTED } else { GOLD },
             );
             d.text(
                 68.0,
-                622.0,
+                611.0,
                 "VOICE COMPRESSOR",
                 16.0,
                 if comp_bypassed { MUTED } else { TEXT },
@@ -1528,7 +1628,12 @@ impl View for StripView {
                 (1, "AUTO MAKEUP", self.params.auto_makeup.value()),
                 (2, "LINKED STEREO", self.params.stereo_link.value()),
             ] {
-                d.button(mode_rect(i), label, active, if comp_bypassed { MUTED } else { GOLD });
+                d.button(
+                    mode_rect(i),
+                    label,
+                    active,
+                    if comp_bypassed { MUTED } else { GOLD },
+                );
             }
             d.bypass_button(COMP_POWER, comp_bypassed, GOLD);
 
@@ -1577,18 +1682,21 @@ impl View for StripView {
                 GOLD,
                 comp_bypassed,
             );
-            d.rect(
-                PSE_COG_BUTTON.0,
-                PSE_COG_BUTTON.1,
-                PSE_COG_BUTTON.2,
-                PSE_COG_BUTTON.3,
-                PANEL,
-            );
-            d.outline(PSE_COG_BUTTON, LINE);
+            let cog_hover = !comp_bypassed
+                && self
+                    .hover
+                    .is_some_and(|(hx, hy)| inside(hx, hy, PSE_COG_BUTTON));
+            let cog_color = if comp_bypassed {
+                MUTED
+            } else if cog_hover {
+                GOLD
+            } else {
+                MUTED
+            };
             d.cog_icon(
                 PSE_COG_BUTTON.0 + PSE_COG_BUTTON.2 * 0.5,
                 PSE_COG_BUTTON.1 + PSE_COG_BUTTON.3 * 0.5,
-                if comp_bypassed { MUTED } else { GOLD },
+                cog_color,
             );
 
             let p2 = self.param(2);
@@ -1645,25 +1753,32 @@ impl View for StripView {
                 if comp_bypassed { MUTED } else { GOLD },
             );
             d.text(872.0 + 82.0, 640.0 + 44.0, "dB", 11.0, MUTED);
-            d.rect(872.0 + 12.0, 640.0 + 58.0, 186.0, 6.0, LINE);
-            d.rect(
-                872.0 + 12.0,
-                640.0 + 58.0,
-                186.0 * (gr / 30.0).clamp(0.0, 1.0),
-                6.0,
-                if comp_bypassed { MUTED } else { GOLD },
-            );
+            let meter_x = 872.0 + 12.0;
+            let meter_y = 640.0 + 58.0;
+            let meter_w = 186.0;
+            let meter_h = 6.0;
+            d.rect(meter_x, meter_y, meter_w, meter_h, LINE);
+            let active_w = meter_w * (gr / 30.0).clamp(0.0, 1.0);
+            if !comp_bypassed && active_w > 0.5 {
+                d.rect(
+                    meter_x + meter_w - active_w,
+                    meter_y,
+                    active_w,
+                    meter_h,
+                    GOLD,
+                );
+            }
             for (pos_frac, lbl) in [
-                (0.0, "0"),
-                (0.1, "3"),
-                (0.2, "6"),
-                (0.4, "12"),
-                (0.6, "18"),
-                (1.0, "30"),
+                (0.0, "30"),
+                (0.4, "18"),
+                (0.6, "12"),
+                (0.8, "6"),
+                (0.9, "3"),
+                (1.0, "0"),
             ] {
-                let lx = 872.0 + 12.0 + 186.0 * pos_frac;
+                let lx = meter_x + meter_w * pos_frac;
                 d.line(lx, 640.0 + 66.0, lx, 640.0 + 70.0, LINE, 1.0);
-                d.text(lx - 4.0, 640.0 + 79.0, lbl, 8.5, MUTED);
+                d.text_centered(lx, 640.0 + 79.0, lbl, 8.5, MUTED);
             }
         }
 
@@ -2127,18 +2242,29 @@ impl Draw<'_> {
         self.rect(r.0 + 12.0, y, (r.2 - 24.0) * n.clamp(0.0, 1.0), 16.0, color);
     }
     fn cog_icon(&mut self, cx: f32, cy: f32, color: C) {
-        self.circle(cx, cy, 2.5, color, false);
+        let mut p = Path::new();
+        let r_outer = 6.0 * self.s;
+        let r_inner = 3.8 * self.s;
+        let ox = self.ox + cx * self.s;
+        let oy = self.oy + cy * self.s;
         for i in 0..6 {
-            let a = (i as f32 * 60.0).to_radians();
-            self.line(
-                cx + 3.8 * a.cos(),
-                cy + 3.8 * a.sin(),
-                cx + 5.5 * a.cos(),
-                cy + 5.5 * a.sin(),
-                color,
-                1.5,
-            );
+            let mid = (i as f32 * 60.0).to_radians();
+            let a1 = mid - 18.0_f32.to_radians();
+            let a2 = mid - 8.0_f32.to_radians();
+            let a3 = mid + 8.0_f32.to_radians();
+            let a4 = mid + 18.0_f32.to_radians();
+            if i == 0 {
+                p.move_to(ox + r_inner * a1.cos(), oy + r_inner * a1.sin());
+            } else {
+                p.line_to(ox + r_inner * a1.cos(), oy + r_inner * a1.sin());
+            }
+            p.line_to(ox + r_outer * a2.cos(), oy + r_outer * a2.sin());
+            p.line_to(ox + r_outer * a3.cos(), oy + r_outer * a3.sin());
+            p.line_to(ox + r_inner * a4.cos(), oy + r_inner * a4.sin());
         }
+        p.close();
+        self.c.fill_path(&p, &Paint::color(self.color(color)));
+        self.circle(cx, cy, 1.8, PANEL, true);
     }
     fn headphones(&mut self, cx: f32, cy: f32, color: C) {
         let mut points = Vec::new();

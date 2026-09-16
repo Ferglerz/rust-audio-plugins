@@ -287,7 +287,7 @@ impl PseTimeConstant {
     pub fn label(self) -> &'static str {
         ["A", "B", "C", "D", "E", "F"][self as usize]
     }
-    fn times(self, peak: bool) -> (f64, f64) {
+    pub fn times(self, peak: bool) -> (f64, f64) {
         if peak {
             (0.020, [0.020, 0.200, 1.0, 2.0, 5.0, 30.0][self as usize])
         } else {
