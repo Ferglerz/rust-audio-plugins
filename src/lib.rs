@@ -3,6 +3,7 @@ use std::sync::Arc;
 pub mod band;
 pub mod dsp;
 mod engine;
+pub mod lift;
 mod params;
 mod processing;
 mod ui;
@@ -16,7 +17,11 @@ pub struct Damian {
 impl Default for Damian {
     fn default() -> Self {
         let params = Arc::new(StripParams::default());
-        let shared = Shared::new(params.bands.clone());
+        let shared = Shared::new(
+            params.bands.clone(),
+            params.eq2_bands.clone(),
+            params.lift_bands.clone(),
+        );
         Self {
             params,
             engine: Engine::new(shared.clone(), 44100.0),
@@ -113,7 +118,9 @@ impl Plugin for Damian {
                 x,
                 settings,
                 self.params.eq_on.value(),
+                self.params.eq2_on.value(),
                 self.params.comp_on.value(),
+                self.params.comp_pre.value(),
                 self.params.bypass.value(),
             );
             for (i, s) in frame.iter_mut().enumerate() {

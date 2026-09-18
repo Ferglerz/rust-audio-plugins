@@ -1,6 +1,7 @@
 use crate::{
     band::Band,
     dsp::{gain_db, BandRuntime, CompSettings, VocalComp},
+    lift::{LiftBand, LiftProcessor, LIFT_ID_BASE, LIFT_LATENCY},
     processing::{Config, Delay, EqPath, ProcessingMode},
 };
 use atomic_float::AtomicF32;
@@ -14,33 +15,58 @@ use std::time::Duration;
 
 pub struct Bank {
     pub bands: Vec<BandRuntime>,
+    pub eq2_bands: Vec<BandRuntime>,
     pub sr: f64,
     config: Config,
     path: EqPath,
     dry: Delay,
 }
 impl Bank {
-    fn new(snapshot: &[Band], sr: f64, config: Config) -> Self {
+    fn new(snapshot: &[Band], snapshot2: &[Band], sr: f64, config: Config) -> Self {
+        let mut combined = Vec::with_capacity(snapshot.len() + snapshot2.len());
+        combined.extend_from_slice(snapshot);
+        combined.extend_from_slice(snapshot2);
         Self {
             bands: snapshot
                 .iter()
                 .cloned()
                 .map(|b| BandRuntime::new(b, config.mode.rate(sr)))
                 .collect(),
+            eq2_bands: snapshot2
+                .iter()
+                .cloned()
+                .map(|b| BandRuntime::new(b, config.mode.rate(sr)))
+                .collect(),
             sr,
             config,
-            path: EqPath::new(snapshot, sr, config),
+            path: EqPath::new(&combined, sr, config),
             dry: Delay::new(config.latency(sr)),
         }
     }
-    fn tick(&mut self, input: [f64; 2]) -> ([f64; 2], [f64; 2]) {
-        (
-            self.path.tick(input, &mut self.bands, self.sr),
-            self.dry.tick(input),
-        )
+    fn tick(&mut self, input: [f64; 2], eq1_mix: f64, eq2_mix: f64) -> ([f64; 2], [f64; 2]) {
+        let dry = self.dry.tick(input);
+        let total_eq_mix = eq1_mix.max(eq2_mix);
+        if total_eq_mix == 0.0 {
+            (dry, dry)
+        } else {
+            (
+                self.path.tick_dual(
+                    input,
+                    &mut self.bands,
+                    &mut self.eq2_bands,
+                    self.sr,
+                    eq1_mix,
+                    eq2_mix,
+                ),
+                dry,
+            )
+        }
     }
     fn reset(&mut self) {
         for b in &mut self.bands {
+            b.reset();
+        }
+        for b in &mut self.eq2_bands {
             b.reset();
         }
         self.path.reset();
@@ -49,14 +75,19 @@ impl Bank {
 }
 pub struct Shared {
     bands: Arc<Mutex<Vec<Band>>>,
+    pub eq2_bands: Arc<Mutex<Vec<Band>>>,
+    pub lift_bands: Arc<Mutex<Vec<LiftBand>>>,
     pub requested_config: AtomicU32,
     pub active_config: AtomicU32,
     pub latency: AtomicU32,
     pub input: AtomicF32,
     pub output: AtomicF32,
     pub gr: AtomicF32,
+    pub sc_level: AtomicF32,
     pub sample_rate: AtomicF32,
     pub spectrum: [AtomicF32; 128],
+    pub lift_band_gr: [AtomicF32; 8],
+    pub lift_bin_gr: [AtomicF32; 256],
     pub selected_id: std::sync::atomic::AtomicU64,
     pub solo_id: std::sync::atomic::AtomicU64,
     pub band_gr: AtomicF32,
@@ -66,17 +97,26 @@ pub struct Shared {
     worker: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 impl Shared {
-    pub fn new(bands: Arc<Mutex<Vec<Band>>>) -> Arc<Self> {
+    pub fn new(
+        bands: Arc<Mutex<Vec<Band>>>,
+        eq2_bands: Arc<Mutex<Vec<Band>>>,
+        lift_bands: Arc<Mutex<Vec<LiftBand>>>,
+    ) -> Arc<Self> {
         let shared = Arc::new(Self {
             bands: bands.clone(),
+            eq2_bands: eq2_bands.clone(),
+            lift_bands: lift_bands.clone(),
             requested_config: AtomicU32::new(Config::default().encode()),
             active_config: AtomicU32::new(Config::default().encode()),
             latency: AtomicU32::new(0),
             input: AtomicF32::new(-90.0),
             output: AtomicF32::new(-90.0),
             gr: AtomicF32::new(0.0),
+            sc_level: AtomicF32::new(-90.0),
             sample_rate: AtomicF32::new(44100.0),
             spectrum: std::array::from_fn(|_| AtomicF32::new(-90.0)),
+            lift_band_gr: std::array::from_fn(|_| AtomicF32::new(0.0)),
+            lift_bin_gr: std::array::from_fn(|_| AtomicF32::new(0.0)),
             selected_id: std::sync::atomic::AtomicU64::new(0),
             solo_id: std::sync::atomic::AtomicU64::new(0),
             band_gr: AtomicF32::new(0.0),
@@ -88,7 +128,7 @@ impl Shared {
         let weak = Arc::downgrade(&shared);
         let stop = shared.stop.clone();
         let handle = std::thread::spawn(move || {
-            let mut last: Option<(Vec<Band>, f64, Config)> = None;
+            let mut last: Option<(Vec<Band>, Vec<Band>, f64, Config)> = None;
             while !stop.load(Ordering::Relaxed) {
                 if let Some(s) = weak.upgrade() {
                     while s.retired.pop().is_some() {}
@@ -96,12 +136,13 @@ impl Shared {
                         let sr = s.sample_rate.load(Ordering::Relaxed) as f64;
                         let config = Config::decode(s.requested_config.load(Ordering::Relaxed));
                         let snapshot = bands.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                        if last.as_ref().is_none_or(|(old, rate, old_config)| {
-                            *old != snapshot || *rate != sr || *old_config != config
+                        let snapshot2 = eq2_bands.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                        if last.as_ref().is_none_or(|(old1, old2, rate, old_config)| {
+                            *old1 != snapshot || *old2 != snapshot2 || *rate != sr || *old_config != config
                         }) {
-                            let bank = Box::new(Bank::new(&snapshot, sr, config));
+                            let bank = Box::new(Bank::new(&snapshot, &snapshot2, sr, config));
                             if s.pending.push(bank).is_ok() {
-                                last = Some((snapshot, sr, config));
+                                last = Some((snapshot, snapshot2, sr, config));
                             }
                         }
                     }
@@ -139,12 +180,16 @@ pub struct Engine {
     position: usize,
     in_peak: f64,
     out_peak: f64,
-    eq_mix: f64,
+    eq1_mix: f64,
+    eq2_mix: f64,
     comp_mix: f64,
+    comp_pre_mix: f64,
     bypass_mix: f64,
     solo_filters: [crate::dsp::Cascade; 2],
     solo_mix: f64,
     solo_topology: Option<(u64, crate::band::Shape, u8)>,
+    lift: LiftProcessor,
+    lift_bands: Vec<LiftBand>,
 }
 impl Engine {
     pub fn new(shared: Arc<Shared>, sr: f64) -> Self {
@@ -154,15 +199,26 @@ impl Engine {
         let config = Config::decode(shared.requested_config.load(Ordering::Relaxed));
         let bank = Box::new(Bank::new(
             &shared.bands.lock().unwrap_or_else(|e| e.into_inner()),
+            &shared.eq2_bands.lock().unwrap_or_else(|e| e.into_inner()),
             sr,
             config,
         ));
+        let lift_bands = shared
+            .lift_bands
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let lift_latency = if lift_bands.iter().any(|b| b.enabled) {
+            LIFT_LATENCY as u32
+        } else {
+            0
+        };
         shared
             .active_config
             .store(config.encode(), Ordering::Relaxed);
         shared
             .latency
-            .store(config.latency(sr) as u32, Ordering::Relaxed);
+            .store((config.latency(sr) as u32) + lift_latency, Ordering::Relaxed);
         Self {
             shared,
             bank,
@@ -179,12 +235,16 @@ impl Engine {
             position: 0,
             in_peak: 0.0,
             out_peak: 0.0,
-            eq_mix: 1.0,
+            eq1_mix: 1.0,
+            eq2_mix: 1.0,
             comp_mix: 1.0,
+            comp_pre_mix: 0.0,
             bypass_mix: 0.0,
             solo_filters: [crate::dsp::Cascade::default(); 2],
             solo_mix: 0.0,
             solo_topology: None,
+            lift: LiftProcessor::new(),
+            lift_bands,
         }
     }
     pub fn reset(&mut self) {
@@ -201,11 +261,21 @@ impl Engine {
         self.solo_filters = [crate::dsp::Cascade::default(); 2];
         self.solo_mix = 0.0;
         self.solo_topology = None;
+        self.lift.reset();
     }
     pub fn latency(&self) -> u32 {
-        self.bank.config.latency(self.sr) as u32
+        let lift_latency = if self.lift_bands.iter().any(|b| b.enabled) {
+            LIFT_LATENCY as u32
+        } else {
+            0
+        };
+        self.bank.config.latency(self.sr) as u32 + lift_latency
     }
     pub fn sync(&mut self) {
+        if let Ok(guard) = self.shared.lift_bands.try_lock() {
+            self.lift_bands = guard.clone();
+            self.shared.latency.store(self.latency(), Ordering::Relaxed);
+        }
         if self.transition == 0 && !self.shared.retired.is_full() {
             if let Some(old) = self.previous.take() {
                 let result = self.shared.retired.push(old);
@@ -223,6 +293,17 @@ impl Engine {
                             j += 1;
                         }
                         if let Some(old) = self.bank.bands.get(j) {
+                            if old.band.id == b.band.id && next.config == self.bank.config {
+                                b.inherit(old);
+                            }
+                        }
+                    }
+                    let mut j2 = 0;
+                    for b in &mut next.eq2_bands {
+                        while j2 < self.bank.eq2_bands.len() && self.bank.eq2_bands[j2].band.id < b.band.id {
+                            j2 += 1;
+                        }
+                        if let Some(old) = self.bank.eq2_bands.get(j2) {
                             if old.band.id == b.band.id && next.config == self.bank.config {
                                 b.inherit(old);
                             }
@@ -249,14 +330,33 @@ impl Engine {
         input: [f64; 2],
         settings: CompSettings,
         eq_on: bool,
+        eq2_on: bool,
         comp_on: bool,
+        comp_pre: bool,
         bypass: bool,
     ) -> [f64; 2] {
         let k = 1.0 - (-1.0 / (self.sr * 0.010)).exp();
-        self.eq_mix += k * (f64::from(eq_on) - self.eq_mix);
+        self.eq1_mix += k * (f64::from(eq_on) - self.eq1_mix);
+        self.eq2_mix += k * (f64::from(eq2_on) - self.eq2_mix);
         self.comp_mix += k * (f64::from(comp_on) - self.comp_mix);
+        self.comp_pre_mix += k * (f64::from(comp_pre) - self.comp_pre_mix);
         self.bypass_mix += k * (f64::from(bypass) - self.bypass_mix);
-        let (mut x, mut dry) = self.bank.tick(input);
+
+        let effective_comp_mix = self.comp_mix * (1.0 - self.solo_mix);
+        let is_pre = self.comp_pre_mix > 0.5;
+
+        let (bank_in, pre_gr, pre_sc) = if is_pre {
+            let (compressed, gr, sc) = self.comp.tick(input, settings, self.sr);
+            let comp_in = [
+                input[0] + effective_comp_mix * (compressed[0] - input[0]),
+                input[1] + effective_comp_mix * (compressed[1] - input[1]),
+            ];
+            (comp_in, gr, sc)
+        } else {
+            (input, 0.0, -90.0)
+        };
+
+        let (mut x, mut dry) = self.bank.tick(bank_in, self.eq1_mix, self.eq2_mix);
         let selected = self.shared.selected_id.load(Ordering::Relaxed);
         let band_gr = if self.bank.config.mode == ProcessingMode::LinearPhase {
             0.0
@@ -264,12 +364,13 @@ impl Engine {
             self.bank
                 .bands
                 .iter()
+                .chain(self.bank.eq2_bands.iter())
                 .find(|b| b.band.id == selected)
                 .map_or(0.0, |b| b.reduction)
         };
         if self.transition > 0 {
             if let Some(previous) = &mut self.previous {
-                let (old, old_dry) = previous.tick(input);
+                let (old, old_dry) = previous.tick(bank_in, self.eq1_mix, self.eq2_mix);
                 if previous.config == self.bank.config {
                     dry = old_dry;
                 }
@@ -288,18 +389,35 @@ impl Engine {
             }
             self.transition -= 1;
         }
-        for i in 0..2 {
-            x[i] = dry[i] + self.eq_mix * (x[i] - dry[i]);
+        let lift_active = self.lift_bands.iter().any(|b| b.enabled);
+        let (lift_out, eq_delayed, dry_delayed) =
+            self.lift.tick(dry, x, &self.lift_bands, self.sr);
+        for i in 0..8 {
+            self.shared.lift_band_gr[i].store(self.lift.band_gr[i], Ordering::Relaxed);
+        }
+        for i in 0..256 {
+            self.shared.lift_bin_gr[i].store(self.lift.bin_gr[i], Ordering::Relaxed);
+        }
+        if lift_active {
+            let total_eq_mix = self.eq1_mix.max(self.eq2_mix);
+            for i in 0..2 {
+                x[i] = eq_delayed[i] + total_eq_mix * lift_out[i];
+            }
+            dry = dry_delayed;
         }
         let solo_id = self.shared.solo_id.load(Ordering::Relaxed);
         let is_solo = solo_id != 0;
         let k_solo = 1.0 - (-1.0 / (self.sr * 0.008)).exp();
         self.solo_mix += k_solo * (f64::from(is_solo) - self.solo_mix);
 
-        let solo_coeff = if is_solo {
+        let is_lift_solo = is_solo && solo_id >= LIFT_ID_BASE;
+        let solo_sample = if is_lift_solo {
+            Some([lift_out[0] * 1.5, lift_out[1] * 1.5])
+        } else if is_solo {
             self.bank
                 .bands
                 .iter()
+                .chain(self.bank.eq2_bands.iter())
                 .find(|b| b.band.id == solo_id)
                 .map(|b| {
                     let mut audition = b.band.clone();
@@ -314,22 +432,28 @@ impl Engine {
                     }
                     crate::dsp::BandCoeffs::make(&audition, self.sr)
                 })
+                .map(|c| {
+                    [
+                        self.solo_filters[0].tick(dry[0], c) * 1.5,
+                        self.solo_filters[1].tick(dry[1], c) * 1.5,
+                    ]
+                })
         } else {
             None
         };
 
-        let solo_sample = solo_coeff.map(|c| {
-            [
-                self.solo_filters[0].tick(dry[0], c) * 1.5,
-                self.solo_filters[1].tick(dry[1], c) * 1.5,
-            ]
-        });
+        let (gr, sc_level) = if !is_pre {
+            let (compressed, gr, sc) = self.comp.tick(x, settings, self.sr);
+            for i in 0..2 {
+                x[i] += effective_comp_mix * (compressed[i] - x[i]);
+            }
+            (gr, sc)
+        } else {
+            (pre_gr, pre_sc)
+        };
 
-        let (compressed, gr) = self.comp.tick(x, settings, self.sr);
-        let effective_comp_mix = self.comp_mix * (1.0 - self.solo_mix);
         for i in 0..2 {
-            let processed = x[i] + effective_comp_mix * (compressed[i] - x[i]);
-            x[i] = processed + self.bypass_mix * (dry[i] - processed);
+            x[i] += self.bypass_mix * (dry[i] - x[i]);
             if let Some(s) = solo_sample {
                 x[i] = (1.0 - self.solo_mix) * x[i] + self.solo_mix * s[i];
             }
@@ -350,6 +474,16 @@ impl Engine {
         };
         self.samples[self.position] = Complex::new(sample as f32 * self.window[self.position], 0.0);
         self.position += 1;
+        if self.position % 256 == 0 {
+            self.shared.sc_level.store(
+                if comp_on && !bypass { (sc_level as f32).max(-90.0) } else { -90.0 },
+                Ordering::Relaxed,
+            );
+            self.shared.gr.store(
+                (gr * self.comp_mix * (1.0 - self.bypass_mix)) as f32,
+                Ordering::Relaxed,
+            );
+        }
         if self.position == 2048 {
             self.position = 0;
             self.fft
@@ -379,6 +513,10 @@ impl Engine {
                 (gr * self.comp_mix * (1.0 - self.bypass_mix)) as f32,
                 Ordering::Relaxed,
             );
+            self.shared.sc_level.store(
+                if comp_on && !bypass { (sc_level as f32).max(-90.0) } else { -90.0 },
+                Ordering::Relaxed,
+            );
             self.shared.band_gr.store(band_gr as f32, Ordering::Relaxed);
             self.in_peak = 0.0;
             self.out_peak = 0.0;
@@ -390,7 +528,11 @@ impl Engine {
 mod tests {
     use super::*;
     fn isolated_shared() -> Arc<Shared> {
-        let shared = Shared::new(Arc::new(Mutex::new(vec![])));
+        let shared = Shared::new(
+            Arc::new(Mutex::new(vec![])),
+            Arc::new(Mutex::new(vec![])),
+            Arc::new(Mutex::new(vec![])),
+        );
         shared.stop.store(true, Ordering::Relaxed);
         if let Some(worker) = shared.worker.lock().unwrap().take() {
             worker.join().unwrap();
@@ -412,7 +554,8 @@ mod tests {
                     .requested_config
                     .store(config.encode(), Ordering::Relaxed);
                 let mut engine = Engine::new(shared.clone(), 44100.0);
-                engine.eq_mix = if global_bypass { 1.0 } else { 0.0 };
+                engine.eq1_mix = if global_bypass { 1.0 } else { 0.0 };
+                engine.eq2_mix = if global_bypass { 1.0 } else { 0.0 };
                 engine.bypass_mix = if global_bypass { 1.0 } else { 0.0 };
                 let latency = engine.latency() as usize;
                 let settings = CompSettings::default();
@@ -423,6 +566,7 @@ mod tests {
                                 gain: 18.0,
                                 ..Band::default()
                             }],
+                            &[],
                             44100.0,
                             config,
                         ));
@@ -430,8 +574,15 @@ mod tests {
                         engine.sync();
                     }
                     let x = (i as f64 * 0.1).sin() * 0.3;
-                    let y =
-                        engine.tick([x, -x], settings, global_bypass, false, global_bypass);
+                    let y = engine.tick(
+                        [x, -x],
+                        settings,
+                        global_bypass,
+                        global_bypass,
+                        false,
+                        false,
+                        global_bypass,
+                    );
                     let expected = if i >= latency {
                         ((i - latency) as f64 * 0.1).sin() * 0.3
                     } else {
@@ -461,14 +612,14 @@ mod tests {
             .store(config.encode(), Ordering::Relaxed);
         assert!(shared
             .pending
-            .push(Box::new(Bank::new(&[], 48000.0, Config::default())))
+            .push(Box::new(Bank::new(&[], &[], 48000.0, Config::default())))
             .is_ok());
         engine.sync();
         assert_eq!(engine.latency(), 0);
         while shared.retired.pop().is_some() {}
         assert!(shared
             .pending
-            .push(Box::new(Bank::new(&[], 48000.0, config)))
+            .push(Box::new(Bank::new(&[], &[], 48000.0, config)))
             .is_ok());
         engine.sync();
         assert_eq!(engine.latency() as usize, config.latency(48000.0));
@@ -480,7 +631,7 @@ mod tests {
         engine.reset();
         for _ in 0..10000 {
             assert_eq!(
-                engine.tick([0.0; 2], CompSettings::default(), true, true, false),
+                engine.tick([0.0; 2], CompSettings::default(), true, true, true, false, false),
                 [0.0; 2]
             );
         }
@@ -495,7 +646,11 @@ mod tests {
                 })
                 .collect(),
         ));
-        let shared = Shared::new(bands);
+        let shared = Shared::new(
+            bands,
+            Arc::new(Mutex::new(vec![])),
+            Arc::new(Mutex::new(vec![])),
+        );
         let mut engine = Engine::new(shared, 48000.0);
         assert_eq!(engine.bank.bands.len(), 200);
         let settings = CompSettings {
@@ -508,16 +663,20 @@ mod tests {
         };
         for i in 0..4096 {
             let x = (i as f64 * 0.1).sin() * 0.5;
-            let out = engine.tick([x, x], settings, true, true, false);
+            let out = engine.tick([x, x], settings, true, true, true, false, false);
             assert!((out[0] - x).abs() < 1e-9);
         }
     }
     #[test]
     fn bypass_preserves_input_after_ramp() {
-        let shared = Shared::new(Arc::new(Mutex::new(vec![Band {
-            gain: 18.0,
-            ..Band::default()
-        }])));
+        let shared = Shared::new(
+            Arc::new(Mutex::new(vec![Band {
+                gain: 18.0,
+                ..Band::default()
+            }])),
+            Arc::new(Mutex::new(vec![])),
+            Arc::new(Mutex::new(vec![])),
+        );
         let mut engine = Engine::new(shared, 48000.0);
         let settings = CompSettings {
             threshold: -30.0,
@@ -529,7 +688,7 @@ mod tests {
         };
         for i in 0..24000 {
             let x = (i as f64 * 0.13).sin() * 0.1;
-            let out = engine.tick([x, x], settings, true, true, true);
+            let out = engine.tick([x, x], settings, true, true, true, false, true);
             if i > 23000 {
                 assert!((out[0] - x).abs() < 1e-10);
             }
@@ -544,7 +703,11 @@ mod tests {
             q: 2.0,
             ..Band::default()
         };
-        let shared = Shared::new(Arc::new(Mutex::new(vec![band])));
+        let shared = Shared::new(
+            Arc::new(Mutex::new(vec![band])),
+            Arc::new(Mutex::new(vec![])),
+            Arc::new(Mutex::new(vec![])),
+        );
         let mut engine = Engine::new(shared.clone(), 48000.0);
         let settings = CompSettings {
             threshold: 0.0,
@@ -554,19 +717,189 @@ mod tests {
             wet: 1.0,
             ..CompSettings::default()
         };
-        // Activate solo
         shared.solo_id.store(1, Ordering::Relaxed);
-        // Feed distant frequency (e.g. 100 Hz vs 1000 Hz band)
         let mut distant_energy = 0.0;
         for i in 0..4800 {
             let t = i as f64 / 48000.0;
             let x = (2.0 * std::f64::consts::PI * 100.0 * t).sin();
-            let out = engine.tick([x, x], settings, true, true, false);
+            let out = engine.tick([x, x], settings, true, true, true, false, false);
             if i > 2400 {
                 distant_energy += out[0].powi(2);
             }
         }
-        // At 100 Hz with 1000 Hz bandpass (Q=2), energy must be heavily attenuated (< 0.1)
         assert!(distant_energy / 2400.0 < 0.05);
+    }
+    #[test]
+    fn lift_band_parallel_processing_and_solo() {
+        let lift = LiftBand {
+            id: LIFT_ID_BASE + 1,
+            shape: crate::band::Shape::HighShelf,
+            freq: 10000.0,
+            gain: 0.0,
+            threshold: -30.0,
+            ratio: 4.0,
+            attack: 1.0,
+            release: 50.0,
+            range: 12.0,
+            enabled: true,
+            ..LiftBand::default()
+        };
+        let shared = Shared::new(
+            Arc::new(Mutex::new(vec![])),
+            Arc::new(Mutex::new(vec![])),
+            Arc::new(Mutex::new(vec![lift])),
+        );
+        let mut engine = Engine::new(shared.clone(), 48000.0);
+        assert_eq!(engine.latency(), LIFT_LATENCY as u32);
+        let settings = CompSettings::default();
+
+        // Feed 10 kHz tone
+        for i in 0..8192 {
+            let t = i as f64 / 48000.0;
+            let x = (2.0 * std::f64::consts::PI * 10000.0 * t).sin() * 0.5;
+            let out = engine.tick([x, x], settings, true, true, false, false, false);
+            if i > LIFT_LATENCY + 2048 {
+                assert!(out[0].is_finite() && out[1].is_finite());
+            }
+        }
+
+        // Test soloing the Lift band
+        shared.solo_id.store(LIFT_ID_BASE + 1, Ordering::Relaxed);
+        let mut solo_energy = 0.0;
+        for i in 0..4800 {
+            let t = i as f64 / 48000.0;
+            let x = (2.0 * std::f64::consts::PI * 10000.0 * t).sin() * 0.5;
+            let out = engine.tick([x, x], settings, true, true, false, false, false);
+            if i > 4000 {
+                solo_energy += out[0].powi(2);
+            }
+        }
+        assert!(solo_energy > 0.01);
+    }
+    #[test]
+    fn dual_eq_series_processing_both_apply_and_bypass_independently() {
+        let b1 = Band {
+            id: 1,
+            freq: 1000.0,
+            gain: 6.0,
+            q: 1.0,
+            ..Band::default()
+        };
+        let b2 = Band {
+            id: 10_001,
+            freq: 1000.0,
+            gain: 6.0,
+            q: 1.0,
+            ..Band::default()
+        };
+        let shared = Shared::new(
+            Arc::new(Mutex::new(vec![b1])),
+            Arc::new(Mutex::new(vec![b2])),
+            Arc::new(Mutex::new(vec![])),
+        );
+        let mut engine = Engine::new(shared, 48000.0);
+        let settings = CompSettings {
+            threshold: 0.0,
+            gate: -80.0,
+            hpf: 80.0,
+            dry: 0.0,
+            wet: 1.0,
+            ..CompSettings::default()
+        };
+
+        // Let ramps settle
+        for _ in 0..1000 {
+            engine.tick([0.0; 2], settings, true, true, false, false, false);
+        }
+
+        // Both EQs active: 6 dB + 6 dB = +12 dB gain at 1 kHz (approx 4.0x linear gain amplitude)
+        let mut max_both: f64 = 0.0;
+        for i in 0..4800 {
+            let t = i as f64 / 48000.0;
+            let x = (2.0 * std::f64::consts::PI * 1000.0 * t).sin() * 0.1;
+            let out = engine.tick([x, x], settings, true, true, false, false, false);
+            if i > 2400 {
+                max_both = max_both.max(out[0].abs());
+            }
+        }
+        assert!((max_both - 0.4).abs() < 0.05, "expected ~0.4, got {max_both}");
+
+        // Bypass EQ 2: only EQ 1 applies (+6 dB = ~2.0x linear gain amplitude)
+        for _ in 0..2000 {
+            engine.tick([0.0; 2], settings, true, false, false, false, false);
+        }
+        let mut max_eq1_only: f64 = 0.0;
+        for i in 0..4800 {
+            let t = i as f64 / 48000.0;
+            let x = (2.0 * std::f64::consts::PI * 1000.0 * t).sin() * 0.1;
+            let out = engine.tick([x, x], settings, true, false, false, false, false);
+            if i > 2400 {
+                max_eq1_only = max_eq1_only.max(out[0].abs());
+            }
+        }
+        assert!((max_eq1_only - 0.2).abs() < 0.05, "expected ~0.2, got {max_eq1_only}");
+    }
+
+    #[test]
+    fn dynamics_pre_and_post_routing_order() {
+        let b1 = Band {
+            id: 1,
+            freq: 1000.0,
+            gain: 12.0,
+            q: 2.0,
+            ..Band::default()
+        };
+        let shared = Shared::new(
+            Arc::new(Mutex::new(vec![b1])),
+            Arc::new(Mutex::new(vec![])),
+            Arc::new(Mutex::new(vec![])),
+        );
+        let mut engine = Engine::new(shared, 48000.0);
+        let settings = CompSettings {
+            threshold: -20.0,
+            ratio: 4.0,
+            attack: 0.5,
+            release: 50.0,
+            auto_makeup: false,
+            gate: -80.0,
+            hpf: 80.0,
+            dry: 0.0,
+            wet: 1.0,
+            ..CompSettings::default()
+        };
+
+        // Pre-EQ mode: input is -25 dB (~0.056 amplitude).
+        // It enters compressor before EQ boost. Threshold is -20 dB, so little to no GR occurs.
+        for _ in 0..1000 {
+            engine.tick([0.0; 2], settings, true, false, true, true, false);
+        }
+        let mut max_pre = 0.0_f64;
+        for i in 0..4800 {
+            let t = i as f64 / 48000.0;
+            let x = (2.0 * std::f64::consts::PI * 1000.0 * t).sin() * 0.056;
+            let out = engine.tick([x, x], settings, true, false, true, true, false);
+            if i > 2400 {
+                max_pre = max_pre.max(out[0].abs());
+            }
+        }
+
+        // Post-EQ mode: input is boosted by +12 dB (4x) first to ~0.224 (-13 dB),
+        // entering compressor well above -20 dB threshold, triggering strong gain reduction.
+        for _ in 0..2000 {
+            engine.tick([0.0; 2], settings, true, false, true, false, false);
+        }
+        let mut max_post = 0.0_f64;
+        for i in 0..4800 {
+            let t = i as f64 / 48000.0;
+            let x = (2.0 * std::f64::consts::PI * 1000.0 * t).sin() * 0.056;
+            let out = engine.tick([x, x], settings, true, false, true, false, false);
+            if i > 2400 {
+                max_post = max_post.max(out[0].abs());
+            }
+        }
+
+        // Pre output has full +12 dB boost preserved after compressor;
+        // Post output was compressed because the EQ boosted it over threshold.
+        assert!(max_pre > max_post * 1.25, "max_pre={max_pre}, max_post={max_post}");
     }
 }

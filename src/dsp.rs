@@ -483,7 +483,7 @@ impl VocalComp {
             over * slope
         }
     }
-    pub fn tick(&mut self, x: [f64; 2], settings: CompSettings, sr: f64) -> ([f64; 2], f64) {
+    pub fn tick(&mut self, x: [f64; 2], settings: CompSettings, sr: f64) -> ([f64; 2], f64, f64) {
         let c = Coeff::make(
             Shape::LowCut,
             settings.hpf,
@@ -532,7 +532,8 @@ impl VocalComp {
         if settings.pse.listen {
             out = filtered;
         }
-        (out, gr)
+        let sc_level = gain_db(self.env[2]);
+        (out, gr, sc_level)
     }
 }
 #[derive(Clone, Copy)]
@@ -830,8 +831,8 @@ mod tests {
         let mut high_energy = 0.0;
         for i in 0..144000 {
             let x = 0.1 * (std::f64::consts::TAU * 50.0 * i as f64 / 48000.0).sin();
-            let (low, _) = low_hpf.tick([x, -x], settings, 48000.0);
-            let (high, _) = high_hpf.tick(
+            let (low, _, _) = low_hpf.tick([x, -x], settings, 48000.0);
+            let (high, _, _) = high_hpf.tick(
                 [x, -x],
                 CompSettings {
                     hpf: 500.0,
@@ -864,13 +865,13 @@ mod tests {
         let mut gr = 0.0;
         for i in 0..48000 {
             let v = (2.0 * PI * 1000.0 * i as f64 / 48000.0).sin() * 0.5;
-            let (out, g) = c.tick([v, v], s, 48000.0);
+            let (out, g, _) = c.tick([v, v], s, 48000.0);
             assert_eq!(out[0], out[1]);
             gr = g;
         }
         assert!(gr > 10.0);
         for _ in 0..96000 {
-            let (out, _) = c.tick([0.0; 2], s, 48000.0);
+            let (out, _, _) = c.tick([0.0; 2], s, 48000.0);
             assert_eq!(out, [0.0; 2]);
         }
     }
@@ -896,8 +897,8 @@ mod tests {
         let mut gr_high = 0.0;
         for i in 0..48000 {
             let v = (2.0 * PI * 1000.0 * i as f64 / 48000.0).sin() * 0.9;
-            let (_, g_low) = c_low.tick([v, v], s_low, 48000.0);
-            let (_, g_high) = c_high.tick([v, v], s_high, 48000.0);
+            let (_, g_low, _) = c_low.tick([v, v], s_low, 48000.0);
+            let (_, g_high, _) = c_high.tick([v, v], s_high, 48000.0);
             gr_low = g_low;
             gr_high = g_high;
         }
@@ -928,8 +929,8 @@ mod tests {
         let mut gr_slow = 0.0;
         for i in 0..240 {
             let v = (2.0 * PI * 1000.0 * i as f64 / 48000.0).sin() * 0.8;
-            let (_, g_f) = fast_comp.tick([v, v], s_fast, 48000.0);
-            let (_, g_s) = slow_comp.tick([v, v], s_slow, 48000.0);
+            let (_, g_f, _) = fast_comp.tick([v, v], s_fast, 48000.0);
+            let (_, g_s, _) = slow_comp.tick([v, v], s_slow, 48000.0);
             gr_fast = g_f;
             gr_slow = g_s;
         }

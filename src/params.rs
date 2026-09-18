@@ -1,5 +1,6 @@
 use crate::{
     band::Band,
+    lift::LiftBand,
     processing::{Config, ProcessingMode, Resolution},
 };
 use nih_plug::prelude::*;
@@ -11,6 +12,10 @@ pub struct StripParams {
     pub editor_state: Arc<ViziaState>,
     #[persist = "eq-bands"]
     pub bands: Arc<Mutex<Vec<Band>>>,
+    #[persist = "eq2-bands"]
+    pub eq2_bands: Arc<Mutex<Vec<Band>>>,
+    #[persist = "lift-bands"]
+    pub lift_bands: Arc<Mutex<Vec<LiftBand>>>,
     #[persist = "eq-graph-range"]
     pub graph_range: Arc<Mutex<f64>>,
     #[id = "processing_mode"]
@@ -21,8 +26,12 @@ pub struct StripParams {
     pub bypass: BoolParam,
     #[id = "eq_on"]
     pub eq_on: BoolParam,
+    #[id = "eq2_on"]
+    pub eq2_on: BoolParam,
     #[id = "comp_on"]
     pub comp_on: BoolParam,
+    #[id = "comp_pre"]
+    pub comp_pre: BoolParam,
     #[id = "compression"]
     // Keep the original positive depth and parameter ID for saved automation.
     // The editor and host display this depth as a negative threshold.
@@ -71,12 +80,16 @@ impl Default for StripParams {
         Self {
             editor_state: ViziaState::new(|| (1120, 800)),
             bands: Arc::new(Mutex::new(Vec::new())),
+            eq2_bands: Arc::new(Mutex::new(Vec::new())),
+            lift_bands: Arc::new(Mutex::new(Vec::new())),
             graph_range: Arc::new(Mutex::new(24.0)),
             processing_mode: EnumParam::new("EQ processing mode", ProcessingMode::ZeroLatency),
             linear_resolution: EnumParam::new("Linear phase resolution", Resolution::Medium),
             bypass: BoolParam::new("Bypass", false).make_bypass(),
             eq_on: BoolParam::new("EQ enabled", true),
-            comp_on: BoolParam::new("Compressor enabled", true),
+            eq2_on: BoolParam::new("EQ 2 enabled", true),
+            comp_on: BoolParam::new("Dynamics enabled", true),
+            comp_pre: BoolParam::new("Dynamics routing", false),
             compression: param("Threshold", 0.0, 0.0, 48.0, " dB")
                 .with_value_to_string(Arc::new(|depth| format!("{:.1}", -depth)))
                 .with_string_to_value(Arc::new(|text| {
@@ -259,6 +272,41 @@ mod tests {
         assert_eq!(
             *params.bands.lock().unwrap(),
             *restored.bands.lock().unwrap()
+        );
+    }
+    #[test]
+    fn lift_bands_round_trip_in_host_state() {
+        let params = StripParams::default();
+        params.lift_bands.lock().unwrap().push(LiftBand {
+            id: 100_005,
+            freq: 14000.0,
+            gain: 8.5,
+            threshold: -20.0,
+            ..LiftBand::default()
+        });
+        let fields = params.serialize_fields();
+        let restored = StripParams::default();
+        restored.deserialize_fields(&fields);
+        assert_eq!(
+            *params.lift_bands.lock().unwrap(),
+            *restored.lift_bands.lock().unwrap()
+        );
+    }
+    #[test]
+    fn eq2_bands_round_trip_in_host_state() {
+        let params = StripParams::default();
+        params.eq2_bands.lock().unwrap().push(Band {
+            id: 10_001,
+            freq: 3456.0,
+            gain: -4.5,
+            ..Band::default()
+        });
+        let fields = params.serialize_fields();
+        let restored = StripParams::default();
+        restored.deserialize_fields(&fields);
+        assert_eq!(
+            *params.eq2_bands.lock().unwrap(),
+            *restored.eq2_bands.lock().unwrap()
         );
     }
 }
