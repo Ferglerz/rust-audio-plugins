@@ -316,7 +316,8 @@ impl LiftProcessor {
             for k in 1..LIFT_FFT_SIZE / 2 {
                 self.spec[ch][LIFT_FFT_SIZE - k] = self.spec[ch][k].conj();
             }
-            self.spec[ch][LIFT_FFT_SIZE / 2] = Complex::new(self.spec[ch][LIFT_FFT_SIZE / 2].re, 0.0);
+            self.spec[ch][LIFT_FFT_SIZE / 2] =
+                Complex::new(self.spec[ch][LIFT_FFT_SIZE / 2].re, 0.0);
 
             self.ifft
                 .process_with_scratch(&mut self.spec[ch], &mut self.scratch_inv);

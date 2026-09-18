@@ -25,6 +25,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rustfft = "6"
 pleasant-ui = { path = "../pleasant-ui" }
+ort = { version = "2.0.0-rc.13", default-features = true }
 
 [profile.release]
 lto = "thin"

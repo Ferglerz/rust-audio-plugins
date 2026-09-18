@@ -7,6 +7,7 @@ pub mod lift;
 mod params;
 mod processing;
 mod ui;
+pub mod vad;
 use engine::{Engine, Shared};
 use params::StripParams;
 pub struct Damian {
@@ -20,6 +21,7 @@ impl Default for Damian {
         let shared = Shared::new(
             params.bands.clone(),
             params.eq2_bands.clone(),
+            params.sc_eq_bands.clone(),
             params.lift_bands.clone(),
         );
         Self {
@@ -67,6 +69,7 @@ impl Plugin for Damian {
             std::sync::atomic::Ordering::Relaxed,
         );
         self.engine = Engine::new(self.shared.clone(), c.sample_rate as f64);
+        self.engine.start_voice_detector();
         context.set_latency_samples(self.engine.latency());
         true
     }
@@ -85,6 +88,7 @@ impl Plugin for Damian {
         );
         self.engine.sync();
         context.set_latency_samples(self.engine.latency());
+        let speech_env = self.engine.speech_env() as f64;
         for mut frame in buffer.iter_samples() {
             let mut x = [0.0; 2];
             for (i, s) in frame.iter_mut().enumerate() {
@@ -98,19 +102,29 @@ impl Plugin for Damian {
                 ratio: self.params.comp_ratio.smoothed.next() as f64,
                 attack: self.params.comp_attack.smoothed.next() as f64,
                 release: self.params.comp_release.smoothed.next() as f64,
-                soft_knee: self.params.soft_knee.value(),
+                knee: if self.params.soft_knee.value() {
+                    self.params.comp_knee.smoothed.next() as f64
+                } else {
+                    0.0
+                },
+                depth: self.params.comp_depth.smoothed.next() as f64,
                 auto_makeup: self.params.auto_makeup.value(),
                 stereo_link: self.params.stereo_link.value(),
                 gate: self.params.gate.smoothed.next() as f64,
                 pse: dsp::PseSettings {
-                    depth: self.params.pse_depth.smoothed.next() as f64,
+                    depth: if self.params.pse_on.value() {
+                        self.params.pse_depth.smoothed.next() as f64
+                    } else {
+                        0.0
+                    },
                     hysteresis: self.params.pse_hysteresis.smoothed.next() as f64,
                     knee: self.params.pse_knee.smoothed.next() as f64,
                     peak: self.params.pse_peak.value(),
                     time: self.params.pse_time.smoothed.next() as f64,
-                    listen: self.params.pse_listen.value(),
+                    listen: self.params.pse_on.value() && self.params.pse_listen.value(),
+                    speech_env,
+                    vad_assist: (self.params.pse_voice_det.smoothed.next() as f64) / 100.0,
                 },
-                hpf: self.params.sc_hpf.smoothed.next() as f64,
                 dry: self.params.dry.smoothed.next() as f64 / 100.0,
                 wet: self.params.wet.smoothed.next() as f64 / 100.0,
             };
@@ -119,6 +133,7 @@ impl Plugin for Damian {
                 settings,
                 self.params.eq_on.value(),
                 self.params.eq2_on.value(),
+                self.params.sc_eq_on.value(),
                 self.params.comp_on.value(),
                 self.params.comp_pre.value(),
                 self.params.bypass.value(),
@@ -127,6 +142,9 @@ impl Plugin for Damian {
                 *s = out[i] as f32;
             }
         }
+        let num_samples = buffer.samples();
+        let block_secs = num_samples as f32 / self.engine.sample_rate() as f32;
+        self.engine.end_block(block_secs);
         if self.engine.latency() > 0 {
             ProcessStatus::Tail(self.engine.latency() * 2)
         } else {

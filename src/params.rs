@@ -1,5 +1,5 @@
 use crate::{
-    band::Band,
+    band::{Band, Shape},
     lift::LiftBand,
     processing::{Config, ProcessingMode, Resolution},
 };
@@ -14,6 +14,8 @@ pub struct StripParams {
     pub bands: Arc<Mutex<Vec<Band>>>,
     #[persist = "eq2-bands"]
     pub eq2_bands: Arc<Mutex<Vec<Band>>>,
+    #[persist = "sc-eq-bands"]
+    pub sc_eq_bands: Arc<Mutex<Vec<Band>>>,
     #[persist = "lift-bands"]
     pub lift_bands: Arc<Mutex<Vec<LiftBand>>>,
     #[persist = "eq-graph-range"]
@@ -28,6 +30,8 @@ pub struct StripParams {
     pub eq_on: BoolParam,
     #[id = "eq2_on"]
     pub eq2_on: BoolParam,
+    #[id = "sc_eq_on"]
+    pub sc_eq_on: BoolParam,
     #[id = "comp_on"]
     pub comp_on: BoolParam,
     #[id = "comp_pre"]
@@ -44,12 +48,18 @@ pub struct StripParams {
     pub comp_release: FloatParam,
     #[id = "soft_knee"]
     pub soft_knee: BoolParam,
+    #[id = "comp_knee"]
+    pub comp_knee: FloatParam,
+    #[id = "comp_depth"]
+    pub comp_depth: FloatParam,
     #[id = "auto_makeup"]
     pub auto_makeup: BoolParam,
     #[id = "stereo_link"]
     pub stereo_link: BoolParam,
     #[id = "gate"]
     pub gate: FloatParam,
+    #[id = "pse_on"]
+    pub pse_on: BoolParam,
     #[id = "pse_depth"]
     pub pse_depth: FloatParam,
     #[id = "pse_hysteresis"]
@@ -62,8 +72,8 @@ pub struct StripParams {
     pub pse_time: FloatParam,
     #[id = "pse_listen"]
     pub pse_listen: BoolParam,
-    #[id = "sc_hpf"]
-    pub sc_hpf: FloatParam,
+    #[id = "pse_voice_det"]
+    pub pse_voice_det: FloatParam,
     #[id = "dry"]
     pub dry: FloatParam,
     #[id = "wet"]
@@ -74,13 +84,31 @@ impl Default for StripParams {
         fn param(name: &str, v: f32, min: f32, max: f32, unit: &'static str) -> FloatParam {
             FloatParam::new(name, v, FloatRange::Linear { min, max })
                 .with_unit(unit)
-                .with_step_size(0.1)
-                .with_smoother(SmoothingStyle::Linear(20.0))
+                .with_value_to_string(Arc::new(move |v| format!("{:.1}{}", v, unit)))
+                .with_string_to_value(Arc::new(move |text| {
+                    text.trim()
+                        .trim_end_matches(unit.trim())
+                        .trim()
+                        .parse::<f32>()
+                        .ok()
+                        .filter(|v| v.is_finite())
+                }))
         }
         Self {
             editor_state: ViziaState::new(|| (1280, 656)),
             bands: Arc::new(Mutex::new(Vec::new())),
             eq2_bands: Arc::new(Mutex::new(Vec::new())),
+            sc_eq_bands: Arc::new(Mutex::new(vec![Band {
+                id: 20_001,
+                shape: Shape::LowCut,
+                order: 3,
+                freq: 80.0,
+                gain: 0.0,
+                q: std::f64::consts::FRAC_1_SQRT_2,
+                enabled: true,
+                dynamic: false,
+                ..Band::default()
+            }])),
             lift_bands: Arc::new(Mutex::new(Vec::new())),
             graph_range: Arc::new(Mutex::new(24.0)),
             processing_mode: EnumParam::new("EQ processing mode", ProcessingMode::ZeroLatency),
@@ -88,6 +116,7 @@ impl Default for StripParams {
             bypass: BoolParam::new("Bypass", false).make_bypass(),
             eq_on: BoolParam::new("EQ enabled", true),
             eq2_on: BoolParam::new("EQ 2 enabled", true),
+            sc_eq_on: BoolParam::new("PSE/Comp SC EQ enabled", true),
             comp_on: BoolParam::new("Dynamics enabled", true),
             comp_pre: BoolParam::new("Dynamics routing", false),
             compression: param("Threshold", 0.0, 0.0, 48.0, " dB")
@@ -166,78 +195,90 @@ impl Default for StripParams {
                 }
             })),
             soft_knee: BoolParam::new("Soft knee", true),
+            comp_knee: FloatParam::new(
+                "Dynamics knee",
+                6.0,
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: 20.0,
+                },
+            )
+            .with_unit(" dB")
+            .with_step_size(0.1)
+            .with_smoother(SmoothingStyle::Linear(20.0))
+            .with_value_to_string(Arc::new(|v| format!("{:.1} dB", v)))
+            .with_string_to_value(Arc::new(|text| {
+                text.trim()
+                    .trim_end_matches("dB")
+                    .trim()
+                    .parse::<f32>()
+                    .ok()
+                    .filter(|v| v.is_finite())
+            })),
+            comp_depth: param("Dynamics depth", 30.0, 0.0, 30.0, " dB"),
             auto_makeup: BoolParam::new("Auto makeup", true),
             stereo_link: BoolParam::new("Linked stereo", true),
-            gate: param("PSE threshold", -80.0, -80.0, -20.0, " dB"),
+            pse_on: BoolParam::new("PSE enabled", true),
+            gate: param("PSE threshold", -80.0, -80.0, -20.0, " dB")
+                .with_value_to_string(Arc::new(|v| format!("{:.1}", v))),
             pse_depth: param("PSE depth", 10.0, 0.0, 20.0, " dB"),
             pse_hysteresis: param("PSE hysteresis", 3.0, 0.0, 9.0, " dB"),
             pse_knee: param("PSE knee", 6.0, 0.0, 18.0, " dB"),
             pse_peak: BoolParam::new("PSE peak detection", false),
-            pse_time: FloatParam::new(
-                "PSE time",
-                2.0,
-                FloatRange::Linear { min: 0.0, max: 5.0 },
-            )
-            .with_step_size(0.01)
-            .with_smoother(SmoothingStyle::Linear(20.0))
-            .with_value_to_string(Arc::new(|v| {
-                let (_, release) = crate::dsp::pse_time_to_times(v as f64, false);
-                if release >= 10.0 {
-                    format!("{:.1} s", release)
-                } else if release >= 1.0 {
-                    if (release * 10.0).fract().abs() < 1e-3 {
+            pse_time: FloatParam::new("PSE time", 2.0, FloatRange::Linear { min: 0.0, max: 5.0 })
+                .with_step_size(0.01)
+                .with_smoother(SmoothingStyle::Linear(20.0))
+                .with_value_to_string(Arc::new(|v| {
+                    let (_, release) = crate::dsp::pse_time_to_times(v as f64, false);
+                    if release >= 10.0 {
                         format!("{:.1} s", release)
+                    } else if release >= 1.0 {
+                        if (release * 10.0).fract().abs() < 1e-3 {
+                            format!("{:.1} s", release)
+                        } else {
+                            format!("{:.2} s", release)
+                        }
                     } else {
-                        format!("{:.2} s", release)
+                        format!("{:.0} ms", release * 1000.0)
                     }
-                } else {
-                    format!("{:.0} ms", release * 1000.0)
-                }
-            }))
-            .with_string_to_value(Arc::new(|text| {
-                let text = text.trim().to_ascii_lowercase();
-                match text.as_str() {
-                    "a" => return Some(0.0),
-                    "b" => return Some(1.0),
-                    "c" => return Some(2.0),
-                    "d" => return Some(3.0),
-                    "e" => return Some(4.0),
-                    "f" => return Some(5.0),
-                    _ => {}
-                }
-                if let Some(s) = text.strip_suffix("ms") {
-                    if let Ok(ms) = s.trim().parse::<f64>() {
-                        return Some(crate::dsp::seconds_to_pse_time_pos(ms * 0.001) as f32);
+                }))
+                .with_string_to_value(Arc::new(|text| {
+                    let text = text.trim().to_ascii_lowercase();
+                    match text.as_str() {
+                        "a" => return Some(0.0),
+                        "b" => return Some(1.0),
+                        "c" => return Some(2.0),
+                        "d" => return Some(3.0),
+                        "e" => return Some(4.0),
+                        "f" => return Some(5.0),
+                        _ => {}
                     }
-                }
-                if let Some(s) = text.strip_suffix("s") {
-                    if let Ok(sec) = s.trim().parse::<f64>() {
-                        return Some(crate::dsp::seconds_to_pse_time_pos(sec) as f32);
+                    if let Some(s) = text.strip_suffix("ms") {
+                        if let Ok(ms) = s.trim().parse::<f64>() {
+                            return Some(crate::dsp::seconds_to_pse_time_pos(ms * 0.001) as f32);
+                        }
                     }
-                }
-                if let Ok(val) = text.parse::<f32>() {
-                    if (0.0..=5.0).contains(&val) {
-                        return Some(val);
+                    if let Some(s) = text.strip_suffix("s") {
+                        if let Ok(sec) = s.trim().parse::<f64>() {
+                            return Some(crate::dsp::seconds_to_pse_time_pos(sec) as f32);
+                        }
                     }
-                    if val > 5.0 {
-                        return Some(crate::dsp::seconds_to_pse_time_pos(val as f64 * 0.001) as f32);
+                    if let Ok(val) = text.parse::<f32>() {
+                        if (0.0..=5.0).contains(&val) {
+                            return Some(val);
+                        }
+                        if val > 5.0 {
+                            return Some(
+                                crate::dsp::seconds_to_pse_time_pos(val as f64 * 0.001) as f32
+                            );
+                        }
                     }
-                }
-                None
-            })),
+                    None
+                })),
             pse_listen: BoolParam::new("PSE listen sidechain", false),
-            sc_hpf: FloatParam::new(
-                "Sidechain high pass",
-                80.0,
-                FloatRange::Skewed {
-                    min: 20.0,
-                    max: 500.0,
-                    factor: FloatRange::skew_factor(-2.0),
-                },
-            )
-            .with_unit(" Hz")
-            .with_step_size(1.0)
-            .with_smoother(SmoothingStyle::Linear(20.0)),
+            pse_voice_det: param("PSE voice detection", 50.0, 0.0, 100.0, " %")
+                .with_step_size(1.0)
+                .with_smoother(SmoothingStyle::Linear(20.0)),
             dry: param("Dry level", 0.0, 0.0, 100.0, " %"),
             wet: param("Wet level", 100.0, 0.0, 100.0, " %"),
         }
@@ -307,6 +348,28 @@ mod tests {
         assert_eq!(
             *params.eq2_bands.lock().unwrap(),
             *restored.eq2_bands.lock().unwrap()
+        );
+    }
+    #[test]
+    fn sc_eq_bands_round_trip_in_host_state() {
+        let params = StripParams::default();
+        assert_eq!(params.sc_eq_bands.lock().unwrap().len(), 1);
+        assert_eq!(params.sc_eq_bands.lock().unwrap()[0].freq, 80.0);
+        assert_eq!(params.sc_eq_bands.lock().unwrap()[0].order, 3);
+        assert_eq!(params.sc_eq_bands.lock().unwrap()[0].shape, Shape::LowCut);
+
+        params.sc_eq_bands.lock().unwrap().push(Band {
+            id: 20_002,
+            freq: 2500.0,
+            gain: -3.0,
+            ..Band::default()
+        });
+        let fields = params.serialize_fields();
+        let restored = StripParams::default();
+        restored.deserialize_fields(&fields);
+        assert_eq!(
+            *params.sc_eq_bands.lock().unwrap(),
+            *restored.sc_eq_bands.lock().unwrap()
         );
     }
 }

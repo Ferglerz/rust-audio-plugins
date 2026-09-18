@@ -248,9 +248,15 @@ impl BandRuntime {
                 self.release
             };
             self.env = k * self.env + (1.0 - k) * peak;
-            self.reduction = ((gain_db(self.env) - self.band.threshold).max(0.0)
+            let max_r = self.band.range.abs();
+            let dyn_amount = ((gain_db(self.env) - self.band.threshold).max(0.0)
                 * (1.0 - 1.0 / self.band.ratio))
-                .min(self.band.range);
+                .min(max_r);
+            self.reduction = if self.band.range >= 0.0 {
+                dyn_amount
+            } else {
+                -dyn_amount
+            };
         } else {
             self.reduction = 0.0;
         }
@@ -329,6 +335,8 @@ impl PseTimeConstant {
         pse_time_to_times(self as usize as f64, peak)
     }
 }
+pub const VOICE_THRESH_SHIFT_DB: f64 = 3.0;
+
 #[derive(Clone, Copy)]
 pub struct PseSettings {
     pub depth: f64,
@@ -337,6 +345,8 @@ pub struct PseSettings {
     pub peak: bool,
     pub time: f64,
     pub listen: bool,
+    pub speech_env: f64,
+    pub vad_assist: f64,
 }
 impl Default for PseSettings {
     fn default() -> Self {
@@ -347,6 +357,8 @@ impl Default for PseSettings {
             peak: false,
             time: 2.0,
             listen: false,
+            speech_env: 0.0,
+            vad_assist: 0.0,
         }
     }
 }
@@ -416,10 +428,17 @@ impl Pse {
         } else {
             -140.0
         };
-        let target_threshold = if level > self.effective_threshold {
-            threshold - settings.hysteresis
-        } else {
+        let voice_shift = settings.vad_assist * VOICE_THRESH_SHIFT_DB * settings.speech_env;
+        let voice_thresh = if threshold <= -79.9 {
             threshold
+        } else {
+            threshold - voice_shift
+        };
+        let voice_depth = settings.depth * (1.0 - settings.vad_assist * 0.15 * settings.speech_env);
+        let target_threshold = if level > self.effective_threshold {
+            voice_thresh - settings.hysteresis
+        } else {
+            voice_thresh
         };
         self.effective_threshold = self.effective_threshold * self.hysteresis_rc
             + target_threshold * (1.0 - self.hysteresis_rc);
@@ -432,7 +451,7 @@ impl Pse {
         let target = if threshold <= -79.9 {
             0.0
         } else {
-            -settings.depth * (1.0 - weight)
+            -voice_depth * (1.0 - weight)
         };
         let rc = if target > self.reduction_db {
             self.gain_rc
@@ -449,7 +468,6 @@ impl Pse {
 
 #[derive(Default)]
 pub struct VocalComp {
-    sc: [Filter; 2],
     // Independent L/R detectors plus one linked stereo detector.
     env: [f64; 3],
     reduction: [f64; 3],
@@ -471,10 +489,10 @@ impl VocalComp {
         if settings.threshold >= -0.0001 {
             return 0.0;
         }
-        if !settings.soft_knee {
+        let knee = settings.knee.max(0.0);
+        if knee <= 0.001 {
             return over.max(0.0) * slope;
         }
-        let knee = 6.0;
         if over <= -knee / 2.0 {
             0.0
         } else if over < knee / 2.0 {
@@ -483,17 +501,15 @@ impl VocalComp {
             over * slope
         }
     }
-    pub fn tick(&mut self, x: [f64; 2], settings: CompSettings, sr: f64) -> ([f64; 2], f64, f64) {
-        let c = Coeff::make(
-            Shape::LowCut,
-            settings.hpf,
-            0.0,
-            std::f64::consts::FRAC_1_SQRT_2,
-            sr,
-        );
-        let filtered = [self.sc[0].tick(x[0], c), self.sc[1].tick(x[1], c)];
-        let left = filtered[0].abs();
-        let right = filtered[1].abs();
+    pub fn tick(
+        &mut self,
+        x: [f64; 2],
+        sc: [f64; 2],
+        settings: CompSettings,
+        sr: f64,
+    ) -> ([f64; 2], f64, f64, f64) {
+        let left = sc[0].abs();
+        let right = sc[1].abs();
         let peaks = [left, right, left.max(right)];
         self.link_mix +=
             (1.0 - (-1.0 / (sr * 0.010)).exp()) * (f64::from(settings.stereo_link) - self.link_mix);
@@ -508,7 +524,7 @@ impl VocalComp {
             let k = (-1.0 / (sr * if peaks[i] > self.env[i] { 0.003 } else { 0.100 })).exp();
             self.env[i] = k * self.env[i] + (1.0 - k) * peaks[i];
             let level = gain_db(self.env[i]);
-            let target = Self::target_reduction(level, settings);
+            let target = Self::target_reduction(level, settings).min(settings.depth);
             let attack_sec = (settings.attack * 0.001).max(0.00005);
             let release_sec = (settings.release * 0.001).max(0.001);
             let tc = if target > self.reduction[i] {
@@ -523,17 +539,21 @@ impl VocalComp {
         }
         let mut out = [0.0; 2];
         let mut gr = 0.0_f64;
+        let mut pse_gr = 0.0_f64;
         for i in 0..2 {
             let gain = gains[i] + self.link_mix * (gains[2] - gains[i]);
             out[i] = x[i] * (settings.dry + settings.wet * gain);
             gr =
                 gr.max(self.reduction[i] + self.link_mix * (self.reduction[2] - self.reduction[i]));
+            let r0 = self.pse[i].reduction_db.abs();
+            let r2 = self.pse[2].reduction_db.abs();
+            pse_gr = pse_gr.max(r0 + self.link_mix * (r2 - r0));
         }
         if settings.pse.listen {
-            out = filtered;
+            out = sc;
         }
         let sc_level = gain_db(self.env[2]);
-        (out, gr, sc_level)
+        (out, gr, sc_level, pse_gr)
     }
 }
 #[derive(Clone, Copy)]
@@ -542,12 +562,12 @@ pub struct CompSettings {
     pub ratio: f64,
     pub attack: f64,
     pub release: f64,
-    pub soft_knee: bool,
+    pub knee: f64,
+    pub depth: f64,
     pub auto_makeup: bool,
     pub stereo_link: bool,
     pub gate: f64,
     pub pse: PseSettings,
-    pub hpf: f64,
     pub dry: f64,
     pub wet: f64,
 }
@@ -558,12 +578,12 @@ impl Default for CompSettings {
             ratio: 4.0,
             attack: 2.0,
             release: 120.0,
-            soft_knee: true,
+            knee: 6.0,
+            depth: 30.0,
             auto_makeup: true,
             stereo_link: true,
             gate: -80.0,
             pse: PseSettings::default(),
-            hpf: 80.0,
             dry: 0.0,
             wet: 1.0,
         }
@@ -758,6 +778,31 @@ mod tests {
         assert!(b.reduction < 0.01);
     }
     #[test]
+    fn dynamic_band_boosts_transient_gain_when_range_negative() {
+        let mut b = BandRuntime::new(
+            Band {
+                dynamic: true,
+                threshold: -30.0,
+                attack: 1.0,
+                release: 10.0,
+                range: -8.0,
+                ..Band::default()
+            },
+            48000.0,
+        );
+        for i in 0..48000 {
+            let v = (2.0 * PI * 1000.0 * i as f64 / 48000.0).sin() * 0.5;
+            b.tick([v, v], 48000.0);
+        }
+        assert!(b.reduction < -5.0);
+        assert!(b.reduction >= -8.0);
+        assert!(b.current_gain > 5.0);
+        for _ in 0..48000 {
+            b.tick([0.0; 2], 48000.0);
+        }
+        assert!(b.reduction.abs() < 0.01);
+    }
+    #[test]
     fn pse_advanced_controls_follow_zingzap_transfer_and_timing() {
         let sr = 48000.0;
         let mut settings = PseSettings {
@@ -820,7 +865,6 @@ mod tests {
     fn pse_uses_shared_hpf_and_handles_opposite_phase_stereo() {
         let settings = CompSettings {
             gate: -30.0,
-            hpf: 20.0,
             auto_makeup: false,
             ..CompSettings::default()
         };
@@ -829,17 +873,28 @@ mod tests {
         let mut input_energy = 0.0;
         let mut low_energy = 0.0;
         let mut high_energy = 0.0;
+        let mut f_low = [Filter::default(); 2];
+        let mut f_high = [Filter::default(); 2];
+        let c_low = Coeff::make(
+            Shape::LowCut,
+            20.0,
+            0.0,
+            std::f64::consts::FRAC_1_SQRT_2,
+            48000.0,
+        );
+        let c_high = Coeff::make(
+            Shape::LowCut,
+            500.0,
+            0.0,
+            std::f64::consts::FRAC_1_SQRT_2,
+            48000.0,
+        );
         for i in 0..144000 {
             let x = 0.1 * (std::f64::consts::TAU * 50.0 * i as f64 / 48000.0).sin();
-            let (low, _, _) = low_hpf.tick([x, -x], settings, 48000.0);
-            let (high, _, _) = high_hpf.tick(
-                [x, -x],
-                CompSettings {
-                    hpf: 500.0,
-                    ..settings
-                },
-                48000.0,
-            );
+            let sc_low = [f_low[0].tick(x, c_low), f_low[1].tick(-x, c_low)];
+            let sc_high = [f_high[0].tick(x, c_high), f_high[1].tick(-x, c_high)];
+            let (low, _, _, _) = low_hpf.tick([x, -x], sc_low, settings, 48000.0);
+            let (high, _, _, _) = high_hpf.tick([x, -x], sc_high, settings, 48000.0);
             assert!((low[0] + low[1]).abs() < 1e-12);
             if i > 96000 {
                 input_energy += x * x;
@@ -857,7 +912,6 @@ mod tests {
         let s = CompSettings {
             threshold: -30.0,
             gate: -80.0,
-            hpf: 80.0,
             dry: 0.0,
             wet: 1.0,
             ..CompSettings::default()
@@ -865,13 +919,13 @@ mod tests {
         let mut gr = 0.0;
         for i in 0..48000 {
             let v = (2.0 * PI * 1000.0 * i as f64 / 48000.0).sin() * 0.5;
-            let (out, g, _) = c.tick([v, v], s, 48000.0);
+            let (out, g, _, _) = c.tick([v, v], [v, v], s, 48000.0);
             assert_eq!(out[0], out[1]);
             gr = g;
         }
         assert!(gr > 10.0);
         for _ in 0..96000 {
-            let (out, _, _) = c.tick([0.0; 2], s, 48000.0);
+            let (out, _, _, _) = c.tick([0.0; 2], [0.0; 2], s, 48000.0);
             assert_eq!(out, [0.0; 2]);
         }
     }
@@ -882,14 +936,14 @@ mod tests {
         let s_low = CompSettings {
             threshold: -20.0,
             ratio: 2.0,
-            soft_knee: false,
+            knee: 0.0,
             auto_makeup: false,
             ..CompSettings::default()
         };
         let s_high = CompSettings {
             threshold: -20.0,
             ratio: 10.0,
-            soft_knee: false,
+            knee: 0.0,
             auto_makeup: false,
             ..CompSettings::default()
         };
@@ -897,12 +951,42 @@ mod tests {
         let mut gr_high = 0.0;
         for i in 0..48000 {
             let v = (2.0 * PI * 1000.0 * i as f64 / 48000.0).sin() * 0.9;
-            let (_, g_low, _) = c_low.tick([v, v], s_low, 48000.0);
-            let (_, g_high, _) = c_high.tick([v, v], s_high, 48000.0);
+            let (_, g_low, _, _) = c_low.tick([v, v], [v, v], s_low, 48000.0);
+            let (_, g_high, _, _) = c_high.tick([v, v], [v, v], s_high, 48000.0);
             gr_low = g_low;
             gr_high = g_high;
         }
         assert!(gr_high > gr_low);
+    }
+    #[test]
+    fn vocal_comp_depth_limits_reduction() {
+        let mut c_unlimited = VocalComp::new();
+        let mut c_limited = VocalComp::new();
+        let s_unlimited = CompSettings {
+            threshold: -30.0,
+            ratio: 20.0,
+            depth: 30.0,
+            auto_makeup: false,
+            ..CompSettings::default()
+        };
+        let s_limited = CompSettings {
+            threshold: -30.0,
+            ratio: 20.0,
+            depth: 5.0,
+            auto_makeup: false,
+            ..CompSettings::default()
+        };
+        let mut gr_unlimited = 0.0;
+        let mut gr_limited = 0.0;
+        for i in 0..48000 {
+            let v = (2.0 * PI * 1000.0 * i as f64 / 48000.0).sin() * 0.9;
+            let (_, gu, _, _) = c_unlimited.tick([v, v], [v, v], s_unlimited, 48000.0);
+            let (_, gl, _, _) = c_limited.tick([v, v], [v, v], s_limited, 48000.0);
+            gr_unlimited = gu;
+            gr_limited = gl;
+        }
+        assert!(gr_unlimited > 20.0);
+        assert!((gr_limited - 5.0).abs() < 0.2);
     }
     #[test]
     fn vocal_comp_attack_and_release_affect_timing() {
@@ -929,11 +1013,77 @@ mod tests {
         let mut gr_slow = 0.0;
         for i in 0..240 {
             let v = (2.0 * PI * 1000.0 * i as f64 / 48000.0).sin() * 0.8;
-            let (_, g_f, _) = fast_comp.tick([v, v], s_fast, 48000.0);
-            let (_, g_s, _) = slow_comp.tick([v, v], s_slow, 48000.0);
+            let (_, g_f, _, _) = fast_comp.tick([v, v], [v, v], s_fast, 48000.0);
+            let (_, g_s, _, _) = slow_comp.tick([v, v], [v, v], s_slow, 48000.0);
             gr_fast = g_f;
             gr_slow = g_s;
         }
         assert!(gr_fast > gr_slow * 2.0);
+    }
+    #[test]
+    fn pse_voice_detect_lowers_threshold_and_softens_depth() {
+        let sr = 48000.0;
+        let mut pse_no_vad = Pse::default();
+        let mut pse_vad = Pse::default();
+
+        let s_no_vad = PseSettings {
+            depth: 10.0,
+            hysteresis: 0.0,
+            knee: 0.01,
+            vad_assist: 0.0,
+            speech_env: 0.0,
+            ..PseSettings::default()
+        };
+        let s_vad = PseSettings {
+            depth: 10.0,
+            hysteresis: 0.0,
+            knee: 0.01,
+            vad_assist: 1.0,
+            speech_env: 1.0,
+            ..PseSettings::default()
+        };
+
+        // Threshold is -40 dB. Signal is at -42 dB.
+        // Without VAD assist: -42 dB is 2 dB below threshold -> closed (depth = 10 dB attenuation).
+        // With VAD assist (100% assist + 100% speech): threshold shifts down by 3 dB to -43 dB.
+        // -42 dB is now 1 dB above threshold (-43 dB) -> opens up (0 dB attenuation)!
+        let settle_samples = (sr * 2.0) as usize;
+        for _ in 0..settle_samples {
+            pse_no_vad.tick(db_gain(-42.0), -40.0, sr, s_no_vad);
+            pse_vad.tick(db_gain(-42.0), -40.0, sr, s_vad);
+        }
+        assert!(
+            pse_no_vad.reduction_db < -9.5,
+            "Without VAD should be fully attenuated"
+        );
+        assert!(
+            pse_vad.reduction_db > -0.5,
+            "With VAD should be open because threshold was pulled down"
+        );
+
+        // When deep below threshold (e.g. -60 dB), check depth softening:
+        // Max attenuation without VAD = 10 dB.
+        // With VAD = 10 * (1 - 0.15) = 8.5 dB.
+        for _ in 0..settle_samples {
+            pse_no_vad.tick(db_gain(-60.0), -40.0, sr, s_no_vad);
+            pse_vad.tick(db_gain(-60.0), -40.0, sr, s_vad);
+        }
+        assert!((pse_no_vad.reduction_db - (-10.0)).abs() < 0.1);
+        assert!((pse_vad.reduction_db - (-8.5)).abs() < 0.1);
+    }
+    #[test]
+    fn pse_voice_detect_stays_off_at_minus_80_threshold() {
+        let sr = 48000.0;
+        let mut pse = Pse::default();
+        let s = PseSettings {
+            depth: 10.0,
+            vad_assist: 1.0,
+            speech_env: 1.0,
+            ..PseSettings::default()
+        };
+        for _ in 0..1000 {
+            pse.tick(db_gain(-50.0), -80.0, sr, s);
+        }
+        assert_eq!(pse.reduction_db, 0.0);
     }
 }

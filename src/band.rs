@@ -31,6 +31,17 @@ impl Shape {
             Self::BandPass => "Band pass",
         }
     }
+    pub fn uppercase_name(self) -> &'static str {
+        match self {
+            Self::Bell => "BELL",
+            Self::LowShelf => "LOW SHELF",
+            Self::HighShelf => "HIGH SHELF",
+            Self::LowCut => "LOW CUT",
+            Self::HighCut => "HIGH CUT",
+            Self::Notch => "NOTCH",
+            Self::BandPass => "BAND PASS",
+        }
+    }
     pub fn is_cut(self) -> bool {
         matches!(self, Self::LowCut | Self::HighCut)
     }
@@ -92,7 +103,7 @@ impl Band {
         safe(&mut self.ratio, 1.0, 20.0, 3.0);
         safe(&mut self.attack, 0.1, 200.0, 15.0);
         safe(&mut self.release, 10.0, 2000.0, 140.0);
-        safe(&mut self.range, 0.0, 24.0, 6.0);
+        safe(&mut self.range, -24.0, 24.0, 6.0);
     }
 }
 /// Background clicks at the outer edges create cuts. Pulling the curve at its ends creates shelves.
@@ -152,5 +163,22 @@ mod tests {
         assert_eq!(infer_shape(0.9, 0.5, true), Shape::HighShelf);
         assert_eq!(infer_shape(0.5, 0.98, false), Shape::Notch);
         assert_eq!(infer_shape(0.5, 0.4, false), Shape::Bell);
+    }
+    #[test]
+    fn dynamic_range_bipolar_sanitization() {
+        let mut b = Band {
+            range: -12.5,
+            ..Band::default()
+        };
+        b.sanitize();
+        assert_eq!(b.range, -12.5);
+
+        b.range = -30.0;
+        b.sanitize();
+        assert_eq!(b.range, -24.0);
+
+        b.range = 30.0;
+        b.sanitize();
+        assert_eq!(b.range, 24.0);
     }
 }
