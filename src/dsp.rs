@@ -189,6 +189,7 @@ pub struct BandRuntime {
     detector: Coeff,
     env: f64,
     pub reduction: f64,
+    pub reduction_uncapped: f64,
     current_gain: f64,
     current_freq: f64,
     current_q: f64,
@@ -206,6 +207,7 @@ impl BandRuntime {
             detector: Coeff::bandpass(b.freq, b.q, sr),
             env: 0.0,
             reduction: 0.0,
+            reduction_uncapped: 0.0,
             current_gain: b.gain,
             current_freq: b.freq,
             current_q: b.q,
@@ -221,6 +223,7 @@ impl BandRuntime {
             self.detectors = old.detectors;
             self.env = old.env;
             self.reduction = old.reduction;
+            self.reduction_uncapped = old.reduction_uncapped;
             self.current_gain = old.current_gain;
             self.current_freq = old.current_freq;
             self.current_q = old.current_q;
@@ -232,6 +235,7 @@ impl BandRuntime {
         self.detectors = [Filter::default(); 2];
         self.env = 0.0;
         self.reduction = 0.0;
+        self.reduction_uncapped = 0.0;
     }
     pub fn tick(&mut self, mut x: [f64; 2], sr: f64) -> [f64; 2] {
         if !self.band.enabled {
@@ -249,16 +253,19 @@ impl BandRuntime {
             };
             self.env = k * self.env + (1.0 - k) * peak;
             let max_r = self.band.range.abs();
-            let dyn_amount = ((gain_db(self.env) - self.band.threshold).max(0.0)
-                * (1.0 - 1.0 / self.band.ratio))
-                .min(max_r);
-            self.reduction = if self.band.range >= 0.0 {
-                dyn_amount
+            let unlimited =
+                (gain_db(self.env) - self.band.threshold).max(0.0) * (1.0 - 1.0 / self.band.ratio);
+            let dyn_amount = unlimited.min(max_r);
+            if self.band.range >= 0.0 {
+                self.reduction = dyn_amount;
+                self.reduction_uncapped = unlimited;
             } else {
-                -dyn_amount
-            };
+                self.reduction = -dyn_amount;
+                self.reduction_uncapped = -unlimited;
+            }
         } else {
             self.reduction = 0.0;
+            self.reduction_uncapped = 0.0;
         }
         if self.phase == 0 {
             let k = (-32.0 / (sr * 0.015)).exp();
@@ -471,6 +478,7 @@ pub struct VocalComp {
     // Independent L/R detectors plus one linked stereo detector.
     env: [f64; 3],
     reduction: [f64; 3],
+    reduction_uncapped: [f64; 3],
     pse: [Pse; 3],
     makeup: f64,
     link_mix: f64,
@@ -524,7 +532,8 @@ impl VocalComp {
             let k = (-1.0 / (sr * if peaks[i] > self.env[i] { 0.003 } else { 0.100 })).exp();
             self.env[i] = k * self.env[i] + (1.0 - k) * peaks[i];
             let level = gain_db(self.env[i]);
-            let target = Self::target_reduction(level, settings).min(settings.depth);
+            let unlimited = Self::target_reduction(level, settings);
+            let target = unlimited.min(settings.depth);
             let attack_sec = (settings.attack * 0.001).max(0.00005);
             let release_sec = (settings.release * 0.001).max(0.001);
             let tc = if target > self.reduction[i] {
@@ -534,6 +543,13 @@ impl VocalComp {
             };
             let k = (-1.0 / (sr * tc)).exp();
             self.reduction[i] = k * self.reduction[i] + (1.0 - k) * target;
+            let tc_u = if unlimited > self.reduction_uncapped[i] {
+                attack_sec
+            } else {
+                release_sec
+            };
+            let k_u = (-1.0 / (sr * tc_u)).exp();
+            self.reduction_uncapped[i] = k_u * self.reduction_uncapped[i] + (1.0 - k_u) * unlimited;
             let pse_gain = self.pse[i].tick(peaks[i], settings.gate, sr, settings.pse);
             gains[i] = db_gain(self.makeup - self.reduction[i]) * pse_gain;
         }
@@ -554,6 +570,16 @@ impl VocalComp {
         }
         let sc_level = gain_db(self.env[2]);
         (out, gr, sc_level, pse_gr)
+    }
+    pub fn uncapped_gr(&self) -> f64 {
+        let mut gr = 0.0_f64;
+        for i in 0..2 {
+            gr = gr.max(
+                self.reduction_uncapped[i]
+                    + self.link_mix * (self.reduction_uncapped[2] - self.reduction_uncapped[i]),
+            );
+        }
+        gr
     }
 }
 #[derive(Clone, Copy)]
@@ -803,6 +829,42 @@ mod tests {
         assert!(b.reduction.abs() < 0.01);
     }
     #[test]
+    fn dynamic_band_uncapped_reduction_exceeds_range() {
+        let mut cut = BandRuntime::new(
+            Band {
+                dynamic: true,
+                threshold: -30.0,
+                attack: 1.0,
+                release: 10.0,
+                range: 3.0,
+                ratio: 10.0,
+                ..Band::default()
+            },
+            48000.0,
+        );
+        let mut boost = BandRuntime::new(
+            Band {
+                dynamic: true,
+                threshold: -30.0,
+                attack: 1.0,
+                release: 10.0,
+                range: -3.0,
+                ratio: 10.0,
+                ..Band::default()
+            },
+            48000.0,
+        );
+        for i in 0..48000 {
+            let v = (2.0 * PI * 1000.0 * i as f64 / 48000.0).sin() * 0.5;
+            cut.tick([v, v], 48000.0);
+            boost.tick([v, v], 48000.0);
+        }
+        assert!((cut.reduction - 3.0).abs() < 0.05);
+        assert!(cut.reduction_uncapped > 8.0);
+        assert!((boost.reduction + 3.0).abs() < 0.05);
+        assert!(boost.reduction_uncapped < -8.0);
+    }
+    #[test]
     fn pse_advanced_controls_follow_zingzap_transfer_and_timing() {
         let sr = 48000.0;
         let mut settings = PseSettings {
@@ -987,6 +1049,8 @@ mod tests {
         }
         assert!(gr_unlimited > 20.0);
         assert!((gr_limited - 5.0).abs() < 0.2);
+        assert!(c_limited.uncapped_gr() > 20.0);
+        assert!(c_limited.uncapped_gr() > gr_limited + 5.0);
     }
     #[test]
     fn vocal_comp_attack_and_release_affect_timing() {

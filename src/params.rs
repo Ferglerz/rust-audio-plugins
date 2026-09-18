@@ -82,20 +82,24 @@ pub struct StripParams {
 impl Default for StripParams {
     fn default() -> Self {
         fn param(name: &str, v: f32, min: f32, max: f32, unit: &'static str) -> FloatParam {
+            // dB is implied on an audio plugin; keep it parseable but omit it from readouts.
+            let display_unit = if unit.trim() == "dB" { "" } else { unit };
             FloatParam::new(name, v, FloatRange::Linear { min, max })
-                .with_unit(unit)
-                .with_value_to_string(Arc::new(move |v| format!("{:.1}{}", v, unit)))
+                .with_unit(display_unit)
+                .with_value_to_string(Arc::new(move |v| format!("{:.1}{}", v, display_unit)))
                 .with_string_to_value(Arc::new(move |text| {
-                    text.trim()
-                        .trim_end_matches(unit.trim())
-                        .trim()
-                        .parse::<f32>()
-                        .ok()
-                        .filter(|v| v.is_finite())
+                    let text = text.trim();
+                    let unit_trim = unit.trim();
+                    let stripped = if unit_trim.is_empty() {
+                        text
+                    } else {
+                        text.trim_end_matches(unit_trim).trim()
+                    };
+                    stripped.parse::<f32>().ok().filter(|v| v.is_finite())
                 }))
         }
         Self {
-            editor_state: ViziaState::new(|| (1280, 656)),
+            editor_state: ViziaState::new(|| (1164, 656)),
             bands: Arc::new(Mutex::new(Vec::new())),
             eq2_bands: Arc::new(Mutex::new(Vec::new())),
             sc_eq_bands: Arc::new(Mutex::new(vec![Band {
@@ -203,10 +207,9 @@ impl Default for StripParams {
                     max: 20.0,
                 },
             )
-            .with_unit(" dB")
             .with_step_size(0.1)
             .with_smoother(SmoothingStyle::Linear(20.0))
-            .with_value_to_string(Arc::new(|v| format!("{:.1} dB", v)))
+            .with_value_to_string(Arc::new(|v| format!("{:.1}", v)))
             .with_string_to_value(Arc::new(|text| {
                 text.trim()
                     .trim_end_matches("dB")
@@ -370,6 +373,27 @@ mod tests {
         assert_eq!(
             *params.sc_eq_bands.lock().unwrap(),
             *restored.sc_eq_bands.lock().unwrap()
+        );
+    }
+
+    #[test]
+    fn db_params_omit_unit_from_readouts_but_still_parse_it() {
+        let params = StripParams::default();
+        let depth = params
+            .pse_depth
+            .normalized_value_to_string(params.pse_depth.unmodulated_normalized_value(), true);
+        assert_eq!(depth, "10.0");
+        let knee = params
+            .comp_knee
+            .normalized_value_to_string(params.comp_knee.unmodulated_normalized_value(), true);
+        assert_eq!(knee, "6.0");
+        let thresh = params
+            .compression
+            .normalized_value_to_string(params.compression.unmodulated_normalized_value(), true);
+        assert!(!thresh.contains("dB"), "{thresh}");
+        assert_eq!(
+            params.pse_depth.string_to_normalized_value("12 dB"),
+            Some(params.pse_depth.preview_normalized(12.0))
         );
     }
 }

@@ -29,19 +29,20 @@ use std::{
 };
 
 pub const LIFT_COLOR: C = rgb(110, 215, 255);
-const UI_W: f32 = 1280.0;
+const UI_W: f32 = 1164.0;
 const UI_H: f32 = 656.0;
 const HEADER_H: f32 = 82.0;
 const MARGIN: f32 = 16.0;
 const GAP: f32 = 12.0;
-const SIDE_W: f32 = 236.0;
+const DYN_W: f32 = 130.0;
+const PSE_W: f32 = 130.0;
 const MODULE_Y: f32 = 92.0;
 const MODULE_H: f32 = 500.0;
-const EQ_W: f32 = UI_W - MARGIN * 2.0 - SIDE_W * 2.0 - GAP * 2.0;
+const EQ_W: f32 = UI_W - 2.0 * MARGIN - 2.0 * GAP - DYN_W - PSE_W;
 const FOOTER_LINE_Y: f32 = 608.0;
 const FOOTER_BTN_Y: f32 = 616.0;
 #[cfg(test)]
-const GX: f32 = MARGIN + 44.0;
+const GX: f32 = MARGIN + PSE_W + GAP + 44.0;
 const GY: f32 = 136.0;
 #[cfg(test)]
 const GW: f32 = EQ_W - 60.0;
@@ -51,6 +52,8 @@ const THEME_BUTTON: (f32, f32, f32, f32) = (UI_W - MARGIN - 116.0, FOOTER_BTN_Y,
 pub const EQ2_ID_BASE: u64 = 10_000;
 pub const SC_EQ_ID_BASE: u64 = 20_000;
 const GRAPH_CLIP_W: f32 = EQ_W;
+const PSE_BLUE: C = rgb(108, 176, 242);
+const PSE_CONTROLS_KNOBS: [usize; 4] = [7, 8, 2, 10];
 fn band_display_num(id: u64) -> u64 {
     if id >= SC_EQ_ID_BASE {
         id - SC_EQ_ID_BASE
@@ -65,8 +68,7 @@ fn quintic_page_progress(progress: f32) -> f32 {
     let frac = progress - unit;
     unit + frac * frac * frac * (frac * (frac * 6.0 - 15.0) + 10.0)
 }
-const PROCESS_BUTTON: (f32, f32, f32, f32) = (130.0, FOOTER_BTN_Y, 216.0, 28.0);
-const PSE_KNOBS: [usize; 6] = [7, 8, 1, 2, 9, 10];
+const PROCESS_BUTTON: (f32, f32, f32, f32) = (32.0, FOOTER_BTN_Y, 152.0, 28.0);
 fn processing_menu_rect(resolution: bool) -> (f32, f32, f32, f32) {
     let r = if resolution {
         resolution_button_rect()
@@ -77,12 +79,18 @@ fn processing_menu_rect(resolution: bool) -> (f32, f32, f32, f32) {
     (r.0, r.1 - height, r.2, height)
 }
 fn resolution_button_rect() -> (f32, f32, f32, f32) {
-    (354.0, FOOTER_BTN_Y, 104.0, 28.0)
+    (192.0, FOOTER_BTN_Y, 104.0, 28.0)
 }
 const SCALES: [f64; 6] = [12.0, 24.0, 36.0, 48.0, 60.0, 72.0];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum DynPage {
+    Main,
+    Controls,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PsePage {
     Main,
     Controls,
 }
@@ -162,6 +170,101 @@ fn db_y(db: f64, range: f64) -> f32 {
 }
 fn y_db(y: f32, range: f64) -> f64 {
     ((0.5 - (y - GY) as f64 / GH as f64) * 2.0 * range).clamp(-24.0, 24.0)
+}
+const GR_METER_DB: f32 = 30.0;
+fn gr_meter_bar_heights(actual: f32, uncapped: f32, meter_h: f32) -> (f32, f32) {
+    let actual_h = meter_h * (actual.max(0.0) / GR_METER_DB).clamp(0.0, 1.0);
+    let uncapped_h = meter_h * (uncapped.max(actual).max(0.0) / GR_METER_DB).clamp(0.0, 1.0);
+    (actual_h, uncapped_h)
+}
+fn knee_pulse_bulge(bulge: &Cell<f32>, knee_hover: bool) -> f32 {
+    let target_b = if knee_hover { 1.0 } else { 0.0 };
+    let cur_b = bulge.get();
+    let next_b = cur_b + (target_b - cur_b) * 0.15;
+    bulge.set(next_b);
+    let now_sec = (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        % 100_000) as f32
+        * 0.001;
+    let pulse = 0.96 + 0.04 * (now_sec * 2.5).sin();
+    next_b * 1.5 * pulse
+}
+fn draw_knee_zone(
+    d: &mut Draw,
+    knee_rect: (f32, f32, f32, f32),
+    bulge_w: f32,
+    knee_norm: f32,
+    knee_hover: bool,
+    base_color: C,
+    bypassed: bool,
+) {
+    let base_alpha = 0.75 - knee_norm * (0.75 - 0.05);
+    let draw_alpha = if knee_hover {
+        (base_alpha + 0.18).min(0.95)
+    } else {
+        base_alpha
+    };
+    let knee_color = C {
+        r: base_color.r,
+        g: base_color.g,
+        b: base_color.b,
+        a: draw_alpha,
+    };
+    let draw_knee = (
+        knee_rect.0 - bulge_w,
+        knee_rect.1,
+        knee_rect.2 + 2.0 * bulge_w,
+        knee_rect.3,
+    );
+    d.rect(draw_knee.0, draw_knee.1, draw_knee.2, draw_knee.3, knee_color);
+    if knee_hover {
+        let highlight = if bypassed { MUTED } else { TEXT };
+        d.outline(
+            draw_knee,
+            C {
+                r: highlight.r,
+                g: highlight.g,
+                b: highlight.b,
+                a: 0.7,
+            },
+        );
+    }
+}
+fn overflow_reduction(range: f64, uncapped: f64) -> Option<f64> {
+    if range >= 0.0 {
+        (uncapped > range + 0.05).then_some(uncapped)
+    } else {
+        (uncapped < range - 0.05).then_some(uncapped)
+    }
+}
+fn uncapped_for(id: u64, meters: &[(u64, f32)]) -> Option<f64> {
+    meters
+        .iter()
+        .find(|(band_id, _)| *band_id == id)
+        .map(|(_, gr)| f64::from(*gr))
+}
+fn draw_dyn_range_stem(
+    d: &mut Draw,
+    node: (f32, f32),
+    gain: f64,
+    range: f64,
+    graph_db: f64,
+    color: C,
+    uncapped: Option<f64>,
+) {
+    let (x, y) = node;
+    let y_range = db_y(gain - range, graph_db);
+    d.line(x, y, x, y_range, color, 3.0);
+    d.circle(x, y_range, 3.0, color, true);
+    if let Some(uncapped) = uncapped.and_then(|gr| overflow_reduction(range, gr)) {
+        let y_over = db_y(gain - uncapped, graph_db);
+        if (y_over - y_range).abs() > 0.5 {
+            d.line(x, y_range, x, y_over, MUTED, 3.0);
+            d.circle(x, y_over, 3.0, MUTED, true);
+        }
+    }
 }
 fn lift_gain_y(gain: f64) -> f32 {
     let norm = ((gain + 100.0) / 100.0).clamp(0.0, 1.0) as f32;
@@ -256,6 +359,8 @@ enum Target {
     Band(usize),
     LiftBand(usize),
     Node(u64),
+    CompKnee { from_top: bool },
+    PseKnee { from_top: bool },
 }
 #[derive(Clone, Copy, PartialEq)]
 enum PendingCreate {
@@ -297,6 +402,7 @@ pub fn create(params: Arc<StripParams>, shared: Arc<Shared>) -> Option<Box<dyn E
                 shared: shared.clone(),
                 selected: None,
                 dyn_page: DynPage::Main,
+                pse_page: PsePage::Main,
                 drag: None,
                 hover: None,
                 font: Cell::new(None),
@@ -313,6 +419,8 @@ pub fn create(params: Arc<StripParams>, shared: Arc<Shared>) -> Option<Box<dyn E
                 anim_progress: Cell::new(0.0),
                 anim_target: Cell::new(0.0),
                 last_tick: Cell::new(None),
+                knee_bulge: Cell::new(0.0),
+                pse_knee_bulge: Cell::new(0.0),
             }
             .build(cx, |cx| {
                 let timer = cx.add_timer(Duration::from_millis(16), None, |cx, action| {
@@ -329,6 +437,7 @@ pub fn create(params: Arc<StripParams>, shared: Arc<Shared>) -> Option<Box<dyn E
 }
 struct StripView {
     dyn_page: DynPage,
+    pse_page: PsePage,
     params: Arc<StripParams>,
     shared: Arc<Shared>,
     selected: Option<u64>,
@@ -348,6 +457,8 @@ struct StripView {
     anim_progress: Cell<f32>,
     anim_target: Cell<f32>,
     last_tick: Cell<Option<std::time::Instant>>,
+    knee_bulge: Cell<f32>,
+    pse_knee_bulge: Cell<f32>,
 }
 fn lift_bin_curve_fit(bins: &[f64; 256], t: f64) -> f64 {
     let u = (t * 256.0 - 0.5).clamp(0.0, 255.0);
@@ -364,6 +475,130 @@ fn lift_bin_curve_fit(bins: &[f64; 256], t: f64) -> f64 {
     let d = y1;
 
     (((a * s + b) * s + c) * s + d).max(0.0)
+}
+fn smooth_lift_bins(raw: &[f64; 256]) -> [f64; 256] {
+    let mut smooth = [0.0_f64; 256];
+    for (k, smooth_val) in smooth.iter_mut().enumerate() {
+        let mut sum = 0.0;
+        let mut w_sum = 0.0;
+        for offset in -3..=3 {
+            let idx = (k as isize + offset).clamp(0, 255) as usize;
+            let w = match offset.abs() {
+                0 => 0.38,
+                1 => 0.24,
+                2 => 0.06,
+                3 => 0.01,
+                _ => 0.0,
+            };
+            sum += raw[idx] * w;
+            w_sum += w;
+        }
+        *smooth_val = sum / w_sum;
+    }
+    smooth
+}
+fn lift_curve_points(b: &LiftBand, gr: &[f64; 256], gx: f32, gw: f32, sr: f64) -> Vec<(f32, f32)> {
+    let graph_bottom_y = GY + GH;
+    (0..=500)
+        .map(|i| {
+            let x = gx + gw * (i as f32 / 500.0);
+            let f = x_freq_at(x, gx, gw);
+            let inf = filter_influence(b.shape, b.freq, b.q, b.order, f, sr);
+            let t = ((f / 20.0).log10() / 3.0).clamp(0.0, 1.0);
+            let gr_db = lift_bin_curve_fit(gr, t);
+            let cut_gain = (b.gain - gr_db * 1.5).clamp(-100.0, 0.0);
+            let norm = ((cut_gain + 100.0) / 100.0) as f32;
+            let y = graph_bottom_y - (GH * norm * inf as f32);
+            (x, y)
+        })
+        .collect()
+}
+fn draw_lift_influence(
+    d: &mut Draw,
+    b: &LiftBand,
+    points: &[(f32, f32)],
+    color: C,
+    alphas: (f32, f32),
+    graph: (f32, f32),
+) {
+    let (fill_a, stroke_a) = alphas;
+    let (gx, gw) = graph;
+    let graph_bottom_y = GY + GH;
+    let c_trans = C {
+        r: color.r,
+        g: color.g,
+        b: color.b,
+        a: 0.0,
+    };
+    let c_solid = C {
+        r: color.r,
+        g: color.g,
+        b: color.b,
+        a: fill_a,
+    };
+    let s_trans = C {
+        r: color.r,
+        g: color.g,
+        b: color.b,
+        a: 0.0,
+    };
+    let s_solid = C {
+        r: color.r,
+        g: color.g,
+        b: color.b,
+        a: stroke_a,
+    };
+    match b.shape {
+        Shape::Bell | Shape::BandPass | Shape::Notch => {
+            let oct_span = (2.0 / b.q.clamp(0.15, 18.0)).clamp(0.5, 4.0);
+            let f_left = (b.freq * 2.0_f64.powf(-oct_span)).max(20.0);
+            let f_right = (b.freq * 2.0_f64.powf(oct_span)).min(20000.0);
+            let x_left = freq_x_at(f_left, gx, gw);
+            let x_center = freq_x_at(b.freq, gx, gw);
+            let x_right = freq_x_at(f_right, gx, gw);
+            let center_idx = points
+                .iter()
+                .position(|(x, _)| *x >= x_center)
+                .unwrap_or(points.len() / 2);
+            let left_pts = &points[..=center_idx];
+            let right_pts = &points[center_idx..];
+            if fill_a > 0.0 {
+                d.area_gradient_span(left_pts, graph_bottom_y, x_left, x_center, c_trans, c_solid);
+                d.area_gradient_span(
+                    right_pts,
+                    graph_bottom_y,
+                    x_center,
+                    x_right,
+                    c_solid,
+                    c_trans,
+                );
+            }
+            d.poly_gradient_span(left_pts, x_left, x_center, s_trans, s_solid, 1.8);
+            d.poly_gradient_span(right_pts, x_center, x_right, s_solid, s_trans, 1.8);
+        }
+        Shape::HighShelf | Shape::LowCut => {
+            let oct_span = (1.5 / b.q.clamp(0.15, 18.0)).clamp(0.5, 3.0);
+            let f_fade_start = (b.freq * 2.0_f64.powf(-oct_span)).max(20.0);
+            let f_fade_end = (b.freq * 2.0_f64.powf(oct_span * 0.5)).min(20000.0);
+            let x_start = freq_x_at(f_fade_start, gx, gw);
+            let x_end = freq_x_at(f_fade_end, gx, gw);
+            if fill_a > 0.0 {
+                d.area_gradient_span(points, graph_bottom_y, x_start, x_end, c_trans, c_solid);
+            }
+            d.poly_gradient_span(points, x_start, x_end, s_trans, s_solid, 1.8);
+        }
+        Shape::LowShelf | Shape::HighCut => {
+            let oct_span = (1.5 / b.q.clamp(0.15, 18.0)).clamp(0.5, 3.0);
+            let f_fade_start = (b.freq * 2.0_f64.powf(-oct_span * 0.5)).max(20.0);
+            let f_fade_end = (b.freq * 2.0_f64.powf(oct_span)).min(20000.0);
+            let x_start = freq_x_at(f_fade_start, gx, gw);
+            let x_end = freq_x_at(f_fade_end, gx, gw);
+            if fill_a > 0.0 {
+                d.area_gradient_span(points, graph_bottom_y, x_start, x_end, c_solid, c_trans);
+            }
+            d.poly_gradient_span(points, x_start, x_end, s_solid, s_trans, 1.8);
+        }
+    }
 }
 fn display_range(range: f64) -> f64 {
     if range.is_finite() {
@@ -405,27 +640,22 @@ impl StripView {
     }
     fn eq_bounds(&self) -> (f32, f32, f32, f32) {
         let x = if self.is_pre() {
-            MARGIN + SIDE_W + GAP
+            MARGIN + PSE_W + GAP + DYN_W + GAP
         } else {
-            MARGIN
+            MARGIN + PSE_W + GAP
         };
         (x, MODULE_Y, EQ_W, MODULE_H)
     }
     fn dyn_bounds(&self) -> (f32, f32, f32, f32) {
         let x = if self.is_pre() {
-            MARGIN
+            MARGIN + PSE_W + GAP
         } else {
-            UI_W - MARGIN - SIDE_W
+            UI_W - MARGIN - DYN_W
         };
-        (x, MODULE_Y, SIDE_W, MODULE_H)
+        (x, MODULE_Y, DYN_W, MODULE_H)
     }
     fn pse_bounds(&self) -> (f32, f32, f32, f32) {
-        let x = if self.is_pre() {
-            UI_W - MARGIN - SIDE_W
-        } else {
-            MARGIN + EQ_W + GAP
-        };
-        (x, MODULE_Y, SIDE_W, MODULE_H)
+        (MARGIN, MODULE_Y, PSE_W, MODULE_H)
     }
     fn gx(&self) -> f32 {
         self.eq_bounds().0 + 44.0
@@ -468,26 +698,33 @@ impl StripView {
     }
     fn eq_tab_1_rect(&self) -> (f32, f32, f32, f32) {
         let eq_x = self.eq_bounds().0;
-        (eq_x + 200.0, 106.0, 52.0, 24.0)
+        (eq_x + 200.0, 103.0, 52.0, 24.0)
     }
     fn eq_tab_2_rect(&self) -> (f32, f32, f32, f32) {
         let eq_x = self.eq_bounds().0;
-        (eq_x + 258.0, 106.0, 52.0, 24.0)
+        (eq_x + 258.0, 103.0, 52.0, 24.0)
     }
     fn eq_tab_sc_rect(&self) -> (f32, f32, f32, f32) {
         let eq_x = self.eq_bounds().0;
-        (eq_x + 316.0, 106.0, 58.0, 24.0)
+        (eq_x + 316.0, 103.0, 58.0, 24.0)
     }
     fn eq_add_lift_rect(&self) -> (f32, f32, f32, f32) {
         let eq_x = self.eq_bounds().0;
-        (eq_x + 382.0, 106.0, 84.0, 24.0)
+        (eq_x + 382.0, 103.0, 84.0, 24.0)
     }
     fn eq_power_rect(&self) -> (f32, f32, f32, f32) {
         let eq_x = self.eq_bounds().0;
-        (eq_x + EQ_W - 40.0, 104.0, 28.0, 28.0)
+        (eq_x + 14.0, 103.0, 24.0, 24.0)
     }
     fn scale_button_rect(&self) -> (f32, f32, f32, f32) {
-        (self.gx() - 52.0, GRAPH_BOTTOM + 4.0, 42.0, 24.0)
+        let label_x = (self.eq_bounds().0 + self.gx()) * 0.5;
+        (label_x - 21.0, GRAPH_BOTTOM + 4.0, 42.0, 24.0)
+    }
+    fn footer_listen_sc_rect(&self) -> (f32, f32, f32, f32) {
+        (510.0, FOOTER_BTN_Y, 96.0, 28.0)
+    }
+    fn footer_comp_routing_rect(&self) -> (f32, f32, f32, f32) {
+        (744.0, FOOTER_BTN_Y, 56.0, 28.0)
     }
     fn scale_menu_rect(&self) -> (f32, f32, f32, f32) {
         (
@@ -497,95 +734,127 @@ impl StripView {
             144.0,
         )
     }
-    fn dyn_routing_button_rect(&self) -> (f32, f32, f32, f32) {
-        let dx = self.dyn_bounds().0;
-        if self.dyn_page == DynPage::Main {
-            (dx + 128.0, 106.0, 44.0, 24.0)
-        } else {
-            (dx + 154.0, 106.0, 44.0, 24.0)
-        }
-    }
     fn dyn_cog_button_rect(&self) -> (f32, f32, f32, f32) {
         let dx = self.dyn_bounds().0;
-        (dx + 176.0, 106.0, 24.0, 24.0)
+        (dx + 14.0, 148.0, 24.0, 24.0)
+    }
+    fn dyn_back_button_rect(&self) -> (f32, f32, f32, f32) {
+        self.dyn_cog_button_rect()
+    }
+    fn pse_cog_button_rect(&self) -> (f32, f32, f32, f32) {
+        let px = self.pse_bounds().0;
+        (px + 14.0, 148.0, 24.0, 24.0)
+    }
+    fn pse_back_button_rect(&self) -> (f32, f32, f32, f32) {
+        self.pse_cog_button_rect()
     }
     fn dyn_power_button_rect(&self) -> (f32, f32, f32, f32) {
         let dx = self.dyn_bounds().0;
-        (dx + 204.0, 106.0, 24.0, 24.0)
+        (dx + 14.0, 103.0, 24.0, 24.0)
     }
-    fn dyn_back_button_rect(&self) -> (f32, f32, f32, f32) {
-        let dx = self.dyn_bounds().0;
-        (dx + 10.0, 106.0, 60.0, 24.0)
+    fn pse_power_button_rect(&self) -> (f32, f32, f32, f32) {
+        let px = self.pse_bounds().0;
+        (px + 14.0, 103.0, 24.0, 24.0)
     }
     fn dyn_mode_rect(&self, i: usize) -> (f32, f32, f32, f32) {
         let dx = self.dyn_bounds().0;
-        (dx + 12.0, 142.0 + i as f32 * 26.0, 212.0, 22.0)
+        if i == 0 {
+            (dx + 6.0, 196.0, 56.0, 22.0)
+        } else {
+            (dx + 68.0, 196.0, 56.0, 22.0)
+        }
     }
-    fn pse_mode_rect(&self, i: usize) -> (f32, f32, f32, f32) {
+    fn pse_detect_mode_rect(&self) -> (f32, f32, f32, f32) {
         let px = self.pse_bounds().0;
-        (px + 12.0, 142.0 + i as f32 * 26.0, 212.0, 22.0)
+        (px + 68.0, 396.0, 56.0, 24.0)
     }
     fn dyn_main_thresh_slider_rect(&self) -> (f32, f32, f32, f32) {
         let dx = self.dyn_bounds().0;
-        let y = 180.0;
-        let h = MODULE_Y + MODULE_H - y - 16.0;
-        (dx + 92.0, y, 36.0, h)
+        (dx + 18.0, 208.0, 38.0, 336.0)
     }
     fn dyn_main_gr_meter_rect(&self) -> (f32, f32, f32, f32) {
-        let (x, y, w, h) = self.dyn_main_thresh_slider_rect();
-        (x + w, y, 16.0, h)
+        let dx = self.dyn_bounds().0;
+        (dx + 66.0, 208.0, 16.0, 336.0)
     }
     fn dyn_main_thresh_handle_rect(&self, thresh_y: f32) -> (f32, f32, f32, f32) {
         let (sx, _, sw, _) = self.dyn_main_thresh_slider_rect();
-        let gr_w = self.dyn_main_gr_meter_rect().2;
-        let bar_w = sw + gr_w + 12.0;
-        (sx - 6.0, thresh_y - 6.0, bar_w, 12.0)
+        (sx - 5.0, thresh_y - 8.0, sw + 10.0, 16.0)
     }
-    fn knob_cell(
-        module_x: f32,
-        col: usize,
-        row: usize,
-        y0: f32,
-        pitch: f32,
-    ) -> (f32, f32, f32, f32) {
-        let x = if col == 0 {
-            module_x + 14.0
-        } else {
-            module_x + 122.0
-        };
-        (x, y0 + row as f32 * pitch, 100.0, 82.0)
+    fn dyn_main_depth_handle_rect(&self, depth_y: f32) -> (f32, f32, f32, f32) {
+        let dx = self.dyn_bounds().0;
+        (dx + 88.0, depth_y - 8.0, 26.0, 16.0)
+    }
+    fn dyn_main_knee_offset(&self) -> f32 {
+        let knee_val = self.params.comp_knee.value();
+        10.0 + (knee_val / 20.0).clamp(0.0, 1.0) * 45.0
+    }
+    fn dyn_main_knee_rect(&self, thresh_y: f32, bulge_w: f32) -> (f32, f32, f32, f32) {
+        let handle = self.dyn_main_thresh_handle_rect(thresh_y);
+        let knee_offset = self.dyn_main_knee_offset();
+        (
+            handle.0 - 2.0 - bulge_w,
+            handle.1 - knee_offset,
+            handle.2 + 4.0 + 2.0 * bulge_w,
+            handle.3 + 2.0 * knee_offset,
+        )
+    }
+    fn pse_main_thresh_slider_rect(&self) -> (f32, f32, f32, f32) {
+        let px = self.pse_bounds().0;
+        (px + 18.0, 208.0, 38.0, 336.0)
+    }
+    fn pse_main_gr_meter_rect(&self) -> (f32, f32, f32, f32) {
+        let px = self.pse_bounds().0;
+        (px + 66.0, 208.0, 16.0, 336.0)
+    }
+    fn pse_main_thresh_handle_rect(&self, thresh_y: f32) -> (f32, f32, f32, f32) {
+        let (sx, _, sw, _) = self.pse_main_thresh_slider_rect();
+        (sx - 5.0, thresh_y - 8.0, sw + 10.0, 16.0)
+    }
+    fn pse_main_depth_handle_rect(&self, depth_y: f32) -> (f32, f32, f32, f32) {
+        let px = self.pse_bounds().0;
+        (px + 88.0, depth_y - 8.0, 26.0, 16.0)
+    }
+    fn pse_main_knee_offset(&self) -> f32 {
+        let knee_val = self.params.pse_knee.value();
+        10.0 + (knee_val / 18.0).clamp(0.0, 1.0) * 45.0
+    }
+    fn pse_main_knee_rect(&self, thresh_y: f32, bulge_w: f32) -> (f32, f32, f32, f32) {
+        let handle = self.pse_main_thresh_handle_rect(thresh_y);
+        let knee_offset = self.pse_main_knee_offset();
+        (
+            handle.0 - 2.0 - bulge_w,
+            handle.1 - knee_offset,
+            handle.2 + 4.0 + 2.0 * bulge_w,
+            handle.3 + 2.0 * knee_offset,
+        )
     }
     fn pse_knob_rect(&self, i: usize) -> (f32, f32, f32, f32) {
         let px = self.pse_bounds().0;
-        let (col, row) = match i {
-            7 => (0, 0),
-            8 => (1, 0),
-            1 => (0, 1),
-            2 => (1, 1),
-            9 => (0, 2),
-            10 => (1, 2),
-            _ => (0, 0),
-        };
-        Self::knob_cell(px, col, row, 208.0, 96.0)
+        match i {
+            7 => (px + 68.0, 356.0, 56.0, 86.0),
+            8 => (px + 6.0, 226.0, 56.0, 86.0),
+            2 => (px + 6.0, 356.0, 56.0, 86.0),
+            10 => (px + 68.0, 226.0, 56.0, 86.0),
+            _ => (px + 6.0, 226.0, 56.0, 86.0),
+        }
     }
     fn global_rect(&self, i: usize) -> (f32, f32, f32, f32) {
         let dx = self.dyn_bounds().0;
         match self.dyn_page {
-            DynPage::Controls => {
-                let (col, row) = match i {
-                    0 => (0, 0),
-                    6 => (1, 0),
-                    5 => (0, 1),
-                    11 => (1, 1),
-                    3 => (0, 2),
-                    4 => (1, 2),
-                    _ => (0, 0),
-                };
-                Self::knob_cell(dx, col, row, 210.0, 92.0)
-            }
+            DynPage::Controls => match i {
+                6 => (dx + 6.0, 226.0, 56.0, 86.0),
+                5 => (dx + 68.0, 226.0, 56.0, 86.0),
+                11 => (dx + 37.0, 314.0, 56.0, 86.0),
+                3 => (dx + 6.0, 402.0, 56.0, 86.0),
+                4 => (dx + 68.0, 402.0, 56.0, 86.0),
+                _ => (0.0, -1000.0, 0.0, 0.0),
+            },
             DynPage::Main => {
-                let dx = self.dyn_bounds().0;
-                (dx + 16.0, 148.0, 72.0, 32.0)
+                if i == 14 {
+                    (dx + 68.0, 552.0, 50.0, 22.0)
+                } else {
+                    (dx + 6.0, 226.0, 56.0, 86.0)
+                }
             }
         }
     }
@@ -593,15 +862,25 @@ impl StripView {
         (r.0 + 6.0, r.1 + 63.0, r.2 - 12.0, 19.0)
     }
     fn global_value_rect(&self, i: usize) -> (f32, f32, f32, f32) {
-        if self.dyn_page == DynPage::Main && i == 0 {
-            let dx = self.dyn_bounds().0;
-            (dx + 16.0, 154.0, 72.0, 20.0)
+        if self.dyn_page == DynPage::Main && i == 14 {
+            self.global_rect(i)
         } else {
             Self::knob_value_rect(self.global_rect(i))
         }
     }
     fn pse_value_rect(&self, i: usize) -> (f32, f32, f32, f32) {
-        Self::knob_value_rect(self.pse_knob_rect(i))
+        if self.pse_page == PsePage::Main && i == 1 {
+            let px = self.pse_bounds().0;
+            (px + 12.0, 552.0, 50.0, 22.0)
+        } else {
+            Self::knob_value_rect(self.pse_knob_rect(i))
+        }
+    }
+    fn pse_controls(&self) -> &'static [usize] {
+        match self.pse_page {
+            PsePage::Main => &[1],
+            PsePage::Controls => &PSE_CONTROLS_KNOBS,
+        }
     }
     fn global_hit_rects(&self) -> Vec<(usize, (f32, f32, f32, f32))> {
         let mut rects: Vec<_> = self
@@ -610,12 +889,16 @@ impl StripView {
             .copied()
             .map(|i| (i, self.global_rect(i)))
             .collect();
-        rects.extend(
-            PSE_KNOBS
-                .iter()
-                .copied()
-                .map(|i| (i, self.pse_knob_rect(i))),
-        );
+        rects.extend(self.pse_controls().iter().copied().map(|i| {
+            (
+                i,
+                if self.pse_page == PsePage::Main {
+                    self.pse_value_rect(i)
+                } else {
+                    self.pse_knob_rect(i)
+                },
+            )
+        }));
         rects
     }
     fn global_value_hits(&self) -> Vec<(ValueTarget, (f32, f32, f32, f32))> {
@@ -626,7 +909,7 @@ impl StripView {
             .map(|i| (ValueTarget::Global(i), self.global_value_rect(i)))
             .collect();
         fields.extend(
-            PSE_KNOBS
+            self.pse_controls()
                 .iter()
                 .copied()
                 .map(|i| (ValueTarget::Global(i), self.pse_value_rect(i))),
@@ -635,6 +918,7 @@ impl StripView {
     }
     fn value_color(&self, target: ValueTarget) -> C {
         match target {
+            ValueTarget::Global(1 | 7 | 8 | 9 | 10) => PSE_BLUE,
             ValueTarget::Global(2 | 3) => TEAL,
             ValueTarget::Global(_) => GOLD,
             ValueTarget::Band(_) => self
@@ -883,7 +1167,7 @@ impl StripView {
     fn global_controls(&self) -> &'static [usize] {
         match self.dyn_page {
             DynPage::Main => &[0],
-            DynPage::Controls => &[0, 6, 5, 11, 3, 4],
+            DynPage::Controls => &[6, 5, 11, 3, 4],
         }
     }
     fn param(&self, i: usize) -> &FloatParam {
@@ -900,6 +1184,8 @@ impl StripView {
             9 => &self.params.pse_knee,
             10 => &self.params.pse_time,
             11 => &self.params.comp_release,
+            12 => &self.params.comp_knee,
+            14 => &self.params.comp_depth,
             _ => &self.params.compression,
         }
     }
@@ -1090,12 +1376,40 @@ impl StripView {
                     let r = self.dyn_main_thresh_slider_rect();
                     let norm = ((y - r.1) / r.3).clamp(0.0, 1.0);
                     cx.emit(RawParamEvent::SetParameterNormalized(p.as_ptr(), norm));
+                } else if i == 1 && self.pse_page == PsePage::Main {
+                    let r = self.pse_main_thresh_slider_rect();
+                    let norm = 1.0 - ((y - r.1) / r.3).clamp(0.0, 1.0);
+                    cx.emit(RawParamEvent::SetParameterNormalized(p.as_ptr(), norm));
+                } else if i == 14 && self.dyn_page == DynPage::Main {
+                    let r = self.dyn_main_gr_meter_rect();
+                    let norm = ((y - r.1) / r.3).clamp(0.0, 1.0);
+                    cx.emit(RawParamEvent::SetParameterNormalized(p.as_ptr(), norm));
+                } else if i == 7 && self.pse_page == PsePage::Main {
+                    let r = self.pse_main_gr_meter_rect();
+                    let norm = ((y - r.1) / r.3).clamp(0.0, 1.0);
+                    cx.emit(RawParamEvent::SetParameterNormalized(p.as_ptr(), norm));
                 } else {
                     let cur = p.unmodulated_normalized_value();
                     let delta = (dy * if shift { 0.0015 } else { 0.007 }) as f32;
                     let norm = (cur + if i == 0 { -delta } else { delta }).clamp(0.0, 1.0);
                     cx.emit(RawParamEvent::SetParameterNormalized(p.as_ptr(), norm));
                 }
+            }
+            Some(Target::CompKnee { from_top }) => {
+                let p = &self.params.comp_knee;
+                let cur = p.unmodulated_normalized_value();
+                let dir = if from_top { 1.0 } else { -1.0 };
+                let delta = (dy * dir * if shift { 0.003 } else { 0.012 }) as f32;
+                let norm = (cur + delta).clamp(0.0, 1.0);
+                cx.emit(RawParamEvent::SetParameterNormalized(p.as_ptr(), norm));
+            }
+            Some(Target::PseKnee { from_top }) => {
+                let p = &self.params.pse_knee;
+                let cur = p.unmodulated_normalized_value();
+                let dir = if from_top { 1.0 } else { -1.0 };
+                let delta = (dy * dir * if shift { 0.003 } else { 0.012 }) as f32;
+                let norm = (cur + delta).clamp(0.0, 1.0);
+                cx.emit(RawParamEvent::SetParameterNormalized(p.as_ptr(), norm));
             }
             Some(Target::Band(i)) => {
                 let r = self.band_rect(i);
@@ -1239,8 +1553,13 @@ impl View for StripView {
                         cx.needs_redraw();
                         return;
                     }
-                    if inside(x, y, self.dyn_routing_button_rect()) {
+                    if inside(x, y, self.footer_comp_routing_rect()) {
                         self.toggle(cx, &self.params.comp_pre);
+                        cx.needs_redraw();
+                        return;
+                    }
+                    if inside(x, y, self.footer_listen_sc_rect()) {
+                        self.toggle(cx, &self.params.pse_listen);
                         cx.needs_redraw();
                         return;
                     }
@@ -1249,15 +1568,85 @@ impl View for StripView {
                         cx.needs_redraw();
                         return;
                     }
-                    if inside(x, y, self.pse_mode_rect(0)) {
-                        self.toggle(cx, &self.params.pse_peak);
+                    if inside(x, y, self.pse_power_button_rect()) {
+                        self.toggle(cx, &self.params.pse_on);
                         cx.needs_redraw();
                         return;
                     }
-                    if inside(x, y, self.pse_mode_rect(1)) {
-                        self.toggle(cx, &self.params.pse_listen);
-                        cx.needs_redraw();
-                        return;
+                    match self.pse_page {
+                        PsePage::Main => {
+                            if inside(x, y, self.pse_cog_button_rect()) {
+                                self.pse_page = PsePage::Controls;
+                                cx.needs_redraw();
+                                return;
+                            }
+                            let r = self.pse_main_thresh_slider_rect();
+                            let gate_ptr = self.params.gate.as_ptr();
+                            let thresh_norm = self.params.gate.unmodulated_normalized_value();
+                            let thresh_y = r.1 + r.3 * (1.0 - thresh_norm);
+                            let handle = self.pse_main_thresh_handle_rect(thresh_y);
+                            let handle_hit = (
+                                handle.0 - 4.0,
+                                handle.1 - 2.0,
+                                handle.2 + 8.0,
+                                handle.3 + 4.0,
+                            );
+                            let knee_rect = self.pse_main_knee_rect(thresh_y, 0.0);
+                            if inside(x, y, handle_hit) {
+                                self.drag = Some(Target::Global(1));
+                                self.last_drag = (x, y);
+                                cx.emit(RawParamEvent::BeginSetParameter(gate_ptr));
+                                cx.capture();
+                                cx.needs_redraw();
+                                return;
+                            }
+                            if inside(x, y, knee_rect) {
+                                let from_top = y < thresh_y;
+                                self.drag = Some(Target::PseKnee { from_top });
+                                self.last_drag = (x, y);
+                                cx.emit(RawParamEvent::BeginSetParameter(
+                                    self.params.pse_knee.as_ptr(),
+                                ));
+                                cx.capture();
+                                cx.needs_redraw();
+                                return;
+                            }
+                            let gr = self.pse_main_gr_meter_rect();
+                            let pse_depth_ptr = self.params.pse_depth.as_ptr();
+                            let depth_norm = self.params.pse_depth.unmodulated_normalized_value();
+                            let depth_y = gr.1 + gr.3 * depth_norm;
+                            let depth_handle = self.pse_main_depth_handle_rect(depth_y);
+                            if inside(x, y, depth_handle) {
+                                self.drag = Some(Target::Global(7));
+                                self.last_drag = (x, y);
+                                cx.emit(RawParamEvent::BeginSetParameter(pse_depth_ptr));
+                                cx.capture();
+                                cx.needs_redraw();
+                                return;
+                            }
+                            if inside(x, y, (r.0 - 10.0, r.1 - 10.0, r.2 + 20.0, r.3 + 20.0)) {
+                                self.drag = Some(Target::Global(1));
+                                self.last_drag = (x, y);
+                                let norm = 1.0 - ((y - r.1) / r.3).clamp(0.0, 1.0);
+                                cx.emit(RawParamEvent::BeginSetParameter(gate_ptr));
+                                cx.emit(RawParamEvent::SetParameterNormalized(gate_ptr, norm));
+                                cx.capture();
+                                cx.needs_redraw();
+                                return;
+                            }
+                        }
+                        PsePage::Controls => {
+                            if inside(x, y, self.pse_back_button_rect()) {
+                                self.pse_page = PsePage::Main;
+                                cx.needs_redraw();
+                                return;
+                            }
+                            if inside(x, y, self.pse_detect_mode_rect()) {
+                                self.toggle(cx, &self.params.pse_peak);
+                                cx.needs_redraw();
+                                return;
+                            }
+                        }
                     }
                     match self.dyn_page {
                         DynPage::Main => {
@@ -1268,16 +1657,55 @@ impl View for StripView {
                             }
                             let r = self.dyn_main_thresh_slider_rect();
                             let gr = self.dyn_main_gr_meter_rect();
+                            let comp_ptr = self.params.compression.as_ptr();
+                            let thresh_norm = self.params.compression.unmodulated_normalized_value();
+                            let thresh_y = r.1 + r.3 * thresh_norm;
+                            let handle = self.dyn_main_thresh_handle_rect(thresh_y);
+                            let handle_hit = (
+                                handle.0 - 4.0,
+                                handle.1 - 2.0,
+                                handle.2 + 8.0,
+                                handle.3 + 4.0,
+                            );
+                            let knee_rect = self.dyn_main_knee_rect(thresh_y, 0.0);
+                            if inside(x, y, handle_hit) {
+                                self.drag = Some(Target::Global(0));
+                                self.last_drag = (x, y);
+                                cx.emit(RawParamEvent::BeginSetParameter(comp_ptr));
+                                cx.capture();
+                                cx.needs_redraw();
+                                return;
+                            }
+                            if inside(x, y, knee_rect) && !inside(x, y, handle_hit) {
+                                let from_top = y < thresh_y;
+                                self.drag = Some(Target::CompKnee { from_top });
+                                self.last_drag = (x, y);
+                                cx.emit(RawParamEvent::BeginSetParameter(
+                                    self.params.comp_knee.as_ptr(),
+                                ));
+                                cx.capture();
+                                cx.needs_redraw();
+                                return;
+                            }
+                            let comp_depth_ptr = self.params.comp_depth.as_ptr();
+                            let depth_norm = self.params.comp_depth.unmodulated_normalized_value();
+                            let depth_y = gr.1 + gr.3 * depth_norm;
+                            let depth_handle = self.dyn_main_depth_handle_rect(depth_y);
+                            if inside(x, y, depth_handle) {
+                                self.drag = Some(Target::Global(14));
+                                self.last_drag = (x, y);
+                                cx.emit(RawParamEvent::BeginSetParameter(comp_depth_ptr));
+                                cx.capture();
+                                cx.needs_redraw();
+                                return;
+                            }
                             let combined = (r.0 - 10.0, r.1 - 10.0, r.2 + gr.2 + 20.0, r.3 + 20.0);
                             if inside(x, y, combined) {
                                 self.drag = Some(Target::Global(0));
                                 self.last_drag = (x, y);
                                 let norm = ((y - r.1) / r.3).clamp(0.0, 1.0);
-                                cx.emit(RawParamEvent::BeginSetParameter(self.param(0).as_ptr()));
-                                cx.emit(RawParamEvent::SetParameterNormalized(
-                                    self.param(0).as_ptr(),
-                                    norm,
-                                ));
+                                cx.emit(RawParamEvent::BeginSetParameter(comp_ptr));
+                                cx.emit(RawParamEvent::SetParameterNormalized(comp_ptr, norm));
                                 cx.capture();
                                 cx.needs_redraw();
                                 return;
@@ -1290,9 +1718,8 @@ impl View for StripView {
                                 return;
                             }
                             for (i, p) in [
-                                (0, &self.params.soft_knee),
-                                (1, &self.params.auto_makeup),
-                                (2, &self.params.stereo_link),
+                                (0, &self.params.auto_makeup),
+                                (1, &self.params.stereo_link),
                             ] {
                                 if inside(x, y, self.dyn_mode_rect(i)) {
                                     self.toggle(cx, p);
@@ -1743,6 +2170,16 @@ impl View for StripView {
                     if let Some(Target::Global(i)) = self.drag {
                         cx.emit(RawParamEvent::EndSetParameter(self.param(i).as_ptr()));
                     }
+                    if let Some(Target::CompKnee { .. }) = self.drag {
+                        cx.emit(RawParamEvent::EndSetParameter(
+                            self.params.comp_knee.as_ptr(),
+                        ));
+                    }
+                    if let Some(Target::PseKnee { .. }) = self.drag {
+                        cx.emit(RawParamEvent::EndSetParameter(
+                            self.params.pse_knee.as_ptr(),
+                        ));
+                    }
                     if self.pending_create.is_some() {
                         self.select(None);
                     }
@@ -2007,16 +2444,10 @@ impl View for StripView {
         d.rect(eq_b.0, eq_b.1, eq_b.2, eq_b.3, PANEL);
         d.outline(eq_b, LINE);
 
+        d.bypass_button(self.eq_power_rect(), active_bypassed, TEAL);
         d.text(
-            eq_x + 12.0,
-            123.0,
-            if self.is_pre() { "02" } else { "01" },
-            13.0,
-            if active_bypassed { MUTED } else { TEAL },
-        );
-        d.text(
-            eq_x + 48.0,
-            123.0,
+            eq_x + 44.0,
+            119.0,
             if page == 2 {
                 "SIDECHAIN EQ"
             } else {
@@ -2082,7 +2513,6 @@ impl View for StripView {
         } else if self.shared.solo_id.load(Ordering::Relaxed) != 0 {
             d.text(eq_x + 478.0, 123.0, "SOLO AUDITION ACTIVE", 12.0, GOLD);
         }
-        d.bypass_button(self.eq_power_rect(), active_bypassed, TEAL);
 
         let spectrum: Vec<_> = (0..128)
             .map(|i| {
@@ -2098,27 +2528,20 @@ impl View for StripView {
         let eq_sr = config.mode.rate(sr);
 
         let mut raw_lift_gr = [0.0_f64; 256];
-        for (k, val) in raw_lift_gr.iter_mut().enumerate() {
-            *val = self.shared.lift_bin_gr[k].load(Ordering::Relaxed) as f64;
+        let mut raw_lift_uncapped = [0.0_f64; 256];
+        for k in 0..256 {
+            raw_lift_gr[k] = self.shared.lift_bin_gr[k].load(Ordering::Relaxed) as f64;
+            raw_lift_uncapped[k] =
+                self.shared.lift_bin_gr_uncapped[k].load(Ordering::Relaxed) as f64;
         }
-        let mut smooth_lift_gr = [0.0_f64; 256];
-        for (k, smooth_val) in smooth_lift_gr.iter_mut().enumerate() {
-            let mut sum = 0.0;
-            let mut w_sum = 0.0;
-            for offset in -3..=3 {
-                let idx = (k as isize + offset).clamp(0, 255) as usize;
-                let w = match offset.abs() {
-                    0 => 0.38,
-                    1 => 0.24,
-                    2 => 0.06,
-                    3 => 0.01,
-                    _ => 0.0,
-                };
-                sum += raw_lift_gr[idx] * w;
-                w_sum += w;
-            }
-            *smooth_val = sum / w_sum;
-        }
+        let smooth_lift_gr = smooth_lift_bins(&raw_lift_gr);
+        let smooth_lift_uncapped = smooth_lift_bins(&raw_lift_uncapped);
+        let dyn_uncapped = self
+            .shared
+            .dyn_gr_uncapped
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_else(|e| e.into_inner().clone());
 
         let scale_btn = self.scale_button_rect();
         let scale_menu_r = self.scale_menu_rect();
@@ -2189,7 +2612,7 @@ impl View for StripView {
                     d.text(
                         row.0 + 10.0,
                         row.1 + 16.0,
-                        &format!("±{} dB", *range as i32),
+                        &format!("±{}", *range as i32),
                         11.0,
                         TEXT,
                     );
@@ -2244,118 +2667,26 @@ impl View for StripView {
                 }
                 let color = if eq1_bypassed { MUTED } else { LIFT_COLOR };
                 let graph_bottom_y = GY + GH;
-
-                // Smooth influence curve using center of bins and Catmull-Rom curve fit
-                let points: Vec<_> = (0..=500)
-                    .map(|i| {
-                        let x = gx + gw * (i as f32 / 500.0);
-                        let f = x_freq_at(x, gx, gw);
-                        let inf = filter_influence(b.shape, b.freq, b.q, b.order, f, sr);
-                        let t = ((f / 20.0).log10() / 3.0).clamp(0.0, 1.0);
-                        let gr_db = lift_bin_curve_fit(&smooth_lift_gr, t);
-                        let cut_gain = (b.gain - gr_db * 1.5).clamp(-100.0, 0.0);
-                        let norm = ((cut_gain + 100.0) / 100.0) as f32;
-                        let y = graph_bottom_y - (GH * norm * inf as f32);
-                        (x, y)
-                    })
-                    .collect();
-
-                let c_trans = C {
-                    r: color.r,
-                    g: color.g,
-                    b: color.b,
-                    a: 0.0,
-                };
-                let c_solid = C {
-                    r: color.r,
-                    g: color.g,
-                    b: color.b,
-                    a: if eq1_bypassed { 0.05 } else { 0.22 },
-                };
-                let s_trans = C {
-                    r: color.r,
-                    g: color.g,
-                    b: color.b,
-                    a: 0.0,
-                };
-                let s_solid = C {
-                    r: color.r,
-                    g: color.g,
-                    b: color.b,
-                    a: if eq1_bypassed { 0.25 } else { 0.90 },
-                };
-
-                match b.shape {
-                    Shape::Bell | Shape::BandPass | Shape::Notch => {
-                        let oct_span = (2.0 / b.q.clamp(0.15, 18.0)).clamp(0.5, 4.0);
-                        let f_left = (b.freq * 2.0_f64.powf(-oct_span)).max(20.0);
-                        let f_right = (b.freq * 2.0_f64.powf(oct_span)).min(20000.0);
-                        let x_left = freq_x_at(f_left, gx, gw);
-                        let x_center = freq_x_at(b.freq, gx, gw);
-                        let x_right = freq_x_at(f_right, gx, gw);
-
-                        let center_idx = points
-                            .iter()
-                            .position(|(x, _)| *x >= x_center)
-                            .unwrap_or(points.len() / 2);
-
-                        let left_pts = &points[..=center_idx];
-                        let right_pts = &points[center_idx..];
-
-                        d.area_gradient_span(
-                            left_pts,
-                            graph_bottom_y,
-                            x_left,
-                            x_center,
-                            c_trans,
-                            c_solid,
-                        );
-                        d.poly_gradient_span(left_pts, x_left, x_center, s_trans, s_solid, 1.8);
-
-                        d.area_gradient_span(
-                            right_pts,
-                            graph_bottom_y,
-                            x_center,
-                            x_right,
-                            c_solid,
-                            c_trans,
-                        );
-                        d.poly_gradient_span(right_pts, x_center, x_right, s_solid, s_trans, 1.8);
-                    }
-                    Shape::HighShelf | Shape::LowCut => {
-                        let oct_span = (1.5 / b.q.clamp(0.15, 18.0)).clamp(0.5, 3.0);
-                        let f_fade_start = (b.freq * 2.0_f64.powf(-oct_span)).max(20.0);
-                        let f_fade_end = (b.freq * 2.0_f64.powf(oct_span * 0.5)).min(20000.0);
-                        let x_start = freq_x_at(f_fade_start, gx, gw);
-                        let x_end = freq_x_at(f_fade_end, gx, gw);
-
-                        d.area_gradient_span(
-                            &points,
-                            graph_bottom_y,
-                            x_start,
-                            x_end,
-                            c_trans,
-                            c_solid,
-                        );
-                        d.poly_gradient_span(&points, x_start, x_end, s_trans, s_solid, 1.8);
-                    }
-                    Shape::LowShelf | Shape::HighCut => {
-                        let oct_span = (1.5 / b.q.clamp(0.15, 18.0)).clamp(0.5, 3.0);
-                        let f_fade_start = (b.freq * 2.0_f64.powf(-oct_span * 0.5)).max(20.0);
-                        let f_fade_end = (b.freq * 2.0_f64.powf(oct_span)).min(20000.0);
-                        let x_start = freq_x_at(f_fade_start, gx, gw);
-                        let x_end = freq_x_at(f_fade_end, gx, gw);
-
-                        d.area_gradient_span(
-                            &points,
-                            graph_bottom_y,
-                            x_start,
-                            x_end,
-                            c_solid,
-                            c_trans,
-                        );
-                        d.poly_gradient_span(&points, x_start, x_end, s_solid, s_trans, 1.8);
-                    }
+                let points = lift_curve_points(b, &smooth_lift_gr, gx, gw, sr);
+                draw_lift_influence(
+                    &mut d,
+                    b,
+                    &points,
+                    color,
+                    (
+                        if eq1_bypassed { 0.05 } else { 0.22 },
+                        if eq1_bypassed { 0.25 } else { 0.90 },
+                    ),
+                    (gx, gw),
+                );
+                let overflow = !eq1_bypassed
+                    && smooth_lift_uncapped
+                        .iter()
+                        .zip(smooth_lift_gr.iter())
+                        .any(|(uncapped, capped)| *uncapped > *capped + 0.15);
+                if overflow {
+                    let over_pts = lift_curve_points(b, &smooth_lift_uncapped, gx, gw, sr);
+                    draw_lift_influence(&mut d, b, &over_pts, MUTED, (0.0, 0.55), (gx, gw));
                 }
 
                 if b.gain <= -98.0 && Some(b.id) == self.selected {
@@ -2447,8 +2778,15 @@ impl View for StripView {
                     d.circle(x, y, 12.0, color, false);
                 }
                 if b.dynamic && b.shape.has_gain() {
-                    d.line(x, y, x, db_y(b.gain - b.range, self.graph_db), color, 3.0);
-                    d.circle(x, db_y(b.gain - b.range, self.graph_db), 3.0, color, true);
+                    draw_dyn_range_stem(
+                        &mut d,
+                        (x, y),
+                        b.gain,
+                        b.range,
+                        self.graph_db,
+                        color,
+                        uncapped_for(b.id, &dyn_uncapped),
+                    );
                 }
                 d.circle(x, y, 7.0, color, true);
                 d.text(x - 4.0, y - 17.0, &b.id.to_string(), 11.0, color);
@@ -2508,7 +2846,7 @@ impl View for StripView {
                         (
                             0,
                             "THRESHOLD",
-                            format!("{:.1} dB", b.threshold),
+                            format!("{:.1}", b.threshold),
                             (b.threshold + 60.0) / 60.0,
                         ),
                         (
@@ -2529,7 +2867,7 @@ impl View for StripView {
                             format!("{:.0} ms", b.release),
                             (b.release / 10.0).log(200.0),
                         ),
-                        (4, "RANGE", format!("{:.1} dB", b.range), b.range / 24.0),
+                        (4, "RANGE", format!("{:.1}", b.range), b.range / 24.0),
                     ] {
                         d.control(band_rect_at(i, gx, gw), label, &val, n as f32, c);
                     }
@@ -2572,7 +2910,7 @@ impl View for StripView {
                         (
                             0,
                             "THRESHOLD",
-                            format!("{:.1} dB", b.threshold),
+                            format!("{:.1}", b.threshold),
                             (b.threshold + 60.0) / 60.0,
                         ),
                         (
@@ -2593,7 +2931,7 @@ impl View for StripView {
                             format!("{:.0} ms", b.release),
                             (b.release / 10.0).log(200.0),
                         ),
-                        (4, "RANGE", format!("{:.1} dB", b.range), b.range / 24.0),
+                        (4, "RANGE", format!("{:.1}", b.range), b.range / 24.0),
                     ] {
                         d.control(band_rect_at(i, gx, gw), label, &val, n as f32, c);
                     }
@@ -2739,8 +3077,15 @@ impl View for StripView {
                     d.circle(x, y, 12.0, color, false);
                 }
                 if allow_dyn && b.dynamic && b.shape.has_gain() {
-                    d.line(x, y, x, db_y(b.gain - b.range, self.graph_db), color, 3.0);
-                    d.circle(x, db_y(b.gain - b.range, self.graph_db), 3.0, color, true);
+                    draw_dyn_range_stem(
+                        &mut d,
+                        (x, y),
+                        b.gain,
+                        b.range,
+                        self.graph_db,
+                        color,
+                        uncapped_for(b.id, &dyn_uncapped),
+                    );
                 }
                 d.circle(x, y, 7.0, color, true);
                 d.text(x - 4.0, y - 17.0, &num.to_string(), 11.0, color);
@@ -2806,7 +3151,7 @@ impl View for StripView {
                             (
                                 0,
                                 "THRESHOLD",
-                                format!("{:.1} dB", b.threshold),
+                                format!("{:.1}", b.threshold),
                                 (b.threshold + 60.0) / 60.0,
                             ),
                             (
@@ -2827,7 +3172,7 @@ impl View for StripView {
                                 format!("{:.0} ms", b.release),
                                 (b.release / 10.0).log(200.0),
                             ),
-                            (4, "RANGE", format!("{:.1} dB", b.range), b.range / 24.0),
+                            (4, "RANGE", format!("{:.1}", b.range), b.range / 24.0),
                         ] {
                             d.control(band_rect_at(i, gx, gw), label, &val, n as f32, c);
                         }
@@ -2918,45 +3263,298 @@ impl View for StripView {
         d.offset_x = 0.0;
         d.alpha_mul = 1.0;
         let comp_bypassed = !self.params.comp_on.value();
+        let pse_bypassed = !self.params.pse_on.value();
+        let (px, py, pw, ph) = self.pse_bounds();
         let (dx, dy, dw, dh) = self.dyn_bounds();
         let is_pre = self.is_pre();
         let is_animating = (cur_p - target_p).abs() > 0.005;
 
-        // Dynamics module chassis (drawn over sliding EQ, faded during animation)
+        if is_animating {
+            d.rect(px, py, pw, ph, C::rgba(21, 24, 29, 215));
+        } else {
+            d.rect(px, py, pw, ph, PANEL);
+        }
+        d.outline((px, py, pw, ph), LINE);
+        d.bypass_button(self.pse_power_button_rect(), pse_bypassed, PSE_BLUE);
+        d.text(
+            px + 44.0,
+            119.0,
+            "PSE",
+            15.0,
+            if pse_bypassed { MUTED } else { TEXT },
+        );
+        d.line(px + 10.0, 138.0, px + pw - 10.0, 138.0, LINE, 1.0);
+
+        match self.pse_page {
+            PsePage::Main => {
+                let cog_r = self.pse_cog_button_rect();
+                let cog_hover =
+                    !pse_bypassed && self.hover.is_some_and(|(hx, hy)| inside(hx, hy, cog_r));
+                let cog_color = if pse_bypassed {
+                    MUTED
+                } else if cog_hover {
+                    PSE_BLUE
+                } else {
+                    TEXT
+                };
+                d.rect(cog_r.0, cog_r.1, cog_r.2, cog_r.3, PANEL);
+                d.outline(cog_r, if cog_hover { PSE_BLUE } else { LINE });
+                d.cog_icon(cog_r.0 + cog_r.2 * 0.5, cog_r.1 + cog_r.3 * 0.5, cog_color);
+
+                let (sx, sy, sw, sh) = self.pse_main_thresh_slider_rect();
+                let (gx_m, gy_m, gw_m, gh_m) = self.pse_main_gr_meter_rect();
+                d.rect(sx, sy, sw, sh, LINE);
+                d.rect(gx_m, gy_m, gw_m, gh_m, LINE);
+
+                let sc_level = if pse_bypassed {
+                    -90.0
+                } else {
+                    self.shared.sc_level.load(Ordering::Relaxed) as f64
+                };
+                let sc_db = sc_level.clamp(-48.0, 0.0);
+                let sig_frac = ((sc_db + 48.0) / 48.0) as f32;
+                let sig_h = sh * sig_frac;
+                let sig_top_y = sy + sh - sig_h;
+
+                let p1 = self.param(1);
+                let thresh_norm = p1.unmodulated_normalized_value();
+                let thresh_y = sy + sh * (1.0 - thresh_norm);
+
+                if !pse_bypassed && sig_h > 0.5 {
+                    let below_thresh_top = sig_top_y.max(thresh_y);
+                    let below_thresh_h = (sy + sh) - below_thresh_top;
+                    if below_thresh_h > 0.0 {
+                        d.rect(sx, below_thresh_top, sw, below_thresh_h, C::rgb(45, 120, 165));
+                    }
+                    if sig_top_y < thresh_y {
+                        d.rect(sx, sig_top_y, sw, thresh_y - sig_top_y, PSE_BLUE);
+                    }
+                }
+
+                let pse_gr = if pse_bypassed {
+                    0.0
+                } else {
+                    self.shared.pse_gr.load(Ordering::Relaxed)
+                };
+                let gr_bar_h = gh_m * (pse_gr / 20.0).clamp(0.0, 1.0);
+                if !pse_bypassed && gr_bar_h > 0.5 {
+                    d.rect(gx_m, gy_m, gw_m, gr_bar_h, PSE_BLUE);
+                }
+
+                let depth_norm = self.param(7).unmodulated_normalized_value();
+                let depth_y = gy_m + gh_m * depth_norm;
+                if !pse_bypassed {
+                    d.line(gx_m, depth_y, gx_m + gw_m, depth_y, PSE_BLUE, 1.0);
+                }
+                let depth_handle = self.pse_main_depth_handle_rect(depth_y);
+                let depth_hover = !pse_bypassed
+                    && (self.hover.is_some_and(|(hx, hy)| inside(hx, hy, depth_handle))
+                        || self.drag == Some(Target::Global(7)));
+                d.grab_bar(
+                    depth_handle,
+                    if pse_bypassed {
+                        MUTED
+                    } else if depth_hover {
+                        TEXT
+                    } else {
+                        PSE_BLUE
+                    },
+                );
+
+                let handle = self.pse_main_thresh_handle_rect(thresh_y);
+                let handle_hit = (
+                    handle.0 - 4.0,
+                    handle.1 - 2.0,
+                    handle.2 + 8.0,
+                    handle.3 + 4.0,
+                );
+                let knee_norm = (self.params.pse_knee.value() / 18.0).clamp(0.0, 1.0);
+                let knee_hover = !pse_bypassed
+                    && (self.hover.is_some_and(|(hx, hy)| {
+                        inside(hx, hy, self.pse_main_knee_rect(thresh_y, 0.0))
+                            && !inside(hx, hy, handle_hit)
+                    }) || matches!(self.drag, Some(Target::PseKnee { .. })));
+                let bulge_w = knee_pulse_bulge(&self.pse_knee_bulge, knee_hover);
+                draw_knee_zone(
+                    &mut d,
+                    self.pse_main_knee_rect(thresh_y, 0.0),
+                    bulge_w,
+                    knee_norm,
+                    knee_hover,
+                    PSE_BLUE,
+                    pse_bypassed,
+                );
+                let handle_hover = self.hover.is_some_and(|(hx, hy)| inside(hx, hy, handle_hit))
+                    || self.drag == Some(Target::Global(1));
+                d.grab_bar(
+                    handle,
+                    if pse_bypassed {
+                        MUTED
+                    } else if handle_hover {
+                        TEXT
+                    } else {
+                        PSE_BLUE
+                    },
+                );
+
+                let gate_val_str = if p1.value() <= -79.9 {
+                    "OFF".to_owned()
+                } else {
+                    p1.normalized_value_to_string(p1.unmodulated_normalized_value(), true)
+                };
+                d.text_centered(
+                    px + 37.0,
+                    566.0,
+                    &gate_val_str,
+                    12.0,
+                    if pse_bypassed { MUTED } else { PSE_BLUE },
+                );
+                let depth_val = self.param(7).normalized_value_to_string(
+                    self.param(7).unmodulated_normalized_value(),
+                    true,
+                );
+                d.text_centered(
+                    px + 93.0,
+                    566.0,
+                    &depth_val,
+                    11.0,
+                    if pse_bypassed { MUTED } else { PSE_BLUE },
+                );
+            }
+            PsePage::Controls => {
+                let back_r = self.pse_back_button_rect();
+                let back_hover =
+                    !pse_bypassed && self.hover.is_some_and(|(hx, hy)| inside(hx, hy, back_r));
+                d.rect(back_r.0, back_r.1, back_r.2, back_r.3, PANEL);
+                d.outline(back_r, if back_hover { PSE_BLUE } else { LINE });
+                d.text(
+                    back_r.0 + back_r.2 * 0.5 - 4.0,
+                    back_r.1 + 16.0,
+                    "<",
+                    14.0,
+                    if pse_bypassed {
+                        MUTED
+                    } else if back_hover {
+                        PSE_BLUE
+                    } else {
+                        TEXT
+                    },
+                );
+
+                for (i, label) in [
+                    (7, "DEPTH"),
+                    (8, "HYSTERESIS"),
+                    (2, "VOICE DET"),
+                    (10, "TIME"),
+                ] {
+                    let p = self.param(i);
+                    let value = if i == 10 {
+                        format_pse_time(p.value() as f64, self.params.pse_peak.value())
+                    } else {
+                        p.normalized_value_to_string(p.unmodulated_normalized_value(), true)
+                    };
+                    d.knob(
+                        self.pse_knob_rect(i),
+                        label,
+                        &value,
+                        p.unmodulated_normalized_value(),
+                        if i == 2 { TEAL } else { PSE_BLUE },
+                        pse_bypassed,
+                    );
+                }
+
+                let time_r = self.pse_knob_rect(10);
+                let det_r = self.pse_detect_mode_rect();
+                let joined_card = (
+                    time_r.0 - 2.0,
+                    time_r.1 - 2.0,
+                    time_r.2 + 4.0,
+                    (det_r.1 + det_r.3) - time_r.1 + 4.0,
+                );
+                d.outline(joined_card, LINE);
+                let is_peak = self.params.pse_peak.value();
+                let det_hover =
+                    !pse_bypassed && self.hover.is_some_and(|(hx, hy)| inside(hx, hy, det_r));
+                d.button(
+                    det_r,
+                    if is_peak { "PEAK" } else { "RMS" },
+                    true,
+                    if pse_bypassed {
+                        MUTED
+                    } else if det_hover {
+                        TEXT
+                    } else {
+                        PSE_BLUE
+                    },
+                );
+
+                let speech_r = (px + 68.0, 430.0, 56.0, 86.0);
+                d.text_centered(
+                    speech_r.0 + speech_r.2 * 0.5,
+                    speech_r.1 + 22.0,
+                    "SPEECH",
+                    9.2,
+                    if pse_bypassed { MUTED } else { TEXT },
+                );
+                let speech_env = self.shared.speech_env.load(Ordering::Relaxed).clamp(0.0, 1.0);
+                let bar_x = speech_r.0 + 4.0;
+                let bar_y = speech_r.1 + 40.0;
+                let bar_w = speech_r.2 - 8.0;
+                let bar_h = 10.0;
+                d.rect(bar_x, bar_y, bar_w, bar_h, rgb(28, 33, 40));
+                d.outline((bar_x, bar_y, bar_w, bar_h), LINE);
+                if !pse_bypassed && speech_env > 0.02 {
+                    d.rect(
+                        bar_x + 1.0,
+                        bar_y + 1.0,
+                        (bar_w - 2.0) * speech_env,
+                        bar_h - 2.0,
+                        TEAL,
+                    );
+                }
+                let status_text = if pse_bypassed || self.params.pse_voice_det.value() <= 0.0 {
+                    "OFF"
+                } else if speech_env > 0.35 {
+                    "VOICE"
+                } else if speech_env > 0.05 {
+                    "DETECT"
+                } else {
+                    "IDLE"
+                };
+                d.text_centered(
+                    speech_r.0 + speech_r.2 * 0.5,
+                    speech_r.1 + 68.0,
+                    status_text,
+                    10.0,
+                    if pse_bypassed || status_text == "OFF" {
+                        MUTED
+                    } else if status_text == "VOICE" {
+                        TEAL
+                    } else {
+                        PSE_BLUE
+                    },
+                );
+            }
+        }
+
         if is_animating {
             d.rect(dx, dy, dw, dh, C::rgba(21, 24, 29, 215));
         } else {
             d.rect(dx, dy, dw, dh, PANEL);
         }
         d.outline((dx, dy, dw, dh), LINE);
-
-        let routing_btn = self.dyn_routing_button_rect();
-        let power_btn = self.dyn_power_button_rect();
+        d.bypass_button(self.dyn_power_button_rect(), comp_bypassed, GOLD);
+        d.text(
+            dx + 44.0,
+            119.0,
+            "DYNAMICS",
+            15.0,
+            if comp_bypassed { MUTED } else { TEXT },
+        );
+        d.line(dx + 10.0, 138.0, dx + dw - 10.0, 138.0, LINE, 1.0);
 
         match self.dyn_page {
             DynPage::Main => {
-                // Header
-                let num_label = if is_pre { "01" } else { "03" };
-                d.text(
-                    dx + 12.0,
-                    123.0,
-                    num_label,
-                    13.0,
-                    if comp_bypassed { MUTED } else { GOLD },
-                );
-                d.text(
-                    dx + 38.0,
-                    123.0,
-                    "DYNAMICS",
-                    15.0,
-                    if comp_bypassed { MUTED } else { TEXT },
-                );
-                d.button_left(
-                    routing_btn,
-                    if is_pre { "PRE" } else { "POST" },
-                    true,
-                    if is_pre { TEAL } else { GOLD },
-                );
                 let cog_r = self.dyn_cog_button_rect();
                 let cog_hover =
                     !comp_bypassed && self.hover.is_some_and(|(hx, hy)| inside(hx, hy, cog_r));
@@ -2970,39 +3568,9 @@ impl View for StripView {
                 d.rect(cog_r.0, cog_r.1, cog_r.2, cog_r.3, PANEL);
                 d.outline(cog_r, if cog_hover { GOLD } else { LINE });
                 d.cog_icon(cog_r.0 + cog_r.2 * 0.5, cog_r.1 + cog_r.3 * 0.5, cog_color);
-                d.bypass_button(power_btn, comp_bypassed, GOLD);
-
-                d.line(dx + 10.0, 138.0, dx + dw - 10.0, 138.0, LINE, 1.0);
 
                 let (sx, sy, sw, sh) = self.dyn_main_thresh_slider_rect();
                 let (gx_m, gy_m, gw_m, gh_m) = self.dyn_main_gr_meter_rect();
-
-                d.text_centered(dx + 52.0, 150.0, "THRESHOLD", 9.5, MUTED);
-                let p0 = self.param(0);
-                let thresh_val_str =
-                    p0.normalized_value_to_string(p0.unmodulated_normalized_value(), true);
-                d.text_centered(
-                    dx + 52.0,
-                    166.0,
-                    &thresh_val_str,
-                    12.0,
-                    if comp_bypassed { MUTED } else { GOLD },
-                );
-
-                d.text_centered(dx + dw - 52.0, 150.0, "GR", 9.5, MUTED);
-                let gr = if comp_bypassed {
-                    0.0
-                } else {
-                    self.shared.gr.load(Ordering::Relaxed)
-                };
-                d.text_centered(
-                    dx + dw - 52.0,
-                    166.0,
-                    &format!("{:.1}", gr),
-                    12.0,
-                    if comp_bypassed { MUTED } else { GOLD },
-                );
-
                 d.rect(sx, sy, sw, sh, LINE);
                 d.rect(gx_m, gy_m, gw_m, gh_m, LINE);
 
@@ -3016,6 +3584,7 @@ impl View for StripView {
                 let sig_h = sh * sig_frac;
                 let sig_top_y = sy + sh - sig_h;
 
+                let p0 = self.param(0);
                 let thresh_norm = p0.unmodulated_normalized_value();
                 let thresh_y = sy + sh * thresh_norm;
 
@@ -3023,64 +3592,133 @@ impl View for StripView {
                     let below_thresh_top = sig_top_y.max(thresh_y);
                     let below_thresh_h = (sy + sh) - below_thresh_top;
                     if below_thresh_h > 0.0 {
-                        d.rect(
-                            sx,
-                            below_thresh_top,
-                            sw,
-                            below_thresh_h,
-                            C::rgb(70, 160, 140),
-                        );
+                        d.rect(sx, below_thresh_top, sw, below_thresh_h, C::rgb(70, 160, 140));
                     }
                     if sig_top_y < thresh_y {
-                        let over_h = thresh_y - sig_top_y;
-                        d.rect(sx, sig_top_y, sw, over_h, GOLD);
+                        d.rect(sx, sig_top_y, sw, thresh_y - sig_top_y, GOLD);
                     }
                 }
 
-                let gr_frac = (gr / 30.0).clamp(0.0, 1.0);
-                let gr_bar_h = gh_m * gr_frac;
+                let gr = if comp_bypassed {
+                    0.0
+                } else {
+                    self.shared.gr.load(Ordering::Relaxed)
+                };
+                let gr_uncapped = if comp_bypassed {
+                    0.0
+                } else {
+                    self.shared.gr_uncapped.load(Ordering::Relaxed)
+                };
+                let (gr_bar_h, gr_uncapped_h) = gr_meter_bar_heights(gr, gr_uncapped, gh_m);
+                if !comp_bypassed && gr_uncapped_h > gr_bar_h + 0.5 {
+                    d.rect(gx_m, gy_m + gr_bar_h, gw_m, gr_uncapped_h - gr_bar_h, MUTED);
+                }
                 if !comp_bypassed && gr_bar_h > 0.5 {
                     d.rect(gx_m, gy_m, gw_m, gr_bar_h, GOLD);
                 }
 
+                let depth_norm = self.param(14).unmodulated_normalized_value();
+                let depth_y = gy_m + gh_m * depth_norm;
+                if !comp_bypassed {
+                    d.line(gx_m, depth_y, gx_m + gw_m, depth_y, GOLD, 1.0);
+                }
+                let depth_handle = self.dyn_main_depth_handle_rect(depth_y);
+                let depth_hover = !comp_bypassed
+                    && (self.hover.is_some_and(|(hx, hy)| inside(hx, hy, depth_handle))
+                        || self.drag == Some(Target::Global(14)));
+                d.grab_bar(
+                    depth_handle,
+                    if comp_bypassed {
+                        MUTED
+                    } else if depth_hover {
+                        TEXT
+                    } else {
+                        GOLD
+                    },
+                );
+
                 let handle = self.dyn_main_thresh_handle_rect(thresh_y);
-                let handle_hover = self.hover.is_some_and(|(hx, hy)| {
-                    inside(
-                        hx,
-                        hy,
-                        (
-                            handle.0 - 4.0,
-                            handle.1 - 6.0,
-                            handle.2 + 8.0,
-                            handle.3 + 12.0,
-                        ),
-                    )
-                }) || self.drag == Some(Target::Global(0));
-                let handle_color = if comp_bypassed {
-                    MUTED
-                } else if handle_hover {
-                    TEXT
-                } else {
-                    GOLD
-                };
-                d.grab_bar(handle, handle_color);
+                let handle_hit = (
+                    handle.0 - 4.0,
+                    handle.1 - 2.0,
+                    handle.2 + 8.0,
+                    handle.3 + 4.0,
+                );
+                let knee_norm = (self.params.comp_knee.value() / 20.0).clamp(0.0, 1.0);
+                let knee_hover = !comp_bypassed
+                    && (self.hover.is_some_and(|(hx, hy)| {
+                        inside(hx, hy, self.dyn_main_knee_rect(thresh_y, 0.0))
+                            && !inside(hx, hy, handle_hit)
+                    }) || matches!(self.drag, Some(Target::CompKnee { .. })));
+                let bulge_w = knee_pulse_bulge(&self.knee_bulge, knee_hover);
+                draw_knee_zone(
+                    &mut d,
+                    self.dyn_main_knee_rect(thresh_y, 0.0),
+                    bulge_w,
+                    knee_norm,
+                    knee_hover,
+                    GOLD,
+                    comp_bypassed,
+                );
+                let handle_hover = self.hover.is_some_and(|(hx, hy)| inside(hx, hy, handle_hit))
+                    || self.drag == Some(Target::Global(0));
+                d.grab_bar(
+                    handle,
+                    if comp_bypassed {
+                        MUTED
+                    } else if handle_hover {
+                        TEXT
+                    } else {
+                        GOLD
+                    },
+                );
+
+                let thresh_val_str =
+                    p0.normalized_value_to_string(p0.unmodulated_normalized_value(), true);
+                d.text_centered(
+                    dx + 37.0,
+                    566.0,
+                    &thresh_val_str,
+                    12.0,
+                    if comp_bypassed { MUTED } else { GOLD },
+                );
+                let depth_val = self.param(14).normalized_value_to_string(
+                    self.param(14).unmodulated_normalized_value(),
+                    true,
+                );
+                d.text_centered(
+                    dx + 93.0,
+                    566.0,
+                    &depth_val,
+                    11.0,
+                    if comp_bypassed { MUTED } else { GOLD },
+                );
             }
             DynPage::Controls => {
-                d.button_left(self.dyn_back_button_rect(), "< BACK", false, TEXT);
-                d.button_left(
-                    routing_btn,
-                    if is_pre { "PRE" } else { "POST" },
-                    true,
-                    if is_pre { TEAL } else { GOLD },
+                let back_r = self.dyn_back_button_rect();
+                let back_hover =
+                    !comp_bypassed && self.hover.is_some_and(|(hx, hy)| inside(hx, hy, back_r));
+                d.rect(back_r.0, back_r.1, back_r.2, back_r.3, PANEL);
+                d.outline(back_r, if back_hover { GOLD } else { LINE });
+                d.text(
+                    back_r.0 + back_r.2 * 0.5 - 4.0,
+                    back_r.1 + 16.0,
+                    "<",
+                    14.0,
+                    if comp_bypassed {
+                        MUTED
+                    } else if back_hover {
+                        GOLD
+                    } else {
+                        TEXT
+                    },
                 );
-                d.bypass_button(power_btn, comp_bypassed, GOLD);
 
                 for (i, label, active) in [
-                    (0, "SOFT KNEE", self.params.soft_knee.value()),
-                    (1, "AUTO MAKEUP", self.params.auto_makeup.value()),
-                    (2, "LINKED STEREO", self.params.stereo_link.value()),
+                    (0, "AUTO", self.params.auto_makeup.value()),
+                    (1, "LINK", self.params.stereo_link.value()),
                 ] {
-                    d.button_left(
+                    d.button(
                         self.dyn_mode_rect(i),
                         label,
                         active,
@@ -3089,7 +3727,6 @@ impl View for StripView {
                 }
 
                 for (i, label, color) in [
-                    (0, "THRESHOLD", GOLD),
                     (6, "RATIO", GOLD),
                     (5, "ATTACK", GOLD),
                     (11, "RELEASE", GOLD),
@@ -3099,85 +3736,16 @@ impl View for StripView {
                     let p = self.param(i);
                     let value =
                         p.normalized_value_to_string(p.unmodulated_normalized_value(), true);
-                    let norm = if i == 0 {
-                        1.0 - p.unmodulated_normalized_value()
-                    } else {
-                        p.unmodulated_normalized_value()
-                    };
                     d.knob(
                         self.global_rect(i),
                         label,
                         &value,
-                        norm,
+                        p.unmodulated_normalized_value(),
                         color,
                         comp_bypassed,
                     );
                 }
             }
-        }
-
-        let (px, py, pw, ph) = self.pse_bounds();
-        if is_animating {
-            d.rect(px, py, pw, ph, C::rgba(21, 24, 29, 215));
-        } else {
-            d.rect(px, py, pw, ph, PANEL);
-        }
-        d.outline((px, py, pw, ph), LINE);
-        d.text(
-            px + 12.0,
-            123.0,
-            if self.is_pre() { "03" } else { "02" },
-            13.0,
-            if comp_bypassed { MUTED } else { GOLD },
-        );
-        d.text(
-            px + 38.0,
-            123.0,
-            "PSE",
-            15.0,
-            if comp_bypassed { MUTED } else { TEXT },
-        );
-        d.line(px + 10.0, 138.0, px + pw - 10.0, 138.0, LINE, 1.0);
-        d.button_left(
-            self.pse_mode_rect(0),
-            if self.params.pse_peak.value() {
-                "DETECT: PEAK"
-            } else {
-                "DETECT: RMS"
-            },
-            true,
-            if comp_bypassed { MUTED } else { GOLD },
-        );
-        d.button_left(
-            self.pse_mode_rect(1),
-            "LISTEN SC",
-            self.params.pse_listen.value(),
-            if comp_bypassed { MUTED } else { TEAL },
-        );
-        for (i, label) in [
-            (7, "DEPTH"),
-            (8, "HYSTERESIS"),
-            (1, "THRESHOLD"),
-            (2, "VOICE DET"),
-            (9, "KNEE"),
-            (10, "TIME"),
-        ] {
-            let p = self.param(i);
-            let value = if i == 1 && p.value() <= -79.9 {
-                "OFF".to_owned()
-            } else if i == 10 {
-                format_pse_time(p.value() as f64, self.params.pse_peak.value())
-            } else {
-                p.normalized_value_to_string(p.unmodulated_normalized_value(), true)
-            };
-            d.knob(
-                self.pse_knob_rect(i),
-                label,
-                &value,
-                p.unmodulated_normalized_value(),
-                if i == 2 { TEAL } else { GOLD },
-                comp_bypassed,
-            );
         }
 
         d.line(32.0, FOOTER_LINE_Y, UI_W - 32.0, FOOTER_LINE_Y, LINE, 1.0);
@@ -3188,14 +3756,14 @@ impl View for StripView {
             11.0,
             MUTED,
         );
-        d.button_left(
+        d.button(
             PROCESS_BUTTON,
             &format!("{} ▾", config.mode.label()),
             false,
             GOLD,
         );
         if config.mode == ProcessingMode::LinearPhase {
-            d.button_left(
+            d.button(
                 resolution_button_rect(),
                 &format!("{} ▾", config.resolution.label()),
                 false,
@@ -3214,12 +3782,31 @@ impl View for StripView {
             String::new()
         };
         let status_x = if config.mode == ProcessingMode::LinearPhase {
-            470.0
+            308.0
         } else {
-            358.0
+            196.0
         };
         d.text(status_x, FOOTER_BTN_Y + 20.0, &status, 10.0, MUTED);
-        d.button_left(
+        d.button(
+            self.footer_listen_sc_rect(),
+            "LISTEN SC",
+            self.params.pse_listen.value(),
+            if pse_bypassed { MUTED } else { TEAL },
+        );
+        d.text(
+            636.0,
+            FOOTER_BTN_Y + 19.0,
+            "Compression:",
+            12.0,
+            if comp_bypassed { MUTED } else { TEXT },
+        );
+        d.button(
+            self.footer_comp_routing_rect(),
+            if is_pre { "PRE" } else { "POST" },
+            true,
+            if is_pre { TEAL } else { GOLD },
+        );
+        d.button(
             THEME_BUTTON,
             if d.light { "DARK MODE" } else { "LIGHT MODE" },
             false,
@@ -3405,7 +3992,7 @@ fn band_hud(
             1,
             "GAIN",
             if b.shape.has_gain() {
-                format!("{:+.2} dB", b.gain)
+                format!("{:+.2}", b.gain)
             } else {
                 "—".into()
             },
@@ -3484,9 +4071,9 @@ fn band_hud_lift(
             1,
             "GAIN",
             if b.gain <= -99.5 {
-                "-inf dB".into()
+                "-inf".into()
             } else {
-                format!("{:.1} dB", b.gain)
+                format!("{:.1}", b.gain)
             },
             true,
         ),
@@ -3802,6 +4389,7 @@ mod tests {
             shared,
             selected: None,
             dyn_page: DynPage::Main,
+            pse_page: PsePage::Main,
             drag: None,
             hover: None,
             font: Cell::new(None),
@@ -3818,89 +4406,121 @@ mod tests {
             anim_progress: Cell::new(0.0),
             anim_target: Cell::new(0.0),
             last_tick: Cell::new(None),
+            knee_bulge: Cell::new(0.0),
+            pse_knee_bulge: Cell::new(0.0),
         };
 
-        // Post mode (default): EQ, then PSE immediately after EQ, Dynamics on the right
+        // Post mode (default): PSE on the left, EQ in the middle, Dynamics on the right
         assert!(!view.is_pre());
-        assert_eq!(view.eq_bounds(), (MARGIN, MODULE_Y, EQ_W, MODULE_H));
+        assert_eq!(view.pse_bounds(), (MARGIN, MODULE_Y, PSE_W, MODULE_H));
         assert_eq!(
-            view.pse_bounds(),
-            (MARGIN + EQ_W + GAP, MODULE_Y, SIDE_W, MODULE_H)
+            view.eq_bounds(),
+            (MARGIN + PSE_W + GAP, MODULE_Y, EQ_W, MODULE_H)
         );
         assert_eq!(
             view.dyn_bounds(),
-            (UI_W - MARGIN - SIDE_W, MODULE_Y, SIDE_W, MODULE_H)
+            (UI_W - MARGIN - DYN_W, MODULE_Y, DYN_W, MODULE_H)
         );
-        assert!(view.eq_bounds().0 + view.eq_bounds().2 <= view.pse_bounds().0);
-        assert!(view.pse_bounds().0 + view.pse_bounds().2 <= view.dyn_bounds().0);
-        assert_eq!(view.gx(), MARGIN + 44.0);
+        assert!(view.pse_bounds().0 + view.pse_bounds().2 <= view.eq_bounds().0);
+        assert!(view.eq_bounds().0 + view.eq_bounds().2 <= view.dyn_bounds().0);
+        assert_eq!(view.gx(), MARGIN + PSE_W + GAP + 44.0);
         assert_eq!(view.global_controls(), &[0]);
-        assert_eq!(PSE_KNOBS, [7, 8, 1, 2, 9, 10]);
+        assert_eq!(PSE_CONTROLS_KNOBS, [7, 8, 2, 10]);
 
-        // Add Lift sits after the SC EQ tab, still before bypass
         let tab2 = view.eq_tab_2_rect();
         let tab_sc = view.eq_tab_sc_rect();
         let add_lift = view.eq_add_lift_rect();
         let bypass = view.eq_power_rect();
         assert!(tab2.0 + tab2.2 < tab_sc.0);
         assert!(tab_sc.0 + tab_sc.2 < add_lift.0);
-        assert!(add_lift.0 + add_lift.2 < bypass.0);
+        assert!(add_lift.0 + add_lift.2 < bypass.0 + bypass.2 || bypass.0 < tab2.0);
         assert_eq!(add_lift.1, tab2.1);
         assert_eq!(tab_sc.1, tab2.1);
 
-        // Combined meters sit flush with no scale reticules between them
         let slider = view.dyn_main_thresh_slider_rect();
         let gr_meter = view.dyn_main_gr_meter_rect();
-        assert_eq!(gr_meter.0, slider.0 + slider.2);
+        assert_eq!(gr_meter.0, slider.0 + slider.2 + 10.0);
         assert_eq!(gr_meter.1, slider.1);
         assert_eq!(gr_meter.3, slider.3);
-        assert!(gr_meter.2 < slider.2);
         let handle = view.dyn_main_thresh_handle_rect(slider.1 + slider.3 * 0.5);
-        assert!(handle.2 > slider.2);
+        assert!(handle.2 <= slider.2 + 12.0);
         assert!(handle.3 >= 12.0);
+        let knee = view.dyn_main_knee_rect(slider.1 + slider.3 * 0.5, 0.0);
+        assert!(knee.3 >= handle.3);
 
-        // Graph and frequency labels stay above the footer
+        let pse_slider = view.pse_main_thresh_slider_rect();
+        let pse_gr = view.pse_main_gr_meter_rect();
+        assert_eq!(pse_gr.0, pse_slider.0 + pse_slider.2 + 10.0);
+        let depth_handle = view.dyn_main_depth_handle_rect(gr_meter.1 + gr_meter.3 * 0.5);
+        assert!(inside(depth_handle.0 + 4.0, depth_handle.1 + 4.0, view.dyn_bounds()));
+
         assert!(GRAPH_BOTTOM + 22.0 <= MODULE_Y + MODULE_H);
         assert!(MODULE_Y + MODULE_H < FOOTER_LINE_Y);
         assert!(FOOTER_LINE_Y < FOOTER_BTN_Y);
         assert!(FOOTER_BTN_Y + 28.0 <= UI_H);
         assert_eq!(HEADER_H, 82.0);
 
-        // Controls keep the original knob size
         view.dyn_page = DynPage::Controls;
-        assert_eq!(view.global_controls(), &[0, 6, 5, 11, 3, 4]);
-        let knob = view.global_rect(0);
-        assert_eq!((knob.2, knob.3), (100.0, 82.0));
-        let pse_knob = view.pse_knob_rect(7);
-        assert_eq!((pse_knob.2, pse_knob.3), (100.0, 82.0));
+        assert_eq!(view.global_controls(), &[6, 5, 11, 3, 4]);
+        let knob = view.global_rect(6);
+        assert_eq!((knob.2, knob.3), (56.0, 86.0));
+        let mode_last = view.dyn_mode_rect(1);
+        assert!(mode_last.1 + mode_last.3 <= knob.1);
+        assert!(
+            !view.global_controls().contains(&2),
+            "SC HPF must not appear on the compressor controls page"
+        );
+
+        view.pse_page = PsePage::Controls;
+        assert_eq!(view.pse_controls(), &[7, 8, 2, 10]);
         assert!(inside(
             view.pse_bounds().0 + 20.0,
-            view.pse_knob_rect(7).1 + 10.0,
+            view.pse_knob_rect(8).1 + 10.0,
             view.pse_bounds()
         ));
 
-        // Pre mode: Dynamics on left, EQ in the middle, PSE stays after EQ on the right
         let params_pre = Arc::new(StripParams {
             comp_pre: BoolParam::new("Dynamics routing", true),
             ..StripParams::default()
         });
         view.params = params_pre;
         assert!(view.is_pre());
-        assert_eq!(view.dyn_bounds(), (MARGIN, MODULE_Y, SIDE_W, MODULE_H));
+        assert_eq!(view.pse_bounds(), (MARGIN, MODULE_Y, PSE_W, MODULE_H));
+        assert_eq!(
+            view.dyn_bounds(),
+            (MARGIN + PSE_W + GAP, MODULE_Y, DYN_W, MODULE_H)
+        );
         assert_eq!(
             view.eq_bounds(),
-            (MARGIN + SIDE_W + GAP, MODULE_Y, EQ_W, MODULE_H)
+            (MARGIN + PSE_W + GAP + DYN_W + GAP, MODULE_Y, EQ_W, MODULE_H)
         );
         assert_eq!(
-            view.pse_bounds(),
-            (UI_W - MARGIN - SIDE_W, MODULE_Y, SIDE_W, MODULE_H)
+            view.gx(),
+            MARGIN + PSE_W + GAP + DYN_W + GAP + 44.0
         );
-        assert!(view.dyn_bounds().0 + view.dyn_bounds().2 <= view.eq_bounds().0);
-        assert!(view.eq_bounds().0 + view.eq_bounds().2 <= view.pse_bounds().0);
-        assert_eq!(view.gx(), MARGIN + SIDE_W + GAP + 44.0);
         view.dyn_page = DynPage::Main;
         let pre_slider = view.dyn_main_thresh_slider_rect();
-        assert_eq!(pre_slider.0, MARGIN + 92.0);
-        assert_eq!(view.dyn_main_gr_meter_rect().0, pre_slider.0 + pre_slider.2);
+        assert_eq!(pre_slider.0, MARGIN + PSE_W + GAP + 18.0);
+        assert_eq!(
+            view.dyn_main_gr_meter_rect().0,
+            pre_slider.0 + pre_slider.2 + 10.0
+        );
+    }
+
+    #[test]
+    fn gr_overflow_extends_past_range_and_depth() {
+        let (actual, uncapped) = gr_meter_bar_heights(5.0, 12.0, 100.0);
+        assert!((actual - 100.0 * 5.0 / 30.0).abs() < 0.001);
+        assert!((uncapped - 100.0 * 12.0 / 30.0).abs() < 0.001);
+        assert!(uncapped > actual);
+        let (full, clipped) = gr_meter_bar_heights(30.0, 48.0, 100.0);
+        assert!((full - 100.0).abs() < 0.001);
+        assert_eq!(clipped, full);
+        assert_eq!(overflow_reduction(6.0, 6.0), None);
+        assert_eq!(overflow_reduction(6.0, 9.5), Some(9.5));
+        assert_eq!(overflow_reduction(-6.0, -9.5), Some(-9.5));
+        assert_eq!(overflow_reduction(-6.0, -2.0), None);
+        assert_eq!(uncapped_for(3, &[(1, 2.0), (3, 11.5)]), Some(11.5));
+        assert_eq!(uncapped_for(2, &[(1, 2.0)]), None);
     }
 }

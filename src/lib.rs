@@ -102,11 +102,7 @@ impl Plugin for Damian {
                 ratio: self.params.comp_ratio.smoothed.next() as f64,
                 attack: self.params.comp_attack.smoothed.next() as f64,
                 release: self.params.comp_release.smoothed.next() as f64,
-                knee: if self.params.soft_knee.value() {
-                    self.params.comp_knee.smoothed.next() as f64
-                } else {
-                    0.0
-                },
+                knee: self.params.comp_knee.smoothed.next() as f64,
                 depth: self.params.comp_depth.smoothed.next() as f64,
                 auto_makeup: self.params.auto_makeup.value(),
                 stereo_link: self.params.stereo_link.value(),

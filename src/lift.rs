@@ -127,6 +127,8 @@ pub struct LiftProcessor {
     pub band_gr: [f32; 8],
     /// Per-bin live gain reduction in dB across 256 log-spaced frequency buckets for real-time micro-cuts display.
     pub bin_gr: [f32; 256],
+    /// Uncapped per-bin GR so the UI can draw overflow past range.
+    pub bin_gr_uncapped: [f32; 256],
 }
 
 impl Default for LiftProcessor {
@@ -173,6 +175,7 @@ impl LiftProcessor {
             dry_delay: Delay::new(LIFT_LATENCY),
             band_gr: [0.0; 8],
             bin_gr: [0.0; 256],
+            bin_gr_uncapped: [0.0; 256],
         }
     }
 
@@ -186,6 +189,7 @@ impl LiftProcessor {
         self.eq_delay.reset();
         self.dry_delay.reset();
         self.bin_gr = [0.0; 256];
+        self.bin_gr_uncapped = [0.0; 256];
     }
 
     /// Ticks one stereo sample through the parallel FFT compressor.
@@ -244,6 +248,7 @@ impl LiftProcessor {
         let mut band_gr_accum = [0.0_f64; 8];
         let mut band_weight_accum = [0.0_f64; 8];
         let mut bin_gr_target = [0.0_f32; 256];
+        let mut bin_gr_uncapped_target = [0.0_f32; 256];
 
         for ch in 0..2 {
             for i in 0..LIFT_FFT_SIZE {
@@ -261,6 +266,7 @@ impl LiftProcessor {
 
                 let mut combined_gain = 0.0_f32;
                 let mut bin_max_gr = 0.0_f32;
+                let mut bin_max_uncapped = 0.0_f32;
 
                 for (b_idx, b) in bands.iter().take(8).enumerate() {
                     let w = filter_influence(b.shape, b.freq, b.q, b.order, f_bin, sr);
@@ -276,12 +282,13 @@ impl LiftProcessor {
 
                     let level_db = 20.0 * ((*env / 512.0).max(1e-6)).log10() as f64;
                     let over = level_db - b.threshold;
-                    let gr_db = if over > 0.0 {
+                    let unlimited = if over > 0.0 {
                         let slope = 1.0 - 1.0 / b.ratio.max(1.0);
-                        (over * slope).min(b.range)
+                        over * slope
                     } else {
                         0.0
                     };
+                    let gr_db = unlimited.min(b.range);
 
                     let comp_gain = 10.0_f64.powf(-gr_db / 20.0);
                     let parallel_gain = if b.gain <= -99.5 {
@@ -295,11 +302,12 @@ impl LiftProcessor {
                     band_weight_accum[b_idx] += w;
 
                     bin_max_gr = bin_max_gr.max((gr_db * w) as f32);
+                    bin_max_uncapped = bin_max_uncapped.max((unlimited * w) as f32);
                 }
 
                 self.spec[ch][k] *= combined_gain;
 
-                if (20.0..=20000.0).contains(&f_bin) && bin_max_gr > 0.0 {
+                if (20.0..=20000.0).contains(&f_bin) && bin_max_uncapped > 0.0 {
                     let bin_w = sr / LIFT_FFT_SIZE as f64;
                     let f_lo = (f_bin - bin_w * 0.5).max(20.0);
                     let f_hi = (f_bin + bin_w * 0.5).min(20000.0);
@@ -307,8 +315,13 @@ impl LiftProcessor {
                     let t_hi = ((f_hi / 20.0).log10() / 3.0).clamp(0.0, 1.0);
                     let idx_lo = ((t_lo * 256.0) as usize).min(255);
                     let idx_hi = ((t_hi * 256.0) as usize).min(255);
-                    for target in bin_gr_target[idx_lo..=idx_hi].iter_mut() {
-                        *target = (*target).max(bin_max_gr);
+                    if bin_max_gr > 0.0 {
+                        for target in bin_gr_target[idx_lo..=idx_hi].iter_mut() {
+                            *target = (*target).max(bin_max_gr);
+                        }
+                    }
+                    for target in bin_gr_uncapped_target[idx_lo..=idx_hi].iter_mut() {
+                        *target = (*target).max(bin_max_uncapped);
                     }
                 }
             }
@@ -343,6 +356,14 @@ impl LiftProcessor {
         for (i, &target) in bin_gr_target.iter().enumerate() {
             let smooth = if target > self.bin_gr[i] { 0.25 } else { 0.85 };
             self.bin_gr[i] = smooth * self.bin_gr[i] + (1.0 - smooth) * target;
+        }
+        for (i, &target) in bin_gr_uncapped_target.iter().enumerate() {
+            let smooth = if target > self.bin_gr_uncapped[i] {
+                0.25
+            } else {
+                0.85
+            };
+            self.bin_gr_uncapped[i] = smooth * self.bin_gr_uncapped[i] + (1.0 - smooth) * target;
         }
     }
 }

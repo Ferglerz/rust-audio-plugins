@@ -85,6 +85,7 @@ pub struct Shared {
     pub input: AtomicF32,
     pub output: AtomicF32,
     pub gr: AtomicF32,
+    pub gr_uncapped: AtomicF32,
     pub pse_gr: AtomicF32,
     pub sc_level: AtomicF32,
     pub speech_env: AtomicF32,
@@ -92,9 +93,11 @@ pub struct Shared {
     pub spectrum: [AtomicF32; 128],
     pub lift_band_gr: [AtomicF32; 8],
     pub lift_bin_gr: [AtomicF32; 256],
+    pub lift_bin_gr_uncapped: [AtomicF32; 256],
     pub selected_id: std::sync::atomic::AtomicU64,
     pub solo_id: std::sync::atomic::AtomicU64,
     pub band_gr: AtomicF32,
+    pub dyn_gr_uncapped: Mutex<Vec<(u64, f32)>>,
     pub pending: ArrayQueue<Box<Bank>>,
     pub retired: ArrayQueue<Box<Bank>>,
     stop: Arc<AtomicBool>,
@@ -118,6 +121,7 @@ impl Shared {
             input: AtomicF32::new(-90.0),
             output: AtomicF32::new(-90.0),
             gr: AtomicF32::new(0.0),
+            gr_uncapped: AtomicF32::new(0.0),
             pse_gr: AtomicF32::new(0.0),
             sc_level: AtomicF32::new(-90.0),
             speech_env: AtomicF32::new(0.0),
@@ -125,9 +129,11 @@ impl Shared {
             spectrum: std::array::from_fn(|_| AtomicF32::new(-90.0)),
             lift_band_gr: std::array::from_fn(|_| AtomicF32::new(0.0)),
             lift_bin_gr: std::array::from_fn(|_| AtomicF32::new(0.0)),
+            lift_bin_gr_uncapped: std::array::from_fn(|_| AtomicF32::new(0.0)),
             selected_id: std::sync::atomic::AtomicU64::new(0),
             solo_id: std::sync::atomic::AtomicU64::new(0),
             band_gr: AtomicF32::new(0.0),
+            dyn_gr_uncapped: Mutex::new(Vec::new()),
             pending: ArrayQueue::new(1),
             retired: ArrayQueue::new(2),
             stop: Arc::new(AtomicBool::new(false)),
@@ -205,6 +211,7 @@ pub struct Engine {
     sc_eq_mix: f64,
     vad: SpeechVad,
     speech_env: f32,
+    dyn_gr_scratch: Vec<(u64, f32)>,
 }
 impl Engine {
     pub fn new(shared: Arc<Shared>, sr: f64) -> Self {
@@ -275,6 +282,7 @@ impl Engine {
             sc_eq_mix: 1.0,
             vad,
             speech_env: 0.0,
+            dyn_gr_scratch: Vec::new(),
         }
     }
     pub fn reset(&mut self) {
@@ -494,6 +502,8 @@ impl Engine {
         }
         for i in 0..256 {
             self.shared.lift_bin_gr[i].store(self.lift.bin_gr[i], Ordering::Relaxed);
+            self.shared.lift_bin_gr_uncapped[i]
+                .store(self.lift.bin_gr_uncapped[i], Ordering::Relaxed);
         }
         if lift_active {
             let total_eq_mix = self.eq1_mix.max(self.eq2_mix);
@@ -583,7 +593,7 @@ impl Engine {
         };
         self.samples[self.position] = Complex::new(sample as f32 * self.window[self.position], 0.0);
         self.position += 1;
-        if self.position % 256 == 0 {
+        if self.position.is_multiple_of(256) {
             self.shared.sc_level.store(
                 if comp_on && !bypass {
                     (sc_level as f32).max(-90.0)
@@ -594,6 +604,10 @@ impl Engine {
             );
             self.shared.gr.store(
                 (gr * self.comp_mix * (1.0 - self.bypass_mix)) as f32,
+                Ordering::Relaxed,
+            );
+            self.shared.gr_uncapped.store(
+                (self.comp.uncapped_gr() * self.comp_mix * (1.0 - self.bypass_mix)) as f32,
                 Ordering::Relaxed,
             );
             self.shared
@@ -629,6 +643,10 @@ impl Engine {
                 (gr * self.comp_mix * (1.0 - self.bypass_mix)) as f32,
                 Ordering::Relaxed,
             );
+            self.shared.gr_uncapped.store(
+                (self.comp.uncapped_gr() * self.comp_mix * (1.0 - self.bypass_mix)) as f32,
+                Ordering::Relaxed,
+            );
             self.shared.sc_level.store(
                 if comp_on && !bypass {
                     (sc_level as f32).max(-90.0)
@@ -638,6 +656,18 @@ impl Engine {
                 Ordering::Relaxed,
             );
             self.shared.band_gr.store(band_gr as f32, Ordering::Relaxed);
+            self.dyn_gr_scratch.clear();
+            if self.bank.config.mode != ProcessingMode::LinearPhase {
+                for b in self.bank.bands.iter().chain(self.bank.eq2_bands.iter()) {
+                    if b.band.dynamic && b.band.shape.has_gain() {
+                        self.dyn_gr_scratch
+                            .push((b.band.id, b.reduction_uncapped as f32));
+                    }
+                }
+            }
+            if let Ok(mut slot) = self.shared.dyn_gr_uncapped.try_lock() {
+                std::mem::swap(&mut *slot, &mut self.dyn_gr_scratch);
+            }
             self.in_peak = 0.0;
             self.out_peak = 0.0;
         }
