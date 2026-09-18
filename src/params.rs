@@ -78,7 +78,7 @@ impl Default for StripParams {
                 .with_smoother(SmoothingStyle::Linear(20.0))
         }
         Self {
-            editor_state: ViziaState::new(|| (1120, 800)),
+            editor_state: ViziaState::new(|| (1280, 656)),
             bands: Arc::new(Mutex::new(Vec::new())),
             eq2_bands: Arc::new(Mutex::new(Vec::new())),
             lift_bands: Arc::new(Mutex::new(Vec::new())),
