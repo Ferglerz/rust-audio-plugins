@@ -11,17 +11,54 @@ pub struct Draw<'a> {
     pub ox: f32,
     pub oy: f32,
     pub font: Option<FontId>,
+    pub offset_x: f32,
+    pub alpha_mul: f32,
 }
 
 impl<'a> Draw<'a> {
+    pub fn new(
+        c: &'a mut Canvas,
+        light: bool,
+        s: f32,
+        ox: f32,
+        oy: f32,
+        font: Option<FontId>,
+    ) -> Self {
+        Self {
+            light,
+            c,
+            s,
+            ox,
+            oy,
+            font,
+            offset_x: 0.0,
+            alpha_mul: 1.0,
+        }
+    }
+
     pub fn color(&self, c: Color) -> Color {
-        theme::transform_color(c, self.light)
+        let mut col = theme::transform_color(c, self.light);
+        col.a = (col.a * self.alpha_mul).clamp(0.0, 1.0);
+        col
+    }
+
+    pub fn scissor(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        self.c.scissor(
+            self.ox + x * self.s,
+            self.oy + y * self.s,
+            w * self.s,
+            h * self.s,
+        );
+    }
+
+    pub fn reset_scissor(&mut self) {
+        self.c.reset_scissor();
     }
 
     pub fn rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: Color) {
         let mut p = Path::new();
         p.rounded_rect(
-            self.ox + x * self.s,
+            self.ox + (x + self.offset_x) * self.s,
             self.oy + y * self.s,
             w * self.s,
             h * self.s,
@@ -33,7 +70,7 @@ impl<'a> Draw<'a> {
     pub fn rounded_rect(&mut self, x: f32, y: f32, w: f32, h: f32, radius: f32, color: Color) {
         let mut p = Path::new();
         p.rounded_rect(
-            self.ox + x * self.s,
+            self.ox + (x + self.offset_x) * self.s,
             self.oy + y * self.s,
             w * self.s,
             h * self.s,
@@ -50,9 +87,9 @@ impl<'a> Draw<'a> {
         let mut p = Path::new();
         for (i, (x, y)) in points.iter().enumerate() {
             if i == 0 {
-                p.move_to(self.ox + x * self.s, self.oy + y * self.s);
+                p.move_to(self.ox + (x + self.offset_x) * self.s, self.oy + y * self.s);
             } else {
-                p.line_to(self.ox + x * self.s, self.oy + y * self.s);
+                p.line_to(self.ox + (x + self.offset_x) * self.s, self.oy + y * self.s);
             }
         }
         let mut paint = Paint::color(self.color(color));
@@ -65,12 +102,15 @@ impl<'a> Draw<'a> {
             return;
         }
         let mut p = Path::new();
-        p.move_to(self.ox + points[0].0 * self.s, self.oy + bottom * self.s);
+        p.move_to(
+            self.ox + (points[0].0 + self.offset_x) * self.s,
+            self.oy + bottom * self.s,
+        );
         for (x, y) in points {
-            p.line_to(self.ox + x * self.s, self.oy + y * self.s);
+            p.line_to(self.ox + (x + self.offset_x) * self.s, self.oy + y * self.s);
         }
         p.line_to(
-            self.ox + points.last().unwrap().0 * self.s,
+            self.ox + (points.last().unwrap().0 + self.offset_x) * self.s,
             self.oy + bottom * self.s,
         );
         p.close();
@@ -79,7 +119,11 @@ impl<'a> Draw<'a> {
 
     pub fn circle(&mut self, x: f32, y: f32, r: f32, color: Color, fill: bool) {
         let mut p = Path::new();
-        p.circle(self.ox + x * self.s, self.oy + y * self.s, r * self.s);
+        p.circle(
+            self.ox + (x + self.offset_x) * self.s,
+            self.oy + y * self.s,
+            r * self.s,
+        );
         let mut paint = Paint::color(self.color(color));
         paint.set_line_width(self.s);
         if fill {
@@ -95,9 +139,12 @@ impl<'a> Draw<'a> {
             p.set_font(&[font]);
         }
         p.set_font_size(size * self.s);
-        let _ = self
-            .c
-            .fill_text(self.ox + x * self.s, self.oy + y * self.s, text, &p);
+        let _ = self.c.fill_text(
+            self.ox + (x + self.offset_x) * self.s,
+            self.oy + y * self.s,
+            text,
+            &p,
+        );
     }
 
     pub fn text_centered(&mut self, cx: f32, y: f32, text: &str, size: f32, color: Color) {
@@ -112,7 +159,7 @@ impl<'a> Draw<'a> {
             text.len() as f32 * size * 0.55
         };
         let _ = self.c.fill_text(
-            self.ox + (cx - width * 0.5) * self.s,
+            self.ox + (cx + self.offset_x - width * 0.5) * self.s,
             self.oy + y * self.s,
             text,
             &p,
@@ -120,6 +167,40 @@ impl<'a> Draw<'a> {
     }
 
     pub fn button(&mut self, r: (f32, f32, f32, f32), label: &str, on: bool, color: Color) {
+        self.button_aligned(r, label, on, color, true);
+    }
+
+    pub fn button_left(&mut self, r: (f32, f32, f32, f32), label: &str, on: bool, color: Color) {
+        self.button_aligned(r, label, on, color, false);
+    }
+
+    fn button_aligned(
+        &mut self,
+        r: (f32, f32, f32, f32),
+        label: &str,
+        on: bool,
+        color: Color,
+        centered: bool,
+    ) {
+        self.rect(r.0, r.1, r.2, r.3, PANEL);
+        if on {
+            self.rect(r.0, r.1 + r.3 - 2.0, r.2, 2.0, color);
+        }
+        let label_color = if on { color } else { MUTED };
+        if centered {
+            self.text_centered(
+                r.0 + r.2 * 0.5,
+                r.1 + r.3 / 2.0 + 4.0,
+                label,
+                11.0,
+                label_color,
+            );
+        } else {
+            self.text(r.0 + 10.0, r.1 + r.3 / 2.0 + 4.0, label, 11.0, label_color);
+        }
+    }
+
+    pub fn tab_button(&mut self, r: (f32, f32, f32, f32), label: &str, on: bool, color: Color) {
         self.rect(r.0, r.1, r.2, r.3, PANEL);
         if on {
             self.rect(r.0, r.1 + r.3 - 2.0, r.2, 2.0, color);
@@ -136,7 +217,7 @@ impl<'a> Draw<'a> {
     pub fn outline(&mut self, r: (f32, f32, f32, f32), color: Color) {
         let mut path = Path::new();
         path.rounded_rect(
-            self.ox + r.0 * self.s,
+            self.ox + (r.0 + self.offset_x) * self.s,
             self.oy + r.1 * self.s,
             r.2 * self.s,
             r.3 * self.s,
@@ -145,6 +226,103 @@ impl<'a> Draw<'a> {
         let mut paint = Paint::color(self.color(color));
         paint.set_line_width(self.s);
         self.c.stroke_path(&path, &paint);
+    }
+
+    pub fn grab_bar(&mut self, r: (f32, f32, f32, f32), color: Color) {
+        self.rect(r.0, r.1, r.2, r.3, color);
+        let grip = Color {
+            r: color.r * 0.35,
+            g: color.g * 0.35,
+            b: color.b * 0.35,
+            a: 1.0,
+        };
+        let cx = r.0 + r.2 * 0.5;
+        let cy = r.1 + r.3 * 0.5;
+        let line_w = (r.2 * 0.38).min(22.0);
+        self.line(
+            cx - line_w * 0.5,
+            cy - 2.2,
+            cx + line_w * 0.5,
+            cy - 2.2,
+            grip,
+            1.4,
+        );
+        self.line(
+            cx - line_w * 0.5,
+            cy + 2.2,
+            cx + line_w * 0.5,
+            cy + 2.2,
+            grip,
+            1.4,
+        );
+    }
+
+    pub fn poly_gradient_span(
+        &mut self,
+        points: &[(f32, f32)],
+        sx: f32,
+        ex: f32,
+        c1: Color,
+        c2: Color,
+        width: f32,
+    ) {
+        if points.is_empty() {
+            return;
+        }
+        let mut p = Path::new();
+        for (i, (x, y)) in points.iter().enumerate() {
+            if i == 0 {
+                p.move_to(self.ox + (x + self.offset_x) * self.s, self.oy + y * self.s);
+            } else {
+                p.line_to(self.ox + (x + self.offset_x) * self.s, self.oy + y * self.s);
+            }
+        }
+        let mut paint = Paint::linear_gradient(
+            self.ox + (sx + self.offset_x) * self.s,
+            self.oy,
+            self.ox + (ex + self.offset_x) * self.s,
+            self.oy,
+            self.color(c1),
+            self.color(c2),
+        );
+        paint.set_line_width(width * self.s);
+        self.c.stroke_path(&p, &paint);
+    }
+
+    pub fn area_gradient_span(
+        &mut self,
+        points: &[(f32, f32)],
+        bottom: f32,
+        sx: f32,
+        ex: f32,
+        c1: Color,
+        c2: Color,
+    ) {
+        if points.is_empty() {
+            return;
+        }
+        let mut p = Path::new();
+        p.move_to(
+            self.ox + (points[0].0 + self.offset_x) * self.s,
+            self.oy + bottom * self.s,
+        );
+        for (x, y) in points {
+            p.line_to(self.ox + (x + self.offset_x) * self.s, self.oy + y * self.s);
+        }
+        p.line_to(
+            self.ox + (points.last().unwrap().0 + self.offset_x) * self.s,
+            self.oy + bottom * self.s,
+        );
+        p.close();
+        let paint = Paint::linear_gradient(
+            self.ox + (sx + self.offset_x) * self.s,
+            self.oy,
+            self.ox + (ex + self.offset_x) * self.s,
+            self.oy,
+            self.color(c1),
+            self.color(c2),
+        );
+        self.c.fill_path(&p, &paint);
     }
 
     pub fn bypass_button(&mut self, r: (f32, f32, f32, f32), bypassed: bool, color: Color) {
@@ -189,7 +367,7 @@ impl<'a> Draw<'a> {
         let mut p = Path::new();
         let r_outer = 6.0 * self.s;
         let r_inner = 3.8 * self.s;
-        let ox = self.ox + cx * self.s;
+        let ox = self.ox + (cx + self.offset_x) * self.s;
         let oy = self.oy + cy * self.s;
         for i in 0..6 {
             let mid = (i as f32 * 60.0).to_radians();
@@ -287,7 +465,14 @@ impl<'a> Draw<'a> {
         );
     }
 
-    pub fn control(&mut self, r: (f32, f32, f32, f32), label: &str, value: &str, n: f32, color: Color) {
+    pub fn control(
+        &mut self,
+        r: (f32, f32, f32, f32),
+        label: &str,
+        value: &str,
+        n: f32,
+        color: Color,
+    ) {
         self.rect(r.0, r.1, r.2, r.3, Color::rgba(27, 31, 37, 225));
         self.outline(
             r,
