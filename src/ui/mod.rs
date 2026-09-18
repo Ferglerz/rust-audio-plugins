@@ -506,12 +506,17 @@ impl StripView {
         let x = if self.is_pre() {
             MARGIN
         } else {
-            MARGIN + EQ_W + GAP
+            UI_W - MARGIN - SIDE_W
         };
         (x, MODULE_Y, SIDE_W, MODULE_H)
     }
     fn pse_bounds(&self) -> (f32, f32, f32, f32) {
-        (UI_W - MARGIN - SIDE_W, MODULE_Y, SIDE_W, MODULE_H)
+        let x = if self.is_pre() {
+            UI_W - MARGIN - SIDE_W
+        } else {
+            MARGIN + EQ_W + GAP
+        };
+        (x, MODULE_Y, SIDE_W, MODULE_H)
     }
     fn gx(&self) -> f32 {
         self.eq_bounds().0 + 44.0
@@ -3035,7 +3040,7 @@ impl View for StripView {
         match self.dyn_page {
             DynPage::Main => {
                 // Header
-                let num_label = if is_pre { "01" } else { "02" };
+                let num_label = if is_pre { "01" } else { "03" };
                 d.text(
                     dx + 12.0,
                     123.0,
@@ -3226,7 +3231,7 @@ impl View for StripView {
         d.text(
             px + 12.0,
             123.0,
-            "03",
+            if self.is_pre() { "03" } else { "02" },
             13.0,
             if comp_bypassed { MUTED } else { GOLD },
         );
@@ -4352,19 +4357,19 @@ mod tests {
             last_tick: Cell::new(None),
         };
 
-        // Post mode (default): EQ, Dynamics, then PSE as its own module after EQ
+        // Post mode (default): EQ, then PSE immediately after EQ, Dynamics on the right
         assert!(!view.is_pre());
         assert_eq!(view.eq_bounds(), (MARGIN, MODULE_Y, EQ_W, MODULE_H));
         assert_eq!(
-            view.dyn_bounds(),
+            view.pse_bounds(),
             (MARGIN + EQ_W + GAP, MODULE_Y, SIDE_W, MODULE_H)
         );
         assert_eq!(
-            view.pse_bounds(),
+            view.dyn_bounds(),
             (UI_W - MARGIN - SIDE_W, MODULE_Y, SIDE_W, MODULE_H)
         );
-        assert!(view.eq_bounds().0 + view.eq_bounds().2 <= view.dyn_bounds().0);
-        assert!(view.dyn_bounds().0 + view.dyn_bounds().2 <= view.pse_bounds().0);
+        assert!(view.eq_bounds().0 + view.eq_bounds().2 <= view.pse_bounds().0);
+        assert!(view.pse_bounds().0 + view.pse_bounds().2 <= view.dyn_bounds().0);
         assert_eq!(view.gx(), MARGIN + 44.0);
         assert_eq!(view.global_controls(), &[0]);
         assert_eq!(PSE_KNOBS, [7, 8, 1, 2, 9, 10]);
