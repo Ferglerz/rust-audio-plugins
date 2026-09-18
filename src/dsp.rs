@@ -509,18 +509,58 @@ impl VocalComp {
             over * slope
         }
     }
-    pub fn tick(
+    fn stereo_peaks(x: [f64; 2]) -> [f64; 3] {
+        let left = x[0].abs();
+        let right = x[1].abs();
+        [left, right, left.max(right)]
+    }
+    fn update_link_mix(&mut self, stereo_link: bool, sr: f64) {
+        self.link_mix +=
+            (1.0 - (-1.0 / (sr * 0.010)).exp()) * (f64::from(stereo_link) - self.link_mix);
+    }
+    fn linked(&self, ch: f64, mid: f64) -> f64 {
+        ch + self.link_mix * (mid - ch)
+    }
+    fn pse_gains(&mut self, peaks: [f64; 3], settings: CompSettings, sr: f64) -> ([f64; 3], f64) {
+        let mut gains = [0.0; 3];
+        for i in 0..3 {
+            gains[i] = self.pse[i].tick(peaks[i], settings.gate, sr, settings.pse);
+        }
+        let mut pse_gr = 0.0_f64;
+        for i in 0..2 {
+            let r0 = self.pse[i].reduction_db.abs();
+            let r2 = self.pse[2].reduction_db.abs();
+            pse_gr = pse_gr.max(self.linked(r0, r2));
+        }
+        (gains, pse_gr)
+    }
+    /// Apply the expander on the main path, detecting from that same audio.
+    pub fn tick_pse(
+        &mut self,
+        x: [f64; 2],
+        settings: CompSettings,
+        sr: f64,
+    ) -> ([f64; 2], f64) {
+        self.update_link_mix(settings.stereo_link, sr);
+        let (gains, pse_gr) = self.pse_gains(Self::stereo_peaks(x), settings, sr);
+        (
+            [
+                x[0] * self.linked(gains[0], gains[2]),
+                x[1] * self.linked(gains[1], gains[2]),
+            ],
+            pse_gr,
+        )
+    }
+    /// Compressor (and Listen SC) only. Sidechain EQ belongs on `sc`.
+    pub fn tick_comp(
         &mut self,
         x: [f64; 2],
         sc: [f64; 2],
         settings: CompSettings,
         sr: f64,
-    ) -> ([f64; 2], f64, f64, f64) {
-        let left = sc[0].abs();
-        let right = sc[1].abs();
-        let peaks = [left, right, left.max(right)];
-        self.link_mix +=
-            (1.0 - (-1.0 / (sr * 0.010)).exp()) * (f64::from(settings.stereo_link) - self.link_mix);
+    ) -> ([f64; 2], f64, f64) {
+        self.update_link_mix(settings.stereo_link, sr);
+        let peaks = Self::stereo_peaks(sc);
         let makeup_target = if settings.auto_makeup {
             -settings.threshold * 0.35 * (1.0 - 1.0 / settings.ratio.clamp(1.0, 20.0)) / 0.75
         } else {
@@ -550,25 +590,34 @@ impl VocalComp {
             };
             let k_u = (-1.0 / (sr * tc_u)).exp();
             self.reduction_uncapped[i] = k_u * self.reduction_uncapped[i] + (1.0 - k_u) * unlimited;
-            let pse_gain = self.pse[i].tick(peaks[i], settings.gate, sr, settings.pse);
-            gains[i] = db_gain(self.makeup - self.reduction[i]) * pse_gain;
+            gains[i] = db_gain(self.makeup - self.reduction[i]);
         }
         let mut out = [0.0; 2];
         let mut gr = 0.0_f64;
-        let mut pse_gr = 0.0_f64;
         for i in 0..2 {
-            let gain = gains[i] + self.link_mix * (gains[2] - gains[i]);
+            let gain = self.linked(gains[i], gains[2]);
             out[i] = x[i] * (settings.dry + settings.wet * gain);
-            gr =
-                gr.max(self.reduction[i] + self.link_mix * (self.reduction[2] - self.reduction[i]));
-            let r0 = self.pse[i].reduction_db.abs();
-            let r2 = self.pse[2].reduction_db.abs();
-            pse_gr = pse_gr.max(r0 + self.link_mix * (r2 - r0));
+            gr = gr.max(self.linked(self.reduction[i], self.reduction[2]));
         }
         if settings.pse.listen {
             out = sc;
         }
-        let sc_level = gain_db(self.env[2]);
+        (out, gr, gain_db(self.env[2]))
+    }
+    pub fn tick(
+        &mut self,
+        x: [f64; 2],
+        sc: [f64; 2],
+        settings: CompSettings,
+        sr: f64,
+    ) -> ([f64; 2], f64, f64, f64) {
+        self.update_link_mix(settings.stereo_link, sr);
+        let (pse_gains, pse_gr) = self.pse_gains(Self::stereo_peaks(sc), settings, sr);
+        let gated = [
+            x[0] * self.linked(pse_gains[0], pse_gains[2]),
+            x[1] * self.linked(pse_gains[1], pse_gains[2]),
+        ];
+        let (out, gr, sc_level) = self.tick_comp(gated, sc, settings, sr);
         (out, gr, sc_level, pse_gr)
     }
     pub fn uncapped_gr(&self) -> f64 {

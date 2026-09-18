@@ -209,6 +209,7 @@ pub struct Engine {
     lift_bands: Vec<LiftBand>,
     pub sc_eq_bands: Vec<BandRuntime>,
     sc_eq_mix: f64,
+    lift_mix: f64,
     vad: SpeechVad,
     speech_env: f32,
     dyn_gr_scratch: Vec<(u64, f32)>,
@@ -280,6 +281,7 @@ impl Engine {
             lift_bands,
             sc_eq_bands,
             sc_eq_mix: 1.0,
+            lift_mix: 1.0,
             vad,
             speech_env: 0.0,
             dyn_gr_scratch: Vec::new(),
@@ -414,6 +416,19 @@ impl Engine {
             }
         }
     }
+    fn sc_detector(&mut self, tap: [f64; 2]) -> [f64; 2] {
+        if self.sc_eq_mix <= 0.0001 {
+            return tap;
+        }
+        let mut sc_filtered = tap;
+        for b in &mut self.sc_eq_bands {
+            sc_filtered = b.tick(sc_filtered, self.sr);
+        }
+        [
+            tap[0] + self.sc_eq_mix * (sc_filtered[0] - tap[0]),
+            tap[1] + self.sc_eq_mix * (sc_filtered[1] - tap[1]),
+        ]
+    }
     pub fn tick(
         &mut self,
         input: [f64; 2],
@@ -421,6 +436,7 @@ impl Engine {
         eq_on: bool,
         eq2_on: bool,
         sc_eq_on: bool,
+        lift_on: bool,
         comp_on: bool,
         comp_pre: bool,
         bypass: bool,
@@ -429,6 +445,7 @@ impl Engine {
         self.eq1_mix += k * (f64::from(eq_on) - self.eq1_mix);
         self.eq2_mix += k * (f64::from(eq2_on) - self.eq2_mix);
         self.sc_eq_mix += k * (f64::from(sc_eq_on) - self.sc_eq_mix);
+        self.lift_mix += k * (f64::from(lift_on) - self.lift_mix);
         self.comp_mix += k * (f64::from(comp_on) - self.comp_mix);
         self.comp_pre_mix += k * (f64::from(comp_pre) - self.comp_pre_mix);
         self.bypass_mix += k * (f64::from(bypass) - self.bypass_mix);
@@ -439,27 +456,26 @@ impl Engine {
         let effective_comp_mix = self.comp_mix * (1.0 - self.solo_mix);
         let is_pre = self.comp_pre_mix > 0.5;
 
-        let (bank_in, pre_gr, pre_sc, pre_pse_gr) = if is_pre {
-            let mut sc_detector = input;
-            if self.sc_eq_mix > 0.0001 {
-                let mut sc_filtered = sc_detector;
-                for b in &mut self.sc_eq_bands {
-                    sc_filtered = b.tick(sc_filtered, self.sr);
-                }
-                sc_detector = [
-                    sc_detector[0] + self.sc_eq_mix * (sc_filtered[0] - sc_detector[0]),
-                    sc_detector[1] + self.sc_eq_mix * (sc_filtered[1] - sc_detector[1]),
-                ];
-            }
-            let (compressed, gr, sc, pse_gr) =
-                self.comp.tick(input, sc_detector, settings, self.sr);
+        // PSE always sits first on the audible path. PRE/POST only moves the
+        // compressor (and its SC EQ detector tap).
+        let (staged, pse_gr) = self.comp.tick_pse(input, settings, self.sr);
+
+        let (bank_in, pre_gr, pre_sc) = if is_pre {
+            let sc_detector = self.sc_detector(staged);
+            let (compressed, gr, sc) =
+                self.comp.tick_comp(staged, sc_detector, settings, self.sr);
+            let mix = if settings.pse.listen {
+                1.0
+            } else {
+                effective_comp_mix
+            };
             let comp_in = [
-                input[0] + effective_comp_mix * (compressed[0] - input[0]),
-                input[1] + effective_comp_mix * (compressed[1] - input[1]),
+                staged[0] + mix * (compressed[0] - staged[0]),
+                staged[1] + mix * (compressed[1] - staged[1]),
             ];
-            (comp_in, gr, sc, pse_gr)
+            (comp_in, gr, sc)
         } else {
-            (input, 0.0, -90.0, 0.0)
+            (staged, 0.0, -90.0)
         };
 
         let (mut x, mut dry) = self.bank.tick(bank_in, self.eq1_mix, self.eq2_mix);
@@ -506,9 +522,8 @@ impl Engine {
                 .store(self.lift.bin_gr_uncapped[i], Ordering::Relaxed);
         }
         if lift_active {
-            let total_eq_mix = self.eq1_mix.max(self.eq2_mix);
             for i in 0..2 {
-                x[i] = eq_delayed[i] + total_eq_mix * lift_out[i];
+                x[i] = eq_delayed[i] + self.lift_mix * lift_out[i];
             }
             dry = dry_delayed;
         }
@@ -550,25 +565,20 @@ impl Engine {
             None
         };
 
-        let (gr, sc_level, pse_gr) = if !is_pre {
-            let mut sc_detector = x;
-            if self.sc_eq_mix > 0.0001 {
-                let mut sc_filtered = sc_detector;
-                for b in &mut self.sc_eq_bands {
-                    sc_filtered = b.tick(sc_filtered, self.sr);
-                }
-                sc_detector = [
-                    sc_detector[0] + self.sc_eq_mix * (sc_filtered[0] - sc_detector[0]),
-                    sc_detector[1] + self.sc_eq_mix * (sc_filtered[1] - sc_detector[1]),
-                ];
-            }
-            let (compressed, gr, sc, pse_gr) = self.comp.tick(x, sc_detector, settings, self.sr);
+        let (gr, sc_level) = if !is_pre {
+            let sc_detector = self.sc_detector(x);
+            let (compressed, gr, sc) = self.comp.tick_comp(x, sc_detector, settings, self.sr);
+            let mix = if settings.pse.listen {
+                1.0
+            } else {
+                effective_comp_mix
+            };
             for i in 0..2 {
-                x[i] += effective_comp_mix * (compressed[i] - x[i]);
+                x[i] += mix * (compressed[i] - x[i]);
             }
-            (gr, sc, pse_gr)
+            (gr, sc)
         } else {
-            (pre_gr, pre_sc, pre_pse_gr)
+            (pre_gr, pre_sc)
         };
 
         for i in 0..2 {
@@ -731,6 +741,7 @@ mod tests {
                         global_bypass,
                         global_bypass,
                         false,
+                        true,
                         false,
                         false,
                         global_bypass,
@@ -790,6 +801,7 @@ mod tests {
                     true,
                     true,
                     true,
+                    true,
                     false,
                     false
                 ),
@@ -824,7 +836,7 @@ mod tests {
         };
         for i in 0..4096 {
             let x = (i as f64 * 0.1).sin() * 0.5;
-            let out = engine.tick([x, x], settings, true, true, false, true, false, false);
+            let out = engine.tick([x, x], settings, true, true, false, true, true, false, false);
             assert!((out[0] - x).abs() < 1e-9);
         }
     }
@@ -849,7 +861,7 @@ mod tests {
         };
         for i in 0..24000 {
             let x = (i as f64 * 0.13).sin() * 0.1;
-            let out = engine.tick([x, x], settings, true, true, false, true, false, true);
+            let out = engine.tick([x, x], settings, true, true, false, true, true, false, true);
             if i > 23000 {
                 assert!((out[0] - x).abs() < 1e-10);
             }
@@ -883,7 +895,7 @@ mod tests {
         for i in 0..4800 {
             let t = i as f64 / 48000.0;
             let x = (2.0 * std::f64::consts::PI * 100.0 * t).sin();
-            let out = engine.tick([x, x], settings, true, true, false, true, false, false);
+            let out = engine.tick([x, x], settings, true, true, false, true, true, false, false);
             if i > 2400 {
                 distant_energy += out[0].powi(2);
             }
@@ -919,7 +931,7 @@ mod tests {
         for i in 0..8192 {
             let t = i as f64 / 48000.0;
             let x = (2.0 * std::f64::consts::PI * 10000.0 * t).sin() * 0.5;
-            let out = engine.tick([x, x], settings, true, true, false, false, false, false);
+            let out = engine.tick([x, x], settings, true, true, false, true, false, false, false);
             if i > LIFT_LATENCY + 2048 {
                 assert!(out[0].is_finite() && out[1].is_finite());
             }
@@ -931,7 +943,7 @@ mod tests {
         for i in 0..4800 {
             let t = i as f64 / 48000.0;
             let x = (2.0 * std::f64::consts::PI * 10000.0 * t).sin() * 0.5;
-            let out = engine.tick([x, x], settings, true, true, false, false, false, false);
+            let out = engine.tick([x, x], settings, true, true, false, true, false, false, false);
             if i > 4000 {
                 solo_energy += out[0].powi(2);
             }
@@ -971,7 +983,7 @@ mod tests {
 
         // Let ramps settle
         for _ in 0..1000 {
-            engine.tick([0.0; 2], settings, true, true, false, false, false, false);
+            engine.tick([0.0; 2], settings, true, true, false, true, false, false, false);
         }
 
         // Both EQs active: 6 dB + 6 dB = +12 dB gain at 1 kHz (approx 4.0x linear gain amplitude)
@@ -979,7 +991,7 @@ mod tests {
         for i in 0..4800 {
             let t = i as f64 / 48000.0;
             let x = (2.0 * std::f64::consts::PI * 1000.0 * t).sin() * 0.1;
-            let out = engine.tick([x, x], settings, true, true, false, false, false, false);
+            let out = engine.tick([x, x], settings, true, true, false, true, false, false, false);
             if i > 2400 {
                 max_both = max_both.max(out[0].abs());
             }
@@ -991,13 +1003,13 @@ mod tests {
 
         // Bypass EQ 2: only EQ 1 applies (+6 dB = ~2.0x linear gain amplitude)
         for _ in 0..2000 {
-            engine.tick([0.0; 2], settings, true, false, false, false, false, false);
+            engine.tick([0.0; 2], settings, true, false, false, true, false, false, false);
         }
         let mut max_eq1_only: f64 = 0.0;
         for i in 0..4800 {
             let t = i as f64 / 48000.0;
             let x = (2.0 * std::f64::consts::PI * 1000.0 * t).sin() * 0.1;
-            let out = engine.tick([x, x], settings, true, false, false, false, false, false);
+            let out = engine.tick([x, x], settings, true, false, false, true, false, false, false);
             if i > 2400 {
                 max_eq1_only = max_eq1_only.max(out[0].abs());
             }
@@ -1039,13 +1051,13 @@ mod tests {
         // Pre-EQ mode: input is -25 dB (~0.056 amplitude).
         // It enters compressor before EQ boost. Threshold is -20 dB, so little to no GR occurs.
         for _ in 0..1000 {
-            engine.tick([0.0; 2], settings, true, false, false, true, true, false);
+            engine.tick([0.0; 2], settings, true, false, false, true, true, true, false);
         }
         let mut max_pre = 0.0_f64;
         for i in 0..4800 {
             let t = i as f64 / 48000.0;
             let x = (2.0 * std::f64::consts::PI * 1000.0 * t).sin() * 0.056;
-            let out = engine.tick([x, x], settings, true, false, false, true, true, false);
+            let out = engine.tick([x, x], settings, true, false, false, true, true, true, false);
             if i > 2400 {
                 max_pre = max_pre.max(out[0].abs());
             }
@@ -1054,13 +1066,13 @@ mod tests {
         // Post-EQ mode: input is boosted by +12 dB (4x) first to ~0.224 (-13 dB),
         // entering compressor well above -20 dB threshold, triggering strong gain reduction.
         for _ in 0..2000 {
-            engine.tick([0.0; 2], settings, true, false, false, true, false, false);
+            engine.tick([0.0; 2], settings, true, false, false, true, true, false, false);
         }
         let mut max_post = 0.0_f64;
         for i in 0..4800 {
             let t = i as f64 / 48000.0;
             let x = (2.0 * std::f64::consts::PI * 1000.0 * t).sin() * 0.056;
-            let out = engine.tick([x, x], settings, true, false, false, true, false, false);
+            let out = engine.tick([x, x], settings, true, false, false, true, true, false, false);
             if i > 2400 {
                 max_post = max_post.max(out[0].abs());
             }
@@ -1072,6 +1084,66 @@ mod tests {
             max_pre > max_post * 1.25,
             "max_pre={max_pre}, max_post={max_post}"
         );
+    }
+
+    #[test]
+    fn pse_runs_before_eq_in_pre_and_post() {
+        let band = Band {
+            id: 1,
+            freq: 1000.0,
+            gain: 18.0,
+            q: 2.0,
+            ..Band::default()
+        };
+        let shared = Shared::new(
+            Arc::new(Mutex::new(vec![band])),
+            Arc::new(Mutex::new(vec![])),
+            Arc::new(Mutex::new(vec![])),
+            Arc::new(Mutex::new(vec![])),
+        );
+        let mut pre = Engine::new(shared, 48000.0);
+        let post_shared = Shared::new(
+            Arc::new(Mutex::new(vec![Band {
+                id: 1,
+                freq: 1000.0,
+                gain: 18.0,
+                q: 2.0,
+                ..Band::default()
+            }])),
+            Arc::new(Mutex::new(vec![])),
+            Arc::new(Mutex::new(vec![])),
+            Arc::new(Mutex::new(vec![])),
+        );
+        let mut post = Engine::new(post_shared, 48000.0);
+        let settings = CompSettings {
+            threshold: 0.0,
+            auto_makeup: false,
+            gate: -40.0,
+            dry: 0.0,
+            wet: 1.0,
+            ..CompSettings::default()
+        };
+        let amp = 0.003;
+        for _ in 0..96000 {
+            pre.tick([0.0; 2], settings, true, false, false, true, true, true, false);
+            post.tick([0.0; 2], settings, true, false, false, true, true, false, false);
+        }
+        let mut max_pre = 0.0_f64;
+        let mut max_post = 0.0_f64;
+        for i in 0..48000 {
+            let t = i as f64 / 48000.0;
+            let x = (2.0 * std::f64::consts::PI * 1000.0 * t).sin() * amp;
+            let pre_out = pre.tick([x, x], settings, true, false, false, true, true, true, false);
+            let post_out = post.tick([x, x], settings, true, false, false, true, true, false, false);
+            if i > 24000 {
+                max_pre = max_pre.max(pre_out[0].abs());
+                max_post = max_post.max(post_out[0].abs());
+            }
+        }
+        // +18 dB of EQ on 0.003 would be ~0.024 if PSE ran after the boost.
+        // With PSE first (~10 dB down) the boosted peak stays well below that.
+        assert!(max_pre < 0.014, "max_pre={max_pre}");
+        assert!(max_post < 0.014, "max_post={max_post}");
     }
 
     #[test]
@@ -1108,7 +1180,7 @@ mod tests {
 
         // Warm up ramps
         for _ in 0..2000 {
-            engine.tick([0.0; 2], settings, false, false, true, true, false, false);
+            engine.tick([0.0; 2], settings, false, false, true, true, true, false, false);
         }
 
         // 1. Feed a 100 Hz tone at 0.5 amplitude (-6 dB).
@@ -1117,7 +1189,7 @@ mod tests {
         for i in 0..4800 {
             let t = i as f64 / 48000.0;
             let x = (2.0 * std::f64::consts::PI * 100.0 * t).sin() * 0.5;
-            let out = engine.tick([x, x], settings, false, false, true, true, false, false);
+            let out = engine.tick([x, x], settings, false, false, true, true, true, false, false);
             if i > 3000 {
                 // Should pass through essentially uncompressed (matches input x)
                 assert!((out[0] - x).abs() < 0.01, "out={}, x={}", out[0], x);
@@ -1134,7 +1206,7 @@ mod tests {
         for i in 0..4800 {
             let t = i as f64 / 48000.0;
             let x = (2.0 * std::f64::consts::PI * 1000.0 * t).sin() * 0.5;
-            engine.tick([x, x], settings, false, false, true, true, false, false);
+            engine.tick([x, x], settings, false, false, true, true, true, false, false);
         }
         let gr_passed = shared.gr.load(Ordering::Relaxed);
         assert!(gr_passed > 5.0, "expected significant GR, got {gr_passed}");
@@ -1153,6 +1225,7 @@ mod tests {
                 false,
                 true,
                 true,
+                true,
                 false,
                 false,
             );
@@ -1163,6 +1236,32 @@ mod tests {
         assert!(
             (max_sc_listen - 0.5).abs() < 0.05,
             "expected passband signal on listen, got {max_sc_listen}"
+        );
+
+        // Listen SC stays available when the compressor section is bypassed.
+        // 100 Hz is rejected by the 500 Hz SC low-cut, so output must be quiet.
+        let mut max_sc_listen_comp_off = 0.0_f64;
+        for i in 0..4800 {
+            let t = i as f64 / 48000.0;
+            let x = (2.0 * std::f64::consts::PI * 100.0 * t).sin() * 0.5;
+            let out = engine.tick(
+                [x, x],
+                listen_settings,
+                false,
+                false,
+                true,
+                true,
+                false,
+                false,
+                false,
+            );
+            if i > 2400 {
+                max_sc_listen_comp_off = max_sc_listen_comp_off.max(out[0].abs());
+            }
+        }
+        assert!(
+            max_sc_listen_comp_off < 0.05,
+            "expected filtered sidechain on listen with compressor off, got {max_sc_listen_comp_off}"
         );
     }
 }

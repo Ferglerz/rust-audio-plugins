@@ -32,6 +32,8 @@ pub struct StripParams {
     pub eq2_on: BoolParam,
     #[id = "sc_eq_on"]
     pub sc_eq_on: BoolParam,
+    #[id = "lift_on"]
+    pub lift_on: BoolParam,
     #[id = "comp_on"]
     pub comp_on: BoolParam,
     #[id = "comp_pre"]
@@ -121,6 +123,7 @@ impl Default for StripParams {
             eq_on: BoolParam::new("EQ enabled", true),
             eq2_on: BoolParam::new("EQ 2 enabled", true),
             sc_eq_on: BoolParam::new("PSE/Comp SC EQ enabled", true),
+            lift_on: BoolParam::new("Lift enabled", true),
             comp_on: BoolParam::new("Dynamics enabled", true),
             comp_pre: BoolParam::new("Dynamics routing", false),
             compression: param("Threshold", 0.0, 0.0, 48.0, " dB")
@@ -278,7 +281,7 @@ impl Default for StripParams {
                     }
                     None
                 })),
-            pse_listen: BoolParam::new("PSE listen sidechain", false),
+            pse_listen: BoolParam::new("Listen sidechain", false),
             pse_voice_det: param("PSE voice detection", 50.0, 0.0, 100.0, " %")
                 .with_step_size(1.0)
                 .with_smoother(SmoothingStyle::Linear(20.0)),
