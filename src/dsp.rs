@@ -535,12 +535,7 @@ impl VocalComp {
         (gains, pse_gr)
     }
     /// Apply the expander on the main path, detecting from that same audio.
-    pub fn tick_pse(
-        &mut self,
-        x: [f64; 2],
-        settings: CompSettings,
-        sr: f64,
-    ) -> ([f64; 2], f64) {
+    pub fn tick_pse(&mut self, x: [f64; 2], settings: CompSettings, sr: f64) -> ([f64; 2], f64) {
         self.update_link_mix(settings.stereo_link, sr);
         let (gains, pse_gr) = self.pse_gains(Self::stereo_peaks(x), settings, sr);
         (

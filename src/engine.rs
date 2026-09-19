@@ -462,8 +462,7 @@ impl Engine {
 
         let (bank_in, pre_gr, pre_sc) = if is_pre {
             let sc_detector = self.sc_detector(staged);
-            let (compressed, gr, sc) =
-                self.comp.tick_comp(staged, sc_detector, settings, self.sr);
+            let (compressed, gr, sc) = self.comp.tick_comp(staged, sc_detector, settings, self.sr);
             let mix = if settings.pse.listen {
                 1.0
             } else {
@@ -836,7 +835,17 @@ mod tests {
         };
         for i in 0..4096 {
             let x = (i as f64 * 0.1).sin() * 0.5;
-            let out = engine.tick([x, x], settings, true, true, false, true, true, false, false);
+            let out = engine.tick(
+                [x, x],
+                settings,
+                true,
+                true,
+                false,
+                true,
+                true,
+                false,
+                false,
+            );
             assert!((out[0] - x).abs() < 1e-9);
         }
     }
@@ -895,7 +904,17 @@ mod tests {
         for i in 0..4800 {
             let t = i as f64 / 48000.0;
             let x = (2.0 * std::f64::consts::PI * 100.0 * t).sin();
-            let out = engine.tick([x, x], settings, true, true, false, true, true, false, false);
+            let out = engine.tick(
+                [x, x],
+                settings,
+                true,
+                true,
+                false,
+                true,
+                true,
+                false,
+                false,
+            );
             if i > 2400 {
                 distant_energy += out[0].powi(2);
             }
@@ -931,7 +950,17 @@ mod tests {
         for i in 0..8192 {
             let t = i as f64 / 48000.0;
             let x = (2.0 * std::f64::consts::PI * 10000.0 * t).sin() * 0.5;
-            let out = engine.tick([x, x], settings, true, true, false, true, false, false, false);
+            let out = engine.tick(
+                [x, x],
+                settings,
+                true,
+                true,
+                false,
+                true,
+                false,
+                false,
+                false,
+            );
             if i > LIFT_LATENCY + 2048 {
                 assert!(out[0].is_finite() && out[1].is_finite());
             }
@@ -943,7 +972,17 @@ mod tests {
         for i in 0..4800 {
             let t = i as f64 / 48000.0;
             let x = (2.0 * std::f64::consts::PI * 10000.0 * t).sin() * 0.5;
-            let out = engine.tick([x, x], settings, true, true, false, true, false, false, false);
+            let out = engine.tick(
+                [x, x],
+                settings,
+                true,
+                true,
+                false,
+                true,
+                false,
+                false,
+                false,
+            );
             if i > 4000 {
                 solo_energy += out[0].powi(2);
             }
@@ -983,7 +1022,9 @@ mod tests {
 
         // Let ramps settle
         for _ in 0..1000 {
-            engine.tick([0.0; 2], settings, true, true, false, true, false, false, false);
+            engine.tick(
+                [0.0; 2], settings, true, true, false, true, false, false, false,
+            );
         }
 
         // Both EQs active: 6 dB + 6 dB = +12 dB gain at 1 kHz (approx 4.0x linear gain amplitude)
@@ -991,7 +1032,17 @@ mod tests {
         for i in 0..4800 {
             let t = i as f64 / 48000.0;
             let x = (2.0 * std::f64::consts::PI * 1000.0 * t).sin() * 0.1;
-            let out = engine.tick([x, x], settings, true, true, false, true, false, false, false);
+            let out = engine.tick(
+                [x, x],
+                settings,
+                true,
+                true,
+                false,
+                true,
+                false,
+                false,
+                false,
+            );
             if i > 2400 {
                 max_both = max_both.max(out[0].abs());
             }
@@ -1003,13 +1054,25 @@ mod tests {
 
         // Bypass EQ 2: only EQ 1 applies (+6 dB = ~2.0x linear gain amplitude)
         for _ in 0..2000 {
-            engine.tick([0.0; 2], settings, true, false, false, true, false, false, false);
+            engine.tick(
+                [0.0; 2], settings, true, false, false, true, false, false, false,
+            );
         }
         let mut max_eq1_only: f64 = 0.0;
         for i in 0..4800 {
             let t = i as f64 / 48000.0;
             let x = (2.0 * std::f64::consts::PI * 1000.0 * t).sin() * 0.1;
-            let out = engine.tick([x, x], settings, true, false, false, true, false, false, false);
+            let out = engine.tick(
+                [x, x],
+                settings,
+                true,
+                false,
+                false,
+                true,
+                false,
+                false,
+                false,
+            );
             if i > 2400 {
                 max_eq1_only = max_eq1_only.max(out[0].abs());
             }
@@ -1051,13 +1114,25 @@ mod tests {
         // Pre-EQ mode: input is -25 dB (~0.056 amplitude).
         // It enters compressor before EQ boost. Threshold is -20 dB, so little to no GR occurs.
         for _ in 0..1000 {
-            engine.tick([0.0; 2], settings, true, false, false, true, true, true, false);
+            engine.tick(
+                [0.0; 2], settings, true, false, false, true, true, true, false,
+            );
         }
         let mut max_pre = 0.0_f64;
         for i in 0..4800 {
             let t = i as f64 / 48000.0;
             let x = (2.0 * std::f64::consts::PI * 1000.0 * t).sin() * 0.056;
-            let out = engine.tick([x, x], settings, true, false, false, true, true, true, false);
+            let out = engine.tick(
+                [x, x],
+                settings,
+                true,
+                false,
+                false,
+                true,
+                true,
+                true,
+                false,
+            );
             if i > 2400 {
                 max_pre = max_pre.max(out[0].abs());
             }
@@ -1066,13 +1141,25 @@ mod tests {
         // Post-EQ mode: input is boosted by +12 dB (4x) first to ~0.224 (-13 dB),
         // entering compressor well above -20 dB threshold, triggering strong gain reduction.
         for _ in 0..2000 {
-            engine.tick([0.0; 2], settings, true, false, false, true, true, false, false);
+            engine.tick(
+                [0.0; 2], settings, true, false, false, true, true, false, false,
+            );
         }
         let mut max_post = 0.0_f64;
         for i in 0..4800 {
             let t = i as f64 / 48000.0;
             let x = (2.0 * std::f64::consts::PI * 1000.0 * t).sin() * 0.056;
-            let out = engine.tick([x, x], settings, true, false, false, true, true, false, false);
+            let out = engine.tick(
+                [x, x],
+                settings,
+                true,
+                false,
+                false,
+                true,
+                true,
+                false,
+                false,
+            );
             if i > 2400 {
                 max_post = max_post.max(out[0].abs());
             }
@@ -1125,16 +1212,40 @@ mod tests {
         };
         let amp = 0.003;
         for _ in 0..96000 {
-            pre.tick([0.0; 2], settings, true, false, false, true, true, true, false);
-            post.tick([0.0; 2], settings, true, false, false, true, true, false, false);
+            pre.tick(
+                [0.0; 2], settings, true, false, false, true, true, true, false,
+            );
+            post.tick(
+                [0.0; 2], settings, true, false, false, true, true, false, false,
+            );
         }
         let mut max_pre = 0.0_f64;
         let mut max_post = 0.0_f64;
         for i in 0..48000 {
             let t = i as f64 / 48000.0;
             let x = (2.0 * std::f64::consts::PI * 1000.0 * t).sin() * amp;
-            let pre_out = pre.tick([x, x], settings, true, false, false, true, true, true, false);
-            let post_out = post.tick([x, x], settings, true, false, false, true, true, false, false);
+            let pre_out = pre.tick(
+                [x, x],
+                settings,
+                true,
+                false,
+                false,
+                true,
+                true,
+                true,
+                false,
+            );
+            let post_out = post.tick(
+                [x, x],
+                settings,
+                true,
+                false,
+                false,
+                true,
+                true,
+                false,
+                false,
+            );
             if i > 24000 {
                 max_pre = max_pre.max(pre_out[0].abs());
                 max_post = max_post.max(post_out[0].abs());
@@ -1180,7 +1291,9 @@ mod tests {
 
         // Warm up ramps
         for _ in 0..2000 {
-            engine.tick([0.0; 2], settings, false, false, true, true, true, false, false);
+            engine.tick(
+                [0.0; 2], settings, false, false, true, true, true, false, false,
+            );
         }
 
         // 1. Feed a 100 Hz tone at 0.5 amplitude (-6 dB).
@@ -1189,7 +1302,17 @@ mod tests {
         for i in 0..4800 {
             let t = i as f64 / 48000.0;
             let x = (2.0 * std::f64::consts::PI * 100.0 * t).sin() * 0.5;
-            let out = engine.tick([x, x], settings, false, false, true, true, true, false, false);
+            let out = engine.tick(
+                [x, x],
+                settings,
+                false,
+                false,
+                true,
+                true,
+                true,
+                false,
+                false,
+            );
             if i > 3000 {
                 // Should pass through essentially uncompressed (matches input x)
                 assert!((out[0] - x).abs() < 0.01, "out={}, x={}", out[0], x);
@@ -1206,7 +1329,17 @@ mod tests {
         for i in 0..4800 {
             let t = i as f64 / 48000.0;
             let x = (2.0 * std::f64::consts::PI * 1000.0 * t).sin() * 0.5;
-            engine.tick([x, x], settings, false, false, true, true, true, false, false);
+            engine.tick(
+                [x, x],
+                settings,
+                false,
+                false,
+                true,
+                true,
+                true,
+                false,
+                false,
+            );
         }
         let gr_passed = shared.gr.load(Ordering::Relaxed);
         assert!(gr_passed > 5.0, "expected significant GR, got {gr_passed}");

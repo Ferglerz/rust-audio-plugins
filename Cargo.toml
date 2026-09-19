@@ -17,8 +17,8 @@ default = []
 debug-alloc = ["nih_plug/assert_process_allocs"]
 
 [dependencies]
-nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" }
-nih_plug_vizia = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+nih_plug = { path = "vendor/nih-plug" }
+nih_plug_vizia = { path = "vendor/nih-plug/nih_plug_vizia" }
 atomic_float = "1"
 crossbeam-queue = "0.3"
 serde = { version = "1", features = ["derive"] }
@@ -26,6 +26,9 @@ serde_json = "1"
 rustfft = "6"
 pleasant-ui = { path = "../pleasant-ui" }
 ort = { version = "2.0.0-rc.13", default-features = true }
+
+[patch."https://github.com/RustAudio/baseview.git"]
+baseview = { path = "vendor/baseview" }
 
 [profile.release]
 lto = "thin"

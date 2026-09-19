@@ -51,8 +51,20 @@ const GX: f32 = MARGIN + PSE_W + GAP + 44.0;
 const GY: f32 = 136.0;
 #[cfg(test)]
 const GW: f32 = EQ_W - 60.0;
-const GH: f32 = 420.0;
+const GH: f32 = 404.0;
 const GRAPH_BOTTOM: f32 = GY + GH;
+const METER_TOP: f32 = GY + 16.0;
+const METER_H: f32 = GRAPH_BOTTOM - METER_TOP;
+const FREQ_AXIS: [(f64, &str); 8] = [
+    (50.0, "50"),
+    (100.0, "100"),
+    (200.0, "200"),
+    (500.0, "500"),
+    (1000.0, "1k"),
+    (2500.0, "2.5k"),
+    (5000.0, "5k"),
+    (10000.0, "10k"),
+];
 const THEME_BUTTON: (f32, f32, f32, f32) = (UI_W - MARGIN - 116.0, FOOTER_BTN_Y, 116.0, 28.0);
 pub const EQ2_ID_BASE: u64 = 10_000;
 pub const SC_EQ_ID_BASE: u64 = 20_000;
@@ -72,6 +84,17 @@ fn quintic_page_progress(progress: f32) -> f32 {
     let unit = progress.floor();
     let frac = progress - unit;
     unit + frac * frac * frac * (frac * (frac * 6.0 - 15.0) + 10.0)
+}
+fn tick_page_anim(progress: &Cell<f32>, target: f32, dt: f32) {
+    let cur = progress.get();
+    let next = if cur < target {
+        (cur + dt / 0.25).min(target)
+    } else if cur > target {
+        (cur - dt / 0.25).max(target)
+    } else {
+        cur
+    };
+    progress.set(next);
 }
 const PROCESS_BUTTON: (f32, f32, f32, f32) = (32.0, FOOTER_BTN_Y, 152.0, 28.0);
 fn processing_menu_rect(resolution: bool) -> (f32, f32, f32, f32) {
@@ -246,12 +269,25 @@ fn draw_knee_zone(
 const DYN_PILL_R: f32 = 12.0;
 const NODE_INNER_R: f32 = 7.5;
 const NODE_HIT_R: f32 = 16.0;
+const THRESH_LINE_H: f32 = 2.0;
+const THRESH_LINE_EXTRA: f32 = 8.0;
+const THRESH_HIT_PAD: f32 = 4.0;
 fn overflow_reduction(range: f64, uncapped: f64) -> Option<f64> {
     if range >= 0.0 {
         (uncapped > range + 0.05).then_some(uncapped)
     } else {
         (uncapped < range - 0.05).then_some(uncapped)
     }
+}
+fn capped_reduction(range: f64, uncapped: f64) -> f64 {
+    if range >= 0.0 {
+        uncapped.clamp(0.0, range)
+    } else {
+        uncapped.clamp(range, 0.0)
+    }
+}
+fn y_to_db(y: f32, range: f64) -> f64 {
+    (0.5 - (y - GY) as f64 / GH as f64) * 2.0 * range
 }
 fn uncapped_for(id: u64, meters: &[(u64, f32)]) -> Option<f64> {
     meters
@@ -277,6 +313,12 @@ fn module_header_ctrl_y() -> f32 {
 }
 fn module_title_y(size: f32) -> f32 {
     module_header_mid() + size * 0.35
+}
+fn module_footer_ctrl_y() -> f32 {
+    MODULE_Y + MODULE_H - MODULE_HEADER_CTRL - 4.0
+}
+fn meter_value_y() -> f32 {
+    GRAPH_BOTTOM + 14.0
 }
 fn axis_label_y(line_y: f32, size: f32) -> f32 {
     line_y + size * 0.35
@@ -342,8 +384,30 @@ fn near_eq_node(b: &Band, x: f32, y: f32, graph_db: f64, gx: f32, gw: f32) -> bo
         if (x - nx).abs() <= DYN_PILL_R && y >= top - 4.0 && y <= bot + 4.0 {
             return true;
         }
+        if threshold_handle_hit(b, x, y, graph_db, gx, gw) {
+            return true;
+        }
     }
     false
+}
+fn threshold_line_rect(b: &Band, graph_db: f64, gx: f32, gw: f32) -> (f32, f32, f32, f32) {
+    let x = freq_x_at(b.freq, gx, gw);
+    let y = db_y(b.threshold, graph_db);
+    let w = DYN_PILL_R * 2.0 + THRESH_LINE_EXTRA * 2.0;
+    (x - w * 0.5, y - THRESH_LINE_H * 0.5, w, THRESH_LINE_H)
+}
+fn threshold_handle_hit(b: &Band, x: f32, y: f32, graph_db: f64, gx: f32, gw: f32) -> bool {
+    if !b.dynamic || !b.shape.has_gain() {
+        return false;
+    }
+    let r = threshold_line_rect(b, graph_db, gx, gw);
+    let hit = (r.0, r.1 - THRESH_HIT_PAD, r.2, r.3 + THRESH_HIT_PAD * 2.0);
+    if !inside(x, y, hit) {
+        return false;
+    }
+    let x_node = freq_x_at(b.freq, gx, gw);
+    let node_y = db_y(b.gain, graph_db);
+    (x - x_node).hypot(y - node_y) > NODE_INNER_R
 }
 fn snap_dyn_range(gain: f64, y: f32, graph_db: f64) -> f64 {
     let mut new_range = gain - y_db(y, graph_db);
@@ -354,23 +418,44 @@ fn snap_dyn_range(gain: f64, y: f32, graph_db: f64) -> f64 {
 }
 fn draw_dyn_range_stem(
     d: &mut Draw,
-    node: (f32, f32),
-    gain: f64,
-    range: f64,
+    b: &Band,
     graph_db: f64,
+    graph: (f32, f32),
     color: C,
     uncapped: Option<f64>,
+    thresh_hover: bool,
 ) {
-    let (x, y) = node;
-    let y_range = db_y(gain - range, graph_db);
+    let (gx, gw) = graph;
+    let x = freq_x_at(b.freq, gx, gw);
+    let y = db_y(b.gain, graph_db);
+    let y_range = db_y(b.gain - b.range, graph_db);
     d.pill(x, y, y_range, DYN_PILL_R, color);
-    if let Some(uncapped) = uncapped.and_then(|gr| overflow_reduction(range, gr)) {
-        let y_over = db_y(gain - uncapped, graph_db);
-        if (y_over - y_range).abs() > 0.5 {
-            d.line(x, y_range, x, y_over, MUTED, 3.0);
-            d.circle(x, y_over, 3.0, MUTED, true);
+    if let Some(uncapped) = uncapped {
+        let live = capped_reduction(b.range, uncapped);
+        if live.abs() > 0.05 {
+            let y_live = db_y(b.gain - live, graph_db);
+            let mut fill = color;
+            fill.a = 0.45;
+            d.pill_fill(x, y, y_live, DYN_PILL_R - 1.0, fill);
+        }
+        if let Some(over) = overflow_reduction(b.range, uncapped) {
+            let y_over = db_y(b.gain - over, graph_db);
+            if (y_over - y_range).abs() > 0.5 {
+                d.line(x, y_range, x, y_over, MUTED, 3.0);
+                d.circle(x, y_over, 3.0, MUTED, true);
+            }
         }
     }
+    let y_th = db_y(b.threshold, graph_db);
+    let line_w = DYN_PILL_R * 2.0 + THRESH_LINE_EXTRA * 2.0;
+    d.line(
+        x - line_w * 0.5,
+        y_th,
+        x + line_w * 0.5,
+        y_th,
+        if thresh_hover { TEXT } else { color },
+        THRESH_LINE_H,
+    );
 }
 fn lift_gain_y(gain: f64) -> f32 {
     let norm = ((gain + 100.0) / 100.0).clamp(0.0, 1.0) as f32;
@@ -383,11 +468,18 @@ fn lift_y_gain(y: f32) -> f64 {
 fn inside(x: f32, y: f32, r: (f32, f32, f32, f32)) -> bool {
     x >= r.0 && x <= r.0 + r.2 && y >= r.1 && y <= r.1 + r.3
 }
+fn hud_height_for(b: &Band) -> f32 {
+    if b.dynamic && b.shape.has_gain() {
+        132.0
+    } else {
+        104.0
+    }
+}
 fn hud_rect_for_at(b: &Band, range: f64, gx: f32, gw: f32) -> (f32, f32, f32, f32) {
     let node_x = freq_x_at(b.freq, gx, gw);
     let node_y = db_y(if b.shape.has_gain() { b.gain } else { 0.0 }, range);
     let bw = 304.0;
-    let bh = 104.0;
+    let bh = hud_height_for(b);
     let gap = 36.0;
     let bx = (node_x - bw / 2.0).clamp(gx + 8.0, gx + gw - bw - 8.0);
     let above_room = node_y - GY;
@@ -404,7 +496,9 @@ fn hud_value_rect_at(b: &Band, range: f64, i: usize, gx: f32, gw: f32) -> (f32, 
     match i {
         0 => (x + 10.0, y + 48.0, 92.0, 24.0),
         1 => (x + 110.0, y + 48.0, 100.0, 24.0),
-        _ => (x + 218.0, y + 48.0, 76.0, 24.0),
+        2 => (x + 218.0, y + 48.0, 76.0, 24.0),
+        3 => (x + 10.0, y + 92.0, 140.0, 24.0),
+        _ => (x + 160.0, y + 92.0, 134.0, 24.0),
     }
 }
 fn hud_rect_for_lift_at(b: &LiftBand, _range: f64, gx: f32, gw: f32) -> (f32, f32, f32, f32) {
@@ -438,7 +532,13 @@ fn hud_value_rect_lift_at(
     }
 }
 fn band_rect_at(i: usize, gx: f32, gw: f32) -> (f32, f32, f32, f32) {
-    let slot = (gw - 46.0) / 5.0;
+    band_slot_rect_at(i, gx, gw, 5)
+}
+fn dyn_slider_rect_at(i: usize, gx: f32, gw: f32) -> (f32, f32, f32, f32) {
+    band_slot_rect_at(i, gx, gw, 3)
+}
+fn band_slot_rect_at(i: usize, gx: f32, gw: f32, count: usize) -> (f32, f32, f32, f32) {
+    let slot = (gw - 46.0) / count as f32;
     (
         gx + 38.0 + i as f32 * slot,
         GRAPH_BOTTOM - 60.0,
@@ -466,6 +566,7 @@ enum Target {
     LiftBand(usize),
     Node(u64),
     Range(u64),
+    Threshold(u64),
     CompKnee { from_top: bool },
     PseKnee { from_top: bool },
 }
@@ -528,6 +629,11 @@ pub fn create(params: Arc<StripParams>, shared: Arc<Shared>) -> Option<Box<dyn E
                 last_tick: Cell::new(None),
                 knee_bulge: Cell::new(0.0),
                 pse_knee_bulge: Cell::new(0.0),
+                dyn_anim_progress: Cell::new(0.0),
+                dyn_anim_target: Cell::new(0.0),
+                pse_anim_progress: Cell::new(0.0),
+                pse_anim_target: Cell::new(0.0),
+                pending_solo: None,
             }
             .build(cx, |cx| {
                 let timer = cx.add_timer(Duration::from_millis(16), None, |cx, action| {
@@ -566,6 +672,11 @@ struct StripView {
     last_tick: Cell<Option<std::time::Instant>>,
     knee_bulge: Cell<f32>,
     pse_knee_bulge: Cell<f32>,
+    dyn_anim_progress: Cell<f32>,
+    dyn_anim_target: Cell<f32>,
+    pse_anim_progress: Cell<f32>,
+    pse_anim_target: Cell<f32>,
+    pending_solo: Option<u64>,
 }
 fn lift_bin_curve_fit(bins: &[f64; 256], t: f64) -> f64 {
     let u = (t * 256.0 - 0.5).clamp(0.0, 255.0);
@@ -803,25 +914,61 @@ impl StripView {
     fn band_dyn_power_rect(&self, dynamic: bool) -> (f32, f32, f32, f32) {
         band_dyn_power_rect_at(dynamic, self.gx())
     }
+    fn dyn_slider_rect(&self, i: usize) -> (f32, f32, f32, f32) {
+        dyn_slider_rect_at(i, self.gx(), self.gw())
+    }
+    fn dyn_slider_bar_rect(&self, i: usize) -> (f32, f32, f32, f32) {
+        let r = self.dyn_slider_rect(i);
+        (r.0 + 12.0, r.1 + 28.0, r.2 - 24.0, 16.0)
+    }
+    fn dyn_slider_value_rect(&self, i: usize) -> (f32, f32, f32, f32) {
+        let r = self.dyn_slider_rect(i);
+        (r.0 + r.2 - 68.0, r.1 + 4.0, 60.0, 20.0)
+    }
     fn eq_tab_1_rect(&self) -> (f32, f32, f32, f32) {
         let eq_x = self.eq_bounds().0;
-        (eq_x + 200.0, module_header_ctrl_y(), 48.0, MODULE_HEADER_CTRL)
+        (
+            eq_x + 200.0,
+            module_header_ctrl_y(),
+            48.0,
+            MODULE_HEADER_CTRL,
+        )
     }
     fn eq_tab_2_rect(&self) -> (f32, f32, f32, f32) {
         let eq_x = self.eq_bounds().0;
-        (eq_x + 252.0, module_header_ctrl_y(), 48.0, MODULE_HEADER_CTRL)
+        (
+            eq_x + 252.0,
+            module_header_ctrl_y(),
+            48.0,
+            MODULE_HEADER_CTRL,
+        )
     }
     fn eq_tab_lift_rect(&self) -> (f32, f32, f32, f32) {
         let eq_x = self.eq_bounds().0;
-        (eq_x + 304.0, module_header_ctrl_y(), 48.0, MODULE_HEADER_CTRL)
+        (
+            eq_x + 304.0,
+            module_header_ctrl_y(),
+            48.0,
+            MODULE_HEADER_CTRL,
+        )
     }
     fn eq_tab_sc_rect(&self) -> (f32, f32, f32, f32) {
         let eq_x = self.eq_bounds().0;
-        (eq_x + 356.0, module_header_ctrl_y(), 56.0, MODULE_HEADER_CTRL)
+        (
+            eq_x + 356.0,
+            module_header_ctrl_y(),
+            56.0,
+            MODULE_HEADER_CTRL,
+        )
     }
     fn eq_power_rect(&self) -> (f32, f32, f32, f32) {
         let eq_x = self.eq_bounds().0;
-        (eq_x + 14.0, module_header_ctrl_y(), 24.0, MODULE_HEADER_CTRL)
+        (
+            eq_x + 14.0,
+            module_header_ctrl_y(),
+            24.0,
+            MODULE_HEADER_CTRL,
+        )
     }
     fn scale_button_rect(&self) -> (f32, f32, f32, f32) {
         let label_x = (self.eq_bounds().0 + self.gx()) * 0.5;
@@ -843,14 +990,14 @@ impl StripView {
     }
     fn dyn_cog_button_rect(&self) -> (f32, f32, f32, f32) {
         let dx = self.dyn_bounds().0;
-        (dx + 14.0, 148.0, 24.0, 24.0)
+        (dx + 14.0, module_footer_ctrl_y(), 24.0, MODULE_HEADER_CTRL)
     }
     fn dyn_back_button_rect(&self) -> (f32, f32, f32, f32) {
         self.dyn_cog_button_rect()
     }
     fn pse_cog_button_rect(&self) -> (f32, f32, f32, f32) {
         let px = self.pse_bounds().0;
-        (px + 14.0, 148.0, 24.0, 24.0)
+        (px + 14.0, module_footer_ctrl_y(), 24.0, MODULE_HEADER_CTRL)
     }
     fn pse_back_button_rect(&self) -> (f32, f32, f32, f32) {
         self.pse_cog_button_rect()
@@ -877,11 +1024,11 @@ impl StripView {
     }
     fn dyn_main_thresh_slider_rect(&self) -> (f32, f32, f32, f32) {
         let dx = self.dyn_bounds().0;
-        (dx + 18.0, 208.0, 38.0, 336.0)
+        (dx + 18.0, METER_TOP, 38.0, METER_H)
     }
     fn dyn_main_gr_meter_rect(&self) -> (f32, f32, f32, f32) {
         let dx = self.dyn_bounds().0;
-        (dx + 66.0, 208.0, 16.0, 336.0)
+        (dx + 66.0, METER_TOP, 16.0, METER_H)
     }
     fn dyn_main_thresh_handle_rect(&self, thresh_y: f32) -> (f32, f32, f32, f32) {
         let (sx, _, sw, _) = self.dyn_main_thresh_slider_rect();
@@ -907,11 +1054,11 @@ impl StripView {
     }
     fn pse_main_thresh_slider_rect(&self) -> (f32, f32, f32, f32) {
         let px = self.pse_bounds().0;
-        (px + 18.0, 208.0, 38.0, 336.0)
+        (px + 18.0, METER_TOP, 38.0, METER_H)
     }
     fn pse_main_gr_meter_rect(&self) -> (f32, f32, f32, f32) {
         let px = self.pse_bounds().0;
-        (px + 66.0, 208.0, 16.0, 336.0)
+        (px + 66.0, METER_TOP, 16.0, METER_H)
     }
     fn pse_main_thresh_handle_rect(&self, thresh_y: f32) -> (f32, f32, f32, f32) {
         let (sx, _, sw, _) = self.pse_main_thresh_slider_rect();
@@ -958,7 +1105,7 @@ impl StripView {
             },
             DynPage::Main => {
                 if i == 14 {
-                    (dx + 68.0, 552.0, 50.0, 22.0)
+                    (dx + 68.0, meter_value_y() - 14.0, 50.0, 22.0)
                 } else {
                     (dx + 6.0, 226.0, 56.0, 86.0)
                 }
@@ -978,7 +1125,7 @@ impl StripView {
     fn pse_value_rect(&self, i: usize) -> (f32, f32, f32, f32) {
         if self.pse_page == PsePage::Main && i == 1 {
             let px = self.pse_bounds().0;
-            (px + 12.0, 552.0, 50.0, 22.0)
+            (px + 12.0, meter_value_y() - 14.0, 50.0, 22.0)
         } else {
             Self::knob_value_rect(self.pse_knob_rect(i))
         }
@@ -1072,10 +1219,16 @@ impl StripView {
                 }
             }
             if b.shape.has_gain() && b.dynamic {
-                for i in 0..5 {
-                    let r = self.band_value_rect(i);
+                if inside(x, y, self.hud_value_rect(&b, 3)) {
+                    return Some((ValueTarget::Band(3), self.hud_value_rect(&b, 3)));
+                }
+                if inside(x, y, self.hud_value_rect(&b, 4)) {
+                    return Some((ValueTarget::Band(7), self.hud_value_rect(&b, 4)));
+                }
+                for i in 0..3 {
+                    let r = self.dyn_slider_value_rect(i);
                     if inside(x, y, r) {
-                        return Some((ValueTarget::Band(i + 3), r));
+                        return Some((ValueTarget::Band(i + 4), r));
                     }
                 }
             }
@@ -1212,10 +1365,13 @@ impl StripView {
                             fields.push((ValueTarget::Band(i), self.hud_value_rect(&b, i)));
                         }
                     }
-                    if b.shape.has_gain() {
-                        fields.extend(
-                            (0..5).map(|i| (ValueTarget::Band(i + 3), self.band_value_rect(i))),
-                        );
+                    if b.shape.has_gain() && b.dynamic {
+                        fields.push((ValueTarget::Band(3), self.hud_value_rect(&b, 3)));
+                        fields.push((ValueTarget::Band(7), self.hud_value_rect(&b, 4)));
+                        fields
+                            .extend((0..3).map(|i| {
+                                (ValueTarget::Band(i + 4), self.dyn_slider_value_rect(i))
+                            }));
                     }
                 }
                 fields.extend(self.global_value_hits());
@@ -1353,6 +1509,16 @@ impl StripView {
             .find(|b| range_handle_hit(b, x, y, self.graph_db, self.gx(), self.gw(), self.selected))
             .map(|b| b.id)
     }
+    fn find_threshold_hit(&self, x: f32, y: f32, bands: &[Band]) -> Option<u64> {
+        if self.active_eq.get() == EQ_PAGE_SC || self.active_eq.get() == EQ_PAGE_LIFT {
+            return None;
+        }
+        bands
+            .iter()
+            .rev()
+            .find(|b| threshold_handle_hit(b, x, y, self.graph_db, self.gx(), self.gw()))
+            .map(|b| b.id)
+    }
     fn begin_range_drag(&mut self, cx: &mut EventContext, id: u64, x: f32, y: f32) {
         self.select(Some(id));
         self.change(|b| {
@@ -1361,6 +1527,17 @@ impl StripView {
             }
         });
         self.drag = Some(Target::Range(id));
+        self.last_drag = (x, y);
+        cx.capture();
+    }
+    fn begin_threshold_drag(&mut self, cx: &mut EventContext, id: u64, x: f32, y: f32) {
+        self.select(Some(id));
+        self.change(|b| {
+            if !b.dynamic {
+                b.dynamic = true;
+            }
+        });
+        self.drag = Some(Target::Threshold(id));
         self.last_drag = (x, y);
         cx.capture();
     }
@@ -1594,15 +1771,22 @@ impl StripView {
                     }
                 });
             }
+            Some(Target::Threshold(_id)) => {
+                self.change(|b| {
+                    if !b.shape.has_gain() {
+                        return;
+                    }
+                    b.dynamic = true;
+                    b.threshold = y_to_db(y, graph_db).clamp(-60.0, 0.0);
+                });
+            }
             Some(Target::Band(i)) => {
-                let r = self.band_rect(i);
+                let r = self.dyn_slider_rect(i);
                 let n = ((x - r.0 - 12.0) / (r.2 - 24.0)).clamp(0.0, 1.0) as f64;
                 self.change(|b| match i {
-                    0 => b.threshold = -60.0 + 60.0 * n,
-                    1 => b.ratio = 1.0 + 19.0 * n,
-                    2 => b.attack = 0.1 * 2000.0_f64.powf(n),
-                    3 => b.release = 10.0 * 200.0_f64.powf(n),
-                    _ => b.range = -24.0 + 48.0 * n,
+                    0 => b.ratio = 1.0 + 19.0 * n,
+                    1 => b.attack = 0.1 * 2000.0_f64.powf(n),
+                    _ => b.release = 10.0 * 200.0_f64.powf(n),
                 });
             }
             Some(Target::LiftBand(i)) => {
@@ -1722,6 +1906,16 @@ impl View for StripView {
                             self.pending_create = None;
                         }
                     }
+                    if let Some(id) = self.pending_solo {
+                        if (x - self.down.0).hypot(y - self.down.1) >= DRAG_START_THRESHOLD {
+                            self.pending_solo = None;
+                            self.drag = Some(Target::Node(id));
+                            self.last_drag = self.down;
+                            let shift = cx.modifiers().shift();
+                            let cmd = cx.modifiers().command();
+                            self.apply_drag(cx, x, y, shift, cmd);
+                        }
+                    }
                     if self.drag.is_some() {
                         let shift = cx.modifiers().shift();
                         let cmd = cx.modifiers().command();
@@ -1758,8 +1952,15 @@ impl View for StripView {
                     }
                     match self.pse_page {
                         PsePage::Main => {
+                            if (self.pse_anim_progress.get() - self.pse_anim_target.get()).abs()
+                                > 0.01
+                                && inside(x, y, self.pse_bounds())
+                            {
+                                return;
+                            }
                             if inside(x, y, self.pse_cog_button_rect()) {
                                 self.pse_page = PsePage::Controls;
+                                self.pse_anim_target.set(1.0);
                                 cx.needs_redraw();
                                 return;
                             }
@@ -1819,8 +2020,15 @@ impl View for StripView {
                             }
                         }
                         PsePage::Controls => {
+                            if (self.pse_anim_progress.get() - self.pse_anim_target.get()).abs()
+                                > 0.01
+                                && inside(x, y, self.pse_bounds())
+                            {
+                                return;
+                            }
                             if inside(x, y, self.pse_back_button_rect()) {
                                 self.pse_page = PsePage::Main;
+                                self.pse_anim_target.set(0.0);
                                 cx.needs_redraw();
                                 return;
                             }
@@ -1833,8 +2041,15 @@ impl View for StripView {
                     }
                     match self.dyn_page {
                         DynPage::Main => {
+                            if (self.dyn_anim_progress.get() - self.dyn_anim_target.get()).abs()
+                                > 0.01
+                                && inside(x, y, self.dyn_bounds())
+                            {
+                                return;
+                            }
                             if inside(x, y, self.dyn_cog_button_rect()) {
                                 self.dyn_page = DynPage::Controls;
+                                self.dyn_anim_target.set(1.0);
                                 cx.needs_redraw();
                                 return;
                             }
@@ -1896,8 +2111,15 @@ impl View for StripView {
                             }
                         }
                         DynPage::Controls => {
+                            if (self.dyn_anim_progress.get() - self.dyn_anim_target.get()).abs()
+                                > 0.01
+                                && inside(x, y, self.dyn_bounds())
+                            {
+                                return;
+                            }
                             if inside(x, y, self.dyn_back_button_rect()) {
                                 self.dyn_page = DynPage::Main;
+                                self.dyn_anim_target.set(0.0);
                                 cx.needs_redraw();
                                 return;
                             }
@@ -2081,12 +2303,10 @@ impl View for StripView {
                                         } else if inside(x, y, (bx + 40.0, by + 6.0, 148.0, 26.0)) {
                                             self.menu = Some(BandMenu::Shape);
                                         } else if inside(x, y, (bx + 222.0, by + 6.0, 28.0, 26.0)) {
-                                            let cur = self.shared.solo_id.load(Ordering::Relaxed);
-                                            if cur == b.id {
-                                                self.shared.solo_id.store(0, Ordering::Relaxed);
-                                            } else {
-                                                self.shared.solo_id.store(b.id, Ordering::Relaxed);
-                                            }
+                                            self.pending_solo = Some(b.id);
+                                            self.down = (x, y);
+                                            self.last_drag = (x, y);
+                                            cx.capture();
                                         } else if inside(
                                             x,
                                             y,
@@ -2111,12 +2331,10 @@ impl View for StripView {
                                         } else if inside(x, y, (bx + 40.0, by + 6.0, 148.0, 26.0)) {
                                             self.menu = Some(BandMenu::Shape);
                                         } else if inside(x, y, (bx + 222.0, by + 6.0, 28.0, 26.0)) {
-                                            let cur = self.shared.solo_id.load(Ordering::Relaxed);
-                                            if cur == b.id {
-                                                self.shared.solo_id.store(0, Ordering::Relaxed);
-                                            } else {
-                                                self.shared.solo_id.store(b.id, Ordering::Relaxed);
-                                            }
+                                            self.pending_solo = Some(b.id);
+                                            self.down = (x, y);
+                                            self.last_drag = (x, y);
+                                            cx.capture();
                                         } else if inside(
                                             x,
                                             y,
@@ -2146,7 +2364,9 @@ impl View for StripView {
                                     }
                                 } else {
                                     let bands = self.clone_page_bands();
-                                    if let Some(id) = self.find_range_hit(x, y, &bands) {
+                                    if let Some(id) = self.find_threshold_hit(x, y, &bands) {
+                                        self.begin_threshold_drag(cx, id, x, y);
+                                    } else if let Some(id) = self.find_range_hit(x, y, &bands) {
                                         self.begin_range_drag(cx, id, x, y);
                                     } else {
                                         let hit = bands
@@ -2239,7 +2459,7 @@ impl View for StripView {
                                     self.change(|b| b.dynamic = !b.dynamic);
                                 } else if is_dynamic {
                                     if let Some(i) =
-                                        (0..5).find(|i| inside(x, y, self.band_bar_rect(*i)))
+                                        (0..3).find(|i| inside(x, y, self.dyn_slider_bar_rect(*i)))
                                     {
                                         self.drag = Some(Target::Band(i));
                                         self.last_drag = (x, y);
@@ -2339,6 +2559,14 @@ impl View for StripView {
                     }
                     if self.pending_create.is_some() {
                         self.select(None);
+                    }
+                    if let Some(id) = self.pending_solo.take() {
+                        let cur = self.shared.solo_id.load(Ordering::Relaxed);
+                        if cur == id {
+                            self.shared.solo_id.store(0, Ordering::Relaxed);
+                        } else {
+                            self.shared.solo_id.store(id, Ordering::Relaxed);
+                        }
                     }
                     self.drag = None;
                     self.pending_create = None;
@@ -2545,6 +2773,8 @@ impl View for StripView {
             cur_p
         };
         self.anim_progress.set(next_p);
+        tick_page_anim(&self.dyn_anim_progress, self.dyn_anim_target.get(), dt);
+        tick_page_anim(&self.pse_anim_progress, self.pse_anim_target.get(), dt);
 
         let eased = quintic_page_progress(next_p);
         let offset_1 = (0.0 - eased) * GRAPH_CLIP_W;
@@ -2685,21 +2915,10 @@ impl View for StripView {
                     MUTED,
                 );
             }
-            for (freq, label) in [
-                (20.0, "20"),
-                (50.0, "50"),
-                (100.0, "100"),
-                (200.0, "200"),
-                (500.0, "500"),
-                (1000.0, "1k"),
-                (2000.0, "2k"),
-                (5000.0, "5k"),
-                (10000.0, "10k"),
-                (20000.0, "20k"),
-            ] {
+            for (freq, label) in FREQ_AXIS {
                 let x = freq_x_at(freq, gx, gw);
                 d.line(x, GY, x, GRAPH_BOTTOM, LINE, 1.0);
-                d.text(x - 9.0, GRAPH_BOTTOM + 16.0, label, 12.0, MUTED);
+                d.text_centered(x, GRAPH_BOTTOM + 16.0, label, 12.0, MUTED);
             }
             d.area(
                 &spectrum,
@@ -2802,14 +3021,18 @@ impl View for StripView {
                     y
                 };
                 if b.dynamic && b.shape.has_gain() {
+                    let thresh_hover = self.drag == Some(Target::Threshold(b.id))
+                        || self.hover.is_some_and(|(hx, hy)| {
+                            threshold_handle_hit(b, hx, hy, self.graph_db, gx, gw)
+                        });
                     draw_dyn_range_stem(
                         &mut d,
-                        (x, y),
-                        b.gain,
-                        b.range,
+                        b,
                         self.graph_db,
+                        (gx, gw),
                         color,
                         uncapped_for(b.id, &dyn_uncapped),
+                        thresh_hover,
                     );
                 } else if Some(b.id) == self.selected {
                     d.circle(x, y, 12.0, color, false);
@@ -2881,36 +3104,24 @@ impl View for StripView {
                     for (i, label, val, n) in [
                         (
                             0,
-                            "THRESHOLD",
-                            format!("{:.1}", b.threshold),
-                            (b.threshold + 60.0) / 60.0,
-                        ),
-                        (
-                            1,
                             "RATIO",
                             format!("{:.1}:1", b.ratio),
                             (b.ratio - 1.0) / 19.0,
                         ),
                         (
-                            2,
+                            1,
                             "ATTACK",
                             format!("{:.1} ms", b.attack),
                             (b.attack / 0.1).log(2000.0),
                         ),
                         (
-                            3,
+                            2,
                             "RELEASE",
                             format!("{:.0} ms", b.release),
                             (b.release / 10.0).log(200.0),
                         ),
-                        (
-                            4,
-                            "RANGE",
-                            format!("{:.1}", b.range),
-                            (b.range + 24.0) / 48.0,
-                        ),
                     ] {
-                        d.control(band_rect_at(i, gx, gw), label, &val, n as f32, c);
+                        d.control(dyn_slider_rect_at(i, gx, gw), label, &val, n as f32, c);
                     }
                 } else {
                     d.outline(power_rect, if hovered { TEXT } else { LINE });
@@ -3004,21 +3215,10 @@ impl View for StripView {
                     MUTED,
                 );
             }
-            for (freq, label) in [
-                (20.0, "20"),
-                (50.0, "50"),
-                (100.0, "100"),
-                (200.0, "200"),
-                (500.0, "500"),
-                (1000.0, "1k"),
-                (2000.0, "2k"),
-                (5000.0, "5k"),
-                (10000.0, "10k"),
-                (20000.0, "20k"),
-            ] {
+            for (freq, label) in FREQ_AXIS {
                 let x = freq_x_at(freq, gx, gw);
                 d.line(x, GY, x, GRAPH_BOTTOM, LINE, 1.0);
-                d.text(x - 9.0, GRAPH_BOTTOM + 16.0, label, 12.0, MUTED);
+                d.text_centered(x, GRAPH_BOTTOM + 16.0, label, 12.0, MUTED);
             }
             d.area(
                 &spectrum,
@@ -3171,7 +3371,13 @@ impl View for StripView {
         // --- DRAW EQ 2 / SC EQ (if visible) ---
         for (page_idx, offset, page_bands, page_on, allow_dyn) in [
             (EQ_PAGE_2, offset_2, eq2_bands.as_slice(), eq2_on, true),
-            (EQ_PAGE_SC, offset_sc, sc_eq_bands.as_slice(), sc_eq_on, false),
+            (
+                EQ_PAGE_SC,
+                offset_sc,
+                sc_eq_bands.as_slice(),
+                sc_eq_on,
+                false,
+            ),
         ] {
             if !(offset > -GRAPH_CLIP_W && offset < GRAPH_CLIP_W) {
                 continue;
@@ -3229,14 +3435,18 @@ impl View for StripView {
                     y
                 };
                 if allow_dyn && b.dynamic && b.shape.has_gain() {
+                    let thresh_hover = self.drag == Some(Target::Threshold(b.id))
+                        || self.hover.is_some_and(|(hx, hy)| {
+                            threshold_handle_hit(b, hx, hy, self.graph_db, gx, gw)
+                        });
                     draw_dyn_range_stem(
                         &mut d,
-                        (x, y),
-                        b.gain,
-                        b.range,
+                        b,
                         self.graph_db,
+                        (gx, gw),
                         color,
                         uncapped_for(b.id, &dyn_uncapped),
+                        thresh_hover,
                     );
                 } else if Some(b.id) == self.selected {
                     d.circle(x, y, 12.0, color, false);
@@ -3310,36 +3520,24 @@ impl View for StripView {
                         for (i, label, val, n) in [
                             (
                                 0,
-                                "THRESHOLD",
-                                format!("{:.1}", b.threshold),
-                                (b.threshold + 60.0) / 60.0,
-                            ),
-                            (
-                                1,
                                 "RATIO",
                                 format!("{:.1}:1", b.ratio),
                                 (b.ratio - 1.0) / 19.0,
                             ),
                             (
-                                2,
+                                1,
                                 "ATTACK",
                                 format!("{:.1} ms", b.attack),
                                 (b.attack / 0.1).log(2000.0),
                             ),
                             (
-                                3,
+                                2,
                                 "RELEASE",
                                 format!("{:.0} ms", b.release),
                                 (b.release / 10.0).log(200.0),
                             ),
-                            (
-                                4,
-                                "RANGE",
-                                format!("{:.1}", b.range),
-                                (b.range + 24.0) / 48.0,
-                            ),
                         ] {
-                            d.control(band_rect_at(i, gx, gw), label, &val, n as f32, c);
+                            d.control(dyn_slider_rect_at(i, gx, gw), label, &val, n as f32, c);
                         }
                     } else {
                         d.outline(power_rect, if hovered { TEXT } else { LINE });
@@ -3444,8 +3642,13 @@ impl View for StripView {
         );
         d.line(px + 10.0, GY, px + pw - 10.0, GY, LINE, 1.0);
 
-        match self.pse_page {
-            PsePage::Main => {
+        d.scissor(px, GY, pw, py + ph - GY);
+        let pse_eased = quintic_page_progress(self.pse_anim_progress.get());
+        let pse_main_off = (0.0 - pse_eased) * pw;
+        let pse_ctrl_off = (1.0 - pse_eased) * pw;
+        if pse_main_off > -pw && pse_main_off < pw {
+            d.offset_x = pse_main_off;
+            {
                 let cog_r = self.pse_cog_button_rect();
                 let cog_hover =
                     !pse_bypassed && self.hover.is_some_and(|(hx, hy)| inside(hx, hy, cog_r));
@@ -3573,7 +3776,7 @@ impl View for StripView {
                 };
                 d.text_centered(
                     px + 37.0,
-                    566.0,
+                    meter_value_y(),
                     &gate_val_str,
                     12.0,
                     if pse_bypassed { MUTED } else { PSE_BLUE },
@@ -3583,13 +3786,16 @@ impl View for StripView {
                     .normalized_value_to_string(self.param(7).unmodulated_normalized_value(), true);
                 d.text_centered(
                     px + 93.0,
-                    566.0,
+                    meter_value_y(),
                     &depth_val,
                     11.0,
                     if pse_bypassed { MUTED } else { PSE_BLUE },
                 );
             }
-            PsePage::Controls => {
+        }
+        if pse_ctrl_off > -pw && pse_ctrl_off < pw {
+            d.offset_x = pse_ctrl_off;
+            {
                 let back_r = self.pse_back_button_rect();
                 let back_hover =
                     !pse_bypassed && self.hover.is_some_and(|(hx, hy)| inside(hx, hy, back_r));
@@ -3708,6 +3914,8 @@ impl View for StripView {
                 );
             }
         }
+        d.reset_scissor();
+        d.offset_x = 0.0;
 
         if is_animating {
             d.rect(dx, dy, dw, dh, C::rgba(21, 24, 29, 215));
@@ -3725,8 +3933,13 @@ impl View for StripView {
         );
         d.line(dx + 10.0, GY, dx + dw - 10.0, GY, LINE, 1.0);
 
-        match self.dyn_page {
-            DynPage::Main => {
+        d.scissor(dx, GY, dw, dy + dh - GY);
+        let dyn_eased = quintic_page_progress(self.dyn_anim_progress.get());
+        let dyn_main_off = (0.0 - dyn_eased) * dw;
+        let dyn_ctrl_off = (1.0 - dyn_eased) * dw;
+        if dyn_main_off > -dw && dyn_main_off < dw {
+            d.offset_x = dyn_main_off;
+            {
                 let cog_r = self.dyn_cog_button_rect();
                 let cog_hover =
                     !comp_bypassed && self.hover.is_some_and(|(hx, hy)| inside(hx, hy, cog_r));
@@ -3859,7 +4072,7 @@ impl View for StripView {
                     p0.normalized_value_to_string(p0.unmodulated_normalized_value(), true);
                 d.text_centered(
                     dx + 37.0,
-                    566.0,
+                    meter_value_y(),
                     &thresh_val_str,
                     12.0,
                     if comp_bypassed { MUTED } else { GOLD },
@@ -3870,13 +4083,16 @@ impl View for StripView {
                 );
                 d.text_centered(
                     dx + 93.0,
-                    566.0,
+                    meter_value_y(),
                     &depth_val,
                     11.0,
                     if comp_bypassed { MUTED } else { GOLD },
                 );
             }
-            DynPage::Controls => {
+        }
+        if dyn_ctrl_off > -dw && dyn_ctrl_off < dw {
+            d.offset_x = dyn_ctrl_off;
+            {
                 let back_r = self.dyn_back_button_rect();
                 let back_hover =
                     !comp_bypassed && self.hover.is_some_and(|(hx, hy)| inside(hx, hy, back_r));
@@ -3929,6 +4145,8 @@ impl View for StripView {
                 }
             }
         }
+        d.reset_scissor();
+        d.offset_x = 0.0;
 
         d.line(32.0, FOOTER_LINE_Y, UI_W - 32.0, FOOTER_LINE_Y, LINE, 1.0);
         d.text(
@@ -4200,6 +4418,16 @@ fn band_hud(
             12.0,
             if active { color } else { MUTED },
         );
+    }
+    if b.dynamic && b.shape.has_gain() {
+        for (i, label, value) in [
+            (3, "THRESH", format!("{:.1}", b.threshold)),
+            (4, "RANGE", format!("{:.1}", b.range)),
+        ] {
+            let r = hud_value_rect_at(b, range, i, gx, gw);
+            d.text(r.0 + 4.0, by + 88.0, label, 8.5, MUTED);
+            d.text(r.0 + 4.0, by + 109.0, &value, 12.0, color);
+        }
     }
     if b.shape.is_cut() {
         d.rect(bx + 10.0, by + 78.0, 108.0, 22.0, C::rgba(35, 40, 48, 150));
@@ -4595,6 +4823,11 @@ mod tests {
             last_tick: Cell::new(None),
             knee_bulge: Cell::new(0.0),
             pse_knee_bulge: Cell::new(0.0),
+            dyn_anim_progress: Cell::new(0.0),
+            dyn_anim_target: Cell::new(0.0),
+            pse_anim_progress: Cell::new(0.0),
+            pse_anim_target: Cell::new(0.0),
+            pending_solo: None,
         };
 
         // Post mode (default): PSE on the left, EQ in the middle, Dynamics on the right
@@ -4634,6 +4867,17 @@ mod tests {
         assert_eq!(gr_meter.0, slider.0 + slider.2 + 10.0);
         assert_eq!(gr_meter.1, slider.1);
         assert_eq!(gr_meter.3, slider.3);
+        assert_eq!(slider.1 + slider.3, GRAPH_BOTTOM);
+        assert_eq!(gr_meter.1 + gr_meter.3, GRAPH_BOTTOM);
+        let cog = view.dyn_cog_button_rect();
+        assert_eq!(cog.1, module_footer_ctrl_y());
+        assert!(cog.1 > GRAPH_BOTTOM);
+        assert!(cog.1 + cog.3 <= MODULE_Y + MODULE_H);
+        assert_eq!(view.pse_cog_button_rect().1, cog.1);
+        assert_eq!(FREQ_AXIS[5], (2500.0, "2.5k"));
+        assert!(FREQ_AXIS
+            .iter()
+            .all(|(f, label)| *f != 20000.0 && *label != "0" && *label != "20k"));
         let handle = view.dyn_main_thresh_handle_rect(slider.1 + slider.3 * 0.5);
         assert!(handle.2 <= slider.2 + 12.0);
         assert!(handle.3 >= 12.0);
@@ -4832,5 +5076,41 @@ mod tests {
             gw,
             None
         ));
+
+        b.dynamic = true;
+        b.threshold = -18.0;
+        let line = threshold_line_rect(&b, graph_db, gx, gw);
+        assert!((line.3 - THRESH_LINE_H).abs() < 0.01);
+        assert!(line.2 > DYN_PILL_R * 2.0);
+        assert!(threshold_handle_hit(
+            &b,
+            line.0 + 1.0,
+            line.1 + line.3 * 0.5,
+            graph_db,
+            gx,
+            gw
+        ));
+        assert!(!threshold_handle_hit(&b, x_node, node_y, graph_db, gx, gw));
+        assert_eq!(capped_reduction(6.0, 9.0), 6.0);
+        assert_eq!(capped_reduction(6.0, 2.0), 2.0);
+        assert_eq!(capped_reduction(-6.0, -9.0), -6.0);
+        assert_eq!(capped_reduction(-6.0, -2.0), -2.0);
+        assert_eq!(hud_height_for(&b), 132.0);
+        let hud = hud_rect_for_at(&b, graph_db, gx, gw);
+        for i in 0..5 {
+            let value = hud_value_rect_at(&b, graph_db, i, gx, gw);
+            assert!(inside(value.0, value.1, hud));
+            assert!(inside(value.0 + value.2, value.1 + value.3, hud));
+        }
+    }
+
+    #[test]
+    fn eq_freq_axis_drops_edges_and_uses_two_point_five_k() {
+        assert_eq!(FREQ_AXIS[0], (50.0, "50"));
+        assert_eq!(FREQ_AXIS[5], (2500.0, "2.5k"));
+        assert_eq!(FREQ_AXIS.last(), Some(&(10000.0, "10k")));
+        assert!(FREQ_AXIS.iter().all(|(freq, label)| {
+            *freq != 20.0 && *freq != 20000.0 && *label != "0" && *label != "20k" && *label != "2k"
+        }));
     }
 }
