@@ -1,5 +1,7 @@
 use nih_plug::prelude::*;
+use nih_plug_vizia::ViziaState;
 use scd_core::KitPieceId;
+use std::sync::Arc;
 
 #[derive(Params)]
 pub struct SubKickParams {
@@ -58,7 +60,6 @@ pub struct ChannelStripParams {
     pub pitch: FloatParam,
     #[id = "punch"]
     pub punch: FloatParam,
-    // Send gains for Close, XY, Mono, Wide, Front MS, Room
     #[id = "send_close"]
     pub send_close: FloatParam,
     #[id = "send_xy"]
@@ -127,6 +128,9 @@ impl ChannelStripParams {
 
 #[derive(Params)]
 pub struct ScdParams {
+    #[persist = "editor-state"]
+    pub editor_state: Arc<ViziaState>,
+
     #[id = "master_gain"]
     pub master_gain: FloatParam,
 
@@ -167,6 +171,7 @@ pub struct ScdParams {
 impl Default for ScdParams {
     fn default() -> Self {
         Self {
+            editor_state: ViziaState::new(|| (1181, 611)),
             master_gain: FloatParam::new(
                 "Master Gain",
                 util::db_to_gain(0.0),
@@ -183,7 +188,6 @@ impl Default for ScdParams {
             fader_lock: BoolParam::new("Fader Lock", false),
             sub_kick: SubKickParams::default(),
 
-            // Default pans and punches from BUILD_DATA.js
             kick: ChannelStripParams::new("Kick", 0.0, 0.3),
             snare: ChannelStripParams::new("Snare", 0.0, 0.25),
             open_snare: ChannelStripParams::new("Open Snare", 0.0, 0.0),

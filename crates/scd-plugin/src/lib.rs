@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 pub mod dsp;
 pub mod params;
+pub mod ui;
 
 use dsp::{HiHatTracker, KickSine, VoicePool};
 pub use params::ScdParams;
@@ -67,6 +68,10 @@ impl Plugin for ScdPlugin {
 
     fn params(&self) -> Arc<dyn Params> {
         self.params.clone()
+    }
+
+    fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
+        ui::create(self.params.clone())
     }
 
     fn initialize(
