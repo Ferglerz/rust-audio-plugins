@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "pleasant-ui",
+    "Damian Channel Strip",
+    "Flattery",
+    "Tape Stop",
+]
+resolver = "2"

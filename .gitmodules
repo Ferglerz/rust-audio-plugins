@@ -1,0 +1,12 @@
+[submodule "Damian Channel Strip"]
+	path = Damian Channel Strip
+	url = https://github.com/Ferglerz/Damian-Channel-Strip.git
+[submodule "Flattery"]
+	path = Flattery
+	url = https://github.com/Ferglerz/Flattery.git
+[submodule "pleasant-ui"]
+	path = pleasant-ui
+	url = ./pleasant-ui
+[submodule "Tape Stop"]
+	path = Tape Stop
+	url = ./Tape Stop
