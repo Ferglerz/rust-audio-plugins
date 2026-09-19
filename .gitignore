@@ -1,0 +1,9 @@
+/target
+**/*.rs.bk
+*.scdpack
+*.wav
+*.flac
+*.hlac
+*.ch[0-9]*
+*.monolith
+.DS_Store
