@@ -1,0 +1,17 @@
+[package]
+name = "scd-plugin"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+scd-core = { path = "../scd-core" }
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+nih_plug_vizia = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+pleasant-ui = { path = "../../../audio-plugins/pleasant-ui" }
+atomic_float = "1"
+crossbeam-queue = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
