@@ -2,7 +2,13 @@
 members = [
     "pleasant-ui",
     "Damian Channel Strip",
+    "Damian Channel Strip/xtask",
     "Flattery",
+    "Flattery/xtask",
     "Tape Stop",
+    "Tape Stop/xtask",
 ]
 resolver = "2"
+
+[patch."https://github.com/RustAudio/baseview.git"]
+baseview = { path = "Damian Channel Strip/vendor/baseview" }
