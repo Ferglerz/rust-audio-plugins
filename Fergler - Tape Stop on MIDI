@@ -1,0 +1,359 @@
+desc: MIDI-Triggered Tape Stop (Retro UI + Mix)
+
+slider1: 0.5<0.01, 5, 0.01>Time to drop -1 Semitone (s)
+slider2: 50<5, 500, 1>Crossfade Time (ms)
+slider3: 1.0<0.1, 4.0, 0.01>Drop Curve (1=Linear)
+slider4: 0<-100, 100, 1>Stereo Divergence (%)
+slider5: 1<0, 31, 1>Override CC # (MSB)
+slider6: 0<0, 1, 1>Enable CC Override
+slider7: 0<0, 100, 1>Dry Mix (%)
+slider8: 100<0, 100, 1>Wet Mix (%)
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+@init
+// Event queue for sample-accurate MIDI handling
+ev_offset = 0; ev_type = 1000; ev_val = 2000;
+
+// Allocate memory safely 
+mask = 8388607; // 2^23 - 1 (8,388,608 samples, ~190s at 44.1kHz)
+bufL = 10000; bufR = bufL + 8388608; 
+scope_bufL = bufR + 8388608; scope_bufR = scope_bufL + 1024; 
+scope_sz = 1024; scope_wp = 0;
+
+// Pre-fault memory to prevent audio dropouts
+bufL[mask] = 0; bufR[mask] = 0; 
+
+wp = 0; rpL = 0; rpR = 0; stop_pos = 0;
+speedL = 1.0; speedR = 1.0; is_stopping = 0; 
+
+// Override state tracking
+prev_override = 0; msb_val = 127; lsb_val = 127;
+target_speed = 1.0; speed_smooth = 1.0;
+
+xfade_len = floor(slider2 * srate / 1000);
+xfade_pos = xfade_len; 
+
+@slider
+semi_drop = 1.0 - exp((-1.0 / 12.0) * log(2.0)); 
+stop_samples_base = (slider1 * srate) / semi_drop; 
+
+div_mult = slider4 / 200.0;
+stop_samples_L = stop_samples_base * max(0.1, (1.0 - div_mult));
+stop_samples_R = stop_samples_base * max(0.1, (1.0 + div_mult));
+max_stop_samples = max(stop_samples_L, stop_samples_R);
+
+xfade_len = floor(slider2 * srate / 1000);
+curve_val = slider3;
+cc_msb = floor(slider5); cc_lsb = cc_msb + 32; 
+override_mode = slider6;
+
+// Independent Dry and Wet Mix Calculation
+mix_dry = slider7 / 100.0;
+mix_wet = slider8 / 100.0;
+
+@block
+spl_cnt = 0; ev_count = 0; ev_idx = 0;
+
+override_mode != prev_override ? (
+    override_mode == 1 ? ( speed_smooth = speedL; ) : (
+        is_stopping = 0;
+        old_rpL = rpL; old_rpR = rpR; old_speedL = speedL; old_speedR = speedR;
+        rpL = wp; rpR = wp; xfade_pos = 0;
+    );
+    prev_override = override_mode;
+);
+
+while (midirecv(offset, msg1, msg2, msg3)) (
+    midisend(offset, msg1, msg2, msg3); 
+    msg1_status = msg1 & 0xF0;
+    
+    is_note_off = (msg1_status == 0x80) || ((msg1_status == 0x90) && (msg3 == 0));
+    is_note_on = (msg1_status == 0x90) && (msg3 > 0);
+    
+    is_note_off || is_note_on ? (
+        ev_offset[ev_count] = offset; ev_type[ev_count] = is_note_off ? 1 : 0; ev_count += 1;
+    );
+    
+    msg1_status == 0xB0 ? (
+        msg2 == cc_msb ? (
+            msb_val = msg3; full_val = (msb_val * 128) + lsb_val;
+            new_target = full_val >= 16256 ? 1.0 : full_val / 16383.0;
+            ev_offset[ev_count] = offset; ev_type[ev_count] = 2; ev_val[ev_count] = new_target; ev_count += 1;
+        ) : msg2 == cc_lsb ? (
+            lsb_val = msg3; full_val = (msb_val * 128) + lsb_val;
+            new_target = full_val >= 16256 ? 1.0 : full_val / 16383.0;
+            ev_offset[ev_count] = offset; ev_type[ev_count] = 2; ev_val[ev_count] = new_target; ev_count += 1;
+        );
+    );
+);
+
+@sample
+// Capture Dry Signal First
+dryL = spl0; dryR = spl1;
+
+bufL[wp] = dryL; bufR[wp] = dryR;
+
+while (ev_idx < ev_count && ev_offset[ev_idx] == spl_cnt) (
+    type = ev_type[ev_idx];
+    type == 1 && is_stopping == 1 && override_mode == 0 ? (
+        is_stopping = 0;
+        old_rpL = rpL; old_rpR = rpR; old_speedL = speedL; old_speedR = speedR;
+        rpL = wp; rpR = wp; xfade_pos = 0;
+    ) : type == 0 && override_mode == 0 ? (
+        is_stopping = 1;
+        old_rpL = rpL; old_rpR = rpR; old_speedL = speedL; old_speedR = speedR;
+        rpL = wp; rpR = wp; stop_pos = 0; xfade_pos = 0;
+    ) : type == 2 ? (
+        target_speed = ev_val[ev_idx];
+    );
+    ev_idx += 1;
+);
+spl_cnt += 1;
+
+override_mode == 1 ? (
+    speed_smooth += (target_speed - speed_smooth) * 0.005;
+    speedL = speed_smooth; speedR = speed_smooth;
+) : is_stopping == 1 ? (
+    progL = min(1.0, stop_pos / stop_samples_L); progR = min(1.0, stop_pos / stop_samples_R);
+    progL > 0 ? curvedL = exp(curve_val * log(progL)) : curvedL = 0;
+    progR > 0 ? curvedR = exp(curve_val * log(progR)) : curvedR = 0;
+    speedL = max(0, 1.0 - curvedL); speedR = max(0, 1.0 - curvedR);
+    stop_pos += 1; stop_pos > max_stop_samples ? stop_pos = max_stop_samples;
+) : (
+    speedL = speedR = 1.0; rpL = rpR = wp; 
+);
+
+rpL_i = floor(rpL); rpL_f = rpL - rpL_i; rpR_i = floor(rpR); rpR_f = rpR - rpR_i;
+
+// Hermite Interpolation (Inlined manually to avoid function overhead per sample)
+idx0_L = (rpL_i - 1) & mask; idx1_L = rpL_i & mask; idx2_L = (rpL_i + 1) & mask; idx3_L = (rpL_i + 2) & mask;
+y0_L = bufL[idx0_L]; y1_L = bufL[idx1_L]; y2_L = bufL[idx2_L]; y3_L = bufL[idx3_L];
+c1_L = 0.5 * (y2_L - y0_L); c2_L = y0_L - 2.5 * y1_L + 2.0 * y2_L - 0.5 * y3_L; c3_L = 0.5 * (y3_L - y0_L) + 1.5 * (y1_L - y2_L);
+new_L = ((c3_L * rpL_f + c2_L) * rpL_f + c1_L) * rpL_f + y1_L;
+
+idx0_R = (rpR_i - 1) & mask; idx1_R = rpR_i & mask; idx2_R = (rpR_i + 1) & mask; idx3_R = (rpR_i + 2) & mask;
+y0_R = bufR[idx0_R]; y1_R = bufR[idx1_R]; y2_R = bufR[idx2_R]; y3_R = bufR[idx3_R];
+c1_R = 0.5 * (y2_R - y0_R); c2_R = y0_R - 2.5 * y1_R + 2.0 * y2_R - 0.5 * y3_R; c3_R = 0.5 * (y3_R - y0_R) + 1.5 * (y1_R - y2_R);
+new_R = ((c3_R * rpR_f + c2_R) * rpR_f + c1_R) * rpR_f + y1_R;
+
+out_L = new_L; out_R = new_R;
+
+xfade_pos < xfade_len ? (
+    old_rpL_i = floor(old_rpL); old_rpL_f = old_rpL - old_rpL_i;
+    old_rpR_i = floor(old_rpR); old_rpR_f = old_rpR - old_rpR_i;
+    
+    idx0_oL = (old_rpL_i - 1) & mask; idx1_oL = old_rpL_i & mask; idx2_oL = (old_rpL_i + 1) & mask; idx3_oL = (old_rpL_i + 2) & mask;
+    y0_oL = bufL[idx0_oL]; y1_oL = bufL[idx1_oL]; y2_oL = bufL[idx2_oL]; y3_oL = bufL[idx3_oL];
+    c1_oL = 0.5 * (y2_oL - y0_oL); c2_oL = y0_oL - 2.5 * y1_oL + 2.0 * y2_oL - 0.5 * y3_oL; c3_oL = 0.5 * (y3_oL - y0_oL) + 1.5 * (y1_oL - y2_oL);
+    old_L = ((c3_oL * old_rpL_f + c2_oL) * old_rpL_f + c1_oL) * old_rpL_f + y1_oL;
+    
+    idx0_oR = (old_rpR_i - 1) & mask; idx1_oR = old_rpR_i & mask; idx2_oR = (old_rpR_i + 1) & mask; idx3_oR = (old_rpR_i + 2) & mask;
+    y0_oR = bufR[idx0_oR]; y1_oR = bufR[idx1_oR]; y2_oR = bufR[idx2_oR]; y3_oR = bufR[idx3_oR];
+    c1_oR = 0.5 * (y2_oR - y0_oR); c2_oR = y0_oR - 2.5 * y1_oR + 2.0 * y2_oR - 0.5 * y3_oR; c3_oR = 0.5 * (y3_oR - y0_oR) + 1.5 * (y1_oR - y2_oR);
+    old_R = ((c3_oR * old_rpR_f + c2_oR) * old_rpR_f + c1_oR) * old_rpR_f + y1_oR;
+
+    old_rpL += old_speedL; old_rpL >= 8388608 ? old_rpL -= 8388608; 
+    old_rpR += old_speedR; old_rpR >= 8388608 ? old_rpR -= 8388608; 
+    
+    fade_in = xfade_pos / xfade_len; fade_in = fade_in * fade_in * (3 - 2 * fade_in); fade_out = 1.0 - fade_in;
+    out_L = (old_L * fade_out) + (new_L * fade_in); out_R = (old_R * fade_out) + (new_R * fade_in);
+    xfade_pos += 1;
+);
+
+// Apply Dry and Wet Mix
+spl0 = (dryL * mix_dry) + (out_L * mix_wet);
+spl1 = (dryR * mix_dry) + (out_R * mix_wet);
+
+// Write final mixed signal to the oscilloscope
+scope_bufL[scope_wp] = spl0; scope_bufR[scope_wp] = spl1;
+scope_wp = (scope_wp + 1) % scope_sz;
+
+wp = (wp + 1) & mask;
+rpL += speedL; rpL >= 8388608 ? rpL -= 8388608; 
+rpR += speedR; rpR >= 8388608 ? rpR -= 8388608; 
+
+
+@gfx 450 360
+
+// Initialize Fonts
+gfx_setfont(1, "Courier New", 14, 'b');
+gfx_setfont(2, "Courier New", 11, 'b');
+gfx_setfont(3, "Courier", 22, 'b');
+
+// Colors
+col_bg_r=0.04; col_bg_g=0.03; col_bg_b=0.06;
+col_pan_r=0.08; col_pan_g=0.06; col_pan_b=0.10;
+col_L_r=0.0; col_L_g=0.9; col_L_b=0.9;   // Neon Cyan
+col_R_r=1.0; col_R_g=0.1; col_R_b=0.5;   // Neon Pink
+col_CC_r=0.6; col_CC_g=1.0; col_CC_b=0.1; // Electric Yellow
+
+pad = 20; gw = gfx_w - pad*2; graph_h = 60;
+graph_y = pad + 25;
+tele_y = graph_y + graph_h + 25;
+scope_y = tele_y + 35;
+scope_h = gfx_h - scope_y - pad - 40; 
+step_x = gw / scope_sz;
+
+// --- GFX HELPER FUNCTIONS ---
+function draw_panel(x, y, w, h, title_str) (
+    gfx_set(col_pan_r, col_pan_g, col_pan_b, 1);
+    gfx_rect(x, y, w, h);
+    gfx_set(0.2, 0.15, 0.3, 1);
+    gfx_rect(x, y, w, h, 0);
+    gfx_set(0.15, 0.1, 0.2, 0.5);
+    gx = x + 20; while (gx < x+w) ( gfx_line(gx, y, gx, y+h); gx+=20; );
+    gy = y + 15; while (gy < y+h) ( gfx_line(x, gy, x+w, gy); gy+=15; );
+    gfx_set(0.4, 0.3, 0.5, 1);
+    gfx_line(x, y, x+5, y); gfx_line(x, y, x, y+5);
+    gfx_line(x+w-5, y, x+w, y); gfx_line(x+w, y, x+w, y+5);
+    gfx_line(x, y+h-5, x, y+h); gfx_line(x, y+h, x+5, y+h);
+    gfx_line(x+w-5, y+h, x+w, y+h); gfx_line(x+w, y+h-5, x+w, y+h);
+    gfx_setfont(2);
+    gfx_set(0.4, 0.4, 0.55, 1);
+    gfx_x = x + 6; gfx_y = y - 14;
+    gfx_drawstr(title_str);
+);
+
+function draw_glow_line(x1, y1, x2, y2, r, g, b, alpha) (
+    gfx_set(r, g, b, alpha * 0.25);
+    gfx_line(x1, y1-1, x2, y2-1);
+    gfx_line(x1, y1+1, x2, y2+1);
+    gfx_set(r, g, b, alpha);
+    gfx_line(x1, y1, x2, y2);
+);
+
+function draw_curve(stop_s, r, g, b, active_speed) (
+    gx = 0;
+    while(gx < gw) (
+        time_ratio = gx / gw;
+        norm_x = time_ratio * (max_stop_samples / stop_s);
+        norm_x > 1.0 ? norm_x = 1.0;
+        norm_x > 0 ? curved_y = exp(curve_val * log(norm_x)) : curved_y = 0;
+        
+        y_pos = graph_y + (curved_y * graph_h);
+        next_ratio = (gx+2) / gw;
+        next_norm = next_ratio * (max_stop_samples / stop_s);
+        next_norm > 1.0 ? next_norm = 1.0;
+        next_norm > 0 ? next_c_y = exp(curve_val * log(next_norm)) : next_c_y = 0;
+        next_pos = graph_y + (next_c_y * graph_h);
+        
+        draw_glow_line(pad+gx, y_pos, pad+gx+2, next_pos, r, g, b, 0.6);
+        gx += 2; 
+    );
+    
+    curr_x = pad + (is_stopping ? (stop_pos / max_stop_samples) * gw : 0);
+    curr_y = graph_y + (1.0 - active_speed) * graph_h;
+    
+    gfx_set(r, g, b, 1.0);
+    gfx_circle(curr_x, curr_y, 4, 1);
+    gfx_line(curr_x, graph_y, curr_x, graph_y+graph_h);
+);
+
+function draw_scope(buf, r, g, b) (
+    idx = 0;
+    while (idx < scope_sz - 2) (
+        read_pos = (scope_wp + idx) % scope_sz;
+        next_pos = (scope_wp + idx + 2) % scope_sz;
+        
+        val1 = buf[read_pos]; val1 > 1.0 ? val1 = 1.0; val1 < -1.0 ? val1 = -1.0;
+        val2 = buf[next_pos]; val2 > 1.0 ? val2 = 1.0; val2 < -1.0 ? val2 = -1.0;
+        
+        y1 = scope_y + scope_h/2 - (val1 * scope_h/2 * 0.85);
+        y2 = scope_y + scope_h/2 - (val2 * scope_h/2 * 0.85);
+        
+        draw_glow_line(pad + idx * step_x, y1, pad + (idx+2) * step_x, y2, r, g, b, 0.85);
+        idx += 2; 
+    );
+);
+
+// --- MAIN RENDERING ---
+gfx_set(col_bg_r, col_bg_g, col_bg_b, 1);
+gfx_rect(0, 0, gfx_w, gfx_h);
+
+// --- HEADER ---
+gfx_setfont(3);
+gfx_set(0.8, 0.8, 0.9, 1);
+gfx_x = pad; gfx_y = pad - 5;
+gfx_drawstr("MAGNETIC TAPE BRAKE ");
+gfx_set(col_R_r, col_R_g, col_R_b, 1);
+gfx_drawstr("// SYS");
+
+// --- 1. TRAJECTORY MATRIX ---
+draw_panel(pad, graph_y, gw, graph_h, "TRAJECTORY MATRIX");
+
+override_mode == 1 ? (
+    t_y = graph_y + (1.0 - target_speed) * graph_h;
+    gfx_set(0.3, 0.3, 0.4, 0.8);
+    gfx_line(pad, t_y, pad+gw, t_y);
+    curr_y = graph_y + (1.0 - speed_smooth) * graph_h;
+    draw_glow_line(pad, curr_y, pad+gw, curr_y, col_CC_r, col_CC_g, col_CC_b, 1.0);
+) : (
+    draw_curve(stop_samples_R, col_R_r, col_R_g, col_R_b, speedR);
+    draw_curve(stop_samples_L, col_L_r, col_L_g, col_L_b, speedL);
+);
+
+// --- 2. TELEMETRY STATUS ---
+gfx_setfont(1);
+
+override_mode == 1 ? (
+    gfx_set(col_CC_r, col_CC_g, col_CC_b, 1);
+    gfx_x = pad; gfx_y = tele_y; gfx_drawstr("> CC OVERRIDE ACTIVE");
+) : is_stopping ? (
+    gfx_set(1.0, 0.3, 0.3, 1);
+    gfx_x = pad; gfx_y = tele_y;
+    (speedL > 0 || speedR > 0) ? gfx_drawstr("> BRAKING ENGAGED...") : gfx_drawstr("> TAPE STOPPED.");
+) : (
+    gfx_set(0.4, 0.8, 0.6, 1);
+    gfx_x = pad; gfx_y = tele_y; gfx_drawstr("> NORMAL PLAYBACK");
+);
+
+// Pitch & Mix Readout
+gfx_set(0.8, 0.8, 0.9, 1);
+speedL > 0 ? semiL = 12.0 * (log(speedL) / log(2.0)) : semiL = -99.9;
+speedR > 0 ? semiR = 12.0 * (log(speedR) / log(2.0)) : semiR = -99.9;
+
+override_mode == 1 ? (
+    speed_smooth == 0 ? sprintf(#speed_str, "[D: %d%% | W: %d%%] [PITCH: -INF]", slider7, slider8) : sprintf(#speed_str, "[D: %d%% | W: %d%%] [PITCH: %.1f st]", slider7, slider8, semiL);
+) : (
+    sprintf(#speed_str, "[D: %d%% | W: %d%%] [PITCH -> L: %.1f st | R: %.1f st]", slider7, slider8, semiL, semiR);
+    speedL == 0 ? sprintf(#speed_str, "[D: %d%% | W: %d%%] [PITCH -> L: -INF | R: %.1f st]", slider7, slider8, semiR);
+    speedR == 0 ? sprintf(#speed_str, "[D: %d%% | W: %d%%] [PITCH -> L: %.1f st | R: -INF]", slider7, slider8, semiL);
+    (speedL == 0 && speedR == 0) ? sprintf(#speed_str, "[D: %d%% | W: %d%%] [PITCH -> L: -INF | R: -INF]", slider7, slider8);
+);
+
+gfx_measurestr(#speed_str, str_w, str_h);
+gfx_x = gfx_w - pad - str_w;
+gfx_drawstr(#speed_str);
+
+// --- 3. WAVEFORM MONITOR ---
+draw_panel(pad, scope_y, gw, scope_h, "WAVEFORM MONITOR");
+
+gfx_set(0.3, 0.2, 0.4, 0.8);
+gfx_line(pad, scope_y + scope_h/2, pad+gw, scope_y + scope_h/2);
+
+draw_scope(scope_bufR, col_R_r, col_R_g, col_R_b); // Right
+draw_scope(scope_bufL, col_L_r, col_L_g, col_L_b); // Left
+
+// --- 4. TERMINAL INSTRUCTIONS ---
+gfx_setfont(2);
+gfx_set(0.5, 0.5, 0.6, 1); 
+instr_y = gfx_h - pad - 18;
+
+#msg1 = "AUTO: NOTE-ON [START] // NOTE-OFF OR VEL=0 [RESTORE]";
+gfx_x = pad; gfx_y = instr_y; gfx_drawstr(#msg1);
+
+sprintf(#msg2, "OVR: CC %d(M)/%d(L)", cc_msb, cc_lsb);
+gfx_measurestr(#msg2, s2w, s2h);
+gfx_x = gfx_w - pad - s2w; gfx_drawstr(#msg2);
+
+// --- SCANLINES OVERLAY ---
+gfx_set(0.0, 0.0, 0.0, 0.35);
+sy = 0;
+while (sy < gfx_h) (
+    gfx_line(0, sy, gfx_w, sy);
+    sy += 3;
+);
