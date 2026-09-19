@@ -220,3 +220,28 @@ impl Plugin for ScdPlugin {
         ProcessStatus::Normal
     }
 }
+
+impl ClapPlugin for ScdPlugin {
+    const CLAP_ID: &'static str = "com.soundchef.drums";
+    const CLAP_DESCRIPTION: Option<&'static str> = Some("SoundChef Drums sampler plugin");
+    const CLAP_MANUAL_URL: Option<&'static str> = None;
+    const CLAP_SUPPORT_URL: Option<&'static str> = None;
+    const CLAP_FEATURES: &'static [ClapFeature] = &[
+        ClapFeature::Instrument,
+        ClapFeature::Drum,
+        ClapFeature::Sampler,
+        ClapFeature::Stereo,
+    ];
+}
+
+impl Vst3Plugin for ScdPlugin {
+    const VST3_CLASS_ID: [u8; 16] = *b"SoundChefDrumsPl";
+    const VST3_SUBCATEGORIES: &'static [Vst3SubCategory] = &[
+        Vst3SubCategory::Instrument,
+        Vst3SubCategory::Drum,
+        Vst3SubCategory::Sampler,
+    ];
+}
+
+nih_export_clap!(ScdPlugin);
+nih_export_vst3!(ScdPlugin);
