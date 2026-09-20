@@ -640,6 +640,7 @@ pub struct CompSettings {
     pub pse: PseSettings,
     pub dry: f64,
     pub wet: f64,
+    pub output_gain: f64,
 }
 impl Default for CompSettings {
     fn default() -> Self {
@@ -656,6 +657,7 @@ impl Default for CompSettings {
             pse: PseSettings::default(),
             dry: 0.0,
             wet: 1.0,
+            output_gain: 0.0,
         }
     }
 }

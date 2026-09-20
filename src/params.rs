@@ -80,6 +80,8 @@ pub struct StripParams {
     pub dry: FloatParam,
     #[id = "wet"]
     pub wet: FloatParam,
+    #[id = "output_gain"]
+    pub output_gain: FloatParam,
 }
 impl Default for StripParams {
     fn default() -> Self {
@@ -287,6 +289,22 @@ impl Default for StripParams {
                 .with_smoother(SmoothingStyle::Linear(20.0)),
             dry: param("Dry level", 0.0, 0.0, 100.0, " %"),
             wet: param("Wet level", 100.0, 0.0, 100.0, " %"),
+            output_gain: param("Output gain", 0.0, -12.0, 12.0, " dB")
+                .with_step_size(0.1)
+                .with_smoother(SmoothingStyle::Linear(20.0))
+                .with_value_to_string(Arc::new(|v| {
+                    if v.abs() < 0.05 {
+                        "0.0 dB".to_string()
+                    } else {
+                        format!("{:+0.1} dB", v)
+                    }
+                }))
+                .with_string_to_value(Arc::new(|text| {
+                    let text = text.trim();
+                    let stripped = text.trim_end_matches("dB").trim();
+                    let stripped = stripped.strip_prefix('+').unwrap_or(stripped);
+                    stripped.parse::<f32>().ok().filter(|v| v.is_finite())
+                })),
         }
     }
 }
@@ -397,6 +415,31 @@ mod tests {
         assert_eq!(
             params.pse_depth.string_to_normalized_value("12 dB"),
             Some(params.pse_depth.preview_normalized(12.0))
+        );
+    }
+
+    #[test]
+    fn output_gain_range_and_formatting() {
+        let params = StripParams::default();
+        assert_eq!(params.output_gain.value(), 0.0);
+        let s0 = params.output_gain.normalized_value_to_string(0.5, true);
+        assert_eq!(s0, "0.0 dB");
+        let s_pos = params
+            .output_gain
+            .normalized_value_to_string(params.output_gain.preview_normalized(6.0), true);
+        assert_eq!(s_pos, "+6.0 dB");
+        let s_neg = params
+            .output_gain
+            .normalized_value_to_string(params.output_gain.preview_normalized(-6.0), true);
+        assert_eq!(s_neg, "-6.0 dB");
+
+        assert_eq!(
+            params.output_gain.string_to_normalized_value("+3.5 dB"),
+            Some(params.output_gain.preview_normalized(3.5))
+        );
+        assert_eq!(
+            params.output_gain.string_to_normalized_value("-10"),
+            Some(params.output_gain.preview_normalized(-10.0))
         );
     }
 }

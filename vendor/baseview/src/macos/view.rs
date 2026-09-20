@@ -131,10 +131,7 @@ unsafe fn create_view_class() -> &'static Class {
         sel!(acceptsFirstResponder),
         property_yes as extern "C" fn(&Object, Sel) -> BOOL,
     );
-    class.add_method(
-        sel!(canBecomeKeyView),
-        property_yes as extern "C" fn(&Object, Sel) -> BOOL,
-    );
+    class.add_method(sel!(canBecomeKeyView), property_yes as extern "C" fn(&Object, Sel) -> BOOL);
     class.add_method(
         sel!(needsPanelToBecomeKey),
         property_yes as extern "C" fn(&Object, Sel) -> BOOL,

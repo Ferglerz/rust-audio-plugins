@@ -123,6 +123,7 @@ impl Plugin for Damian {
                 },
                 dry: self.params.dry.smoothed.next() as f64 / 100.0,
                 wet: self.params.wet.smoothed.next() as f64 / 100.0,
+                output_gain: self.params.output_gain.smoothed.next() as f64,
             };
             let out = self.engine.tick(
                 x,

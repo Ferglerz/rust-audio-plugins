@@ -342,11 +342,11 @@ impl<P: Vst3Plugin> IPlugView for WrapperView<P> {
         _key_code: i16,
         _modifiers: i16,
     ) -> tresult {
-        // Advertise that this view handles keyboard/text input. Hosts that probe
-        // IPlugView (Cubase, Live, FL) often withhold keys when this returns
-        // kNotImplemented. Actual characters still arrive through the native
-        // NSView/HWND; returning kResultTrue tells the host not to steal them.
-        kResultOk
+        // Implemented (not kNotImplemented) so hosts know we accept keyboard
+        // protocol, but kResultFalse means we did not consume the IPlugView
+        // event. REAPER's "send all keyboard input" otherwise treats True as
+        // handled and never delivers NSEvent/WM_CHAR to the editor view.
+        kResultFalse
     }
 
     unsafe fn on_key_up(
@@ -355,7 +355,7 @@ impl<P: Vst3Plugin> IPlugView for WrapperView<P> {
         _key_code: i16,
         _modifiers: i16,
     ) -> tresult {
-        kResultOk
+        kResultFalse
     }
 
     unsafe fn get_size(&self, size: *mut ViewRect) -> tresult {

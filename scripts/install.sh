@@ -40,9 +40,10 @@ mkdir -p "$TARGET_DIR"
 echo "Removing previous install at $INSTALLED"
 rm -rf "$INSTALLED"
 
-echo "Installing $BUNDLE -> $TARGET_DIR/"
-cp -R "$BUNDLE" "$TARGET_DIR/"
+echo "Installing $BUNDLE -> $INSTALLED"
+ditto "$BUNDLE" "$INSTALLED"
 xattr -cr "$INSTALLED" 2>/dev/null || true
+codesign --force --deep -s - "$INSTALLED"
 
 INST_BIN="$INSTALLED/Contents/MacOS/Damian Channel Strip"
 echo "Installed binary:"

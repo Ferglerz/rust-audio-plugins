@@ -6,9 +6,6 @@ authors = ["Fergler"]
 license = "GPL-3.0-or-later"
 description = "Damian Birdsey signature dynamic EQ and vocal channel strip"
 
-[workspace]
-members = ["xtask"]
-
 [lib]
 crate-type = ["cdylib", "lib"]
 

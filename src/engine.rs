@@ -7,6 +7,7 @@ use crate::{
 };
 use atomic_float::AtomicF32;
 use crossbeam_queue::ArrayQueue;
+use pleasant_ui::spectrum::{peak_hold, SPECTRUM_FALL_DB_PER_FRAME};
 use rustfft::{num_complex::Complex, Fft, FftPlanner};
 use std::sync::{
     atomic::{AtomicBool, AtomicU32, Ordering},
@@ -580,6 +581,10 @@ impl Engine {
             (pre_gr, pre_sc)
         };
 
+        let out_gain = 10.0_f64.powf(settings.output_gain / 20.0);
+        for i in 0..2 {
+            x[i] *= out_gain;
+        }
         for i in 0..2 {
             x[i] += self.bypass_mix * (dry[i] - x[i]);
             if let Some(s) = solo_sample {
@@ -640,7 +645,10 @@ impl Engine {
                 }
                 let db = (20.0 * mag.max(0.0000316).log10()).max(-90.0);
                 let old = self.shared.spectrum[i].load(Ordering::Relaxed);
-                self.shared.spectrum[i].store(db.max(old - 3.0), Ordering::Relaxed);
+                self.shared.spectrum[i].store(
+                    peak_hold(old, db, SPECTRUM_FALL_DB_PER_FRAME),
+                    Ordering::Relaxed,
+                );
             }
             self.shared
                 .input

@@ -19,8 +19,9 @@ use nih_plug_vizia::{
     ViziaTheming,
 };
 use pleasant_ui::{
+    spectrum::smooth_bins,
     theme::{rgb, BG, COLORS, GOLD, LINE, MUTED, PANEL, TEAL, TEXT},
-    Draw, ValueEdit, FONT_JETBRAINS_MONO,
+    ButtonAnim, Draw, ValueEdit, FONT_JETBRAINS_MONO,
 };
 use std::{
     cell::Cell,
@@ -38,6 +39,8 @@ const DYN_W: f32 = 130.0;
 const PSE_W: f32 = 130.0;
 const MODULE_Y: f32 = 92.0;
 const MODULE_H: f32 = 500.0;
+const MODULE_HEADER_H: f32 = 44.0;
+const MODULE_HEADER_BOTTOM: f32 = MODULE_Y + MODULE_HEADER_H;
 const MODULE_HEADER_CTRL: f32 = 24.0;
 const EQ_PAGE_1: usize = 0;
 const EQ_PAGE_2: usize = 1;
@@ -46,15 +49,19 @@ const EQ_PAGE_SC: usize = 3;
 const EQ_W: f32 = UI_W - 2.0 * MARGIN - 2.0 * GAP - DYN_W - PSE_W;
 const FOOTER_LINE_Y: f32 = 608.0;
 const FOOTER_BTN_Y: f32 = 616.0;
+const EQ_GRAPH_PAD_LEFT: f32 = 54.0;
+const EQ_GRAPH_PAD_RIGHT: f32 = 26.0;
 #[cfg(test)]
-const GX: f32 = MARGIN + PSE_W + GAP + 44.0;
-const GY: f32 = 136.0;
+const GX: f32 = MARGIN + PSE_W + GAP + EQ_GRAPH_PAD_LEFT;
+const GY: f32 = 156.0;
 #[cfg(test)]
-const GW: f32 = EQ_W - 60.0;
-const GH: f32 = 404.0;
+const GW: f32 = EQ_W - EQ_GRAPH_PAD_LEFT - EQ_GRAPH_PAD_RIGHT;
+const GH: f32 = 384.0;
 const GRAPH_BOTTOM: f32 = GY + GH;
-const METER_TOP: f32 = GY + 16.0;
-const METER_H: f32 = GRAPH_BOTTOM - METER_TOP;
+// Headroom under the title divider for the full knee (half-handle 8 + max offset 55).
+const METER_TOP: f32 = MODULE_HEADER_BOTTOM + 72.0;
+const METER_H: f32 = GRAPH_BOTTOM - 16.0 - METER_TOP;
+const KNEE_METER_OVERHANG: f32 = 4.0;
 const FREQ_AXIS: [(f64, &str); 8] = [
     (50.0, "50"),
     (100.0, "100"),
@@ -65,12 +72,12 @@ const FREQ_AXIS: [(f64, &str); 8] = [
     (5000.0, "5k"),
     (10000.0, "10k"),
 ];
-const THEME_BUTTON: (f32, f32, f32, f32) = (UI_W - MARGIN - 116.0, FOOTER_BTN_Y, 116.0, 28.0);
+const THEME_BUTTON: (f32, f32, f32, f32) = (32.0, FOOTER_BTN_Y, 88.0, 28.0);
 pub const EQ2_ID_BASE: u64 = 10_000;
 pub const SC_EQ_ID_BASE: u64 = 20_000;
 const GRAPH_CLIP_W: f32 = EQ_W;
 const PSE_BLUE: C = rgb(108, 176, 242);
-const PSE_CONTROLS_KNOBS: [usize; 4] = [7, 8, 2, 10];
+const PSE_CONTROLS_KNOBS: [usize; 3] = [8, 2, 10];
 fn band_display_num(id: u64) -> u64 {
     if id >= SC_EQ_ID_BASE {
         id - SC_EQ_ID_BASE
@@ -96,7 +103,7 @@ fn tick_page_anim(progress: &Cell<f32>, target: f32, dt: f32) {
     };
     progress.set(next);
 }
-const PROCESS_BUTTON: (f32, f32, f32, f32) = (32.0, FOOTER_BTN_Y, 152.0, 28.0);
+const PROCESS_BUTTON: (f32, f32, f32, f32) = (128.0, FOOTER_BTN_Y, 152.0, 28.0);
 fn processing_menu_rect(resolution: bool) -> (f32, f32, f32, f32) {
     let r = if resolution {
         resolution_button_rect()
@@ -107,9 +114,16 @@ fn processing_menu_rect(resolution: bool) -> (f32, f32, f32, f32) {
     (r.0, r.1 - height, r.2, height)
 }
 fn resolution_button_rect() -> (f32, f32, f32, f32) {
-    (192.0, FOOTER_BTN_Y, 104.0, 28.0)
+    (288.0, FOOTER_BTN_Y, 104.0, 28.0)
 }
-const SCALES: [f64; 6] = [12.0, 24.0, 36.0, 48.0, 60.0, 72.0];
+fn output_gain_rect() -> (f32, f32, f32, f32) {
+    (UI_W - MARGIN - 130.0, FOOTER_BTN_Y, 130.0, 28.0)
+}
+fn output_gain_value_rect() -> (f32, f32, f32, f32) {
+    let r = output_gain_rect();
+    (r.0 + r.2 - 62.0, r.1 + 2.0, 56.0, 16.0)
+}
+const SCALES: [f64; 7] = [6.0, 12.0, 24.0, 36.0, 48.0, 60.0, 72.0];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum DynPage {
@@ -129,6 +143,67 @@ enum ValueTarget {
     // Frequency, gain, Q, threshold, ratio, attack, release, range.
     Band(usize),
     Lift(usize),
+}
+fn typed_char(code: Code, shift: bool) -> Option<char> {
+    Some(match code {
+        Code::Digit0 | Code::Numpad0 => '0',
+        Code::Digit1 | Code::Numpad1 => '1',
+        Code::Digit2 | Code::Numpad2 => '2',
+        Code::Digit3 | Code::Numpad3 => '3',
+        Code::Digit4 | Code::Numpad4 => '4',
+        Code::Digit5 | Code::Numpad5 => '5',
+        Code::Digit6 | Code::Numpad6 => '6',
+        Code::Digit7 | Code::Numpad7 => '7',
+        Code::Digit8 | Code::Numpad8 => '8',
+        Code::Digit9 | Code::Numpad9 => '9',
+        Code::Period | Code::NumpadDecimal => '.',
+        Code::Comma => ',',
+        Code::Minus | Code::NumpadSubtract => '-',
+        Code::Equal => {
+            if shift {
+                '+'
+            } else {
+                '='
+            }
+        }
+        Code::NumpadAdd => '+',
+        Code::Slash | Code::NumpadDivide => '/',
+        Code::Space => ' ',
+        Code::KeyA => letter(shift, 'a'),
+        Code::KeyB => letter(shift, 'b'),
+        Code::KeyC => letter(shift, 'c'),
+        Code::KeyD => letter(shift, 'd'),
+        Code::KeyE => letter(shift, 'e'),
+        Code::KeyF => letter(shift, 'f'),
+        Code::KeyG => letter(shift, 'g'),
+        Code::KeyH => letter(shift, 'h'),
+        Code::KeyI => letter(shift, 'i'),
+        Code::KeyJ => letter(shift, 'j'),
+        Code::KeyK => letter(shift, 'k'),
+        Code::KeyL => letter(shift, 'l'),
+        Code::KeyM => letter(shift, 'm'),
+        Code::KeyN => letter(shift, 'n'),
+        Code::KeyO => letter(shift, 'o'),
+        Code::KeyP => letter(shift, 'p'),
+        Code::KeyQ => letter(shift, 'q'),
+        Code::KeyR => letter(shift, 'r'),
+        Code::KeyS => letter(shift, 's'),
+        Code::KeyT => letter(shift, 't'),
+        Code::KeyU => letter(shift, 'u'),
+        Code::KeyV => letter(shift, 'v'),
+        Code::KeyW => letter(shift, 'w'),
+        Code::KeyX => letter(shift, 'x'),
+        Code::KeyY => letter(shift, 'y'),
+        Code::KeyZ => letter(shift, 'z'),
+        _ => return None,
+    })
+}
+fn letter(shift: bool, c: char) -> char {
+    if shift {
+        c.to_ascii_uppercase()
+    } else {
+        c
+    }
 }
 fn parse_value(text: &str, target: ValueTarget) -> Option<f64> {
     let text = text.trim().to_ascii_lowercase();
@@ -266,12 +341,49 @@ fn draw_knee_zone(
         );
     }
 }
+fn draw_gr_depth_handle(d: &mut Draw, gx_m: f32, gw_m: f32, depth_y: f32, color: C) {
+    let tw = 8.0;
+    let th = 8.0;
+    let y_bot = depth_y + 3.0;
+    let y_top = y_bot - th;
+
+    // Left right-triangle (vertical outer edge, horizontal bottom, hypotenuse facing inward):
+    d.fill_poly(
+        &[
+            (gx_m - tw * 0.5, y_top),
+            (gx_m - tw * 0.5, y_bot),
+            (gx_m + tw * 0.5, y_bot),
+        ],
+        color,
+    );
+
+    // Right right-triangle (vertical outer edge, horizontal bottom, hypotenuse facing inward):
+    d.fill_poly(
+        &[
+            (gx_m + gw_m + tw * 0.5, y_top),
+            (gx_m + gw_m + tw * 0.5, y_bot),
+            (gx_m + gw_m - tw * 0.5, y_bot),
+        ],
+        color,
+    );
+
+    // Thin 3px line connecting them at the bottom of the triangles:
+    d.rect(gx_m - tw * 0.5, depth_y, gw_m + tw, 3.0, color);
+
+    // Horizontal rule within the 3px area to suggest grabability:
+    let grip = if color == TEXT { PANEL } else { BG };
+    d.line(
+        gx_m - 2.0,
+        depth_y + 1.5,
+        gx_m + gw_m + 2.0,
+        depth_y + 1.5,
+        grip,
+        1.0,
+    );
+}
 const DYN_PILL_R: f32 = 12.0;
 const NODE_INNER_R: f32 = 7.5;
 const NODE_HIT_R: f32 = 16.0;
-const THRESH_LINE_H: f32 = 2.0;
-const THRESH_LINE_EXTRA: f32 = 8.0;
-const THRESH_HIT_PAD: f32 = 4.0;
 fn overflow_reduction(range: f64, uncapped: f64) -> Option<f64> {
     if range >= 0.0 {
         (uncapped > range + 0.05).then_some(uncapped)
@@ -285,9 +397,6 @@ fn capped_reduction(range: f64, uncapped: f64) -> f64 {
     } else {
         uncapped.clamp(range, 0.0)
     }
-}
-fn y_to_db(y: f32, range: f64) -> f64 {
-    (0.5 - (y - GY) as f64 / GH as f64) * 2.0 * range
 }
 fn uncapped_for(id: u64, meters: &[(u64, f32)]) -> Option<f64> {
     meters
@@ -306,7 +415,7 @@ fn hover_preview_text_y(circle_y: f32) -> f32 {
     circle_y + 4.0
 }
 fn module_header_mid() -> f32 {
-    MODULE_Y + (GY - MODULE_Y) * 0.5
+    MODULE_Y + MODULE_HEADER_H * 0.5
 }
 fn module_header_ctrl_y() -> f32 {
     module_header_mid() - MODULE_HEADER_CTRL * 0.5
@@ -314,11 +423,15 @@ fn module_header_ctrl_y() -> f32 {
 fn module_title_y(size: f32) -> f32 {
     module_header_mid() + size * 0.35
 }
-fn module_footer_ctrl_y() -> f32 {
-    MODULE_Y + MODULE_H - MODULE_HEADER_CTRL - 4.0
-}
 fn meter_value_y() -> f32 {
     GRAPH_BOTTOM + 14.0
+}
+fn clamp_knee_to_meter(x: f32, y: f32, w: f32, h: f32) -> (f32, f32, f32, f32) {
+    let min_y = METER_TOP - KNEE_METER_OVERHANG;
+    let max_bottom = METER_TOP + METER_H + KNEE_METER_OVERHANG;
+    let top = y.max(min_y);
+    let bottom = (y + h).min(max_bottom);
+    (x, top, w, (bottom - top).max(0.0))
 }
 fn axis_label_y(line_y: f32, size: f32) -> f32 {
     line_y + size * 0.35
@@ -335,6 +448,233 @@ fn draw_hover_preview(d: &mut Draw, x: f32, y: f32, gx: f32, gw: f32, label: &st
         x + 12.0
     };
     d.text(text_x, hover_preview_text_y(y), label, 12.0, MUTED);
+}
+fn draw_eq_preview_influence(
+    d: &mut Draw,
+    shape: Shape,
+    freq: f64,
+    q: f64,
+    points: &[(f32, f32)],
+    graph_db: f64,
+    graph: (f32, f32),
+) {
+    let (gx, gw) = graph;
+    let baseline_y = db_y(0.0, graph_db);
+    let fill_a = 0.08;
+    let stroke_a = 0.40;
+    let color = MUTED;
+    let c_trans = C {
+        r: color.r,
+        g: color.g,
+        b: color.b,
+        a: 0.0,
+    };
+    let c_solid = C {
+        r: color.r,
+        g: color.g,
+        b: color.b,
+        a: fill_a,
+    };
+    let s_trans = C {
+        r: color.r,
+        g: color.g,
+        b: color.b,
+        a: 0.0,
+    };
+    let s_solid = C {
+        r: color.r,
+        g: color.g,
+        b: color.b,
+        a: stroke_a,
+    };
+    match shape {
+        Shape::Bell | Shape::BandPass | Shape::Notch => {
+            let oct_span = (2.0 / q.clamp(0.15, 18.0)).clamp(0.5, 4.0);
+            let f_left = (freq * 2.0_f64.powf(-oct_span)).max(20.0);
+            let f_right = (freq * 2.0_f64.powf(oct_span)).min(20000.0);
+            let x_left = freq_x_at(f_left, gx, gw);
+            let x_center = freq_x_at(freq, gx, gw);
+            let x_right = freq_x_at(f_right, gx, gw);
+            let center_idx = points
+                .iter()
+                .position(|(x, _)| *x >= x_center)
+                .unwrap_or(points.len() / 2);
+            let left_pts = &points[..=center_idx];
+            let right_pts = &points[center_idx..];
+            if fill_a > 0.0 {
+                d.area_gradient_span(left_pts, baseline_y, x_left, x_center, c_trans, c_solid);
+                d.area_gradient_span(right_pts, baseline_y, x_center, x_right, c_solid, c_trans);
+            }
+            d.poly_gradient_span(left_pts, x_left, x_center, s_trans, s_solid, 1.4);
+            d.poly_gradient_span(right_pts, x_center, x_right, s_solid, s_trans, 1.4);
+        }
+        Shape::HighShelf | Shape::HighCut => {
+            let oct_span = (1.5 / q.clamp(0.15, 18.0)).clamp(0.5, 3.0);
+            let f_fade_start = (freq * 2.0_f64.powf(-oct_span)).max(20.0);
+            let f_fade_end = (freq * 2.0_f64.powf(oct_span * 0.5)).min(20000.0);
+            let x_start = freq_x_at(f_fade_start, gx, gw);
+            let x_end = freq_x_at(f_fade_end, gx, gw);
+            if fill_a > 0.0 {
+                d.area_gradient_span(points, baseline_y, x_start, x_end, c_trans, c_solid);
+            }
+            d.poly_gradient_span(points, x_start, x_end, s_trans, s_solid, 1.4);
+        }
+        Shape::LowShelf | Shape::LowCut => {
+            let oct_span = (1.5 / q.clamp(0.15, 18.0)).clamp(0.5, 3.0);
+            let f_fade_start = (freq * 2.0_f64.powf(-oct_span * 0.5)).max(20.0);
+            let f_fade_end = (freq * 2.0_f64.powf(oct_span)).min(20000.0);
+            let x_start = freq_x_at(f_fade_start, gx, gw);
+            let x_end = freq_x_at(f_fade_end, gx, gw);
+            if fill_a > 0.0 {
+                d.area_gradient_span(points, baseline_y, x_start, x_end, c_solid, c_trans);
+            }
+            d.poly_gradient_span(points, x_start, x_end, s_solid, s_trans, 1.4);
+        }
+    }
+}
+fn solo_shade_rects(
+    shape: Shape,
+    freq: f64,
+    q: f64,
+    gx: f32,
+    gw: f32,
+) -> (Option<(f32, f32)>, Option<(f32, f32)>) {
+    let graph_l = gx;
+    let graph_r = gx + gw;
+    let left_rect = |x_edge: f32| {
+        let w = x_edge - graph_l;
+        (w > 1.0).then_some((graph_l, w))
+    };
+    let right_rect = |x_edge: f32| {
+        let w = graph_r - x_edge;
+        (w > 1.0).then_some((x_edge, w))
+    };
+    match shape {
+        Shape::LowCut => {
+            let oct = (1.5 / q.clamp(0.15, 18.0)).clamp(0.5, 3.0);
+            let f_edge = (freq * 2.0_f64.powf(-oct * 0.5)).max(20.0);
+            (left_rect(freq_x_at(f_edge, gx, gw)), None)
+        }
+        Shape::HighCut => {
+            let oct = (1.5 / q.clamp(0.15, 18.0)).clamp(0.5, 3.0);
+            let f_edge = (freq * 2.0_f64.powf(oct * 0.5)).min(20000.0);
+            (None, right_rect(freq_x_at(f_edge, gx, gw)))
+        }
+        _ => {
+            let oct_span = (2.0 / q.clamp(0.15, 18.0)).clamp(0.5, 4.0);
+            let x_left = freq_x_at((freq * 2.0_f64.powf(-oct_span)).max(20.0), gx, gw);
+            let x_right = freq_x_at((freq * 2.0_f64.powf(oct_span)).min(20000.0), gx, gw);
+            (left_rect(x_left), right_rect(x_right))
+        }
+    }
+}
+fn greyscale_darken(color: C, amount: f32) -> C {
+    let y = (0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b) * (1.0 - amount);
+    C {
+        r: y,
+        g: y,
+        b: y,
+        a: color.a,
+    }
+}
+fn intersect_rect(
+    a: (f32, f32, f32, f32),
+    b: (f32, f32, f32, f32),
+) -> Option<(f32, f32, f32, f32)> {
+    let x0 = a.0.max(b.0);
+    let y0 = a.1.max(b.1);
+    let x1 = (a.0 + a.2).min(b.0 + b.2);
+    let y1 = (a.1 + a.3).min(b.1 + b.3);
+    (x1 - x0 > 0.5 && y1 - y0 > 0.5).then_some((x0, y0, x1 - x0, y1 - y0))
+}
+fn draw_solo_shade(
+    d: &mut Draw,
+    shape: Shape,
+    freq: f64,
+    q: f64,
+    gx: f32,
+    gw: f32,
+    clip: (f32, f32, f32, f32),
+    sum: &[(f32, f32)],
+    sum_color: C,
+    sum_width: f32,
+    fill: Option<(&[(f32, f32)], f32, C)>,
+) {
+    let overlay = C::rgba(12, 12, 14, 178);
+    let grey_sum = greyscale_darken(sum_color, 0.32);
+    let (left, right) = solo_shade_rects(shape, freq, q, gx, gw);
+    for (x, w) in [left, right].into_iter().flatten() {
+        d.rounded_rect(x, GY, w, GH, 0.0, overlay);
+        let Some((ix, iy, iw, ih)) = intersect_rect((x + d.offset_x, GY, w, GH), clip) else {
+            continue;
+        };
+        d.scissor(ix, iy, iw, ih);
+        if let Some((pts, baseline, fill_c)) = fill {
+            d.area(pts, baseline, greyscale_darken(fill_c, 0.40));
+        }
+        d.poly(sum, grey_sum, sum_width);
+        d.scissor(clip.0, clip.1, clip.2, clip.3);
+    }
+}
+fn draw_eq_hover_preview(
+    d: &mut Draw,
+    x: f32,
+    y: f32,
+    gx: f32,
+    gw: f32,
+    graph_db: f64,
+    sr: f64,
+    eq_sr: f64,
+    selected: Option<u64>,
+    shape: Shape,
+) {
+    if selected.is_none() {
+        let f = x_freq_at(x, gx, gw).clamp(20.0, sr * 0.49);
+        let gain = if shape.has_gain() {
+            y_db(y, graph_db)
+        } else {
+            0.0
+        };
+        let q = if matches!(shape, Shape::LowCut | Shape::HighCut) {
+            0.707
+        } else {
+            1.0
+        };
+        let preview_band = Band {
+            id: 0,
+            shape,
+            freq: f,
+            gain,
+            q,
+            order: 2,
+            ..Band::default()
+        };
+        let coeff = BandCoeffs::make(&preview_band, eq_sr);
+        let points: Vec<_> = (0..420)
+            .map(|i| {
+                let px = gx + gw * (i as f32 / 419.0);
+                let db = coeff.response(x_freq_at(px, gx, gw).min(sr * 0.49), eq_sr);
+                (px, db_y(db, graph_db))
+            })
+            .collect();
+        draw_eq_preview_influence(
+            d,
+            shape,
+            preview_band.freq,
+            preview_band.q,
+            &points,
+            graph_db,
+            (gx, gw),
+        );
+    }
+    draw_hover_preview(
+        d,
+        x,
+        y,
+        gx,
+        gw,
+        hover_preview_label(selected.is_some(), shape),
+    );
 }
 fn range_handle_hit(
     b: &Band,
@@ -384,30 +724,8 @@ fn near_eq_node(b: &Band, x: f32, y: f32, graph_db: f64, gx: f32, gw: f32) -> bo
         if (x - nx).abs() <= DYN_PILL_R && y >= top - 4.0 && y <= bot + 4.0 {
             return true;
         }
-        if threshold_handle_hit(b, x, y, graph_db, gx, gw) {
-            return true;
-        }
     }
     false
-}
-fn threshold_line_rect(b: &Band, graph_db: f64, gx: f32, gw: f32) -> (f32, f32, f32, f32) {
-    let x = freq_x_at(b.freq, gx, gw);
-    let y = db_y(b.threshold, graph_db);
-    let w = DYN_PILL_R * 2.0 + THRESH_LINE_EXTRA * 2.0;
-    (x - w * 0.5, y - THRESH_LINE_H * 0.5, w, THRESH_LINE_H)
-}
-fn threshold_handle_hit(b: &Band, x: f32, y: f32, graph_db: f64, gx: f32, gw: f32) -> bool {
-    if !b.dynamic || !b.shape.has_gain() {
-        return false;
-    }
-    let r = threshold_line_rect(b, graph_db, gx, gw);
-    let hit = (r.0, r.1 - THRESH_HIT_PAD, r.2, r.3 + THRESH_HIT_PAD * 2.0);
-    if !inside(x, y, hit) {
-        return false;
-    }
-    let x_node = freq_x_at(b.freq, gx, gw);
-    let node_y = db_y(b.gain, graph_db);
-    (x - x_node).hypot(y - node_y) > NODE_INNER_R
 }
 fn snap_dyn_range(gain: f64, y: f32, graph_db: f64) -> f64 {
     let mut new_range = gain - y_db(y, graph_db);
@@ -423,7 +741,6 @@ fn draw_dyn_range_stem(
     graph: (f32, f32),
     color: C,
     uncapped: Option<f64>,
-    thresh_hover: bool,
 ) {
     let (gx, gw) = graph;
     let x = freq_x_at(b.freq, gx, gw);
@@ -446,16 +763,6 @@ fn draw_dyn_range_stem(
             }
         }
     }
-    let y_th = db_y(b.threshold, graph_db);
-    let line_w = DYN_PILL_R * 2.0 + THRESH_LINE_EXTRA * 2.0;
-    d.line(
-        x - line_w * 0.5,
-        y_th,
-        x + line_w * 0.5,
-        y_th,
-        if thresh_hover { TEXT } else { color },
-        THRESH_LINE_H,
-    );
 }
 fn lift_gain_y(gain: f64) -> f32 {
     let norm = ((gain + 100.0) / 100.0).clamp(0.0, 1.0) as f32;
@@ -468,53 +775,217 @@ fn lift_y_gain(y: f32) -> f64 {
 fn inside(x: f32, y: f32, r: (f32, f32, f32, f32)) -> bool {
     x >= r.0 && x <= r.0 + r.2 && y >= r.1 && y <= r.1 + r.3
 }
+const HUD_PAD: f32 = 8.0;
+const HUD_BTN: f32 = 22.0;
+const HUD_BTN_GAP: f32 = 3.0;
+const HUD_COL_GAP: f32 = 6.0;
+const HUD_OVERLAY_GAP: f32 = 10.0;
+const HUD_DYN_R: f32 = 13.0;
+const HUD_FREQ_W: f32 = 86.0;
+const HUD_GAIN_W: f32 = 52.0;
+const HUD_Q_W: f32 = 40.0;
+const HUD_SHAPE_W: f32 = 104.0;
+const HUD_MAIN_W: f32 =
+    HUD_PAD + HUD_FREQ_W + HUD_COL_GAP + HUD_GAIN_W + HUD_COL_GAP + HUD_Q_W + HUD_PAD;
+const HUD_DYN_W: f32 = 400.0;
+const HUD_H: f32 = 76.0;
+const HUD_CUT_H: f32 = 96.0;
+const HUD_DYN_FIELD_H: f32 = 28.0;
+const HUD_DYN_ROW_GAP: f32 = 4.0;
+const HUD_DYN_VALUE_W: f32 = 56.0;
+const HUD_RADIUS: f32 = 6.0;
+const LIFT_DOCK_H: f32 = 60.0;
+#[derive(Clone, Copy)]
+struct HudGeom {
+    bx: f32,
+    by: f32,
+    bw: f32,
+    bh: f32,
+    dyn_x: f32,
+    dyn_w: f32,
+    show_dyn: bool,
+    show_dyn_btn: bool,
+}
+fn band_allows_dyn(b: &Band) -> bool {
+    b.shape.has_gain() && b.id < SC_EQ_ID_BASE
+}
 fn hud_height_for(b: &Band) -> f32 {
-    if b.dynamic && b.shape.has_gain() {
-        132.0
+    if b.shape.is_cut() {
+        HUD_CUT_H
     } else {
-        104.0
+        HUD_H
+    }
+}
+fn hud_height_for_lift(b: &LiftBand) -> f32 {
+    if b.shape.is_cut() {
+        HUD_CUT_H
+    } else {
+        HUD_H
+    }
+}
+fn hud_place(
+    node_x: f32,
+    node_y: f32,
+    bw: f32,
+    bh: f32,
+    trail: f32,
+    gx: f32,
+    gw: f32,
+    bottom_inset: f32,
+) -> (f32, f32) {
+    let total = bw + trail;
+    let max_x = (gx + gw - total - 8.0).max(gx + 8.0);
+    let bx = (node_x - total * 0.5).clamp(gx + 8.0, max_x);
+    let by = if node_y < GY + GH * 0.5 {
+        (GY + GH - bottom_inset - bh - 4.0).max(GY + 4.0)
+    } else {
+        GY + 4.0
+    };
+    (bx, by)
+}
+fn hud_trail(show_dyn: bool, show_dyn_btn: bool) -> f32 {
+    if show_dyn {
+        HUD_OVERLAY_GAP + HUD_DYN_W
+    } else if show_dyn_btn {
+        HUD_OVERLAY_GAP * 0.5 + HUD_DYN_R
+    } else {
+        0.0
+    }
+}
+fn hud_geom_for_at(b: &Band, range: f64, gx: f32, gw: f32) -> HudGeom {
+    let show_dyn_btn = band_allows_dyn(b);
+    let show_dyn = show_dyn_btn && b.dynamic;
+    let bw = HUD_MAIN_W;
+    let bh = hud_height_for(b);
+    let node_x = freq_x_at(b.freq, gx, gw);
+    let node_y = db_y(if b.shape.has_gain() { b.gain } else { 0.0 }, range);
+    let (bx, by) = hud_place(
+        node_x,
+        node_y,
+        bw,
+        bh,
+        hud_trail(show_dyn, show_dyn_btn),
+        gx,
+        gw,
+        0.0,
+    );
+    HudGeom {
+        bx,
+        by,
+        bw,
+        bh,
+        dyn_x: bx + bw + HUD_OVERLAY_GAP,
+        dyn_w: if show_dyn { HUD_DYN_W } else { 0.0 },
+        show_dyn,
+        show_dyn_btn,
     }
 }
 fn hud_rect_for_at(b: &Band, range: f64, gx: f32, gw: f32) -> (f32, f32, f32, f32) {
-    let node_x = freq_x_at(b.freq, gx, gw);
-    let node_y = db_y(if b.shape.has_gain() { b.gain } else { 0.0 }, range);
-    let bw = 304.0;
-    let bh = hud_height_for(b);
-    let gap = 36.0;
-    let bx = (node_x - bw / 2.0).clamp(gx + 8.0, gx + gw - bw - 8.0);
-    let above_room = node_y - GY;
-    let below_room = GY + GH - node_y;
-    let by = if above_room >= bh + gap || above_room >= below_room {
-        (node_y - bh - gap).max(GY + 4.0)
-    } else {
-        (node_y + gap).min(GY + GH - bh - 4.0)
-    };
-    (bx, by, bw, bh)
+    let g = hud_geom_for_at(b, range, gx, gw);
+    (g.bx, g.by, g.bw, g.bh)
+}
+#[cfg(test)]
+fn hud_dyn_rect_for_at(b: &Band, range: f64, gx: f32, gw: f32) -> Option<(f32, f32, f32, f32)> {
+    let g = hud_geom_for_at(b, range, gx, gw);
+    g.show_dyn.then_some((g.dyn_x, g.by, g.dyn_w, g.bh))
+}
+fn hud_bounds_for_at(b: &Band, range: f64, gx: f32, gw: f32) -> (f32, f32, f32, f32) {
+    let g = hud_geom_for_at(b, range, gx, gw);
+    (
+        g.bx,
+        g.by,
+        g.bw + hud_trail(g.show_dyn, g.show_dyn_btn),
+        g.bh,
+    )
+}
+fn hud_dyn_btn_center(g: HudGeom) -> (f32, f32) {
+    (g.bx + g.bw + HUD_OVERLAY_GAP * 0.5, g.by + g.bh * 0.5)
+}
+fn hud_dyn_btn_hit(g: HudGeom, x: f32, y: f32) -> bool {
+    if !g.show_dyn_btn {
+        return false;
+    }
+    let (cx, cy) = hud_dyn_btn_center(g);
+    (x - cx).hypot(y - cy) <= HUD_DYN_R
+}
+fn hud_btn_rect(bx: f32, by: f32, i: usize) -> (f32, f32, f32, f32) {
+    (
+        bx + HUD_PAD + i as f32 * (HUD_BTN + HUD_BTN_GAP),
+        by + HUD_PAD,
+        HUD_BTN,
+        HUD_BTN,
+    )
+}
+fn hud_bypass_rect(bx: f32, by: f32) -> (f32, f32, f32, f32) {
+    hud_btn_rect(bx, by, 0)
+}
+fn hud_solo_rect(bx: f32, by: f32) -> (f32, f32, f32, f32) {
+    hud_btn_rect(bx, by, 1)
+}
+fn hud_close_rect(bx: f32, by: f32) -> (f32, f32, f32, f32) {
+    hud_btn_rect(bx, by, 2)
+}
+fn hud_shape_rect(bx: f32, by: f32, bw: f32) -> (f32, f32, f32, f32) {
+    let x = bx + HUD_PAD + 3.0 * HUD_BTN + 2.0 * HUD_BTN_GAP + HUD_COL_GAP;
+    let avail = (bx + bw - HUD_PAD - x).max(0.0);
+    (x, by + HUD_PAD, avail.min(HUD_SHAPE_W), HUD_BTN)
+}
+fn hud_order_rect(bx: f32, by: f32) -> (f32, f32, f32, f32) {
+    (bx + HUD_PAD, by + HUD_H - 4.0, 108.0, 18.0)
+}
+fn hud_value_row_y(by: f32) -> f32 {
+    by + HUD_PAD + HUD_DYN_FIELD_H + HUD_DYN_ROW_GAP
 }
 fn hud_value_rect_at(b: &Band, range: f64, i: usize, gx: f32, gw: f32) -> (f32, f32, f32, f32) {
-    let (x, y, _, _) = hud_rect_for_at(b, range, gx, gw);
+    let g = hud_geom_for_at(b, range, gx, gw);
+    let y = hud_value_row_y(g.by);
     match i {
-        0 => (x + 10.0, y + 48.0, 92.0, 24.0),
-        1 => (x + 110.0, y + 48.0, 100.0, 24.0),
-        2 => (x + 218.0, y + 48.0, 76.0, 24.0),
-        3 => (x + 10.0, y + 92.0, 140.0, 24.0),
-        _ => (x + 160.0, y + 92.0, 134.0, 24.0),
+        0 => (g.bx + HUD_PAD, y, HUD_FREQ_W, HUD_DYN_FIELD_H),
+        1 => (
+            g.bx + HUD_PAD + HUD_FREQ_W + HUD_COL_GAP,
+            y,
+            HUD_GAIN_W,
+            HUD_DYN_FIELD_H,
+        ),
+        2 => (
+            g.bx + HUD_PAD + HUD_FREQ_W + HUD_COL_GAP + HUD_GAIN_W + HUD_COL_GAP,
+            y,
+            HUD_Q_W,
+            HUD_DYN_FIELD_H,
+        ),
+        other => hud_dyn_value_rect_at(b, range, if other == 3 { 0 } else { 1 }, gx, gw),
     }
 }
+fn hud_dyn_field_rect_at(b: &Band, range: f64, i: usize, gx: f32, gw: f32) -> (f32, f32, f32, f32) {
+    let g = hud_geom_for_at(b, range, gx, gw);
+    let cols = 3.0;
+    let col_w = (g.dyn_w - HUD_PAD * 2.0 - HUD_COL_GAP * (cols - 1.0)) / cols;
+    let (col, row) = match i {
+        0 => (0.0, 0.0),
+        1 => (1.0, 0.0),
+        2 => (2.0, 0.0),
+        3 => (0.0, 1.0),
+        _ => (1.0, 1.0),
+    };
+    let x = g.dyn_x + HUD_PAD + col * (col_w + HUD_COL_GAP);
+    let y = g.by + HUD_PAD + row * (HUD_DYN_FIELD_H + HUD_DYN_ROW_GAP);
+    (x, y, col_w, HUD_DYN_FIELD_H)
+}
+fn hud_dyn_value_rect_at(b: &Band, range: f64, i: usize, gx: f32, gw: f32) -> (f32, f32, f32, f32) {
+    let r = hud_dyn_field_rect_at(b, range, i, gx, gw);
+    (
+        r.0 + r.2 - HUD_DYN_VALUE_W - 6.0,
+        r.1 + 2.0,
+        HUD_DYN_VALUE_W,
+        16.0,
+    )
+}
 fn hud_rect_for_lift_at(b: &LiftBand, _range: f64, gx: f32, gw: f32) -> (f32, f32, f32, f32) {
+    let bw = HUD_MAIN_W;
+    let bh = hud_height_for_lift(b);
     let node_x = freq_x_at(b.freq, gx, gw);
     let node_y = lift_gain_y(b.gain);
-    let bw = 304.0;
-    let bh = 104.0;
-    let gap = 36.0;
-    let bx = (node_x - bw / 2.0).clamp(gx + 8.0, gx + gw - bw - 8.0);
-    let above_room = node_y - GY;
-    let below_room = GY + GH - node_y;
-    let by = if above_room >= bh + gap || above_room >= below_room {
-        (node_y - bh - gap).max(GY + 4.0)
-    } else {
-        (node_y + gap).min(GY + GH - bh - 4.0)
-    };
+    let (bx, by) = hud_place(node_x, node_y, bw, bh, 0.0, gx, gw, LIFT_DOCK_H);
     (bx, by, bw, bh)
 }
 fn hud_value_rect_lift_at(
@@ -525,30 +996,75 @@ fn hud_value_rect_lift_at(
     gw: f32,
 ) -> (f32, f32, f32, f32) {
     let (x, y, _, _) = hud_rect_for_lift_at(b, range, gx, gw);
+    let row_y = hud_value_row_y(y);
     match i {
-        0 => (x + 10.0, y + 48.0, 92.0, 24.0),
-        1 => (x + 110.0, y + 48.0, 100.0, 24.0),
-        _ => (x + 218.0, y + 48.0, 76.0, 24.0),
+        0 => (x + HUD_PAD, row_y, HUD_FREQ_W, HUD_DYN_FIELD_H),
+        1 => (
+            x + HUD_PAD + HUD_FREQ_W + HUD_COL_GAP,
+            row_y,
+            HUD_GAIN_W,
+            HUD_DYN_FIELD_H,
+        ),
+        _ => (
+            x + HUD_PAD + HUD_FREQ_W + HUD_COL_GAP + HUD_GAIN_W + HUD_COL_GAP,
+            row_y,
+            HUD_Q_W,
+            HUD_DYN_FIELD_H,
+        ),
     }
+}
+fn hud_chrome_hit(x: f32, y: f32, bx: f32, by: f32, bw: f32, is_cut: bool) -> Option<HudChrome> {
+    if inside(x, y, hud_bypass_rect(bx, by)) {
+        Some(HudChrome::Bypass)
+    } else if inside(x, y, hud_solo_rect(bx, by)) {
+        Some(HudChrome::Solo)
+    } else if inside(x, y, hud_close_rect(bx, by)) {
+        Some(HudChrome::Close)
+    } else if inside(x, y, hud_shape_rect(bx, by, bw)) {
+        Some(HudChrome::Shape)
+    } else if is_cut && inside(x, y, hud_order_rect(bx, by)) {
+        Some(HudChrome::Order)
+    } else {
+        None
+    }
+}
+#[derive(Clone, Copy)]
+enum HudChrome {
+    Bypass,
+    Solo,
+    Close,
+    Shape,
+    Order,
+}
+fn hud_menu_rect(anchor: (f32, f32, f32, f32), h: f32) -> (f32, f32, f32, f32) {
+    let below = anchor.1 + anchor.3 + 2.0;
+    let y = if below + h <= GY + GH {
+        below
+    } else {
+        (anchor.1 - h - 2.0).max(GY)
+    };
+    (anchor.0, y, anchor.2.max(160.0), h)
+}
+fn plot_band(b: &Band, meters: &[(u64, f32)]) -> Band {
+    let mut plot = b.clone();
+    if plot.dynamic && plot.shape.has_gain() {
+        if let Some(uncapped) = uncapped_for(plot.id, meters) {
+            plot.gain -= capped_reduction(plot.range, uncapped);
+        }
+    }
+    plot
 }
 fn band_rect_at(i: usize, gx: f32, gw: f32) -> (f32, f32, f32, f32) {
     band_slot_rect_at(i, gx, gw, 5)
-}
-fn dyn_slider_rect_at(i: usize, gx: f32, gw: f32) -> (f32, f32, f32, f32) {
-    band_slot_rect_at(i, gx, gw, 3)
 }
 fn band_slot_rect_at(i: usize, gx: f32, gw: f32, count: usize) -> (f32, f32, f32, f32) {
     let slot = (gw - 46.0) / count as f32;
     (
         gx + 38.0 + i as f32 * slot,
-        GRAPH_BOTTOM - 60.0,
+        GRAPH_BOTTOM - LIFT_DOCK_H,
         (slot - 4.0).max(80.0),
         52.0,
     )
-}
-fn band_dyn_power_rect_at(dynamic: bool, gx: f32) -> (f32, f32, f32, f32) {
-    let w = if dynamic { 28.0 } else { 130.0 };
-    (gx + 8.0, GRAPH_BOTTOM - 48.0, w, 28.0)
 }
 fn band_bar_rect_at(i: usize, gx: f32, gw: f32) -> (f32, f32, f32, f32) {
     let r = band_rect_at(i, gx, gw);
@@ -566,9 +1082,18 @@ enum Target {
     LiftBand(usize),
     Node(u64),
     Range(u64),
-    Threshold(u64),
-    CompKnee { from_top: bool },
-    PseKnee { from_top: bool },
+    CompKnee {
+        from_top: bool,
+    },
+    PseKnee {
+        from_top: bool,
+    },
+    SoloAudition {
+        id: u64,
+        restore: u64,
+        grab_dx: f32,
+        grab_dy: f32,
+    },
 }
 #[derive(Clone, Copy, PartialEq)]
 enum PendingCreate {
@@ -589,14 +1114,22 @@ impl BandMenu {
         }
     }
     fn rect_at(self, b: &Band, range: f64, gx: f32, gw: f32) -> (f32, f32, f32, f32) {
-        let (x, y, _, _) = hud_rect_for_at(b, range, gx, gw);
         let h = self.count() as f32 * 24.0;
-        (x + 40.0, (y + 32.0).min(GY + GH - h), 192.0, h)
+        let (bx, by, bw, _) = hud_rect_for_at(b, range, gx, gw);
+        let anchor = match self {
+            Self::Shape => hud_shape_rect(bx, by, bw),
+            Self::Order => hud_order_rect(bx, by),
+        };
+        hud_menu_rect(anchor, h)
     }
     fn rect_lift_at(self, b: &LiftBand, range: f64, gx: f32, gw: f32) -> (f32, f32, f32, f32) {
-        let (x, y, _, _) = hud_rect_for_lift_at(b, range, gx, gw);
         let h = self.count() as f32 * 24.0;
-        (x + 40.0, (y + 32.0).min(GY + GH - h), 192.0, h)
+        let (bx, by, bw, _) = hud_rect_for_lift_at(b, range, gx, gw);
+        let anchor = match self {
+            Self::Shape => hud_shape_rect(bx, by, bw),
+            Self::Order => hud_order_rect(bx, by),
+        };
+        hud_menu_rect(anchor, h)
     }
 }
 pub fn create(params: Arc<StripParams>, shared: Arc<Shared>) -> Option<Box<dyn Editor>> {
@@ -626,6 +1159,8 @@ pub fn create(params: Arc<StripParams>, shared: Arc<Shared>) -> Option<Box<dyn E
                 active_eq: Cell::new(0),
                 anim_progress: Cell::new(0.0),
                 anim_target: Cell::new(0.0),
+                anim_start: Cell::new(0.0),
+                anim_time: Cell::new(1.0),
                 last_tick: Cell::new(None),
                 knee_bulge: Cell::new(0.0),
                 pse_knee_bulge: Cell::new(0.0),
@@ -634,6 +1169,11 @@ pub fn create(params: Arc<StripParams>, shared: Arc<Shared>) -> Option<Box<dyn E
                 pse_anim_progress: Cell::new(0.0),
                 pse_anim_target: Cell::new(0.0),
                 pending_solo: None,
+                eq_bypass_anim: ButtonAnim::new(),
+                pse_bypass_anim: ButtonAnim::new(),
+                dyn_bypass_anim: ButtonAnim::new(),
+                lift_badge_anim: ButtonAnim::new(),
+                dyn_band_anim: ButtonAnim::new(),
             }
             .build(cx, |cx| {
                 let timer = cx.add_timer(Duration::from_millis(16), None, |cx, action| {
@@ -644,7 +1184,8 @@ pub fn create(params: Arc<StripParams>, shared: Arc<Shared>) -> Option<Box<dyn E
                 cx.start_timer(timer);
             })
             .width(Stretch(1.0))
-            .height(Stretch(1.0));
+            .height(Stretch(1.0))
+            .focusable(true);
         },
     )
 }
@@ -669,6 +1210,8 @@ struct StripView {
     active_eq: Cell<usize>,
     anim_progress: Cell<f32>,
     anim_target: Cell<f32>,
+    anim_start: Cell<f32>,
+    anim_time: Cell<f32>,
     last_tick: Cell<Option<std::time::Instant>>,
     knee_bulge: Cell<f32>,
     pse_knee_bulge: Cell<f32>,
@@ -677,6 +1220,11 @@ struct StripView {
     pse_anim_progress: Cell<f32>,
     pse_anim_target: Cell<f32>,
     pending_solo: Option<u64>,
+    eq_bypass_anim: ButtonAnim,
+    pse_bypass_anim: ButtonAnim,
+    dyn_bypass_anim: ButtonAnim,
+    lift_badge_anim: ButtonAnim,
+    dyn_band_anim: ButtonAnim,
 }
 fn lift_bin_curve_fit(bins: &[f64; 256], t: f64) -> f64 {
     let u = (t * 256.0 - 0.5).clamp(0.0, 255.0);
@@ -696,23 +1244,7 @@ fn lift_bin_curve_fit(bins: &[f64; 256], t: f64) -> f64 {
 }
 fn smooth_lift_bins(raw: &[f64; 256]) -> [f64; 256] {
     let mut smooth = [0.0_f64; 256];
-    for (k, smooth_val) in smooth.iter_mut().enumerate() {
-        let mut sum = 0.0;
-        let mut w_sum = 0.0;
-        for offset in -3..=3 {
-            let idx = (k as isize + offset).clamp(0, 255) as usize;
-            let w = match offset.abs() {
-                0 => 0.38,
-                1 => 0.24,
-                2 => 0.06,
-                3 => 0.01,
-                _ => 0.0,
-            };
-            sum += raw[idx] * w;
-            w_sum += w;
-        }
-        *smooth_val = sum / w_sum;
-    }
+    smooth_bins(raw, &mut smooth);
     smooth
 }
 fn lift_curve_points(b: &LiftBand, gr: &[f64; 256], gx: f32, gw: f32, sr: f64) -> Vec<(f32, f32)> {
@@ -819,11 +1351,19 @@ fn draw_lift_influence(
     }
 }
 fn display_range(range: f64) -> f64 {
-    if range.is_finite() {
-        (range / 12.0).round().clamp(1.0, 6.0) * 12.0
-    } else {
-        24.0
+    if !range.is_finite() {
+        return 24.0;
     }
+    let mut closest = SCALES[0];
+    let mut min_diff = (range - closest).abs();
+    for &s in &SCALES[1..] {
+        let diff = (range - s).abs();
+        if diff < min_diff {
+            min_diff = diff;
+            closest = s;
+        }
+    }
+    closest
 }
 fn format_pse_time(time_val: f64, peak: bool) -> String {
     let (attack, release) = crate::dsp::pse_time_to_times(time_val, peak);
@@ -856,6 +1396,9 @@ impl StripView {
     fn is_pre(&self) -> bool {
         self.params.comp_pre.value()
     }
+    fn idle_hover(&self) -> Option<(f32, f32)> {
+        self.hover.filter(|_| self.drag.is_none())
+    }
     fn eq_bounds(&self) -> (f32, f32, f32, f32) {
         let x = if self.is_pre() {
             MARGIN + PSE_W + GAP + DYN_W + GAP
@@ -876,10 +1419,10 @@ impl StripView {
         (MARGIN, MODULE_Y, PSE_W, MODULE_H)
     }
     fn gx(&self) -> f32 {
-        self.eq_bounds().0 + 44.0
+        self.eq_bounds().0 + EQ_GRAPH_PAD_LEFT
     }
     fn gw(&self) -> f32 {
-        self.eq_bounds().2 - 60.0
+        self.eq_bounds().2 - EQ_GRAPH_PAD_LEFT - EQ_GRAPH_PAD_RIGHT
     }
     fn graph_area(&self) -> (f32, f32, f32, f32) {
         (self.gx(), GY, self.gw(), GH)
@@ -890,8 +1433,8 @@ impl StripView {
     fn x_freq(&self, x: f32) -> f64 {
         x_freq_at(x, self.gx(), self.gw())
     }
-    fn hud_rect_for(&self, b: &Band) -> (f32, f32, f32, f32) {
-        hud_rect_for_at(b, self.graph_db, self.gx(), self.gw())
+    fn hud_bounds_for(&self, b: &Band) -> (f32, f32, f32, f32) {
+        hud_bounds_for_at(b, self.graph_db, self.gx(), self.gw())
     }
     fn hud_rect_for_lift(&self, b: &LiftBand) -> (f32, f32, f32, f32) {
         hud_rect_for_lift_at(b, self.graph_db, self.gx(), self.gw())
@@ -902,6 +1445,15 @@ impl StripView {
     fn hud_value_rect_lift(&self, b: &LiftBand, i: usize) -> (f32, f32, f32, f32) {
         hud_value_rect_lift_at(b, self.graph_db, i, self.gx(), self.gw())
     }
+    fn hud_dyn_field_rect(&self, b: &Band, i: usize) -> (f32, f32, f32, f32) {
+        hud_dyn_field_rect_at(b, self.graph_db, i, self.gx(), self.gw())
+    }
+    fn hud_dyn_value_rect(&self, b: &Band, i: usize) -> (f32, f32, f32, f32) {
+        hud_dyn_value_rect_at(b, self.graph_db, i, self.gx(), self.gw())
+    }
+    fn hud_geom(&self, b: &Band) -> HudGeom {
+        hud_geom_for_at(b, self.graph_db, self.gx(), self.gw())
+    }
     fn band_rect(&self, i: usize) -> (f32, f32, f32, f32) {
         band_rect_at(i, self.gx(), self.gw())
     }
@@ -911,19 +1463,12 @@ impl StripView {
     fn band_value_rect(&self, i: usize) -> (f32, f32, f32, f32) {
         band_value_rect_at(i, self.gx(), self.gw())
     }
-    fn band_dyn_power_rect(&self, dynamic: bool) -> (f32, f32, f32, f32) {
-        band_dyn_power_rect_at(dynamic, self.gx())
-    }
-    fn dyn_slider_rect(&self, i: usize) -> (f32, f32, f32, f32) {
-        dyn_slider_rect_at(i, self.gx(), self.gw())
-    }
-    fn dyn_slider_bar_rect(&self, i: usize) -> (f32, f32, f32, f32) {
-        let r = self.dyn_slider_rect(i);
-        (r.0 + 12.0, r.1 + 28.0, r.2 - 24.0, 16.0)
-    }
-    fn dyn_slider_value_rect(&self, i: usize) -> (f32, f32, f32, f32) {
-        let r = self.dyn_slider_rect(i);
-        (r.0 + r.2 - 68.0, r.1 + 4.0, 60.0, 20.0)
+    fn dyn_gr_uncapped(&self) -> Vec<(u64, f32)> {
+        self.shared
+            .dyn_gr_uncapped
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_else(|e| e.into_inner().clone())
     }
     fn eq_tab_1_rect(&self) -> (f32, f32, f32, f32) {
         let eq_x = self.eq_bounds().0;
@@ -971,33 +1516,49 @@ impl StripView {
         )
     }
     fn scale_button_rect(&self) -> (f32, f32, f32, f32) {
-        let label_x = (self.eq_bounds().0 + self.gx()) * 0.5;
-        (label_x - 21.0, GRAPH_BOTTOM + 4.0, 42.0, 24.0)
+        let eq_x = self.eq_bounds().0;
+        (eq_x, GY - 10.0, EQ_GRAPH_PAD_LEFT, 20.0)
     }
-    fn footer_listen_sc_rect(&self) -> (f32, f32, f32, f32) {
-        (510.0, FOOTER_BTN_Y, 96.0, 28.0)
+    fn eq_header_listen_sc_rect(&self) -> (f32, f32, f32, f32) {
+        let eq_b = self.eq_bounds();
+        (
+            eq_b.0 + eq_b.2 - 14.0 - 90.0,
+            module_header_ctrl_y(),
+            90.0,
+            MODULE_HEADER_CTRL,
+        )
     }
     fn footer_comp_routing_rect(&self) -> (f32, f32, f32, f32) {
         (744.0, FOOTER_BTN_Y, 56.0, 28.0)
     }
+    fn footer_auto_rect(&self) -> (f32, f32, f32, f32) {
+        (808.0, FOOTER_BTN_Y, 56.0, 28.0)
+    }
+    fn footer_link_rect(&self) -> (f32, f32, f32, f32) {
+        (872.0, FOOTER_BTN_Y, 56.0, 28.0)
+    }
     fn scale_menu_rect(&self) -> (f32, f32, f32, f32) {
-        (
-            self.scale_button_rect().0 + 2.0,
-            GRAPH_BOTTOM - 144.0,
-            98.0,
-            144.0,
-        )
+        let btn = self.scale_button_rect();
+        (btn.0, btn.1 + btn.3 + 2.0, 72.0, SCALES.len() as f32 * 24.0)
     }
     fn dyn_cog_button_rect(&self) -> (f32, f32, f32, f32) {
-        let dx = self.dyn_bounds().0;
-        (dx + 14.0, module_footer_ctrl_y(), 24.0, MODULE_HEADER_CTRL)
+        let (gx, _, gw, _) = self.dyn_main_gr_meter_rect();
+        let cx = gx + gw * 0.5;
+        let w = 24.0;
+        let h = 24.0;
+        let y = (MODULE_HEADER_BOTTOM + METER_TOP) * 0.5 - h * 0.5;
+        (cx - w * 0.5, y, w, h)
     }
     fn dyn_back_button_rect(&self) -> (f32, f32, f32, f32) {
         self.dyn_cog_button_rect()
     }
     fn pse_cog_button_rect(&self) -> (f32, f32, f32, f32) {
-        let px = self.pse_bounds().0;
-        (px + 14.0, module_footer_ctrl_y(), 24.0, MODULE_HEADER_CTRL)
+        let (gx, _, gw, _) = self.pse_main_gr_meter_rect();
+        let cx = gx + gw * 0.5;
+        let w = 24.0;
+        let h = 24.0;
+        let y = (MODULE_HEADER_BOTTOM + METER_TOP) * 0.5 - h * 0.5;
+        (cx - w * 0.5, y, w, h)
     }
     fn pse_back_button_rect(&self) -> (f32, f32, f32, f32) {
         self.pse_cog_button_rect()
@@ -1010,33 +1571,25 @@ impl StripView {
         let px = self.pse_bounds().0;
         (px + 14.0, module_header_ctrl_y(), 24.0, MODULE_HEADER_CTRL)
     }
-    fn dyn_mode_rect(&self, i: usize) -> (f32, f32, f32, f32) {
-        let dx = self.dyn_bounds().0;
-        if i == 0 {
-            (dx + 6.0, 196.0, 56.0, 22.0)
-        } else {
-            (dx + 68.0, 196.0, 56.0, 22.0)
-        }
-    }
     fn pse_detect_mode_rect(&self) -> (f32, f32, f32, f32) {
         let px = self.pse_bounds().0;
-        (px + 68.0, 396.0, 56.0, 24.0)
+        (px + 68.0, 316.0, 56.0, 24.0)
     }
     fn dyn_main_thresh_slider_rect(&self) -> (f32, f32, f32, f32) {
         let dx = self.dyn_bounds().0;
-        (dx + 18.0, METER_TOP, 38.0, METER_H)
+        (dx + 30.0, METER_TOP, 38.0, METER_H)
     }
     fn dyn_main_gr_meter_rect(&self) -> (f32, f32, f32, f32) {
         let dx = self.dyn_bounds().0;
-        (dx + 66.0, METER_TOP, 16.0, METER_H)
+        (dx + 84.0, METER_TOP, 16.0, METER_H)
     }
     fn dyn_main_thresh_handle_rect(&self, thresh_y: f32) -> (f32, f32, f32, f32) {
         let (sx, _, sw, _) = self.dyn_main_thresh_slider_rect();
         (sx - 5.0, thresh_y - 8.0, sw + 10.0, 16.0)
     }
     fn dyn_main_depth_handle_rect(&self, depth_y: f32) -> (f32, f32, f32, f32) {
-        let dx = self.dyn_bounds().0;
-        (dx + 88.0, depth_y - 8.0, 26.0, 16.0)
+        let (gx, _, gw, _) = self.dyn_main_gr_meter_rect();
+        (gx - 6.0, depth_y - 8.0, gw + 12.0, 16.0)
     }
     fn dyn_main_knee_offset(&self) -> f32 {
         let knee_val = self.params.comp_knee.value();
@@ -1045,7 +1598,7 @@ impl StripView {
     fn dyn_main_knee_rect(&self, thresh_y: f32, bulge_w: f32) -> (f32, f32, f32, f32) {
         let handle = self.dyn_main_thresh_handle_rect(thresh_y);
         let knee_offset = self.dyn_main_knee_offset();
-        (
+        clamp_knee_to_meter(
             handle.0 - 2.0 - bulge_w,
             handle.1 - knee_offset,
             handle.2 + 4.0 + 2.0 * bulge_w,
@@ -1054,19 +1607,19 @@ impl StripView {
     }
     fn pse_main_thresh_slider_rect(&self) -> (f32, f32, f32, f32) {
         let px = self.pse_bounds().0;
-        (px + 18.0, METER_TOP, 38.0, METER_H)
+        (px + 30.0, METER_TOP, 38.0, METER_H)
     }
     fn pse_main_gr_meter_rect(&self) -> (f32, f32, f32, f32) {
         let px = self.pse_bounds().0;
-        (px + 66.0, METER_TOP, 16.0, METER_H)
+        (px + 84.0, METER_TOP, 16.0, METER_H)
     }
     fn pse_main_thresh_handle_rect(&self, thresh_y: f32) -> (f32, f32, f32, f32) {
         let (sx, _, sw, _) = self.pse_main_thresh_slider_rect();
         (sx - 5.0, thresh_y - 8.0, sw + 10.0, 16.0)
     }
     fn pse_main_depth_handle_rect(&self, depth_y: f32) -> (f32, f32, f32, f32) {
-        let px = self.pse_bounds().0;
-        (px + 88.0, depth_y - 8.0, 26.0, 16.0)
+        let (gx, _, gw, _) = self.pse_main_gr_meter_rect();
+        (gx - 6.0, depth_y - 8.0, gw + 12.0, 16.0)
     }
     fn pse_main_knee_offset(&self) -> f32 {
         let knee_val = self.params.pse_knee.value();
@@ -1075,7 +1628,7 @@ impl StripView {
     fn pse_main_knee_rect(&self, thresh_y: f32, bulge_w: f32) -> (f32, f32, f32, f32) {
         let handle = self.pse_main_thresh_handle_rect(thresh_y);
         let knee_offset = self.pse_main_knee_offset();
-        (
+        clamp_knee_to_meter(
             handle.0 - 2.0 - bulge_w,
             handle.1 - knee_offset,
             handle.2 + 4.0 + 2.0 * bulge_w,
@@ -1085,7 +1638,6 @@ impl StripView {
     fn pse_knob_rect(&self, i: usize) -> (f32, f32, f32, f32) {
         let px = self.pse_bounds().0;
         match i {
-            7 => (px + 68.0, 356.0, 56.0, 86.0),
             8 => (px + 6.0, 226.0, 56.0, 86.0),
             2 => (px + 6.0, 356.0, 56.0, 86.0),
             10 => (px + 68.0, 226.0, 56.0, 86.0),
@@ -1096,9 +1648,9 @@ impl StripView {
         let dx = self.dyn_bounds().0;
         match self.dyn_page {
             DynPage::Controls => match i {
-                6 => (dx + 6.0, 226.0, 56.0, 86.0),
-                5 => (dx + 68.0, 226.0, 56.0, 86.0),
-                11 => (dx + 37.0, 314.0, 56.0, 86.0),
+                5 => (dx + 6.0, 226.0, 56.0, 86.0),
+                11 => (dx + 68.0, 226.0, 56.0, 86.0),
+                6 => (dx + 37.0, 314.0, 56.0, 86.0),
                 3 => (dx + 6.0, 402.0, 56.0, 86.0),
                 4 => (dx + 68.0, 402.0, 56.0, 86.0),
                 _ => (0.0, -1000.0, 0.0, 0.0),
@@ -1106,6 +1658,8 @@ impl StripView {
             DynPage::Main => {
                 if i == 14 {
                     (dx + 68.0, meter_value_y() - 14.0, 50.0, 22.0)
+                } else if i == 0 {
+                    (dx + 6.0, meter_value_y() - 14.0, 50.0, 22.0)
                 } else {
                     (dx + 6.0, 226.0, 56.0, 86.0)
                 }
@@ -1168,6 +1722,7 @@ impl StripView {
                 .copied()
                 .map(|i| (ValueTarget::Global(i), self.pse_value_rect(i))),
         );
+        fields.push((ValueTarget::Global(15), output_gain_value_rect()));
         fields
     }
     fn value_color(&self, target: ValueTarget) -> C {
@@ -1218,17 +1773,18 @@ impl StripView {
                     return Some((ValueTarget::Band(i), r));
                 }
             }
-            if b.shape.has_gain() && b.dynamic {
-                if inside(x, y, self.hud_value_rect(&b, 3)) {
-                    return Some((ValueTarget::Band(3), self.hud_value_rect(&b, 3)));
-                }
-                if inside(x, y, self.hud_value_rect(&b, 4)) {
-                    return Some((ValueTarget::Band(7), self.hud_value_rect(&b, 4)));
-                }
-                for i in 0..3 {
-                    let r = self.dyn_slider_value_rect(i);
+            if b.shape.has_gain() && b.dynamic && band_allows_dyn(&b) {
+                for i in 0..5 {
+                    let r = self.hud_dyn_value_rect(&b, i);
                     if inside(x, y, r) {
-                        return Some((ValueTarget::Band(i + 4), r));
+                        let target = match i {
+                            0 => 3,
+                            1 => 7,
+                            2 => 4,
+                            3 => 5,
+                            _ => 6,
+                        };
+                        return Some((ValueTarget::Band(target), r));
                     }
                 }
             }
@@ -1237,7 +1793,13 @@ impl StripView {
             .into_iter()
             .find(|(_, r)| inside(x, y, *r))
     }
-    fn start_edit(&mut self, target: ValueTarget, rect: (f32, f32, f32, f32)) {
+    fn start_edit(
+        &mut self,
+        cx: &mut EventContext,
+        target: ValueTarget,
+        rect: (f32, f32, f32, f32),
+    ) {
+        cx.focus();
         let value = match target {
             ValueTarget::Global(i) => {
                 let value = self.param(i).value() as f64;
@@ -1365,13 +1927,18 @@ impl StripView {
                             fields.push((ValueTarget::Band(i), self.hud_value_rect(&b, i)));
                         }
                     }
-                    if b.shape.has_gain() && b.dynamic {
-                        fields.push((ValueTarget::Band(3), self.hud_value_rect(&b, 3)));
-                        fields.push((ValueTarget::Band(7), self.hud_value_rect(&b, 4)));
-                        fields
-                            .extend((0..3).map(|i| {
-                                (ValueTarget::Band(i + 4), self.dyn_slider_value_rect(i))
-                            }));
+                    if b.shape.has_gain() && b.dynamic && band_allows_dyn(&b) {
+                        for i in 0..5 {
+                            let target = match i {
+                                0 => 3,
+                                1 => 7,
+                                2 => 4,
+                                3 => 5,
+                                _ => 6,
+                            };
+                            fields
+                                .push((ValueTarget::Band(target), self.hud_dyn_value_rect(&b, i)));
+                        }
                     }
                 }
                 fields.extend(self.global_value_hits());
@@ -1381,7 +1948,7 @@ impl StripView {
                 } else {
                     (index + 1) % fields.len()
                 };
-                self.start_edit(fields[next].0, fields[next].1);
+                self.start_edit(cx, fields[next].0, fields[next].1);
             }
             return;
         }
@@ -1430,7 +1997,7 @@ impl StripView {
     fn global_controls(&self) -> &'static [usize] {
         match self.dyn_page {
             DynPage::Main => &[0],
-            DynPage::Controls => &[6, 5, 11, 3, 4],
+            DynPage::Controls => &[5, 11, 6, 3, 4],
         }
     }
     fn param(&self, i: usize) -> &FloatParam {
@@ -1449,6 +2016,7 @@ impl StripView {
             11 => &self.params.comp_release,
             12 => &self.params.comp_knee,
             14 => &self.params.comp_depth,
+            15 => &self.params.output_gain,
             _ => &self.params.compression,
         }
     }
@@ -1509,16 +2077,6 @@ impl StripView {
             .find(|b| range_handle_hit(b, x, y, self.graph_db, self.gx(), self.gw(), self.selected))
             .map(|b| b.id)
     }
-    fn find_threshold_hit(&self, x: f32, y: f32, bands: &[Band]) -> Option<u64> {
-        if self.active_eq.get() == EQ_PAGE_SC || self.active_eq.get() == EQ_PAGE_LIFT {
-            return None;
-        }
-        bands
-            .iter()
-            .rev()
-            .find(|b| threshold_handle_hit(b, x, y, self.graph_db, self.gx(), self.gw()))
-            .map(|b| b.id)
-    }
     fn begin_range_drag(&mut self, cx: &mut EventContext, id: u64, x: f32, y: f32) {
         self.select(Some(id));
         self.change(|b| {
@@ -1527,17 +2085,6 @@ impl StripView {
             }
         });
         self.drag = Some(Target::Range(id));
-        self.last_drag = (x, y);
-        cx.capture();
-    }
-    fn begin_threshold_drag(&mut self, cx: &mut EventContext, id: u64, x: f32, y: f32) {
-        self.select(Some(id));
-        self.change(|b| {
-            if !b.dynamic {
-                b.dynamic = true;
-            }
-        });
-        self.drag = Some(Target::Threshold(id));
         self.last_drag = (x, y);
         cx.capture();
     }
@@ -1668,12 +2215,61 @@ impl StripView {
             })
             .map(|b| b.id)
     }
+    fn is_auditioning(&self, id: u64) -> bool {
+        self.pending_solo == Some(id) || self.shared.solo_id.load(Ordering::Relaxed) == id
+    }
+    fn node_xy(&self, id: u64) -> (f32, f32) {
+        if id >= LIFT_ID_BASE {
+            if let Some(b) = self.selected_lift() {
+                return (self.freq_x(b.freq), lift_gain_y(b.gain));
+            }
+        } else if let Some(b) = self.find_band(id) {
+            let y = db_y(if b.shape.has_gain() { b.gain } else { 0.0 }, self.graph_db);
+            return (self.freq_x(b.freq), y);
+        }
+        self.down
+    }
+    fn begin_solo_audition_drag(&mut self, id: u64) {
+        let restore = self.shared.solo_id.load(Ordering::Relaxed);
+        self.shared.solo_id.store(id, Ordering::Relaxed);
+        self.pending_solo = None;
+        let (nx, ny) = self.node_xy(id);
+        self.drag = Some(Target::SoloAudition {
+            id,
+            restore,
+            grab_dx: nx - self.down.0,
+            grab_dy: ny - self.down.1,
+        });
+        self.last_drag = self.down;
+    }
     fn apply_drag(&mut self, cx: &mut EventContext, x: f32, y: f32, shift: bool, cmd: bool) {
         let graph_db = self.graph_db;
         let (_lx, ly) = self.last_drag;
         let dy = (ly - y) as f64;
         self.last_drag = (x, y);
         match self.drag {
+            Some(Target::SoloAudition {
+                id,
+                grab_dx,
+                grab_dy,
+                ..
+            }) => {
+                let nx = (x + grab_dx).clamp(self.gx(), self.gx() + self.gw());
+                let ny = y + grab_dy;
+                if id >= LIFT_ID_BASE {
+                    self.change_lift(|b| {
+                        b.freq = self.x_freq(nx).clamp(20.0, 20000.0);
+                        b.gain = lift_y_gain(ny);
+                    });
+                } else {
+                    self.change(|b| {
+                        b.freq = self.x_freq(nx);
+                        if b.shape.has_gain() {
+                            b.gain = y_db(ny, graph_db);
+                        }
+                    });
+                }
+            }
             Some(Target::Node(id)) => {
                 if id >= LIFT_ID_BASE {
                     if shift {
@@ -1735,6 +2331,18 @@ impl StripView {
                     let r = self.pse_main_gr_meter_rect();
                     let norm = ((y - r.1) / r.3).clamp(0.0, 1.0);
                     cx.emit(RawParamEvent::SetParameterNormalized(p.as_ptr(), norm));
+                } else if i == 15 {
+                    let r = output_gain_rect();
+                    let bar_x = r.0 + 8.0;
+                    let bar_w = r.2 - 16.0;
+                    let norm = if shift {
+                        let cur = p.unmodulated_normalized_value();
+                        let dx = x - self.last_drag.0;
+                        (cur + (dx / bar_w) * 0.1).clamp(0.0, 1.0)
+                    } else {
+                        ((x - bar_x) / bar_w).clamp(0.0, 1.0)
+                    };
+                    cx.emit(RawParamEvent::SetParameterNormalized(p.as_ptr(), norm));
                 } else {
                     let cur = p.unmodulated_normalized_value();
                     let delta = (dy * if shift { 0.0015 } else { 0.007 }) as f32;
@@ -1771,21 +2379,19 @@ impl StripView {
                     }
                 });
             }
-            Some(Target::Threshold(_id)) => {
-                self.change(|b| {
-                    if !b.shape.has_gain() {
-                        return;
-                    }
-                    b.dynamic = true;
-                    b.threshold = y_to_db(y, graph_db).clamp(-60.0, 0.0);
-                });
-            }
             Some(Target::Band(i)) => {
-                let r = self.dyn_slider_rect(i);
-                let n = ((x - r.0 - 12.0) / (r.2 - 24.0)).clamp(0.0, 1.0) as f64;
+                let Some(b) = self.selected.and_then(|id| self.find_band(id)) else {
+                    return;
+                };
+                let r = self.hud_dyn_field_rect(&b, i);
+                let bar_x = r.0 + 8.0;
+                let bar_w = (r.2 - 16.0).max(1.0);
+                let n = ((x - bar_x) / bar_w).clamp(0.0, 1.0) as f64;
                 self.change(|b| match i {
-                    0 => b.ratio = 1.0 + 19.0 * n,
-                    1 => b.attack = 0.1 * 2000.0_f64.powf(n),
+                    0 => b.threshold = -60.0 + 60.0 * n,
+                    1 => b.range = -24.0 + 48.0 * n,
+                    2 => b.ratio = 1.0 + 19.0 * n,
+                    3 => b.attack = 0.1 * 2000.0_f64.powf(n),
                     _ => b.release = 10.0 * 200.0_f64.powf(n),
                 });
             }
@@ -1810,6 +2416,157 @@ impl StripView {
             if p.value() { 0.0 } else { 1.0 },
         ));
         cx.emit(RawParamEvent::EndSetParameter(p.as_ptr()));
+    }
+    fn reset_float_param(&self, cx: &mut EventContext, p: &FloatParam) {
+        let ptr = p.as_ptr();
+        cx.emit(RawParamEvent::BeginSetParameter(ptr));
+        cx.emit(RawParamEvent::SetParameterNormalized(
+            ptr,
+            p.default_normalized_value(),
+        ));
+        cx.emit(RawParamEvent::EndSetParameter(ptr));
+    }
+    fn finish_param_reset(&mut self, cx: &mut EventContext) {
+        self.drag = None;
+        cx.release();
+        cx.needs_redraw();
+    }
+    fn try_reset_at(&mut self, cx: &mut EventContext, x: f32, y: f32) -> bool {
+        if self.value_at(x, y).is_some() {
+            return false;
+        }
+        if inside(x, y, output_gain_rect()) {
+            self.reset_float_param(cx, self.param(15));
+            self.finish_param_reset(cx);
+            return true;
+        }
+        if self.pse_page == PsePage::Main
+            && (self.pse_anim_progress.get() - self.pse_anim_target.get()).abs() <= 0.01
+        {
+            let r = self.pse_main_thresh_slider_rect();
+            let thresh_norm = self.params.gate.unmodulated_normalized_value();
+            let thresh_y = r.1 + r.3 * (1.0 - thresh_norm);
+            let handle = self.pse_main_thresh_handle_rect(thresh_y);
+            let handle_hit = (
+                handle.0 - 4.0,
+                handle.1 - 2.0,
+                handle.2 + 8.0,
+                handle.3 + 4.0,
+            );
+            let knee_rect = self.pse_main_knee_rect(thresh_y, 0.0);
+            let gr = self.pse_main_gr_meter_rect();
+            let depth_y = gr.1 + gr.3 * self.params.pse_depth.unmodulated_normalized_value();
+            let depth_handle = self.pse_main_depth_handle_rect(depth_y);
+            if inside(x, y, handle_hit) {
+                self.reset_float_param(cx, self.param(1));
+                self.finish_param_reset(cx);
+                return true;
+            }
+            if inside(x, y, knee_rect) {
+                self.reset_float_param(cx, &self.params.pse_knee);
+                self.finish_param_reset(cx);
+                return true;
+            }
+            if inside(x, y, depth_handle) {
+                self.reset_float_param(cx, self.param(7));
+                self.finish_param_reset(cx);
+                return true;
+            }
+            if inside(x, y, (r.0 - 10.0, r.1 - 10.0, r.2 + 20.0, r.3 + 20.0)) {
+                self.reset_float_param(cx, self.param(1));
+                self.finish_param_reset(cx);
+                return true;
+            }
+        }
+        if self.dyn_page == DynPage::Main
+            && (self.dyn_anim_progress.get() - self.dyn_anim_target.get()).abs() <= 0.01
+        {
+            let r = self.dyn_main_thresh_slider_rect();
+            let gr = self.dyn_main_gr_meter_rect();
+            let thresh_norm = self.params.compression.unmodulated_normalized_value();
+            let thresh_y = r.1 + r.3 * thresh_norm;
+            let handle = self.dyn_main_thresh_handle_rect(thresh_y);
+            let handle_hit = (
+                handle.0 - 4.0,
+                handle.1 - 2.0,
+                handle.2 + 8.0,
+                handle.3 + 4.0,
+            );
+            let knee_rect = self.dyn_main_knee_rect(thresh_y, 0.0);
+            let depth_y = gr.1 + gr.3 * self.params.comp_depth.unmodulated_normalized_value();
+            let depth_handle = self.dyn_main_depth_handle_rect(depth_y);
+            if inside(x, y, handle_hit) {
+                self.reset_float_param(cx, self.param(0));
+                self.finish_param_reset(cx);
+                return true;
+            }
+            if inside(x, y, knee_rect) {
+                self.reset_float_param(cx, &self.params.comp_knee);
+                self.finish_param_reset(cx);
+                return true;
+            }
+            if inside(x, y, depth_handle) {
+                self.reset_float_param(cx, self.param(14));
+                self.finish_param_reset(cx);
+                return true;
+            }
+            if inside(
+                x,
+                y,
+                (r.0 - 10.0, r.1 - 10.0, r.2 + gr.2 + 20.0, r.3 + 20.0),
+            ) {
+                self.reset_float_param(cx, self.param(0));
+                self.finish_param_reset(cx);
+                return true;
+            }
+        }
+        if let Some(i) = self
+            .global_hit_rects()
+            .into_iter()
+            .find(|(_, r)| inside(x, y, *r))
+            .map(|(i, _)| i)
+        {
+            self.reset_float_param(cx, self.param(i));
+            self.finish_param_reset(cx);
+            return true;
+        }
+        if self.is_lift_selected() {
+            if let Some(i) = (0..5).find(|i| {
+                inside(x, y, self.band_bar_rect(*i)) && !inside(x, y, self.band_value_rect(*i))
+            }) {
+                let defaults = LiftBand::default();
+                self.change_lift(|b| match i {
+                    0 => b.threshold = defaults.threshold,
+                    1 => b.ratio = defaults.ratio,
+                    2 => b.attack = defaults.attack,
+                    3 => b.release = defaults.release,
+                    _ => b.range = defaults.range,
+                });
+                self.finish_param_reset(cx);
+                return true;
+            }
+        } else if let Some(b) = self
+            .selected
+            .and_then(|id| self.find_band(id))
+            .filter(|b| b.shape.has_gain() && b.dynamic && band_allows_dyn(b))
+        {
+            if let Some(i) = (0..5).find(|i| {
+                inside(x, y, self.hud_dyn_field_rect(&b, *i))
+                    && !inside(x, y, self.hud_dyn_value_rect(&b, *i))
+            }) {
+                let defaults = Band::default();
+                self.change(|band| match i {
+                    0 => band.threshold = defaults.threshold,
+                    1 => band.range = defaults.range,
+                    2 => band.ratio = defaults.ratio,
+                    3 => band.attack = defaults.attack,
+                    _ => band.release = defaults.release,
+                });
+                self.finish_param_reset(cx);
+                return true;
+            }
+        }
+        false
     }
     fn delete(&mut self) {
         if let Some(id) = self.selected {
@@ -1854,8 +2611,15 @@ impl View for StripView {
                         cx.needs_redraw();
                         return;
                     }
-                    WindowEvent::KeyDown(code, _) => {
+                    WindowEvent::KeyDown(code, key) => {
                         self.edit_key(cx, *code);
+                        // Some hosts deliver only KeyDown (empty characters / keyCode).
+                        let has_char = matches!(key, Some(Key::Character(_)));
+                        if !has_char && !cx.modifiers().command() {
+                            if let Some(c) = typed_char(*code, cx.modifiers().shift()) {
+                                self.edit.as_mut().unwrap().insert(&c.to_string());
+                            }
+                        }
                         meta.consume();
                         cx.needs_redraw();
                         return;
@@ -1908,12 +2672,7 @@ impl View for StripView {
                     }
                     if let Some(id) = self.pending_solo {
                         if (x - self.down.0).hypot(y - self.down.1) >= DRAG_START_THRESHOLD {
-                            self.pending_solo = None;
-                            self.drag = Some(Target::Node(id));
-                            self.last_drag = self.down;
-                            let shift = cx.modifiers().shift();
-                            let cmd = cx.modifiers().command();
-                            self.apply_drag(cx, x, y, shift, cmd);
+                            self.begin_solo_audition_drag(id);
                         }
                     }
                     if self.drag.is_some() {
@@ -1921,6 +2680,10 @@ impl View for StripView {
                         let cmd = cx.modifiers().command();
                         self.apply_drag(cx, x, y, shift, cmd);
                     }
+                    cx.needs_redraw();
+                }
+                WindowEvent::MouseLeave => {
+                    self.hover = None;
                     cx.needs_redraw();
                 }
                 WindowEvent::MouseDown(MouseButton::Left) => {
@@ -1935,17 +2698,44 @@ impl View for StripView {
                         cx.needs_redraw();
                         return;
                     }
-                    if inside(x, y, self.footer_listen_sc_rect()) {
-                        self.toggle(cx, &self.params.pse_listen);
+                    if inside(x, y, self.footer_auto_rect()) {
+                        self.toggle(cx, &self.params.auto_makeup);
+                        cx.needs_redraw();
+                        return;
+                    }
+                    if inside(x, y, self.footer_link_rect()) {
+                        self.toggle(cx, &self.params.stereo_link);
+                        cx.needs_redraw();
+                        return;
+                    }
+                    if inside(x, y, output_gain_rect()) {
+                        if let Some((target, rect)) = self.value_at(x, y) {
+                            self.start_edit(cx, target, rect);
+                            cx.needs_redraw();
+                            return;
+                        }
+                        self.drag = Some(Target::Global(15));
+                        self.down = (x, y);
+                        self.last_drag = (x, y);
+                        cx.capture();
+                        let r = output_gain_rect();
+                        let bar_x = r.0 + 8.0;
+                        let bar_w = r.2 - 16.0;
+                        let norm = ((x - bar_x) / bar_w).clamp(0.0, 1.0);
+                        let p = self.param(15);
+                        cx.emit(RawParamEvent::BeginSetParameter(p.as_ptr()));
+                        cx.emit(RawParamEvent::SetParameterNormalized(p.as_ptr(), norm));
                         cx.needs_redraw();
                         return;
                     }
                     if inside(x, y, self.dyn_power_button_rect()) {
+                        self.dyn_bypass_anim.trigger_click();
                         self.toggle(cx, &self.params.comp_on);
                         cx.needs_redraw();
                         return;
                     }
                     if inside(x, y, self.pse_power_button_rect()) {
+                        self.pse_bypass_anim.trigger_click();
                         self.toggle(cx, &self.params.pse_on);
                         cx.needs_redraw();
                         return;
@@ -2123,15 +2913,6 @@ impl View for StripView {
                                 cx.needs_redraw();
                                 return;
                             }
-                            for (i, p) in
-                                [(0, &self.params.auto_makeup), (1, &self.params.stereo_link)]
-                            {
-                                if inside(x, y, self.dyn_mode_rect(i)) {
-                                    self.toggle(cx, p);
-                                    cx.needs_redraw();
-                                    return;
-                                }
-                            }
                         }
                     }
                     if let Some(resolution) = self.processing_menu.take() {
@@ -2227,7 +3008,7 @@ impl View for StripView {
                         return;
                     }
                     if let Some((target, rect)) = self.value_at(x, y) {
-                        self.start_edit(target, rect);
+                        self.start_edit(cx, target, rect);
                         cx.needs_redraw();
                         return;
                     }
@@ -2275,9 +3056,17 @@ impl View for StripView {
                         }
                         return;
                     }
+                    if self.active_eq.get() == EQ_PAGE_SC
+                        && inside(x, y, self.eq_header_listen_sc_rect())
+                    {
+                        self.toggle(cx, &self.params.pse_listen);
+                        cx.needs_redraw();
+                        return;
+                    }
                     self.down = (x, y);
                     self.last_drag = (x, y);
                     if inside(x, y, self.eq_power_rect()) {
+                        self.eq_bypass_anim.trigger_click();
                         match self.active_eq.get() {
                             EQ_PAGE_2 => self.toggle(cx, &self.params.eq2_on),
                             EQ_PAGE_LIFT => self.toggle(cx, &self.params.lift_on),
@@ -2290,68 +3079,132 @@ impl View for StripView {
                         {
                             return;
                         }
-                        // Check if click hits selected band HUD
-                        let mut hud_consumed = false;
-                        if let Some(sel_id) = self.selected {
-                            if sel_id >= LIFT_ID_BASE {
-                                if let Some(b) = self.selected_lift() {
-                                    let (bx, by, bw, bh) = self.hud_rect_for_lift(&b);
-                                    if inside(x, y, (bx, by, bw, bh)) {
-                                        hud_consumed = true;
-                                        if inside(x, y, (bx + 6.0, by + 6.0, 26.0, 26.0)) {
-                                            self.change_lift(|b| b.enabled = !b.enabled);
-                                        } else if inside(x, y, (bx + 40.0, by + 6.0, 148.0, 26.0)) {
-                                            self.menu = Some(BandMenu::Shape);
-                                        } else if inside(x, y, (bx + 222.0, by + 6.0, 28.0, 26.0)) {
-                                            self.pending_solo = Some(b.id);
-                                            self.down = (x, y);
-                                            self.last_drag = (x, y);
-                                            cx.capture();
-                                        } else if inside(
-                                            x,
-                                            y,
-                                            (bx + bw - 32.0, by + 6.0, 26.0, 26.0),
-                                        ) {
-                                            self.delete();
-                                        } else if inside(x, y, (bx + 10.0, by + 78.0, 108.0, 22.0))
-                                            && b.shape.is_cut()
-                                        {
-                                            self.menu = Some(BandMenu::Order);
+                        // Lift dock sits on top of HUD and graph.
+                        let mut bottom_control_handled = false;
+                        let bottom_dock = (
+                            self.gx(),
+                            GRAPH_BOTTOM - LIFT_DOCK_H,
+                            self.gw(),
+                            LIFT_DOCK_H,
+                        );
+                        if let Some(i) = self
+                            .global_hit_rects()
+                            .into_iter()
+                            .find(|(_, r)| inside(x, y, *r))
+                            .map(|(i, _)| i)
+                        {
+                            bottom_control_handled = true;
+                            self.drag = Some(Target::Global(i));
+                            self.last_drag = (x, y);
+                            cx.emit(RawParamEvent::BeginSetParameter(self.param(i).as_ptr()));
+                            cx.capture();
+                        } else if self.is_lift_selected() {
+                            let badge_rect = (self.gx() + 8.0, GRAPH_BOTTOM - 48.0, 32.0, 28.0);
+                            if inside(x, y, badge_rect) {
+                                self.lift_badge_anim.trigger_click();
+                                bottom_control_handled = true;
+                                self.change_lift(|b| b.enabled = !b.enabled);
+                            } else if let Some(i) =
+                                (0..5).find(|i| inside(x, y, self.band_bar_rect(*i)))
+                            {
+                                bottom_control_handled = true;
+                                self.drag = Some(Target::LiftBand(i));
+                                self.last_drag = (x, y);
+                                cx.capture();
+                                self.apply_drag(cx, x, y, false, false);
+                            } else if inside(x, y, bottom_dock) {
+                                bottom_control_handled = true;
+                            }
+                        }
+
+                        if !bottom_control_handled {
+                            // Check if click hits selected band HUD
+                            let mut hud_consumed = false;
+                            if let Some(sel_id) = self.selected {
+                                if sel_id >= LIFT_ID_BASE {
+                                    if let Some(b) = self.selected_lift() {
+                                        let (bx, by, bw, bh) = self.hud_rect_for_lift(&b);
+                                        if inside(x, y, (bx, by, bw, bh)) {
+                                            hud_consumed = true;
+                                            match hud_chrome_hit(x, y, bx, by, bw, b.shape.is_cut())
+                                            {
+                                                Some(HudChrome::Bypass) => {
+                                                    self.change_lift(|b| b.enabled = !b.enabled);
+                                                }
+                                                Some(HudChrome::Shape) => {
+                                                    self.menu = Some(BandMenu::Shape);
+                                                }
+                                                Some(HudChrome::Solo) => {
+                                                    self.pending_solo = Some(b.id);
+                                                    self.down = (x, y);
+                                                    self.last_drag = (x, y);
+                                                    cx.capture();
+                                                }
+                                                Some(HudChrome::Close) => self.delete(),
+                                                Some(HudChrome::Order) => {
+                                                    self.menu = Some(BandMenu::Order);
+                                                }
+                                                None => {}
+                                            }
                                         }
                                     }
-                                }
-                            } else {
-                                let band_opt = self.find_band(sel_id);
-                                if let Some(b) = band_opt {
-                                    let (bx, by, bw, bh) = self.hud_rect_for(&b);
-                                    if inside(x, y, (bx, by, bw, bh)) {
+                                } else if let Some(b) = self.find_band(sel_id) {
+                                    let g = self.hud_geom(&b);
+                                    let in_hud = inside(x, y, self.hud_bounds_for(&b))
+                                        || hud_dyn_btn_hit(g, x, y);
+                                    if in_hud {
                                         hud_consumed = true;
-                                        if inside(x, y, (bx + 6.0, by + 6.0, 26.0, 26.0)) {
-                                            self.change(|b| b.enabled = !b.enabled);
-                                        } else if inside(x, y, (bx + 40.0, by + 6.0, 148.0, 26.0)) {
-                                            self.menu = Some(BandMenu::Shape);
-                                        } else if inside(x, y, (bx + 222.0, by + 6.0, 28.0, 26.0)) {
-                                            self.pending_solo = Some(b.id);
-                                            self.down = (x, y);
-                                            self.last_drag = (x, y);
-                                            cx.capture();
-                                        } else if inside(
-                                            x,
-                                            y,
-                                            (bx + bw - 32.0, by + 6.0, 26.0, 26.0),
-                                        ) {
-                                            self.delete();
-                                        } else if inside(x, y, (bx + 10.0, by + 78.0, 108.0, 22.0))
-                                            && b.shape.is_cut()
-                                        {
-                                            self.menu = Some(BandMenu::Order);
+                                        if hud_dyn_btn_hit(g, x, y) {
+                                            self.dyn_band_anim.trigger_click();
+                                            self.change(|b| b.dynamic = !b.dynamic);
+                                        } else {
+                                            match hud_chrome_hit(
+                                                x,
+                                                y,
+                                                g.bx,
+                                                g.by,
+                                                g.bw,
+                                                b.shape.is_cut(),
+                                            ) {
+                                                Some(HudChrome::Bypass) => {
+                                                    self.change(|b| b.enabled = !b.enabled);
+                                                }
+                                                Some(HudChrome::Shape) => {
+                                                    self.menu = Some(BandMenu::Shape);
+                                                }
+                                                Some(HudChrome::Solo) => {
+                                                    self.pending_solo = Some(b.id);
+                                                    self.down = (x, y);
+                                                    self.last_drag = (x, y);
+                                                    cx.capture();
+                                                }
+                                                Some(HudChrome::Close) => self.delete(),
+                                                Some(HudChrome::Order) => {
+                                                    self.menu = Some(BandMenu::Order);
+                                                }
+                                                None => {
+                                                    if b.dynamic && band_allows_dyn(&b) {
+                                                        if let Some(i) = (0..5).find(|i| {
+                                                            inside(
+                                                                x,
+                                                                y,
+                                                                self.hud_dyn_field_rect(&b, *i),
+                                                            )
+                                                        }) {
+                                                            self.drag = Some(Target::Band(i));
+                                                            self.last_drag = (x, y);
+                                                            cx.capture();
+                                                            self.apply_drag(cx, x, y, false, false);
+                                                        }
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
                             }
-                        }
-                        if !hud_consumed {
-                            if inside(x, y, self.graph_area()) {
+
+                            if !hud_consumed && inside(x, y, self.graph_area()) {
                                 let lift_hit = self.lift_hit_at(x, y);
                                 if let Some(id) = lift_hit {
                                     self.select(Some(id));
@@ -2364,9 +3217,7 @@ impl View for StripView {
                                     }
                                 } else {
                                     let bands = self.clone_page_bands();
-                                    if let Some(id) = self.find_threshold_hit(x, y, &bands) {
-                                        self.begin_threshold_drag(cx, id, x, y);
-                                    } else if let Some(id) = self.find_range_hit(x, y, &bands) {
+                                    if let Some(id) = self.find_range_hit(x, y, &bands) {
                                         self.begin_range_drag(cx, id, x, y);
                                     } else {
                                         let hit = bands
@@ -2401,11 +3252,12 @@ impl View for StripView {
                                                 as f64;
                                             let config = self.params.processing_config();
                                             let eq_sr = config.mode.rate(sr);
+                                            let meters = self.dyn_gr_uncapped();
                                             let db = bands
                                                 .iter()
                                                 .filter(|b| b.enabled)
                                                 .map(|b| {
-                                                    BandCoeffs::make(b, eq_sr)
+                                                    BandCoeffs::make(&plot_band(b, &meters), eq_sr)
                                                         .response(self.x_freq(x), eq_sr)
                                                 })
                                                 .sum::<f64>();
@@ -2423,50 +3275,6 @@ impl View for StripView {
                                         }
                                     }
                                 }
-                            } else if let Some(i) = self
-                                .global_hit_rects()
-                                .into_iter()
-                                .find(|(_, r)| inside(x, y, *r))
-                                .map(|(i, _)| i)
-                            {
-                                self.drag = Some(Target::Global(i));
-                                self.last_drag = (x, y);
-                                cx.emit(RawParamEvent::BeginSetParameter(self.param(i).as_ptr()));
-                                cx.capture();
-                            } else if self.is_lift_selected() {
-                                let badge_rect = (self.gx() + 8.0, GRAPH_BOTTOM - 48.0, 32.0, 28.0);
-                                if inside(x, y, badge_rect) {
-                                    self.change_lift(|b| b.enabled = !b.enabled);
-                                } else if let Some(i) =
-                                    (0..5).find(|i| inside(x, y, self.band_bar_rect(*i)))
-                                {
-                                    self.drag = Some(Target::LiftBand(i));
-                                    self.last_drag = (x, y);
-                                    cx.capture();
-                                    self.apply_drag(cx, x, y, false, false);
-                                }
-                            } else if self
-                                .selected
-                                .and_then(|id| self.find_band(id))
-                                .is_some_and(|b| b.shape.has_gain() && b.id < SC_EQ_ID_BASE)
-                            {
-                                let is_dynamic = self
-                                    .selected
-                                    .and_then(|id| self.find_band(id))
-                                    .map(|b| b.dynamic)
-                                    .unwrap_or(false);
-                                if inside(x, y, self.band_dyn_power_rect(is_dynamic)) {
-                                    self.change(|b| b.dynamic = !b.dynamic);
-                                } else if is_dynamic {
-                                    if let Some(i) =
-                                        (0..3).find(|i| inside(x, y, self.dyn_slider_bar_rect(*i)))
-                                    {
-                                        self.drag = Some(Target::Band(i));
-                                        self.last_drag = (x, y);
-                                        cx.capture();
-                                        self.apply_drag(cx, x, y, false, false);
-                                    }
-                                }
                             }
                         }
                     }
@@ -2476,18 +3284,21 @@ impl View for StripView {
                     if self.menu.is_some() || self.scale_menu || self.processing_menu.is_some() {
                         return;
                     }
-                    if self.dyn_page == DynPage::Main {
-                        let r = self.dyn_main_thresh_slider_rect();
-                        if inside(x, y, (r.0 - 10.0, r.1 - 10.0, r.2 + 20.0, r.3 + 20.0)) {
-                            let p = self.param(0);
-                            cx.emit(RawParamEvent::BeginSetParameter(p.as_ptr()));
-                            cx.emit(RawParamEvent::SetParameterNormalized(p.as_ptr(), 0.0));
-                            cx.emit(RawParamEvent::EndSetParameter(p.as_ptr()));
-                            cx.needs_redraw();
-                            return;
-                        }
+                    if self.try_reset_at(cx, x, y) {
+                        return;
                     }
                     if inside(x, y, self.graph_area()) && self.drag.is_none() {
+                        if self.is_lift_selected() {
+                            let bottom_dock = (
+                                self.gx(),
+                                GRAPH_BOTTOM - LIFT_DOCK_H,
+                                self.gw(),
+                                LIFT_DOCK_H,
+                            );
+                            if inside(x, y, bottom_dock) {
+                                return;
+                            }
+                        }
                         let mut over_hud = false;
                         if let Some(sel_id) = self.selected {
                             if sel_id >= LIFT_ID_BASE {
@@ -2497,7 +3308,7 @@ impl View for StripView {
                                     }
                                 }
                             } else if let Some(b) = self.find_band(sel_id) {
-                                if inside(x, y, self.hud_rect_for(&b)) {
+                                if inside(x, y, self.hud_bounds_for(&b)) {
                                     over_hud = true;
                                 }
                             }
@@ -2557,6 +3368,9 @@ impl View for StripView {
                             self.params.pse_knee.as_ptr(),
                         ));
                     }
+                    if let Some(Target::SoloAudition { restore, .. }) = self.drag {
+                        self.shared.solo_id.store(restore, Ordering::Relaxed);
+                    }
                     if self.pending_create.is_some() {
                         self.select(None);
                     }
@@ -2589,7 +3403,7 @@ impl View for StripView {
                                     }
                                 }
                             } else if let Some(b) = self.find_band(sel_id) {
-                                if inside(x, y, self.hud_rect_for(&b)) {
+                                if inside(x, y, self.hud_bounds_for(&b)) {
                                     over_hud = true;
                                 }
                             }
@@ -2627,10 +3441,27 @@ impl View for StripView {
                     {
                         return;
                     }
-                    if inside(x, y, (self.gx() - 50.0, GY, 36.0, GRAPH_BOTTOM - GY + 32.0))
-                        && *dy != 0.0
+                    if inside(
+                        x,
+                        y,
+                        (
+                            self.gx() - EQ_GRAPH_PAD_LEFT,
+                            GY,
+                            EQ_GRAPH_PAD_LEFT,
+                            GRAPH_BOTTOM - GY + 32.0,
+                        ),
+                    ) && *dy != 0.0
                     {
-                        self.set_graph_range(self.graph_db - dy.signum() as f64 * 12.0);
+                        let cur_idx = SCALES
+                            .iter()
+                            .position(|&s| (s - self.graph_db).abs() < 0.1)
+                            .unwrap_or(2);
+                        let next_idx = if *dy > 0.0 {
+                            cur_idx.saturating_sub(1)
+                        } else {
+                            (cur_idx + 1).min(SCALES.len() - 1)
+                        };
+                        self.set_graph_range(SCALES[next_idx]);
                         cx.needs_redraw();
                         return;
                     }
@@ -2763,24 +3594,25 @@ impl View for StripView {
             .clamp(0.001, 0.1);
         self.last_tick.set(Some(now));
 
-        let cur_p = self.anim_progress.get();
-        let target_p = self.anim_target.get();
-        let next_p = if cur_p < target_p {
-            (cur_p + dt / 0.25).min(target_p)
-        } else if cur_p > target_p {
-            (cur_p - dt / 0.25).max(target_p)
+        let cur_t = self.anim_time.get();
+        let next_t = if cur_t < 1.0 {
+            (cur_t + dt / 0.25).min(1.0)
         } else {
-            cur_p
+            1.0
         };
+        self.anim_time.set(next_t);
+        let eased_t = next_t * next_t * next_t * (next_t * (next_t * 6.0 - 15.0) + 10.0);
+        let start_p = self.anim_start.get();
+        let target_p = self.anim_target.get();
+        let next_p = start_p + (target_p - start_p) * eased_t;
         self.anim_progress.set(next_p);
         tick_page_anim(&self.dyn_anim_progress, self.dyn_anim_target.get(), dt);
         tick_page_anim(&self.pse_anim_progress, self.pse_anim_target.get(), dt);
 
-        let eased = quintic_page_progress(next_p);
-        let offset_1 = (0.0 - eased) * GRAPH_CLIP_W;
-        let offset_2 = (1.0 - eased) * GRAPH_CLIP_W;
-        let offset_lift = (EQ_PAGE_LIFT as f32 - eased) * GRAPH_CLIP_W;
-        let offset_sc = (EQ_PAGE_SC as f32 - eased) * GRAPH_CLIP_W;
+        let offset_1 = (0.0 - next_p) * GRAPH_CLIP_W;
+        let offset_2 = (1.0 - next_p) * GRAPH_CLIP_W;
+        let offset_lift = (EQ_PAGE_LIFT as f32 - next_p) * GRAPH_CLIP_W;
+        let offset_sc = (EQ_PAGE_SC as f32 - next_p) * GRAPH_CLIP_W;
 
         let page = self.active_eq.get();
         let eq1_on = self.params.eq_on.value();
@@ -2805,7 +3637,18 @@ impl View for StripView {
         d.rect(eq_b.0, eq_b.1, eq_b.2, eq_b.3, PANEL);
         d.outline(eq_b, LINE);
 
-        d.bypass_button(self.eq_power_rect(), active_bypassed, TEAL);
+        let eq_power_r = self.eq_power_rect();
+        let eq_power_hovered = self
+            .idle_hover()
+            .is_some_and(|(hx, hy)| inside(hx, hy, eq_power_r));
+        let eq_power_click = self.eq_bypass_anim.step();
+        d.bypass_button(
+            eq_power_r,
+            active_bypassed,
+            TEAL,
+            eq_power_hovered,
+            eq_power_click,
+        );
         d.text(
             eq_x + 44.0,
             module_title_y(16.0),
@@ -2841,6 +3684,14 @@ impl View for StripView {
             page == EQ_PAGE_SC,
             if sc_eq_on { TEAL } else { MUTED },
         );
+        if page == EQ_PAGE_SC {
+            d.button(
+                self.eq_header_listen_sc_rect(),
+                "LISTEN SC",
+                self.params.pse_listen.value(),
+                TEAL,
+            );
+        }
 
         if active_bypassed {
             d.text(
@@ -2897,7 +3748,8 @@ impl View for StripView {
         let scale_btn = self.scale_button_rect();
         let scale_menu_r = self.scale_menu_rect();
         let draw_grid_and_spectrum = |d: &mut Draw, bypassed: bool, eq_idx: usize| {
-            for db in (-(self.graph_db as i32)..=self.graph_db as i32).step_by(12) {
+            let step = if self.graph_db <= 6.0 { 6 } else { 12 };
+            for db in (-(self.graph_db as i32)..=self.graph_db as i32).step_by(step) {
                 let y = db_y(db as f64, self.graph_db);
                 d.line(
                     gx,
@@ -2907,13 +3759,15 @@ impl View for StripView {
                     if db == 0 { C::rgb(75, 81, 85) } else { LINE },
                     1.0,
                 );
-                d.text_centered(
-                    gx - 22.0,
-                    axis_label_y(y, 13.0),
-                    &axis_db_text(db),
-                    13.0,
-                    MUTED,
-                );
+                if db != self.graph_db as i32 {
+                    d.text_centered(
+                        gx - EQ_GRAPH_PAD_LEFT * 0.5,
+                        axis_label_y(y, 13.0),
+                        &axis_db_text(db),
+                        13.0,
+                        MUTED,
+                    );
+                }
             }
             for (freq, label) in FREQ_AXIS {
                 let x = freq_x_at(freq, gx, gw);
@@ -2938,13 +3792,16 @@ impl View for StripView {
                 },
                 1.0,
             );
+            let scale_hover = self
+                .idle_hover()
+                .is_some_and(|(hx, hy)| inside(hx, hy, scale_btn));
             d.rect(scale_btn.0, scale_btn.1, scale_btn.2, scale_btn.3, PANEL);
             d.text_centered(
                 scale_btn.0 + scale_btn.2 * 0.5,
-                scale_btn.1 + 16.0,
+                axis_label_y(GY, 13.0),
                 &format!("±{} ▾", self.graph_db as i32),
-                9.5,
-                MUTED,
+                13.0,
+                if scale_hover { TEXT } else { MUTED },
             );
             if self.scale_menu && self.active_eq.get() == eq_idx {
                 let r = scale_menu_r;
@@ -2975,11 +3832,12 @@ impl View for StripView {
             draw_grid_and_spectrum(&mut d, eq1_bypassed, 0);
 
             let mut sum = vec![0.0; 420];
+            let mut selected_curve: Option<(Vec<(f32, f32)>, C)> = None;
             for b in &bands {
                 if !b.enabled {
                     continue;
                 }
-                let coeff = BandCoeffs::make(b, eq_sr);
+                let coeff = BandCoeffs::make(&plot_band(b, &dyn_uncapped), eq_sr);
                 let color = if eq1_bypassed {
                     MUTED
                 } else {
@@ -2998,6 +3856,7 @@ impl View for StripView {
                     fill.a = if eq1_bypassed { 0.02 } else { 0.07 };
                     d.area(&points, db_y(0.0, self.graph_db), fill);
                     d.poly(&points, color, 1.2);
+                    selected_curve = Some((points, color));
                 }
             }
             let points: Vec<_> = sum
@@ -3005,7 +3864,21 @@ impl View for StripView {
                 .enumerate()
                 .map(|(i, db)| (gx + gw * i as f32 / 419.0, db_y(*db, self.graph_db)))
                 .collect();
-            d.poly(&points, if eq1_bypassed { MUTED } else { GOLD }, 2.2);
+            let sum_color = if eq1_bypassed { MUTED } else { GOLD };
+            d.poly(&points, sum_color, 2.2);
+            if let Some(b) = bands
+                .iter()
+                .find(|b| b.id == self.shared.solo_id.load(Ordering::Relaxed))
+            {
+                let fill = selected_curve.as_ref().map(|(pts, color)| {
+                    let mut fill = *color;
+                    fill.a = if eq1_bypassed { 0.02 } else { 0.07 };
+                    (pts.as_slice(), db_y(0.0, self.graph_db), fill)
+                });
+                draw_solo_shade(
+                    &mut d, b.shape, b.freq, b.q, gx, gw, eq_b, &points, sum_color, 2.2, fill,
+                );
+            }
 
             for b in &bands {
                 let color = if !b.enabled || eq1_bypassed {
@@ -3015,16 +3888,7 @@ impl View for StripView {
                 };
                 let x = freq_x_at(b.freq, gx, gw);
                 let y = db_y(if b.shape.has_gain() { b.gain } else { 0.0 }, self.graph_db);
-                let y_range = if b.dynamic && b.shape.has_gain() {
-                    db_y(b.gain - b.range, self.graph_db)
-                } else {
-                    y
-                };
                 if b.dynamic && b.shape.has_gain() {
-                    let thresh_hover = self.drag == Some(Target::Threshold(b.id))
-                        || self.hover.is_some_and(|(hx, hy)| {
-                            threshold_handle_hit(b, hx, hy, self.graph_db, gx, gw)
-                        });
                     draw_dyn_range_stem(
                         &mut d,
                         b,
@@ -3032,28 +3896,24 @@ impl View for StripView {
                         (gx, gw),
                         color,
                         uncapped_for(b.id, &dyn_uncapped),
-                        thresh_hover,
                     );
                 } else if Some(b.id) == self.selected {
                     d.circle(x, y, 12.0, color, false);
                 }
                 d.circle(x, y, 7.0, color, true);
-                d.text(
-                    x - 4.0,
-                    y.min(y_range) - 17.0,
-                    &b.id.to_string(),
-                    11.0,
-                    color,
-                );
             }
 
             if let Some(b) = bands.iter().find(|b| Some(b.id) == self.selected) {
-                let color = if eq1_bypassed {
+                let color = if !b.enabled || eq1_bypassed {
                     MUTED
                 } else {
                     COLORS[(b.id as usize - 1) % COLORS.len()]
                 };
-                let is_solo = self.shared.solo_id.load(Ordering::Relaxed) == b.id;
+                let is_solo = self.is_auditioning(b.id);
+                let g = hud_geom_for_at(b, self.graph_db, gx, gw);
+                let dyn_hover = self
+                    .idle_hover()
+                    .is_some_and(|(hx, hy)| hud_dyn_btn_hit(g, hx, hy));
                 band_hud(
                     &mut d,
                     b,
@@ -3063,97 +3923,14 @@ impl View for StripView {
                     config.mode == ProcessingMode::LinearPhase,
                     gx,
                     gw,
-                );
-            }
-
-            // EQ 1 Bottom dynamic area
-            if let Some(b) = self
-                .selected
-                .and_then(|id| self.find_band(id))
-                .filter(|b| b.id < EQ2_ID_BASE && b.shape.has_gain())
-            {
-                let color = COLORS[(b.id as usize - 1) % COLORS.len()];
-                let power_rect = band_dyn_power_rect_at(b.dynamic, gx);
-                let hovered = self
-                    .hover
-                    .is_some_and(|(hx, hy)| inside(hx, hy, power_rect));
-                d.rect(
-                    power_rect.0,
-                    power_rect.1,
-                    power_rect.2,
-                    power_rect.3,
-                    PANEL,
-                );
-                if b.dynamic {
-                    let c = if eq1_on { color } else { MUTED };
-                    d.outline(
-                        power_rect,
-                        if hovered {
-                            TEXT
-                        } else if eq1_on {
-                            c
-                        } else {
-                            LINE
-                        },
-                    );
-                    d.power_icon(
-                        power_rect.0 + power_rect.2 * 0.5,
-                        power_rect.1 + power_rect.3 * 0.5,
-                        c,
-                    );
-                    for (i, label, val, n) in [
-                        (
-                            0,
-                            "RATIO",
-                            format!("{:.1}:1", b.ratio),
-                            (b.ratio - 1.0) / 19.0,
-                        ),
-                        (
-                            1,
-                            "ATTACK",
-                            format!("{:.1} ms", b.attack),
-                            (b.attack / 0.1).log(2000.0),
-                        ),
-                        (
-                            2,
-                            "RELEASE",
-                            format!("{:.0} ms", b.release),
-                            (b.release / 10.0).log(200.0),
-                        ),
-                    ] {
-                        d.control(dyn_slider_rect_at(i, gx, gw), label, &val, n as f32, c);
-                    }
-                } else {
-                    d.outline(power_rect, if hovered { TEXT } else { LINE });
-                    d.power_icon(
-                        power_rect.0 + 14.0,
-                        power_rect.1 + power_rect.3 * 0.5,
-                        if hovered { TEXT } else { MUTED },
-                    );
-                    d.text(
-                        power_rect.0 + 28.0,
-                        power_rect.1 + power_rect.3 * 0.5 + 4.0,
-                        "BAND DYNAMICS",
-                        11.0,
-                        if hovered { TEXT } else { MUTED },
-                    );
-                }
-            } else if self.selected.is_none() {
-                let add_rect = (gx + 8.0, GRAPH_BOTTOM - 50.0, gw - 16.0, 32.0);
-                d.rect(add_rect.0, add_rect.1, add_rect.2, add_rect.3, PANEL);
-                d.outline(add_rect, LINE);
-                d.text_centered(
-                    add_rect.0 + add_rect.2 * 0.5,
-                    add_rect.1 + 20.0,
-                    "SELECT A BAND TO CONFIGURE DYNAMICS",
-                    11.5,
-                    MUTED,
+                    dyn_hover,
+                    self.dyn_band_anim.step(),
                 );
             }
 
             // Hover cursor on EQ 1
             if page == 0 && (next_p - target_p).abs() < 0.05 {
-                if let Some((x, y)) = self.hover {
+                if let Some((x, y)) = self.idle_hover() {
                     if inside(x, y, (gx, GY, gw, GH))
                         && self.drag.is_none()
                         && self.menu.is_none()
@@ -3162,7 +3939,7 @@ impl View for StripView {
                         && self.edit.is_none()
                         && !bands.iter().any(|b| {
                             Some(b.id) == self.selected
-                                && inside(x, y, hud_rect_for_at(b, self.graph_db, gx, gw))
+                                && inside(x, y, hud_bounds_for_at(b, self.graph_db, gx, gw))
                         })
                         && !eq1_bypassed
                     {
@@ -3174,18 +3951,23 @@ impl View for StripView {
                                 .iter()
                                 .filter(|b| b.enabled)
                                 .map(|b| {
-                                    BandCoeffs::make(b, eq_sr).response(x_freq_at(x, gx, gw), eq_sr)
+                                    BandCoeffs::make(&plot_band(b, &dyn_uncapped), eq_sr)
+                                        .response(x_freq_at(x, gx, gw), eq_sr)
                                 })
                                 .sum::<f64>();
                             let curve = (y - db_y(db, self.graph_db)).abs() < 12.0;
                             let shape = infer_shape((x - gx) / gw, (y - GY) / GH, curve);
-                            draw_hover_preview(
+                            draw_eq_hover_preview(
                                 &mut d,
                                 x,
                                 y,
                                 gx,
                                 gw,
-                                hover_preview_label(self.selected.is_some(), shape),
+                                self.graph_db,
+                                sr,
+                                eq_sr,
+                                self.selected,
+                                shape,
                             );
                         }
                     }
@@ -3266,6 +4048,28 @@ impl View for StripView {
                     draw_lift_influence(&mut d, b, &over_pts, MUTED, (0.0, 0.55), (gx, gw));
                 }
             }
+            if let Some(b) = lift_bands
+                .iter()
+                .find(|b| b.id == self.shared.solo_id.load(Ordering::Relaxed))
+            {
+                let lift_pts = lift_curve_points(b, &smooth_lift_gr, gx, gw, sr);
+                let lift_color = if lift_bypassed { MUTED } else { LIFT_COLOR };
+                let mut fill = lift_color;
+                fill.a = if lift_bypassed { 0.05 } else { 0.22 };
+                draw_solo_shade(
+                    &mut d,
+                    b.shape,
+                    b.freq,
+                    b.q,
+                    gx,
+                    gw,
+                    eq_b,
+                    &lift_pts,
+                    lift_color,
+                    1.8,
+                    Some((lift_pts.as_slice(), GY + GH, fill)),
+                );
+            }
 
             for (idx, b) in lift_bands.iter().enumerate() {
                 let color = if !b.enabled || lift_bypassed {
@@ -3280,20 +4084,34 @@ impl View for StripView {
                 }
                 d.circle(x, y, 7.0, color, true);
                 let label = if lift_bands.len() > 1 {
-                    format!("LIFT {}", idx + 1)
+                    format!("{} LIFT {}", b.shape.uppercase_name(), idx + 1)
                 } else {
-                    "LIFT".to_string()
+                    format!("{} LIFT", b.shape.uppercase_name())
                 };
                 d.text(x - 12.0, y - 17.0, &label, 10.0, color);
             }
 
             if let Some(b) = lift_bands.iter().find(|b| Some(b.id) == self.selected) {
-                let color = if lift_bypassed { MUTED } else { LIFT_COLOR };
-                let is_solo = self.shared.solo_id.load(Ordering::Relaxed) == b.id;
+                let color = if !b.enabled || lift_bypassed {
+                    MUTED
+                } else {
+                    LIFT_COLOR
+                };
+                let is_solo = self.is_auditioning(b.id);
                 band_hud_lift(&mut d, b, is_solo, color, self.graph_db, gx, gw);
                 let c = if lift_on { LIFT_COLOR } else { MUTED };
                 let badge_rect = (gx + 8.0, GRAPH_BOTTOM - 48.0, 32.0, 28.0);
-                d.bypass_button(badge_rect, !b.enabled, LIFT_COLOR);
+                let badge_hovered = self
+                    .idle_hover()
+                    .is_some_and(|(hx, hy)| inside(hx, hy, badge_rect));
+                let badge_click = self.lift_badge_anim.step();
+                d.bypass_button(
+                    badge_rect,
+                    !b.enabled,
+                    LIFT_COLOR,
+                    badge_hovered,
+                    badge_click,
+                );
                 for (i, label, val, n) in [
                     (
                         0,
@@ -3323,21 +4141,10 @@ impl View for StripView {
                 ] {
                     d.control(band_rect_at(i, gx, gw), label, &val, n as f32, c);
                 }
-            } else if self.selected.is_none() {
-                let add_rect = (gx + 8.0, GRAPH_BOTTOM - 50.0, gw - 16.0, 32.0);
-                d.rect(add_rect.0, add_rect.1, add_rect.2, add_rect.3, PANEL);
-                d.outline(add_rect, LINE);
-                d.text_centered(
-                    add_rect.0 + add_rect.2 * 0.5,
-                    add_rect.1 + 20.0,
-                    "CLICK TO ADD A LIFT BAND",
-                    11.5,
-                    MUTED,
-                );
             }
 
             if page == EQ_PAGE_LIFT && (next_p - target_p).abs() < 0.05 {
-                if let Some((x, y)) = self.hover {
+                if let Some((x, y)) = self.idle_hover() {
                     if inside(x, y, (gx, GY, gw, GH))
                         && self.drag.is_none()
                         && self.menu.is_none()
@@ -3354,6 +4161,25 @@ impl View for StripView {
                         });
                         if !near {
                             let shape = infer_shape((x - gx) / gw, (y - GY) / GH, false);
+                            if self.selected.is_none() {
+                                let preview_band = LiftBand {
+                                    id: 0,
+                                    shape,
+                                    freq: x_freq_at(x, gx, gw).clamp(20.0, 20000.0),
+                                    gain: lift_y_gain(y),
+                                    ..LiftBand::default()
+                                };
+                                let points =
+                                    lift_curve_points(&preview_band, &smooth_lift_gr, gx, gw, sr);
+                                draw_lift_influence(
+                                    &mut d,
+                                    &preview_band,
+                                    &points,
+                                    MUTED,
+                                    (0.08, 0.40),
+                                    (gx, gw),
+                                );
+                            }
                             draw_hover_preview(
                                 &mut d,
                                 x,
@@ -3387,11 +4213,12 @@ impl View for StripView {
             draw_grid_and_spectrum(&mut d, page_bypassed, page_idx);
 
             let mut sum = vec![0.0; 420];
+            let mut selected_curve: Option<(Vec<(f32, f32)>, C)> = None;
             for b in page_bands {
                 if !b.enabled {
                     continue;
                 }
-                let coeff = BandCoeffs::make(b, eq_sr);
+                let coeff = BandCoeffs::make(&plot_band(b, &dyn_uncapped), eq_sr);
                 let num = band_display_num(b.id);
                 let color = if page_bypassed {
                     MUTED
@@ -3411,6 +4238,7 @@ impl View for StripView {
                     fill.a = if page_bypassed { 0.02 } else { 0.07 };
                     d.area(&points, db_y(0.0, self.graph_db), fill);
                     d.poly(&points, color, 1.2);
+                    selected_curve = Some((points, color));
                 }
             }
             let points: Vec<_> = sum
@@ -3418,7 +4246,21 @@ impl View for StripView {
                 .enumerate()
                 .map(|(i, db)| (gx + gw * i as f32 / 419.0, db_y(*db, self.graph_db)))
                 .collect();
-            d.poly(&points, if page_bypassed { MUTED } else { GOLD }, 2.2);
+            let sum_color = if page_bypassed { MUTED } else { GOLD };
+            d.poly(&points, sum_color, 2.2);
+            if let Some(b) = page_bands
+                .iter()
+                .find(|b| b.id == self.shared.solo_id.load(Ordering::Relaxed))
+            {
+                let fill = selected_curve.as_ref().map(|(pts, color)| {
+                    let mut fill = *color;
+                    fill.a = if page_bypassed { 0.02 } else { 0.07 };
+                    (pts.as_slice(), db_y(0.0, self.graph_db), fill)
+                });
+                draw_solo_shade(
+                    &mut d, b.shape, b.freq, b.q, gx, gw, eq_b, &points, sum_color, 2.2, fill,
+                );
+            }
 
             for b in page_bands {
                 let num = band_display_num(b.id);
@@ -3429,16 +4271,7 @@ impl View for StripView {
                 };
                 let x = freq_x_at(b.freq, gx, gw);
                 let y = db_y(if b.shape.has_gain() { b.gain } else { 0.0 }, self.graph_db);
-                let y_range = if allow_dyn && b.dynamic && b.shape.has_gain() {
-                    db_y(b.gain - b.range, self.graph_db)
-                } else {
-                    y
-                };
                 if allow_dyn && b.dynamic && b.shape.has_gain() {
-                    let thresh_hover = self.drag == Some(Target::Threshold(b.id))
-                        || self.hover.is_some_and(|(hx, hy)| {
-                            threshold_handle_hit(b, hx, hy, self.graph_db, gx, gw)
-                        });
                     draw_dyn_range_stem(
                         &mut d,
                         b,
@@ -3446,29 +4279,25 @@ impl View for StripView {
                         (gx, gw),
                         color,
                         uncapped_for(b.id, &dyn_uncapped),
-                        thresh_hover,
                     );
                 } else if Some(b.id) == self.selected {
                     d.circle(x, y, 12.0, color, false);
                 }
                 d.circle(x, y, 7.0, color, true);
-                d.text(
-                    x - 4.0,
-                    y.min(y_range) - 17.0,
-                    &num.to_string(),
-                    11.0,
-                    color,
-                );
             }
 
             if let Some(b) = page_bands.iter().find(|b| Some(b.id) == self.selected) {
                 let num = band_display_num(b.id);
-                let color = if page_bypassed {
+                let color = if !b.enabled || page_bypassed {
                     MUTED
                 } else {
                     COLORS[(num as usize - 1) % COLORS.len()]
                 };
-                let is_solo = self.shared.solo_id.load(Ordering::Relaxed) == b.id;
+                let is_solo = self.is_auditioning(b.id);
+                let g = hud_geom_for_at(b, self.graph_db, gx, gw);
+                let dyn_hover = self
+                    .idle_hover()
+                    .is_some_and(|(hx, hy)| hud_dyn_btn_hit(g, hx, hy));
                 band_hud(
                     &mut d,
                     b,
@@ -3478,98 +4307,13 @@ impl View for StripView {
                     config.mode == ProcessingMode::LinearPhase,
                     gx,
                     gw,
+                    dyn_hover,
+                    self.dyn_band_anim.step(),
                 );
             }
 
-            if allow_dyn {
-                if let Some(b) = self
-                    .selected
-                    .and_then(|id| self.find_band(id))
-                    .filter(|b| b.id >= EQ2_ID_BASE && b.id < SC_EQ_ID_BASE && b.shape.has_gain())
-                {
-                    let num = band_display_num(b.id);
-                    let color = COLORS[(num as usize - 1) % COLORS.len()];
-                    let power_rect = band_dyn_power_rect_at(b.dynamic, gx);
-                    let hovered = self
-                        .hover
-                        .is_some_and(|(hx, hy)| inside(hx, hy, power_rect));
-                    d.rect(
-                        power_rect.0,
-                        power_rect.1,
-                        power_rect.2,
-                        power_rect.3,
-                        PANEL,
-                    );
-                    if b.dynamic {
-                        let c = if page_on { color } else { MUTED };
-                        d.outline(
-                            power_rect,
-                            if hovered {
-                                TEXT
-                            } else if page_on {
-                                c
-                            } else {
-                                LINE
-                            },
-                        );
-                        d.power_icon(
-                            power_rect.0 + power_rect.2 * 0.5,
-                            power_rect.1 + power_rect.3 * 0.5,
-                            c,
-                        );
-                        for (i, label, val, n) in [
-                            (
-                                0,
-                                "RATIO",
-                                format!("{:.1}:1", b.ratio),
-                                (b.ratio - 1.0) / 19.0,
-                            ),
-                            (
-                                1,
-                                "ATTACK",
-                                format!("{:.1} ms", b.attack),
-                                (b.attack / 0.1).log(2000.0),
-                            ),
-                            (
-                                2,
-                                "RELEASE",
-                                format!("{:.0} ms", b.release),
-                                (b.release / 10.0).log(200.0),
-                            ),
-                        ] {
-                            d.control(dyn_slider_rect_at(i, gx, gw), label, &val, n as f32, c);
-                        }
-                    } else {
-                        d.outline(power_rect, if hovered { TEXT } else { LINE });
-                        d.power_icon(
-                            power_rect.0 + 14.0,
-                            power_rect.1 + power_rect.3 * 0.5,
-                            if hovered { TEXT } else { MUTED },
-                        );
-                        d.text(
-                            power_rect.0 + 28.0,
-                            power_rect.1 + power_rect.3 * 0.5 + 4.0,
-                            "BAND DYNAMICS",
-                            11.0,
-                            if hovered { TEXT } else { MUTED },
-                        );
-                    }
-                } else if self.selected.is_none() {
-                    let add_rect = (gx + 8.0, GRAPH_BOTTOM - 50.0, gw - 16.0, 32.0);
-                    d.rect(add_rect.0, add_rect.1, add_rect.2, add_rect.3, PANEL);
-                    d.outline(add_rect, LINE);
-                    d.text_centered(
-                        add_rect.0 + add_rect.2 * 0.5,
-                        add_rect.1 + 20.0,
-                        "SELECT A BAND TO CONFIGURE DYNAMICS",
-                        11.5,
-                        MUTED,
-                    );
-                }
-            }
-
             if page == page_idx && (next_p - target_p).abs() < 0.05 {
-                if let Some((x, y)) = self.hover {
+                if let Some((x, y)) = self.idle_hover() {
                     if inside(x, y, (gx, GY, gw, GH))
                         && self.drag.is_none()
                         && self.menu.is_none()
@@ -3578,7 +4322,7 @@ impl View for StripView {
                         && self.edit.is_none()
                         && !page_bands.iter().any(|b| {
                             Some(b.id) == self.selected
-                                && inside(x, y, hud_rect_for_at(b, self.graph_db, gx, gw))
+                                && inside(x, y, hud_bounds_for_at(b, self.graph_db, gx, gw))
                         })
                         && !page_bypassed
                     {
@@ -3590,18 +4334,23 @@ impl View for StripView {
                                 .iter()
                                 .filter(|b| b.enabled)
                                 .map(|b| {
-                                    BandCoeffs::make(b, eq_sr).response(x_freq_at(x, gx, gw), eq_sr)
+                                    BandCoeffs::make(&plot_band(b, &dyn_uncapped), eq_sr)
+                                        .response(x_freq_at(x, gx, gw), eq_sr)
                                 })
                                 .sum::<f64>();
                             let curve = (y - db_y(db, self.graph_db)).abs() < 12.0;
                             let shape = infer_shape((x - gx) / gw, (y - GY) / GH, curve);
-                            draw_hover_preview(
+                            draw_eq_hover_preview(
                                 &mut d,
                                 x,
                                 y,
                                 gx,
                                 gw,
-                                hover_preview_label(self.selected.is_some(), shape),
+                                self.graph_db,
+                                sr,
+                                eq_sr,
+                                self.selected,
+                                shape,
                             );
                         }
                     }
@@ -3609,10 +4358,10 @@ impl View for StripView {
             }
         }
 
-        let seam_frac = eased - eased.floor();
+        let seam_frac = next_p - next_p.floor();
         if seam_frac > 0.005 && seam_frac < 0.995 {
             d.offset_x = 0.0;
-            let seam_x = eq_b.0 + (eased.floor() + 1.0 - eased) * GRAPH_CLIP_W;
+            let seam_x = eq_b.0 + (next_p.floor() + 1.0 - next_p) * GRAPH_CLIP_W;
             d.line(seam_x, eq_b.1, seam_x, eq_b.1 + eq_b.3, LINE, 1.0);
         }
 
@@ -3624,7 +4373,7 @@ impl View for StripView {
         let (px, py, pw, ph) = self.pse_bounds();
         let (dx, dy, dw, dh) = self.dyn_bounds();
         let is_pre = self.is_pre();
-        let is_animating = (cur_p - target_p).abs() > 0.005;
+        let is_animating = (next_p - target_p).abs() > 0.005;
 
         if is_animating {
             d.rect(px, py, pw, ph, C::rgba(21, 24, 29, 215));
@@ -3632,7 +4381,12 @@ impl View for StripView {
             d.rect(px, py, pw, ph, PANEL);
         }
         d.outline((px, py, pw, ph), LINE);
-        d.bypass_button(self.pse_power_button_rect(), pse_bypassed, PSE_BLUE);
+        let pse_power_r = self.pse_power_button_rect();
+        let pse_hovered = self
+            .idle_hover()
+            .is_some_and(|(hx, hy)| inside(hx, hy, pse_power_r));
+        let pse_click = self.pse_bypass_anim.step();
+        d.bypass_button(pse_power_r, pse_bypassed, PSE_BLUE, pse_hovered, pse_click);
         d.text(
             px + 44.0,
             module_title_y(15.0),
@@ -3640,9 +4394,8 @@ impl View for StripView {
             15.0,
             if pse_bypassed { MUTED } else { TEXT },
         );
-        d.line(px + 10.0, GY, px + pw - 10.0, GY, LINE, 1.0);
 
-        d.scissor(px, GY, pw, py + ph - GY);
+        d.scissor(px, py, pw, ph);
         let pse_eased = quintic_page_progress(self.pse_anim_progress.get());
         let pse_main_off = (0.0 - pse_eased) * pw;
         let pse_ctrl_off = (1.0 - pse_eased) * pw;
@@ -3650,8 +4403,10 @@ impl View for StripView {
             d.offset_x = pse_main_off;
             {
                 let cog_r = self.pse_cog_button_rect();
-                let cog_hover =
-                    !pse_bypassed && self.hover.is_some_and(|(hx, hy)| inside(hx, hy, cog_r));
+                let cog_hover = !pse_bypassed
+                    && self
+                        .idle_hover()
+                        .is_some_and(|(hx, hy)| inside(hx, hy, cog_r));
                 let cog_color = if pse_bypassed {
                     MUTED
                 } else if cog_hover {
@@ -3659,8 +4414,6 @@ impl View for StripView {
                 } else {
                     TEXT
                 };
-                d.rect(cog_r.0, cog_r.1, cog_r.2, cog_r.3, PANEL);
-                d.outline(cog_r, if cog_hover { PSE_BLUE } else { LINE });
                 d.cog_icon(cog_r.0 + cog_r.2 * 0.5, cog_r.1 + cog_r.3 * 0.5, cog_color);
 
                 let (sx, sy, sw, sh) = self.pse_main_thresh_slider_rect();
@@ -3711,25 +4464,20 @@ impl View for StripView {
 
                 let depth_norm = self.param(7).unmodulated_normalized_value();
                 let depth_y = gy_m + gh_m * depth_norm;
-                if !pse_bypassed {
-                    d.line(gx_m, depth_y, gx_m + gw_m, depth_y, PSE_BLUE, 1.0);
-                }
                 let depth_handle = self.pse_main_depth_handle_rect(depth_y);
                 let depth_hover = !pse_bypassed
                     && (self
-                        .hover
+                        .idle_hover()
                         .is_some_and(|(hx, hy)| inside(hx, hy, depth_handle))
                         || self.drag == Some(Target::Global(7)));
-                d.grab_bar(
-                    depth_handle,
-                    if pse_bypassed {
-                        MUTED
-                    } else if depth_hover {
-                        TEXT
-                    } else {
-                        PSE_BLUE
-                    },
-                );
+                let handle_color = if pse_bypassed {
+                    MUTED
+                } else if depth_hover {
+                    TEXT
+                } else {
+                    PSE_BLUE
+                };
+                draw_gr_depth_handle(&mut d, gx_m, gw_m, depth_y, handle_color);
 
                 let handle = self.pse_main_thresh_handle_rect(thresh_y);
                 let handle_hit = (
@@ -3740,7 +4488,7 @@ impl View for StripView {
                 );
                 let knee_norm = (self.params.pse_knee.value() / 18.0).clamp(0.0, 1.0);
                 let knee_hover = !pse_bypassed
-                    && (self.hover.is_some_and(|(hx, hy)| {
+                    && (self.idle_hover().is_some_and(|(hx, hy)| {
                         inside(hx, hy, self.pse_main_knee_rect(thresh_y, 0.0))
                             && !inside(hx, hy, handle_hit)
                     }) || matches!(self.drag, Some(Target::PseKnee { .. })));
@@ -3755,7 +4503,7 @@ impl View for StripView {
                     pse_bypassed,
                 );
                 let handle_hover = self
-                    .hover
+                    .idle_hover()
                     .is_some_and(|(hx, hy)| inside(hx, hy, handle_hit))
                     || self.drag == Some(Target::Global(1));
                 d.grab_bar(
@@ -3797,12 +4545,12 @@ impl View for StripView {
             d.offset_x = pse_ctrl_off;
             {
                 let back_r = self.pse_back_button_rect();
-                let back_hover =
-                    !pse_bypassed && self.hover.is_some_and(|(hx, hy)| inside(hx, hy, back_r));
-                d.rect(back_r.0, back_r.1, back_r.2, back_r.3, PANEL);
-                d.outline(back_r, if back_hover { PSE_BLUE } else { LINE });
-                d.text(
-                    back_r.0 + back_r.2 * 0.5 - 4.0,
+                let back_hover = !pse_bypassed
+                    && self
+                        .idle_hover()
+                        .is_some_and(|(hx, hy)| inside(hx, hy, back_r));
+                d.text_centered(
+                    back_r.0 + back_r.2 * 0.5,
                     back_r.1 + 16.0,
                     "<",
                     14.0,
@@ -3815,12 +4563,7 @@ impl View for StripView {
                     },
                 );
 
-                for (i, label) in [
-                    (7, "DEPTH"),
-                    (8, "HYSTERESIS"),
-                    (2, "VOICE DET"),
-                    (10, "TIME"),
-                ] {
+                for (i, label) in [(8, "HYSTERESIS"), (2, "VOICE DET"), (10, "TIME")] {
                     let p = self.param(i);
                     let value = if i == 10 {
                         format_pse_time(p.value() as f64, self.params.pse_peak.value())
@@ -3847,8 +4590,10 @@ impl View for StripView {
                 );
                 d.outline(joined_card, LINE);
                 let is_peak = self.params.pse_peak.value();
-                let det_hover =
-                    !pse_bypassed && self.hover.is_some_and(|(hx, hy)| inside(hx, hy, det_r));
+                let det_hover = !pse_bypassed
+                    && self
+                        .idle_hover()
+                        .is_some_and(|(hx, hy)| inside(hx, hy, det_r));
                 d.button(
                     det_r,
                     if is_peak { "PEAK" } else { "RMS" },
@@ -3862,7 +4607,7 @@ impl View for StripView {
                     },
                 );
 
-                let speech_r = (px + 68.0, 430.0, 56.0, 86.0);
+                let speech_r = (px + 68.0, 356.0, 56.0, 86.0);
                 d.text_centered(
                     speech_r.0 + speech_r.2 * 0.5,
                     speech_r.1 + 22.0,
@@ -3923,7 +4668,12 @@ impl View for StripView {
             d.rect(dx, dy, dw, dh, PANEL);
         }
         d.outline((dx, dy, dw, dh), LINE);
-        d.bypass_button(self.dyn_power_button_rect(), comp_bypassed, GOLD);
+        let dyn_power_r = self.dyn_power_button_rect();
+        let dyn_hovered = self
+            .idle_hover()
+            .is_some_and(|(hx, hy)| inside(hx, hy, dyn_power_r));
+        let dyn_click = self.dyn_bypass_anim.step();
+        d.bypass_button(dyn_power_r, comp_bypassed, GOLD, dyn_hovered, dyn_click);
         d.text(
             dx + 44.0,
             module_title_y(15.0),
@@ -3931,9 +4681,8 @@ impl View for StripView {
             15.0,
             if comp_bypassed { MUTED } else { TEXT },
         );
-        d.line(dx + 10.0, GY, dx + dw - 10.0, GY, LINE, 1.0);
 
-        d.scissor(dx, GY, dw, dy + dh - GY);
+        d.scissor(dx, dy, dw, dh);
         let dyn_eased = quintic_page_progress(self.dyn_anim_progress.get());
         let dyn_main_off = (0.0 - dyn_eased) * dw;
         let dyn_ctrl_off = (1.0 - dyn_eased) * dw;
@@ -3941,8 +4690,10 @@ impl View for StripView {
             d.offset_x = dyn_main_off;
             {
                 let cog_r = self.dyn_cog_button_rect();
-                let cog_hover =
-                    !comp_bypassed && self.hover.is_some_and(|(hx, hy)| inside(hx, hy, cog_r));
+                let cog_hover = !comp_bypassed
+                    && self
+                        .idle_hover()
+                        .is_some_and(|(hx, hy)| inside(hx, hy, cog_r));
                 let cog_color = if comp_bypassed {
                     MUTED
                 } else if cog_hover {
@@ -3950,8 +4701,6 @@ impl View for StripView {
                 } else {
                     TEXT
                 };
-                d.rect(cog_r.0, cog_r.1, cog_r.2, cog_r.3, PANEL);
-                d.outline(cog_r, if cog_hover { GOLD } else { LINE });
                 d.cog_icon(cog_r.0 + cog_r.2 * 0.5, cog_r.1 + cog_r.3 * 0.5, cog_color);
 
                 let (sx, sy, sw, sh) = self.dyn_main_thresh_slider_rect();
@@ -4010,25 +4759,20 @@ impl View for StripView {
 
                 let depth_norm = self.param(14).unmodulated_normalized_value();
                 let depth_y = gy_m + gh_m * depth_norm;
-                if !comp_bypassed {
-                    d.line(gx_m, depth_y, gx_m + gw_m, depth_y, GOLD, 1.0);
-                }
                 let depth_handle = self.dyn_main_depth_handle_rect(depth_y);
                 let depth_hover = !comp_bypassed
                     && (self
-                        .hover
+                        .idle_hover()
                         .is_some_and(|(hx, hy)| inside(hx, hy, depth_handle))
                         || self.drag == Some(Target::Global(14)));
-                d.grab_bar(
-                    depth_handle,
-                    if comp_bypassed {
-                        MUTED
-                    } else if depth_hover {
-                        TEXT
-                    } else {
-                        GOLD
-                    },
-                );
+                let handle_color = if comp_bypassed {
+                    MUTED
+                } else if depth_hover {
+                    TEXT
+                } else {
+                    GOLD
+                };
+                draw_gr_depth_handle(&mut d, gx_m, gw_m, depth_y, handle_color);
 
                 let handle = self.dyn_main_thresh_handle_rect(thresh_y);
                 let handle_hit = (
@@ -4039,7 +4783,7 @@ impl View for StripView {
                 );
                 let knee_norm = (self.params.comp_knee.value() / 20.0).clamp(0.0, 1.0);
                 let knee_hover = !comp_bypassed
-                    && (self.hover.is_some_and(|(hx, hy)| {
+                    && (self.idle_hover().is_some_and(|(hx, hy)| {
                         inside(hx, hy, self.dyn_main_knee_rect(thresh_y, 0.0))
                             && !inside(hx, hy, handle_hit)
                     }) || matches!(self.drag, Some(Target::CompKnee { .. })));
@@ -4054,7 +4798,7 @@ impl View for StripView {
                     comp_bypassed,
                 );
                 let handle_hover = self
-                    .hover
+                    .idle_hover()
                     .is_some_and(|(hx, hy)| inside(hx, hy, handle_hit))
                     || self.drag == Some(Target::Global(0));
                 d.grab_bar(
@@ -4094,12 +4838,12 @@ impl View for StripView {
             d.offset_x = dyn_ctrl_off;
             {
                 let back_r = self.dyn_back_button_rect();
-                let back_hover =
-                    !comp_bypassed && self.hover.is_some_and(|(hx, hy)| inside(hx, hy, back_r));
-                d.rect(back_r.0, back_r.1, back_r.2, back_r.3, PANEL);
-                d.outline(back_r, if back_hover { GOLD } else { LINE });
-                d.text(
-                    back_r.0 + back_r.2 * 0.5 - 4.0,
+                let back_hover = !comp_bypassed
+                    && self
+                        .idle_hover()
+                        .is_some_and(|(hx, hy)| inside(hx, hy, back_r));
+                d.text_centered(
+                    back_r.0 + back_r.2 * 0.5,
                     back_r.1 + 16.0,
                     "<",
                     14.0,
@@ -4112,22 +4856,10 @@ impl View for StripView {
                     },
                 );
 
-                for (i, label, active) in [
-                    (0, "AUTO", self.params.auto_makeup.value()),
-                    (1, "LINK", self.params.stereo_link.value()),
-                ] {
-                    d.button(
-                        self.dyn_mode_rect(i),
-                        label,
-                        active,
-                        if comp_bypassed { MUTED } else { GOLD },
-                    );
-                }
-
                 for (i, label, color) in [
-                    (6, "RATIO", GOLD),
                     (5, "ATTACK", GOLD),
                     (11, "RELEASE", GOLD),
+                    (6, "RATIO", GOLD),
                     (3, "DRY", TEAL),
                     (4, "WET", GOLD),
                 ] {
@@ -4149,12 +4881,11 @@ impl View for StripView {
         d.offset_x = 0.0;
 
         d.line(32.0, FOOTER_LINE_Y, UI_W - 32.0, FOOTER_LINE_Y, LINE, 1.0);
-        d.text(
-            32.0,
-            FOOTER_BTN_Y + 20.0,
-            &format!("{:.1} kHz", sr / 1000.0),
-            11.0,
-            MUTED,
+        d.button(
+            THEME_BUTTON,
+            if d.light { "DARK MODE" } else { "LIGHT MODE" },
+            false,
+            TEXT,
         );
         d.button(
             PROCESS_BUTTON,
@@ -4181,18 +4912,14 @@ impl View for StripView {
         } else {
             String::new()
         };
-        let status_x = if config.mode == ProcessingMode::LinearPhase {
-            308.0
-        } else {
-            196.0
-        };
-        d.text(status_x, FOOTER_BTN_Y + 20.0, &status, 10.0, MUTED);
-        d.button(
-            self.footer_listen_sc_rect(),
-            "LISTEN SC",
-            self.params.pse_listen.value(),
-            TEAL,
-        );
+        if !status.is_empty() {
+            let status_x = if config.mode == ProcessingMode::LinearPhase {
+                400.0
+            } else {
+                288.0
+            };
+            d.text(status_x, FOOTER_BTN_Y + 18.0, &status, 10.0, MUTED);
+        }
         d.text(
             636.0,
             FOOTER_BTN_Y + 19.0,
@@ -4207,11 +4934,73 @@ impl View for StripView {
             if is_pre { TEAL } else { GOLD },
         );
         d.button(
-            THEME_BUTTON,
-            if d.light { "DARK MODE" } else { "LIGHT MODE" },
-            false,
-            TEXT,
+            self.footer_auto_rect(),
+            "AUTO",
+            self.params.auto_makeup.value(),
+            if comp_bypassed { MUTED } else { GOLD },
         );
+        d.button(
+            self.footer_link_rect(),
+            "LINK",
+            self.params.stereo_link.value(),
+            if comp_bypassed { MUTED } else { GOLD },
+        );
+
+        let r = output_gain_rect();
+        d.rect(r.0, r.1, r.2, r.3, PANEL);
+        let out_hover = self.idle_hover().is_some_and(|(hx, hy)| inside(hx, hy, r));
+        let out_dragging = self.drag == Some(Target::Global(15));
+        d.outline(
+            r,
+            if out_hover || out_dragging {
+                GOLD
+            } else {
+                LINE
+            },
+        );
+
+        let p_out = self.param(15);
+        let out_norm = p_out.unmodulated_normalized_value();
+        let out_val = p_out.value();
+        let val_str = if out_val.abs() < 0.05 {
+            "0.0 dB".to_string()
+        } else {
+            format!("{:+0.1} dB", out_val)
+        };
+
+        d.text(r.0 + 8.0, r.1 + 13.0, "OUTPUT", 9.5, MUTED);
+        let val_r = output_gain_value_rect();
+        if let Some(edit) = &self.edit {
+            if edit.target == ValueTarget::Global(15) {
+                d.value_edit(edit, GOLD);
+            } else {
+                d.text_centered(val_r.0 + val_r.2 * 0.5, r.1 + 13.0, &val_str, 10.5, TEXT);
+            }
+        } else {
+            d.text_centered(val_r.0 + val_r.2 * 0.5, r.1 + 13.0, &val_str, 10.5, TEXT);
+            if out_hover
+                && self
+                    .idle_hover()
+                    .is_some_and(|(hx, hy)| inside(hx, hy, val_r))
+            {
+                d.value_underline(val_r, GOLD);
+            }
+        }
+
+        let bar_x = r.0 + 8.0;
+        let bar_w = r.2 - 16.0;
+        let bar_y = r.1 + 19.0;
+        let bar_h = 4.0;
+        d.rect(bar_x, bar_y, bar_w, bar_h, LINE);
+        let mid_x = bar_x + bar_w * 0.5;
+        if out_norm > 0.5 {
+            let fill_w = bar_w * (out_norm - 0.5);
+            d.rect(mid_x, bar_y, fill_w, bar_h, GOLD);
+        } else if out_norm < 0.5 {
+            let fill_w = bar_w * (0.5 - out_norm);
+            d.rect(mid_x - fill_w, bar_y, fill_w, bar_h, GOLD);
+        }
+        d.line(mid_x, bar_y - 1.0, mid_x, bar_y + bar_h + 1.0, TEXT, 1.0);
         if let Some(menu) = self.menu {
             let menu_info = self
                 .selected
@@ -4247,7 +5036,7 @@ impl View for StripView {
                     let row_y = r.1 + row as f32 * 24.0;
                     if selected
                         || self
-                            .hover
+                            .idle_hover()
                             .is_some_and(|(x, y)| inside(x, y, (r.0, row_y, r.2, 24.0)))
                     {
                         d.rect(r.0, row_y, r.2, 24.0, LINE);
@@ -4278,7 +5067,7 @@ impl View for StripView {
                     (MODES[i].label(), config.mode == MODES[i])
                 };
                 let row = (r.0, r.1 + i as f32 * 24.0, r.2, 24.0);
-                if selected || self.hover.is_some_and(|(x, y)| inside(x, y, row)) {
+                if selected || self.idle_hover().is_some_and(|(x, y)| inside(x, y, row)) {
                     d.rect(row.0, row.1, row.2, row.3, LINE);
                 }
                 d.text(
@@ -4295,7 +5084,7 @@ impl View for StripView {
             && !self.scale_menu
             && self.processing_menu.is_none()
         {
-            if let Some((target, r)) = self.hover.and_then(|(x, y)| self.value_at(x, y)) {
+            if let Some((target, r)) = self.idle_hover().and_then(|(x, y)| self.value_at(x, y)) {
                 d.line(
                     r.0 + 4.0,
                     r.1 + r.3 - 1.0,
@@ -4344,6 +5133,80 @@ impl View for StripView {
         }
     }
 }
+fn draw_hud_panel(d: &mut Draw, x: f32, y: f32, w: f32, h: f32, color: C) {
+    d.rounded_rect(x, y, w, h, HUD_RADIUS, C::rgba(12, 12, 14, 214));
+    d.outline_rounded(x, y, w, h, HUD_RADIUS, C::rgba(40, 44, 50, 180), 1.0);
+    d.line(x + 8.0, y, x + w - 8.0, y, color, 1.5);
+}
+fn draw_hud_chrome(
+    d: &mut Draw,
+    bx: f32,
+    by: f32,
+    bw: f32,
+    enabled: bool,
+    is_solo: bool,
+    color: C,
+    shape_label: &str,
+) {
+    let bypass = hud_bypass_rect(bx, by);
+    let solo = hud_solo_rect(bx, by);
+    let close = hud_close_rect(bx, by);
+    let shape = hud_shape_rect(bx, by, bw);
+    d.rounded_rect(
+        bypass.0,
+        bypass.1,
+        bypass.2,
+        bypass.3,
+        4.0,
+        C::rgba(35, 40, 48, 150),
+    );
+    d.power_icon(
+        bypass.0 + bypass.2 * 0.5,
+        bypass.1 + bypass.3 * 0.5,
+        if enabled { color } else { MUTED },
+    );
+    d.rounded_rect(
+        solo.0,
+        solo.1,
+        solo.2,
+        solo.3,
+        4.0,
+        if is_solo {
+            C::rgba(110, 85, 30, 180)
+        } else {
+            C::rgba(35, 40, 48, 150)
+        },
+    );
+    d.headphones(
+        solo.0 + solo.2 * 0.5,
+        solo.1 + solo.3 * 0.5,
+        if is_solo { GOLD } else { MUTED },
+    );
+    d.rounded_rect(
+        close.0,
+        close.1,
+        close.2,
+        close.3,
+        4.0,
+        C::rgba(35, 40, 48, 150),
+    );
+    d.close_icon(close.0 + close.2 * 0.5, close.1 + close.3 * 0.5, MUTED);
+    d.rounded_rect(
+        shape.0,
+        shape.1,
+        shape.2,
+        shape.3,
+        4.0,
+        C::rgba(35, 40, 48, 150),
+    );
+    d.text(
+        shape.0 + 8.0,
+        shape.1 + shape.3 * 0.5 + 4.0,
+        shape_label,
+        10.0,
+        if enabled { TEXT } else { MUTED },
+    );
+}
 fn hz(f: f64) -> String {
     if f >= 1000.0 {
         format!("{:.2} kHz", f / 1000.0)
@@ -4360,32 +5223,21 @@ fn band_hud(
     _linear: bool,
     gx: f32,
     gw: f32,
+    dyn_hover: bool,
+    dyn_click: f32,
 ) {
-    let (bx, by, bw, _) = hud_rect_for_at(b, range, gx, gw);
-    d.line(bx + 10.0, by, bx + bw - 10.0, by, color, 1.5);
-    d.power_icon(bx + 19.0, by + 19.0, if b.enabled { color } else { MUTED });
-    d.rect(bx + 40.0, by + 6.0, 148.0, 26.0, C::rgba(35, 40, 48, 150));
-    d.text(
-        bx + 50.0,
-        by + 23.0,
+    let g = hud_geom_for_at(b, range, gx, gw);
+    draw_hud_panel(d, g.bx, g.by, g.bw, g.bh, color);
+    draw_hud_chrome(
+        d,
+        g.bx,
+        g.by,
+        g.bw,
+        b.enabled,
+        is_solo,
+        color,
         &format!("{} ▾", b.shape.name()),
-        11.0,
-        TEXT,
     );
-    d.rect(
-        bx + 222.0,
-        by + 6.0,
-        28.0,
-        26.0,
-        if is_solo {
-            C::rgba(110, 85, 30, 180)
-        } else {
-            C::rgba(35, 40, 48, 150)
-        },
-    );
-    d.headphones(bx + 236.0, by + 18.0, if is_solo { GOLD } else { MUTED });
-    d.close_icon(bx + bw - 19.0, by + 19.0, MUTED);
-
     for (i, label, value, active) in [
         (0, "FREQ", hz(b.freq), true),
         (
@@ -4410,34 +5262,129 @@ fn band_hud(
         ),
     ] {
         let r = hud_value_rect_at(b, range, i, gx, gw);
-        d.text(r.0 + 4.0, by + 44.0, label, 8.5, MUTED);
+        d.text(r.0 + 2.0, r.1 + 10.0, label, 8.0, MUTED);
         d.text(
-            r.0 + 4.0,
-            by + 65.0,
+            r.0 + 2.0,
+            r.1 + 24.0,
             &value,
-            12.0,
-            if active { color } else { MUTED },
+            11.0,
+            if b.enabled && active { color } else { MUTED },
         );
-    }
-    if b.dynamic && b.shape.has_gain() {
-        for (i, label, value) in [
-            (3, "THRESH", format!("{:.1}", b.threshold)),
-            (4, "RANGE", format!("{:.1}", b.range)),
-        ] {
-            let r = hud_value_rect_at(b, range, i, gx, gw);
-            d.text(r.0 + 4.0, by + 88.0, label, 8.5, MUTED);
-            d.text(r.0 + 4.0, by + 109.0, &value, 12.0, color);
-        }
     }
     if b.shape.is_cut() {
-        d.rect(bx + 10.0, by + 78.0, 108.0, 22.0, C::rgba(35, 40, 48, 150));
+        let order = hud_order_rect(g.bx, g.by);
+        d.rounded_rect(
+            order.0,
+            order.1,
+            order.2,
+            order.3,
+            4.0,
+            C::rgba(35, 40, 48, 150),
+        );
         d.text(
-            bx + 18.0,
-            by + 93.0,
+            order.0 + 6.0,
+            order.1 + 13.0,
             &format!("{} dB/oct ▾", b.order * 6),
             9.0,
-            TEXT,
+            if b.enabled { TEXT } else { MUTED },
         );
+    }
+    if g.show_dyn {
+        draw_hud_panel(d, g.dyn_x, g.by, g.dyn_w, g.bh, color);
+        for (i, label, value, n, bipolar) in [
+            (
+                0,
+                "THRESH",
+                format!("{:.1}", b.threshold),
+                ((b.threshold + 60.0) / 60.0) as f32,
+                false,
+            ),
+            (
+                1,
+                "RANGE",
+                format!("{:.1}", b.range),
+                ((b.range + 24.0) / 48.0) as f32,
+                true,
+            ),
+            (
+                2,
+                "RATIO",
+                format!("{:.1}:1", b.ratio),
+                ((b.ratio - 1.0) / 19.0) as f32,
+                false,
+            ),
+            (
+                3,
+                "ATTACK",
+                format!("{:.1} ms", b.attack),
+                (b.attack / 0.1).log(2000.0) as f32,
+                false,
+            ),
+            (
+                4,
+                "RELEASE",
+                format!("{:.0} ms", b.release),
+                (b.release / 10.0).log(200.0) as f32,
+                false,
+            ),
+        ] {
+            let r = hud_dyn_field_rect_at(b, range, i, gx, gw);
+            let val_r = hud_dyn_value_rect_at(b, range, i, gx, gw);
+            d.text(r.0 + 8.0, r.1 + 13.0, label, 8.5, MUTED);
+            d.text_centered(
+                val_r.0 + val_r.2 * 0.5,
+                r.1 + 13.0,
+                &value,
+                10.5,
+                if b.enabled { color } else { MUTED },
+            );
+            let bar_x = r.0 + 8.0;
+            let bar_w = r.2 - 16.0;
+            let bar_y = r.1 + 19.0;
+            let bar_h = 4.0;
+            d.rect(bar_x, bar_y, bar_w, bar_h, LINE);
+            let n = n.clamp(0.0, 1.0);
+            let fill_color = if b.enabled { color } else { MUTED };
+            if bipolar {
+                let mid_x = bar_x + bar_w * 0.5;
+                if n > 0.5 {
+                    d.rect(mid_x, bar_y, bar_w * (n - 0.5), bar_h, fill_color);
+                } else if n < 0.5 {
+                    let fill_w = bar_w * (0.5 - n);
+                    d.rect(mid_x - fill_w, bar_y, fill_w, bar_h, fill_color);
+                }
+                d.line(
+                    mid_x,
+                    bar_y - 1.0,
+                    mid_x,
+                    bar_y + bar_h + 1.0,
+                    if b.enabled { TEXT } else { MUTED },
+                    1.0,
+                );
+            } else {
+                d.rect(bar_x, bar_y, bar_w * n, bar_h, fill_color);
+            }
+        }
+    }
+    if g.show_dyn_btn {
+        let (cx, cy) = hud_dyn_btn_center(g);
+        let on = b.dynamic;
+        let mut fill = C::rgba(12, 12, 14, 230);
+        if dyn_click > 0.01 {
+            fill.a = 1.0;
+        }
+        d.circle(cx, cy, HUD_DYN_R, fill, true);
+        let ring = if !b.enabled {
+            MUTED
+        } else if on {
+            color
+        } else if dyn_hover {
+            TEXT
+        } else {
+            MUTED
+        };
+        d.circle(cx, cy, HUD_DYN_R, ring, false);
+        d.text_centered(cx, cy + 3.0, "DYN", 8.0, ring);
     }
 }
 
@@ -4450,31 +5397,18 @@ fn band_hud_lift(
     gx: f32,
     gw: f32,
 ) {
-    let (bx, by, bw, _) = hud_rect_for_lift_at(b, range, gx, gw);
-    d.line(bx + 10.0, by, bx + bw - 10.0, by, color, 1.5);
-    d.power_icon(bx + 19.0, by + 19.0, if b.enabled { color } else { MUTED });
-    d.rect(bx + 40.0, by + 6.0, 148.0, 26.0, C::rgba(35, 40, 48, 150));
-    d.text(
-        bx + 50.0,
-        by + 23.0,
-        &format!("{} ▾", b.shape.name()),
-        11.0,
-        TEXT,
+    let (bx, by, bw, bh) = hud_rect_for_lift_at(b, range, gx, gw);
+    draw_hud_panel(d, bx, by, bw, bh, color);
+    draw_hud_chrome(
+        d,
+        bx,
+        by,
+        bw,
+        b.enabled,
+        is_solo,
+        color,
+        &format!("{} LIFT ▾", b.shape.uppercase_name()),
     );
-    d.rect(
-        bx + 222.0,
-        by + 6.0,
-        28.0,
-        26.0,
-        if is_solo {
-            C::rgba(110, 85, 30, 180)
-        } else {
-            C::rgba(35, 40, 48, 150)
-        },
-    );
-    d.headphones(bx + 236.0, by + 18.0, if is_solo { GOLD } else { MUTED });
-    d.close_icon(bx + bw - 19.0, by + 19.0, MUTED);
-
     for (i, label, value, active) in [
         (0, "FREQ", hz(b.freq), true),
         (
@@ -4499,23 +5433,31 @@ fn band_hud_lift(
         ),
     ] {
         let r = hud_value_rect_lift_at(b, range, i, gx, gw);
-        d.text(r.0 + 4.0, by + 44.0, label, 8.5, MUTED);
+        d.text(r.0 + 2.0, r.1 + 10.0, label, 8.0, MUTED);
         d.text(
-            r.0 + 4.0,
-            by + 65.0,
+            r.0 + 2.0,
+            r.1 + 24.0,
             &value,
-            12.0,
-            if active { color } else { MUTED },
+            11.0,
+            if b.enabled && active { color } else { MUTED },
         );
     }
     if b.shape.is_cut() {
-        d.rect(bx + 10.0, by + 78.0, 108.0, 22.0, C::rgba(35, 40, 48, 150));
+        let order = hud_order_rect(bx, by);
+        d.rounded_rect(
+            order.0,
+            order.1,
+            order.2,
+            order.3,
+            4.0,
+            C::rgba(35, 40, 48, 150),
+        );
         d.text(
-            bx + 18.0,
-            by + 93.0,
+            order.0 + 6.0,
+            order.1 + 13.0,
             &format!("{} dB/oct ▾", b.order * 6),
             9.0,
-            TEXT,
+            if b.enabled { TEXT } else { MUTED },
         );
     }
 }
@@ -4654,6 +5596,12 @@ mod tests {
                         node_y - r.1 - r.3
                     };
                     assert!(gap >= 26.0, "scale={range}, gain={gain}, gap={gap}");
+                    let at_bottom = node_y < GY + GH * 0.5;
+                    if at_bottom {
+                        assert!((r.1 + r.3 - (GY + GH - 4.0)).abs() < 0.01);
+                    } else {
+                        assert!((r.1 - (GY + 4.0)).abs() < 0.01);
+                    }
                     for i in 0..3 {
                         let value = hud_value_rect(&b, range, i);
                         assert!(inside(value.0, value.1, r));
@@ -4661,6 +5609,39 @@ mod tests {
                     }
                 }
             }
+        }
+        let wide = Band {
+            freq: 1000.0,
+            gain: 12.0,
+            dynamic: true,
+            ..Band::default()
+        };
+        let main = hud_rect_for(&wide, 24.0);
+        let dyn_overlay = hud_dyn_rect_for_at(&wide, 24.0, GX, GW).expect("dyn overlay");
+        assert!((dyn_overlay.0 - (main.0 + main.2 + HUD_OVERLAY_GAP)).abs() < 0.01);
+        assert_eq!(dyn_overlay.1, main.1);
+        assert_eq!(dyn_overlay.3, main.3);
+        assert!((main.2 - HUD_MAIN_W).abs() < 0.01);
+        assert_eq!(HUD_GAIN_W, 52.0);
+        assert_eq!(HUD_Q_W, 40.0);
+        assert_eq!(HUD_SHAPE_W, 104.0);
+        assert_eq!(HUD_FREQ_W, 86.0);
+        assert_eq!(HUD_DYN_FIELD_H, 28.0);
+        for i in 0..5 {
+            let field = hud_dyn_field_rect_at(&wide, 24.0, i, GX, GW);
+            assert!(inside(field.0, field.1, dyn_overlay));
+            assert!(inside(field.0 + field.2, field.1 + field.3, dyn_overlay));
+            assert_eq!(field.3, HUD_DYN_FIELD_H);
+            let value = hud_dyn_value_rect_at(&wide, 24.0, i, GX, GW);
+            assert!(inside(value.0, value.1, field));
+            assert!(inside(value.0 + value.2, value.1 + value.3, field));
+            assert!(value.0 > field.0 + 8.0);
+        }
+        let attack = hud_dyn_field_rect_at(&wide, 24.0, 3, GX, GW);
+        for i in 0..3 {
+            let value = hud_value_rect_at(&wide, 24.0, i, GX, GW);
+            assert_eq!(value.1, attack.1);
+            assert_eq!(value.3, attack.3);
         }
     }
 
@@ -4726,6 +5707,29 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn solo_shade_covers_sides_when_applicable() {
+        let gx = 100.0;
+        let gw = 800.0;
+        let (bell_l, bell_r) = solo_shade_rects(Shape::Bell, 1000.0, 1.0, gx, gw);
+        assert!(bell_l.is_some() && bell_r.is_some());
+        let (low_l, low_r) = solo_shade_rects(Shape::LowCut, 1000.0, 0.707, gx, gw);
+        assert!(low_l.is_some() && low_r.is_none());
+        let (high_l, high_r) = solo_shade_rects(Shape::HighCut, 1000.0, 0.707, gx, gw);
+        assert!(high_l.is_none() && high_r.is_some());
+        if let Some((x, w)) = bell_l {
+            assert!((x - gx).abs() < 0.01);
+            assert!(w > 1.0);
+            assert!(x + w < gx + gw);
+        }
+        let gold = GOLD;
+        let grey = greyscale_darken(gold, 0.32);
+        assert!((grey.r - grey.g).abs() < 1e-5 && (grey.g - grey.b).abs() < 1e-5);
+        assert!(grey.r < gold.r && grey.r < gold.g);
+        let hit = intersect_rect((100.0, 10.0, 50.0, 20.0), (120.0, 0.0, 80.0, 40.0));
+        assert_eq!(hit, Some((120.0, 10.0, 30.0, 20.0)));
     }
 
     #[test]
@@ -4820,6 +5824,8 @@ mod tests {
             active_eq: Cell::new(0),
             anim_progress: Cell::new(0.0),
             anim_target: Cell::new(0.0),
+            anim_start: Cell::new(0.0),
+            anim_time: Cell::new(1.0),
             last_tick: Cell::new(None),
             knee_bulge: Cell::new(0.0),
             pse_knee_bulge: Cell::new(0.0),
@@ -4828,6 +5834,11 @@ mod tests {
             pse_anim_progress: Cell::new(0.0),
             pse_anim_target: Cell::new(0.0),
             pending_solo: None,
+            eq_bypass_anim: ButtonAnim::new(),
+            pse_bypass_anim: ButtonAnim::new(),
+            dyn_bypass_anim: ButtonAnim::new(),
+            lift_badge_anim: ButtonAnim::new(),
+            dyn_band_anim: ButtonAnim::new(),
         };
 
         // Post mode (default): PSE on the left, EQ in the middle, Dynamics on the right
@@ -4843,20 +5854,24 @@ mod tests {
         );
         assert!(view.pse_bounds().0 + view.pse_bounds().2 <= view.eq_bounds().0);
         assert!(view.eq_bounds().0 + view.eq_bounds().2 <= view.dyn_bounds().0);
-        assert_eq!(view.gx(), MARGIN + PSE_W + GAP + 44.0);
+        assert_eq!(view.gx(), MARGIN + PSE_W + GAP + EQ_GRAPH_PAD_LEFT);
         assert_eq!(view.global_controls(), &[0]);
-        assert_eq!(PSE_CONTROLS_KNOBS, [7, 8, 2, 10]);
+        assert_eq!(PSE_CONTROLS_KNOBS, [8, 2, 10]);
 
         let tab2 = view.eq_tab_2_rect();
         let tab_lift = view.eq_tab_lift_rect();
         let tab_sc = view.eq_tab_sc_rect();
         let bypass = view.eq_power_rect();
+        let header_listen_sc = view.eq_header_listen_sc_rect();
         assert!(tab2.0 + tab2.2 < tab_lift.0);
         assert!(tab_lift.0 + tab_lift.2 < tab_sc.0);
-        assert!(tab_sc.0 + tab_sc.2 < view.eq_bounds().0 + view.eq_bounds().2);
+        assert!(tab_sc.0 + tab_sc.2 < header_listen_sc.0);
+        assert!(header_listen_sc.0 + header_listen_sc.2 <= view.eq_bounds().0 + view.eq_bounds().2);
         assert_eq!(tab_lift.1, tab2.1);
         assert_eq!(tab_sc.1, tab2.1);
         assert_eq!(bypass.1, tab2.1);
+        assert_eq!(header_listen_sc.1, tab2.1);
+        assert_eq!(header_listen_sc.3, MODULE_HEADER_CTRL);
         assert!((bypass.1 + bypass.3 * 0.5 - module_header_mid()).abs() < 0.01);
         assert_eq!(axis_db_text(12), "12");
         assert_eq!(axis_db_text(0), "0");
@@ -4864,16 +5879,39 @@ mod tests {
 
         let slider = view.dyn_main_thresh_slider_rect();
         let gr_meter = view.dyn_main_gr_meter_rect();
-        assert_eq!(gr_meter.0, slider.0 + slider.2 + 10.0);
+        assert_eq!(gr_meter.0, slider.0 + slider.2 + 16.0);
         assert_eq!(gr_meter.1, slider.1);
         assert_eq!(gr_meter.3, slider.3);
-        assert_eq!(slider.1 + slider.3, GRAPH_BOTTOM);
-        assert_eq!(gr_meter.1 + gr_meter.3, GRAPH_BOTTOM);
+        assert_eq!(slider.1 + slider.3, GRAPH_BOTTOM - 16.0);
+        assert_eq!(gr_meter.1 + gr_meter.3, GRAPH_BOTTOM - 16.0);
+        let knee_at_top = view.dyn_main_knee_rect(slider.1, 0.0);
+        assert_eq!(knee_at_top.1, slider.1 - KNEE_METER_OVERHANG);
+        assert!(knee_at_top.1 + knee_at_top.3 <= slider.1 + slider.3 + KNEE_METER_OVERHANG);
+        let knee_at_bottom = view.dyn_main_knee_rect(slider.1 + slider.3, 0.0);
+        assert_eq!(
+            knee_at_bottom.1 + knee_at_bottom.3,
+            slider.1 + slider.3 + KNEE_METER_OVERHANG
+        );
+        assert!(knee_at_bottom.1 >= slider.1 - KNEE_METER_OVERHANG);
+        let pse_knee_at_top = view.pse_main_knee_rect(slider.1, 0.0);
+        assert_eq!(pse_knee_at_top.1, slider.1 - KNEE_METER_OVERHANG);
         let cog = view.dyn_cog_button_rect();
-        assert_eq!(cog.1, module_footer_ctrl_y());
-        assert!(cog.1 > GRAPH_BOTTOM);
-        assert!(cog.1 + cog.3 <= MODULE_Y + MODULE_H);
-        assert_eq!(view.pse_cog_button_rect().1, cog.1);
+        assert_eq!(cog.0 + cog.2 * 0.5, gr_meter.0 + gr_meter.2 * 0.5);
+        assert!(cog.1 >= MODULE_HEADER_BOTTOM);
+        assert!(cog.1 + cog.3 <= gr_meter.1);
+        let pse_cog = view.pse_cog_button_rect();
+        assert_eq!(pse_cog.1, cog.1);
+        assert_eq!(
+            pse_cog.0 + pse_cog.2 * 0.5,
+            view.pse_main_gr_meter_rect().0 + view.pse_main_gr_meter_rect().2 * 0.5
+        );
+        let scale_btn = view.scale_button_rect();
+        assert_eq!(
+            scale_btn.0 + scale_btn.2 * 0.5,
+            view.gx() - EQ_GRAPH_PAD_LEFT * 0.5
+        );
+        assert_eq!(scale_btn.1, GY - 10.0);
+        assert_eq!(scale_btn.3, 20.0);
         assert_eq!(FREQ_AXIS[5], (2500.0, "2.5k"));
         assert!(FREQ_AXIS
             .iter()
@@ -4882,11 +5920,14 @@ mod tests {
         assert!(handle.2 <= slider.2 + 12.0);
         assert!(handle.3 >= 12.0);
         let knee = view.dyn_main_knee_rect(slider.1 + slider.3 * 0.5, 0.0);
-        assert!(knee.3 >= handle.3);
+        let knee_offset = view.dyn_main_knee_offset();
+        assert_eq!(knee.1, handle.1 - knee_offset);
+        assert_eq!(knee.3, handle.3 + 2.0 * knee_offset);
 
         let pse_slider = view.pse_main_thresh_slider_rect();
         let pse_gr = view.pse_main_gr_meter_rect();
-        assert_eq!(pse_gr.0, pse_slider.0 + pse_slider.2 + 10.0);
+        assert_eq!(pse_slider.1, slider.1);
+        assert_eq!(pse_gr.0, pse_slider.0 + pse_slider.2 + 16.0);
         let depth_handle = view.dyn_main_depth_handle_rect(gr_meter.1 + gr_meter.3 * 0.5);
         assert!(inside(
             depth_handle.0 + 4.0,
@@ -4900,19 +5941,39 @@ mod tests {
         assert!(FOOTER_BTN_Y + 28.0 <= UI_H);
         assert_eq!(HEADER_H, 82.0);
 
+        let out_r = output_gain_rect();
+        assert_eq!(out_r, (UI_W - MARGIN - 130.0, FOOTER_BTN_Y, 130.0, 28.0));
+        assert_eq!(THEME_BUTTON, (32.0, FOOTER_BTN_Y, 88.0, 28.0));
+        assert_eq!(PROCESS_BUTTON.0, 128.0);
+
         view.dyn_page = DynPage::Controls;
-        assert_eq!(view.global_controls(), &[6, 5, 11, 3, 4]);
-        let knob = view.global_rect(6);
-        assert_eq!((knob.2, knob.3), (56.0, 86.0));
-        let mode_last = view.dyn_mode_rect(1);
-        assert!(mode_last.1 + mode_last.3 <= knob.1);
+        assert_eq!(view.global_controls(), &[5, 11, 6, 3, 4]);
+        let attack = view.global_rect(5);
+        let release = view.global_rect(11);
+        let ratio = view.global_rect(6);
+        assert_eq!((attack.2, attack.3), (56.0, 86.0));
+        assert_eq!(attack.1, release.1);
+        assert!(attack.0 < release.0);
+        assert!(ratio.1 > attack.1);
+        let routing = view.footer_comp_routing_rect();
+        let auto = view.footer_auto_rect();
+        let link = view.footer_link_rect();
+        assert_eq!(auto.1, routing.1);
+        assert_eq!(link.1, routing.1);
+        assert!(routing.0 + routing.2 <= auto.0);
+        assert!(auto.0 + auto.2 <= link.0);
+        assert!(link.0 + link.2 <= out_r.0);
         assert!(
             !view.global_controls().contains(&2),
             "SC HPF must not appear on the compressor controls page"
         );
 
         view.pse_page = PsePage::Controls;
-        assert_eq!(view.pse_controls(), &[7, 8, 2, 10]);
+        assert_eq!(view.pse_controls(), &[8, 2, 10]);
+        let time_r = view.pse_knob_rect(10);
+        let det_r = view.pse_detect_mode_rect();
+        assert_eq!(det_r.0, time_r.0);
+        assert!(time_r.1 + time_r.3 <= det_r.1);
         assert!(inside(
             view.pse_bounds().0 + 20.0,
             view.pse_knob_rect(8).1 + 10.0,
@@ -4934,13 +5995,16 @@ mod tests {
             view.eq_bounds(),
             (MARGIN + PSE_W + GAP + DYN_W + GAP, MODULE_Y, EQ_W, MODULE_H)
         );
-        assert_eq!(view.gx(), MARGIN + PSE_W + GAP + DYN_W + GAP + 44.0);
+        assert_eq!(
+            view.gx(),
+            MARGIN + PSE_W + GAP + DYN_W + GAP + EQ_GRAPH_PAD_LEFT
+        );
         view.dyn_page = DynPage::Main;
         let pre_slider = view.dyn_main_thresh_slider_rect();
-        assert_eq!(pre_slider.0, MARGIN + PSE_W + GAP + 18.0);
+        assert_eq!(pre_slider.0, MARGIN + PSE_W + GAP + 30.0);
         assert_eq!(
             view.dyn_main_gr_meter_rect().0,
-            pre_slider.0 + pre_slider.2 + 10.0
+            pre_slider.0 + pre_slider.2 + 16.0
         );
     }
 
@@ -4981,6 +6045,106 @@ mod tests {
     }
 
     #[test]
+    fn hover_preview_band_curve_and_fading_ranges() {
+        let gx = GX;
+        let gw = GW;
+        let sr = 48000.0;
+        let _graph_db = 24.0;
+
+        // Test preview band inference
+        let f_mid = x_freq_at(gx + gw * 0.5, gx, gw);
+        assert!((f_mid - 632.45).abs() < 1.0);
+
+        // Bell filter preview response & fading spans
+        let bell_shape = Shape::Bell;
+        let bell_gain = 6.0;
+        let bell_q = 1.0;
+        let preview_bell = Band {
+            id: 0,
+            shape: bell_shape,
+            freq: 1000.0,
+            gain: bell_gain,
+            q: bell_q,
+            order: 2,
+            ..Band::default()
+        };
+        let coeff_bell = BandCoeffs::make(&preview_bell, sr);
+        assert!((coeff_bell.response(1000.0, sr) - 6.0).abs() < 0.01);
+        assert!(coeff_bell.response(20.0, sr).abs() < 0.1);
+        assert!(coeff_bell.response(20000.0, sr).abs() < 0.1);
+
+        let oct_span_bell = (2.0 / bell_q.clamp(0.15, 18.0)).clamp(0.5, 4.0);
+        let f_left = (preview_bell.freq * 2.0_f64.powf(-oct_span_bell)).max(20.0);
+        let f_right = (preview_bell.freq * 2.0_f64.powf(oct_span_bell)).min(20000.0);
+        assert_eq!(f_left, 250.0);
+        assert_eq!(f_right, 4000.0);
+        assert!(freq_x_at(f_left, gx, gw) < freq_x_at(preview_bell.freq, gx, gw));
+        assert!(freq_x_at(preview_bell.freq, gx, gw) < freq_x_at(f_right, gx, gw));
+
+        // LowCut filter preview response & fading spans
+        let preview_lowcut = Band {
+            id: 0,
+            shape: Shape::LowCut,
+            freq: 100.0,
+            gain: 0.0,
+            q: 0.707,
+            order: 2,
+            ..Band::default()
+        };
+        let coeff_lowcut = BandCoeffs::make(&preview_lowcut, sr);
+        assert!(coeff_lowcut.response(20.0, sr) < -12.0);
+        assert!((coeff_lowcut.response(10000.0, sr)).abs() < 0.05);
+
+        let oct_span_cut = (1.5 / preview_lowcut.q.clamp(0.15, 18.0)).clamp(0.5, 3.0);
+        let f_fade_start = (preview_lowcut.freq * 2.0_f64.powf(-oct_span_cut * 0.5)).max(20.0);
+        let f_fade_end = (preview_lowcut.freq * 2.0_f64.powf(oct_span_cut)).min(20000.0);
+        assert!(f_fade_start < preview_lowcut.freq);
+        assert!(f_fade_end > preview_lowcut.freq);
+        assert!(freq_x_at(f_fade_start, gx, gw) < freq_x_at(f_fade_end, gx, gw));
+
+        // HighCut filter preview response & fading spans
+        let preview_highcut = Band {
+            id: 0,
+            shape: Shape::HighCut,
+            freq: 5000.0,
+            gain: 0.0,
+            q: 0.707,
+            order: 2,
+            ..Band::default()
+        };
+        let coeff_highcut = BandCoeffs::make(&preview_highcut, sr);
+        assert!((coeff_highcut.response(100.0, sr)).abs() < 0.05);
+        assert!(coeff_highcut.response(20000.0, sr) < -12.0);
+
+        // HighShelf & LowShelf response
+        let preview_highshelf = Band {
+            id: 0,
+            shape: Shape::HighShelf,
+            freq: 2000.0,
+            gain: 6.0,
+            q: 1.0,
+            order: 2,
+            ..Band::default()
+        };
+        let coeff_highshelf = BandCoeffs::make(&preview_highshelf, sr);
+        assert!((coeff_highshelf.response(100.0, sr)).abs() < 0.1);
+        assert!((coeff_highshelf.response(15000.0, sr) - 6.0).abs() < 0.2);
+
+        let preview_lowshelf = Band {
+            id: 0,
+            shape: Shape::LowShelf,
+            freq: 200.0,
+            gain: 6.0,
+            q: 1.0,
+            order: 2,
+            ..Band::default()
+        };
+        let coeff_lowshelf = BandCoeffs::make(&preview_lowshelf, sr);
+        assert!((coeff_lowshelf.response(30.0, sr) - 6.0).abs() < 0.2);
+        assert!((coeff_lowshelf.response(10000.0, sr)).abs() < 0.1);
+    }
+
+    #[test]
     fn dynamic_eq_range_drag_and_bipolar_normalization() {
         let graph_db = 18.0;
         let gain = 4.0;
@@ -5000,14 +6164,6 @@ mod tests {
 
         let y_near_zero = db_y(gain - 0.15, graph_db);
         assert_eq!(snap_dyn_range(gain, y_near_zero, graph_db), 0.0);
-
-        let y_range_pos = db_y(gain - range_atten, graph_db);
-        let label_y_pos = y_node.min(y_range_pos) - 17.0;
-        assert_eq!(label_y_pos, y_node - 17.0);
-
-        let y_range_neg = db_y(gain - range_boost, graph_db);
-        let label_y_neg = y_node.min(y_range_neg) - 17.0;
-        assert_eq!(label_y_neg, y_range_neg - 17.0);
 
         let norm_fn = |range: f64| (range + 24.0) / 48.0;
         let denorm_fn = |n: f64| -24.0 + 48.0 * n;
@@ -5078,30 +6234,27 @@ mod tests {
         ));
 
         b.dynamic = true;
-        b.threshold = -18.0;
-        let line = threshold_line_rect(&b, graph_db, gx, gw);
-        assert!((line.3 - THRESH_LINE_H).abs() < 0.01);
-        assert!(line.2 > DYN_PILL_R * 2.0);
-        assert!(threshold_handle_hit(
-            &b,
-            line.0 + 1.0,
-            line.1 + line.3 * 0.5,
-            graph_db,
-            gx,
-            gw
-        ));
-        assert!(!threshold_handle_hit(&b, x_node, node_y, graph_db, gx, gw));
         assert_eq!(capped_reduction(6.0, 9.0), 6.0);
         assert_eq!(capped_reduction(6.0, 2.0), 2.0);
         assert_eq!(capped_reduction(-6.0, -9.0), -6.0);
         assert_eq!(capped_reduction(-6.0, -2.0), -2.0);
-        assert_eq!(hud_height_for(&b), 132.0);
+        assert_eq!(hud_height_for(&b), HUD_H);
         let hud = hud_rect_for_at(&b, graph_db, gx, gw);
-        for i in 0..5 {
+        for i in 0..3 {
             let value = hud_value_rect_at(&b, graph_db, i, gx, gw);
             assert!(inside(value.0, value.1, hud));
             assert!(inside(value.0 + value.2, value.1 + value.3, hud));
         }
+        let dyn_overlay = hud_dyn_rect_for_at(&b, graph_db, gx, gw).expect("dyn overlay");
+        for i in 0..5 {
+            let value = hud_dyn_value_rect_at(&b, graph_db, i, gx, gw);
+            assert!(inside(value.0, value.1, dyn_overlay));
+            assert!(inside(value.0 + value.2, value.1 + value.3, dyn_overlay));
+        }
+        let live = plot_band(&b, &[(b.id, 9.0)]);
+        assert!((live.gain - (b.gain - 6.0)).abs() < 1e-9);
+        let idle = plot_band(&b, &[]);
+        assert_eq!(idle.gain, b.gain);
     }
 
     #[test]
