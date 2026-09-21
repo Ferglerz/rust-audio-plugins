@@ -6,7 +6,6 @@
 //! to copy the widgets and modify them to your personal taste.
 
 use crossbeam::atomic::AtomicCell;
-use nih_plug::debug::*;
 use nih_plug::prelude::{GuiContext, Param, ParamPtr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -193,19 +192,25 @@ impl Model for WindowModel {
         event.map(|window_event, _| {
             if let WindowEvent::GeometryChanged { .. } = window_event {
                 let logical_size = (cx.window_size().width, cx.window_size().height);
-                // `self.vizia_state.inner_logical_size()` should match `logical_size`. Since it's
-                // computed we need to store the last logical size on this object.
-                nih_debug_assert_eq!(
-                    logical_size,
-                    self.vizia_state.inner_logical_size(),
-                    "The window size set on the vizia context does not match the size returned by \
-                     'ViziaState::size_fn'"
-                );
                 let scale = cx.user_scale_factor();
                 let previous_scale = self.vizia_state.scale_factor.load();
-                if logical_size == self.last_inner_window_size.load() && scale == previous_scale {
+                let last = self.last_inner_window_size.load();
+                if logical_size == last && scale == previous_scale {
                     return;
                 }
+
+                // Host-driven: inner size moved away from both the last
+                // accepted size and ViziaState. Scale-only changes are the
+                // resize handle and still need a debounced request_resize.
+                let expected = self.vizia_state.inner_logical_size();
+                if logical_size != last && logical_size != expected {
+                    self.last_inner_window_size.store(logical_size);
+                    self.pending_resize = None;
+                    return;
+                }
+
+                // Plugin-initiated scale (resize handle). Debounce so we do
+                // not spam the host on every drag tick.
                 self.vizia_state.scale_factor.store(scale);
                 self.pending_resize = Some(Instant::now());
             }

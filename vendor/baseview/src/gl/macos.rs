@@ -91,6 +91,9 @@ impl GlContext {
 
         view.setWantsBestResolutionOpenGLSurface_(YES);
 
+        // Do not autoresize this GL view with the parent. A 0×0
+        // NSOpenGLView during live resize aborts native GL even when
+        // vizia is not drawing. Size is applied only from sync_from_view.
         let () = msg_send![view, retain];
         NSOpenGLView::display_(view);
         parent_view.addSubview_(view);
@@ -136,8 +139,16 @@ impl GlContext {
 
     /// On macOS the `NSOpenGLView` needs to be resized separtely from our main view.
     pub(crate) fn resize(&self, size: NSSize) {
-        unsafe { NSView::setFrameSize(self.view, size) };
+        if !size.width.is_finite()
+            || !size.height.is_finite()
+            || size.width < 1.0
+            || size.height < 1.0
+        {
+            return;
+        }
         unsafe {
+            NSView::setFrameSize(self.view, size);
+            let _: () = msg_send![self.context, update];
             let _: () = msg_send![self.view, setNeedsDisplay: YES];
         }
     }

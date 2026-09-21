@@ -7,7 +7,7 @@ use cocoa::appkit::{
     NSApp, NSApplication, NSApplicationActivationPolicyRegular, NSBackingStoreBuffered,
     NSPasteboard, NSView, NSWindow, NSWindowStyleMask,
 };
-use cocoa::base::{id, nil, NO, YES};
+use cocoa::base::{id, nil, BOOL, NO, YES};
 use cocoa::foundation::{NSAutoreleasePool, NSPoint, NSRect, NSSize, NSString};
 use core_foundation::runloop::{
     __CFRunLoopTimer, kCFRunLoopDefaultMode, CFRunLoop, CFRunLoopTimer, CFRunLoopTimerContext,
@@ -53,7 +53,7 @@ unsafe impl HasRawWindowHandle for WindowHandle {
 }
 
 pub(super) struct WindowInner {
-    open: Cell<bool>,
+    pub(super) open: Cell<bool>,
 
     /// Only set if we created the parent window, i.e. we are running in
     /// parentless mode
@@ -62,10 +62,10 @@ pub(super) struct WindowInner {
     /// parentless mode
     ns_window: Cell<Option<id>>,
     /// Our subclassed NSView
-    ns_view: id,
+    pub(super) ns_view: id,
 
     #[cfg(feature = "opengl")]
-    gl_context: Option<GlContext>,
+    pub(super) gl_context: Option<GlContext>,
 }
 
 impl WindowInner {
@@ -76,6 +76,9 @@ impl WindowInner {
             unsafe {
                 // Take back ownership of the NSView's Rc<WindowState>
                 let state_ptr: *const c_void = *(*self.ns_view).get_ivar(BASEVIEW_STATE_IVAR);
+                // Clear the ivar first so setFrameSize / backing-change
+                // callbacks during teardown cannot resurrect a freed Rc.
+                (*self.ns_view).set_ivar(BASEVIEW_STATE_IVAR, ptr::null::<c_void>());
                 let window_state = Rc::from_raw(state_ptr as *mut WindowState);
 
                 // Cancel the frame timer
@@ -284,26 +287,17 @@ impl<'a> Window<'a> {
         if self.inner.open.get() {
             // NOTE: macOS gives you a personal rave if you pass in fractional pixels here. Even
             // though the size is in fractional pixels.
-            let size = NSSize::new(size.width.round(), size.height.round());
-
-            unsafe { NSView::setFrameSize(self.inner.ns_view, size) };
-            if let Some(state) = unsafe { WindowState::try_from_view(&*self.inner.ns_view) } {
-                let window_info = WindowInfo::from_logical_size(
-                    Size::new(size.width, size.height),
-                    state.window_info.get().scale(),
-                );
-                state.window_info.set(window_info);
-                state.trigger_event(Event::Window(crate::WindowEvent::Resized(window_info)));
+            let width = size.width.round().max(0.0);
+            let height = size.height.round().max(0.0);
+            if width < 1.0 || height < 1.0 {
+                return;
             }
+            let size = NSSize::new(width, height);
+
+            // `setFrameSize:` is overridden to sync OpenGL and emit Resized.
+            unsafe { NSView::setFrameSize(self.inner.ns_view, size) };
             unsafe {
                 let _: () = msg_send![self.inner.ns_view, setNeedsDisplay: YES];
-            }
-
-            // When using OpenGL the `NSOpenGLView` needs to be resized separately? Why? Because
-            // macOS.
-            #[cfg(feature = "opengl")]
-            if let Some(gl_context) = &self.inner.gl_context {
-                gl_context.resize(size);
             }
 
             // If this is a standalone window then we'll also need to resize the window itself
@@ -314,7 +308,8 @@ impl<'a> Window<'a> {
     }
 
     pub fn set_mouse_cursor(&mut self, _mouse_cursor: MouseCursor) {
-        todo!()
+        // Cursor changes are not implemented for this backend. A `todo!()`
+        // here aborted the DAW with no plugin log.
     }
 
     #[cfg(feature = "opengl")]
@@ -371,7 +366,74 @@ impl WindowState {
         self.window_handler.borrow_mut().on_event(&mut window, event)
     }
 
+    /// Keep OpenGL and vizia in sync with the NSView frame. Skip 0×0
+    /// sizes: FemtoVG `canvas.set_size(0, 0)` aborts native GL.
+    pub(super) fn sync_from_view(&self) {
+        if !self.window_inner.open.get() {
+            return;
+        }
+
+        let (bounds, scale_factor, live) = unsafe {
+            let ns_window: *mut Object = msg_send![self.window_inner.ns_view, window];
+            let scale_factor: f64 =
+                if ns_window.is_null() { 1.0 } else { NSWindow::backingScaleFactor(ns_window) };
+            let bounds: NSRect = msg_send![self.window_inner.ns_view, bounds];
+            let live: BOOL = msg_send![self.window_inner.ns_view, inLiveResize];
+            (bounds, scale_factor, live)
+        };
+
+        // Recreating the FemtoVG framebuffer on every live-resize tick
+        // is what aborted the host. Keep the last frame until the drag ends.
+        if live != NO {
+            return;
+        }
+
+        if !bounds.size.width.is_finite()
+            || !bounds.size.height.is_finite()
+            || bounds.size.width < 1.0
+            || bounds.size.height < 1.0
+        {
+            return;
+        }
+
+        let size = NSSize::new(bounds.size.width.round(), bounds.size.height.round());
+        #[cfg(feature = "opengl")]
+        if let Some(gl_context) = &self.window_inner.gl_context {
+            gl_context.resize(size);
+        }
+
+        let new_window_info = WindowInfo::from_logical_size(
+            Size::new(bounds.size.width, bounds.size.height),
+            scale_factor,
+        );
+        if new_window_info.physical_size().width == 0 || new_window_info.physical_size().height == 0
+        {
+            return;
+        }
+        if new_window_info.physical_size() != self.window_info.get().physical_size() {
+            self.window_info.set(new_window_info);
+            self.trigger_event(Event::Window(crate::WindowEvent::Resized(new_window_info)));
+        }
+    }
+
     pub(super) fn trigger_frame(&self) {
+        if !self.window_inner.open.get() {
+            return;
+        }
+        unsafe {
+            let bounds: NSRect = msg_send![self.window_inner.ns_view, bounds];
+            if !bounds.size.width.is_finite()
+                || !bounds.size.height.is_finite()
+                || bounds.size.width < 1.0
+                || bounds.size.height < 1.0
+            {
+                return;
+            }
+            let live: BOOL = msg_send![self.window_inner.ns_view, inLiveResize];
+            if live != NO {
+                return;
+            }
+        }
         let mut window = crate::Window::new(Window { inner: &self.window_inner });
         self.window_handler.borrow_mut().on_frame(&mut window);
     }

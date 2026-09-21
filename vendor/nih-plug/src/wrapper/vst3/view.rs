@@ -380,17 +380,11 @@ impl<P: Vst3Plugin> IPlugView for WrapperView<P> {
     unsafe fn on_size(&self, new_size: *mut ViewRect) -> tresult {
         check_null_ptr!(new_size);
 
-        // TODO: Implement Host->Plugin resizing
-        let (unscaled_width, unscaled_height) = self.editor.lock().size();
-        let scaling_factor = self.scaling_factor.load(Ordering::Relaxed);
-        let (editor_width, editor_height) = (
-            (unscaled_width as f32 * scaling_factor).round() as i32,
-            (unscaled_height as f32 * scaling_factor).round() as i32,
-        );
-
+        // The host already resized the platform view. Rejecting a mismatch
+        // against Editor::size() made DAWs fight the OpenGL surface.
         let width = (*new_size).right - (*new_size).left;
         let height = (*new_size).bottom - (*new_size).top;
-        if width == editor_width && height == editor_height {
+        if width >= 200 && height >= 120 {
             kResultOk
         } else {
             kResultFalse
@@ -429,15 +423,13 @@ impl<P: Vst3Plugin> IPlugView for WrapperView<P> {
     }
 
     unsafe fn can_resize(&self) -> tresult {
-        // TODO: Implement Host->Plugin resizing
-        kResultFalse
+        kResultOk
     }
 
     unsafe fn check_size_constraint(&self, rect: *mut ViewRect) -> tresult {
         check_null_ptr!(rect);
 
-        // TODO: Implement Host->Plugin resizing
-        if (*rect).right - (*rect).left > 0 && (*rect).bottom - (*rect).top > 0 {
+        if (*rect).right - (*rect).left >= 200 && (*rect).bottom - (*rect).top >= 120 {
             kResultOk
         } else {
             kResultFalse

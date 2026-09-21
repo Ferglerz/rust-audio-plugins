@@ -6,8 +6,8 @@ use winapi::um::ole2::{OleInitialize, RegisterDragDrop, RevokeDragDrop};
 use winapi::um::oleidl::LPDROPTARGET;
 use winapi::um::winuser::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    GetDpiForWindow, GetMessageW, GetWindowLongPtrW, LoadCursorW, PostMessageW, RegisterClassW,
-    ReleaseCapture, SetCapture, SetFocus, SetProcessDpiAwarenessContext, SetTimer,
+    GetClientRect, GetDpiForWindow, GetMessageW, GetWindowLongPtrW, LoadCursorW, PostMessageW,
+    RegisterClassW, ReleaseCapture, SetCapture, SetFocus, SetProcessDpiAwarenessContext, SetTimer,
     SetWindowLongPtrW, SetWindowPos, TranslateMessage, UnregisterClassW, CS_OWNDC,
     DLGC_WANTALLKEYS, DLGC_WANTARROWS, DLGC_WANTCHARS, DLGC_WANTTAB, GET_XBUTTON_WPARAM,
     GWLP_USERDATA, IDC_ARROW, MSG, SWP_NOMOVE, SWP_NOZORDER, WHEEL_DELTA, WM_CHAR, WM_CLOSE,
@@ -280,9 +280,13 @@ unsafe fn wnd_proc_inner(
             None
         }
         WM_TIMER => {
-            let mut window = crate::Window::new(window_state.create_window());
-
             if wparam == WIN_FRAME_TIMER {
+                let mut rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+                GetClientRect(hwnd, &mut rect);
+                if rect.right - rect.left < 1 || rect.bottom - rect.top < 1 {
+                    return Some(0);
+                }
+                let mut window = crate::Window::new(window_state.create_window());
                 window_state.handler.borrow_mut().as_mut().unwrap().on_frame(&mut window);
             }
 
@@ -332,6 +336,9 @@ unsafe fn wnd_proc_inner(
 
             let width = (lparam & 0xFFFF) as u16 as u32;
             let height = ((lparam >> 16) & 0xFFFF) as u16 as u32;
+            if width == 0 || height == 0 {
+                return None;
+            }
 
             let new_window_info = {
                 let mut window_info = window_state.window_info.borrow_mut();
@@ -755,7 +762,7 @@ impl Window<'_> {
     }
 
     pub fn set_mouse_cursor(&mut self, _mouse_cursor: MouseCursor) {
-        todo!()
+        // Unimplemented on this backend. `todo!()` aborted the host.
     }
 
     #[cfg(feature = "opengl")]

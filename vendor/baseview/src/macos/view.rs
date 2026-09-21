@@ -15,8 +15,8 @@ use uuid::Uuid;
 
 use crate::MouseEvent::{ButtonPressed, ButtonReleased};
 use crate::{
-    DropData, DropEffect, Event, EventStatus, MouseButton, MouseEvent, Point, ScrollDelta, Size,
-    WindowEvent, WindowInfo, WindowOpenOptions,
+    DropData, DropEffect, Event, EventStatus, MouseButton, MouseEvent, Point, ScrollDelta,
+    WindowEvent, WindowOpenOptions,
 };
 
 use super::keyboard::{from_nsstring, make_modifiers};
@@ -110,6 +110,12 @@ pub(super) unsafe fn create_view(window_options: &WindowOpenOptions) -> id {
 
     view.initWithFrame_(NSRect::new(NSPoint::new(0., 0.), NSSize::new(size.width, size.height)));
 
+    // Track the host parent so DAW window resizes reach this view.
+    const NS_VIEW_WIDTH_SIZABLE: NSUInteger = 2;
+    const NS_VIEW_HEIGHT_SIZABLE: NSUInteger = 16;
+    let _: () =
+        msg_send![view, setAutoresizingMask: NS_VIEW_WIDTH_SIZABLE | NS_VIEW_HEIGHT_SIZABLE];
+
     let _: id = msg_send![
         view,
         registerForDraggedTypes: NSArray::arrayWithObjects(nil, &[NSFilenamesPboardType])
@@ -141,9 +147,16 @@ unsafe fn create_view_class() -> &'static Class {
         property_yes as extern "C" fn(&Object, Sel) -> BOOL,
     );
     class.add_method(sel!(isFlipped), property_yes as extern "C" fn(&Object, Sel) -> BOOL);
+    // Keep the last frame during live resize. Drawing into a 0×0 or
+    // mid-resize OpenGL surface is what crashed the host to desktop.
     class.add_method(
         sel!(preservesContentInLiveResize),
-        property_no as extern "C" fn(&Object, Sel) -> BOOL,
+        property_yes as extern "C" fn(&Object, Sel) -> BOOL,
+    );
+    class.add_method(sel!(setFrameSize:), set_frame_size as extern "C" fn(&Object, Sel, NSSize));
+    class.add_method(
+        sel!(viewDidEndLiveResize),
+        view_did_end_live_resize as extern "C" fn(&Object, Sel),
     );
     class.add_method(
         sel!(acceptsFirstMouse:),
@@ -216,8 +229,28 @@ extern "C" fn property_yes(_this: &Object, _sel: Sel) -> BOOL {
     YES
 }
 
-extern "C" fn property_no(_this: &Object, _sel: Sel) -> BOOL {
-    NO
+extern "C" fn set_frame_size(this: &Object, _sel: Sel, size: NSSize) {
+    unsafe {
+        let superclass = msg_send![this, superclass];
+        let () = msg_send![super(this, superclass), setFrameSize: size];
+    }
+    emit_resize_if_valid(this);
+}
+
+extern "C" fn view_did_end_live_resize(this: &Object, _sel: Sel) {
+    unsafe {
+        let superclass = msg_send![this, superclass];
+        let () = msg_send![super(this, superclass), viewDidEndLiveResize];
+    }
+    emit_resize_if_valid(this);
+}
+
+/// Push a Resized event only for a positive framebuffer. Zero-size
+/// canvases make FemtoVG/OpenGL abort with no Rust panic log.
+fn emit_resize_if_valid(this: &Object) {
+    if let Some(state) = unsafe { WindowState::try_from_view(this) } {
+        state.sync_from_view();
+    }
 }
 
 extern "C" fn accepts_first_mouse(_this: &Object, _sel: Sel, _event: id) -> BOOL {
@@ -247,30 +280,7 @@ extern "C" fn dealloc(this: &mut Object, _sel: Sel) {
 }
 
 extern "C" fn view_did_change_backing_properties(this: &Object, _: Sel, _: id) {
-    unsafe {
-        let ns_window: *mut Object = msg_send![this, window];
-
-        let scale_factor: f64 =
-            if ns_window.is_null() { 1.0 } else { NSWindow::backingScaleFactor(ns_window) };
-
-        let state = WindowState::from_view(this);
-
-        let bounds: NSRect = msg_send![this, bounds];
-
-        let new_window_info = WindowInfo::from_logical_size(
-            Size::new(bounds.size.width, bounds.size.height),
-            scale_factor,
-        );
-
-        let window_info = state.window_info.get();
-
-        // Only send the event when the window's size has actually changed to be in line with the
-        // other platform implementations
-        if new_window_info.physical_size() != window_info.physical_size() {
-            state.window_info.set(new_window_info);
-            state.trigger_event(Event::Window(WindowEvent::Resized(new_window_info)));
-        }
-    }
+    emit_resize_if_valid(this);
 }
 
 /// Init/reinit tracking area

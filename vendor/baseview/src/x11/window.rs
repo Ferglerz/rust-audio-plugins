@@ -423,6 +423,9 @@ impl WindowInner {
         }
 
         if let Some(size) = self.new_physical_size.take() {
+            if size.width == 0 || size.height == 0 {
+                return;
+            }
             self.window_info = WindowInfo::from_physical_size(size, self.window_info.scale());
 
             let window_info = self.window_info;
@@ -458,7 +461,10 @@ impl WindowInner {
             // if it's already time to draw a new frame.
             let next_frame = last_frame + self.frame_interval;
             if Instant::now() >= next_frame {
-                handler.on_frame(&mut crate::Window::new(Window { inner: self }));
+                let phy = self.window_info.physical_size();
+                if phy.width > 0 && phy.height > 0 {
+                    handler.on_frame(&mut crate::Window::new(Window { inner: self }));
+                }
                 last_frame = Instant::max(next_frame, Instant::now() - self.frame_interval);
             }
 

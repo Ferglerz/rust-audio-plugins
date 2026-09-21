@@ -95,6 +95,13 @@ fn quintic_page_progress(progress: f32) -> f32 {
     let frac = progress - unit;
     unit + frac * frac * frac * (frac * (frac * 6.0 - 15.0) + 10.0)
 }
+fn view_scale(bounds: BoundingBox) -> Option<f32> {
+    if !bounds.w.is_finite() || !bounds.h.is_finite() || bounds.w < 8.0 || bounds.h < 8.0 {
+        return None;
+    }
+    let scale = bounds.w / UI_W;
+    (scale.is_finite() && scale > 0.01).then_some(scale)
+}
 fn tick_page_anim(progress: &Cell<f32>, target: f32, dt: f32) {
     let cur = progress.get();
     let next = if cur < target {
@@ -2778,7 +2785,9 @@ impl View for StripView {
     fn event(&mut self, cx: &mut EventContext, event: &mut Event) {
         event.map(|e, meta| {
             let bounds = cx.bounds();
-            let scale = bounds.w / UI_W;
+            let Some(scale) = view_scale(bounds) else {
+                return;
+            };
             let x = (cx.mouse().cursorx - bounds.x) / scale;
             let y = (cx.mouse().cursory - bounds.y) / scale;
             if self.edit.is_some() {
@@ -3795,6 +3804,9 @@ impl View for StripView {
     }
     fn draw(&self, cx: &mut DrawContext, canvas: &mut Canvas) {
         let bounds = cx.bounds();
+        let Some(scale) = view_scale(bounds) else {
+            return;
+        };
         if self.font.get().is_none() {
             self.font.set(canvas.add_font_mem(FONT_JETBRAINS_MONO).ok());
         }
@@ -3808,7 +3820,7 @@ impl View for StripView {
         let mut d = Draw::new(
             canvas,
             preferences::light(),
-            bounds.w / UI_W,
+            scale,
             bounds.x,
             bounds.y,
             self.font.get(),
@@ -5878,6 +5890,54 @@ mod tests {
         for input in ["", "-", "NaN", "inf", "1e999", "12garbage", "2 ms", "--3"] {
             assert_eq!(parse_value(input, ValueTarget::Band(0)), None, "{input}");
         }
+    }
+
+    #[test]
+    fn view_scale_rejects_empty_and_non_finite_bounds() {
+        assert_eq!(
+            view_scale(BoundingBox {
+                x: 0.0,
+                y: 0.0,
+                w: UI_W,
+                h: UI_H
+            }),
+            Some(1.0)
+        );
+        assert!(view_scale(BoundingBox {
+            x: 0.0,
+            y: 0.0,
+            w: 0.0,
+            h: UI_H
+        })
+        .is_none());
+        assert!(view_scale(BoundingBox {
+            x: 0.0,
+            y: 0.0,
+            w: UI_W,
+            h: 0.0
+        })
+        .is_none());
+        assert!(view_scale(BoundingBox {
+            x: 0.0,
+            y: 0.0,
+            w: f32::NAN,
+            h: UI_H
+        })
+        .is_none());
+        assert!(view_scale(BoundingBox {
+            x: 0.0,
+            y: 0.0,
+            w: f32::INFINITY,
+            h: UI_H
+        })
+        .is_none());
+        assert!(view_scale(BoundingBox {
+            x: 0.0,
+            y: 0.0,
+            w: 4.0,
+            h: 4.0
+        })
+        .is_none());
     }
 
     #[test]
