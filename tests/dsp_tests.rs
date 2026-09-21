@@ -130,3 +130,39 @@ fn test_auto_restart_transient_detection() {
     assert!(engine.is_crossfading());
     assert!(engine.transient_flash() > 0.5);
 }
+
+#[test]
+fn test_s_curve_deceleration_matches_ui() {
+    use tape_stop::dsp::s_curve;
+
+    let mut engine = TapeStopEngine::new();
+    engine.set_sample_rate(44100.0);
+    engine.note_on(60, 1.0);
+
+    let drop_time = 0.5;
+    let curve_exp = 2.5;
+
+    // Process partway through
+    for _ in 0..5000 {
+        engine.process_sample(
+            0.0, 0.0, drop_time, 10.0, curve_exp, 0.0, false, -18.0, true,
+        );
+    }
+
+    let prog_l = engine.brake_progress_l();
+    let speed_l = engine.speed_left();
+    let expected_speed = 1.0 - s_curve(prog_l, curve_exp);
+    assert!((speed_l - expected_speed).abs() < 1e-5);
+}
+
+#[test]
+fn test_clear_held_notes_releases_brake() {
+    let mut engine = TapeStopEngine::new();
+    engine.set_sample_rate(44100.0);
+    engine.note_on(60, 1.0);
+    assert!(engine.is_braking());
+
+    engine.clear_held_notes();
+    assert!(!engine.is_braking());
+    assert!(engine.is_crossfading());
+}

@@ -8,6 +8,8 @@ pub struct TapeStopTelemetry {
     pub is_braking: AtomicBool,
     pub is_crossfading: AtomicBool,
     pub brake_progress: AtomicF32,
+    pub brake_progress_l: AtomicF32,
+    pub brake_progress_r: AtomicF32,
     pub input_peak: AtomicF32,
     pub output_peak: AtomicF32,
     pub live_envelope: AtomicF32,
@@ -23,6 +25,8 @@ impl TapeStopTelemetry {
             is_braking: AtomicBool::new(false),
             is_crossfading: AtomicBool::new(false),
             brake_progress: AtomicF32::new(0.0),
+            brake_progress_l: AtomicF32::new(0.0),
+            brake_progress_r: AtomicF32::new(0.0),
             input_peak: AtomicF32::new(0.0),
             output_peak: AtomicF32::new(0.0),
             live_envelope: AtomicF32::new(0.0),
@@ -31,6 +35,7 @@ impl TapeStopTelemetry {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     #[inline(always)]
     pub fn update(
         &self,
@@ -39,6 +44,8 @@ impl TapeStopTelemetry {
         is_braking: bool,
         is_crossfading: bool,
         brake_progress: f32,
+        brake_progress_l: f32,
+        brake_progress_r: f32,
         in_peak: f32,
         out_peak: f32,
         live_envelope: f32,
@@ -49,6 +56,10 @@ impl TapeStopTelemetry {
         self.is_braking.store(is_braking, Ordering::Relaxed);
         self.is_crossfading.store(is_crossfading, Ordering::Relaxed);
         self.brake_progress.store(brake_progress, Ordering::Relaxed);
+        self.brake_progress_l
+            .store(brake_progress_l, Ordering::Relaxed);
+        self.brake_progress_r
+            .store(brake_progress_r, Ordering::Relaxed);
         self.input_peak.store(in_peak, Ordering::Relaxed);
         self.output_peak.store(out_peak, Ordering::Relaxed);
         self.live_envelope.store(live_envelope, Ordering::Relaxed);

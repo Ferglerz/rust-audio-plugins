@@ -1,5 +1,20 @@
 use crate::dsp::ring_buffer::StereoRingBuffer;
 
+/// S-curve deceleration function shared between DSP and UI visualization.
+#[inline(always)]
+pub fn s_curve(t: f32, exp: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    if t <= 0.0 {
+        0.0
+    } else if t >= 1.0 {
+        1.0
+    } else if t < 0.5 {
+        0.5 * (2.0 * t).powf(exp)
+    } else {
+        1.0 - 0.5 * (2.0 * (1.0 - t)).powf(exp)
+    }
+}
+
 /// Semitone drop constant: 1.0 - 2^(-1/12) ≈ 0.0561256873183065
 const SEMI_DROP: f64 = 1.0 - 0.9438743126816935;
 
@@ -135,6 +150,19 @@ impl TapeStopEngine {
         self.evaluate_trigger_state();
     }
 
+    pub fn clear_held_notes(&mut self) {
+        self.active_note_count = 0;
+        self.evaluate_trigger_state();
+    }
+
+    pub fn clear_cc_override(&mut self) {
+        self.cc_override_active = false;
+        self.target_cc_speed = 1.0;
+        self.smoothed_cc_speed = 1.0;
+        self.last_cc_msb = None;
+        self.last_cc_lsb = None;
+    }
+
     fn evaluate_trigger_state(&mut self) {
         let should_brake = self.active_note_count > 0 || self.manual_trigger;
 
@@ -259,16 +287,8 @@ impl TapeStopEngine {
             let prog_l = (self.brake_pos_samples / self.stop_samples_l).min(1.0);
             let prog_r = (self.brake_pos_samples / self.stop_samples_r).min(1.0);
 
-            let curved_l = if prog_l > 0.0 {
-                prog_l.powf(drop_curve as f64)
-            } else {
-                0.0
-            };
-            let curved_r = if prog_r > 0.0 {
-                prog_r.powf(drop_curve as f64)
-            } else {
-                0.0
-            };
+            let curved_l = s_curve(prog_l as f32, drop_curve) as f64;
+            let curved_r = s_curve(prog_r as f32, drop_curve) as f64;
 
             let mut speed_l = (1.0 - curved_l).max(0.0);
             let mut speed_r = (1.0 - curved_r).max(0.0);
@@ -347,6 +367,24 @@ impl TapeStopEngine {
     pub fn brake_progress(&self) -> f32 {
         if self.max_stop_samples > 0.0 {
             (self.brake_pos_samples / self.max_stop_samples).clamp(0.0, 1.0) as f32
+        } else {
+            0.0
+        }
+    }
+
+    #[inline(always)]
+    pub fn brake_progress_l(&self) -> f32 {
+        if self.stop_samples_l > 0.0 {
+            (self.brake_pos_samples / self.stop_samples_l).clamp(0.0, 1.0) as f32
+        } else {
+            0.0
+        }
+    }
+
+    #[inline(always)]
+    pub fn brake_progress_r(&self) -> f32 {
+        if self.stop_samples_r > 0.0 {
+            (self.brake_pos_samples / self.stop_samples_r).clamp(0.0, 1.0) as f32
         } else {
             0.0
         }

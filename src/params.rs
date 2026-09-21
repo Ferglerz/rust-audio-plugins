@@ -2,12 +2,20 @@ use nih_plug::prelude::*;
 use nih_plug_vizia::ViziaState;
 use std::sync::Arc;
 
+#[derive(Enum, PartialEq, Eq, Clone, Copy, Debug)]
+pub enum MidiAssign {
+    #[name = "CC"]
+    Cc,
+    #[name = "Note"]
+    Note,
+}
+
 #[derive(Params)]
 pub struct TapeStopParams {
     #[persist = "editor-state"]
     pub editor_state: Arc<ViziaState>,
 
-    /// Drop Time in seconds [0.01s - 5.0s]
+    /// Drop Time in seconds [0.05s - 16.0s]
     #[id = "drop_time"]
     pub drop_time: FloatParam,
 
@@ -23,9 +31,17 @@ pub struct TapeStopParams {
     #[id = "stereo_div"]
     pub stereo_div: FloatParam,
 
+    /// MIDI assignment type for the compact CC / Note control
+    #[id = "midi_assign"]
+    pub midi_assign: EnumParam<MidiAssign>,
+
     /// 14-bit Continuous Speed MIDI CC # [0 to 31]
     #[id = "override_cc"]
     pub override_cc: IntParam,
+
+    /// MIDI note that triggers the tape brake when assigned to Note [0 to 127]
+    #[id = "override_note"]
+    pub override_note: IntParam,
 
     /// Auto Restart Enabled on Transient / Envelope
     #[id = "auto_restart"]
@@ -47,18 +63,19 @@ pub struct TapeStopParams {
 impl Default for TapeStopParams {
     fn default() -> Self {
         Self {
-            editor_state: ViziaState::new(|| (1040, 520)),
+            editor_state: ViziaState::new_screen_sized(|| (1040, 520)),
 
             drop_time: FloatParam::new(
                 "Drop Time",
                 0.50,
                 FloatRange::Skewed {
-                    min: 0.01,
-                    max: 5.0,
+                    min: 0.05,
+                    max: 16.0,
                     factor: FloatRange::skew_factor(-1.5),
                 },
             )
             .with_unit(" s")
+            .with_step_size(0.05)
             .with_value_to_string(formatters::v2s_f32_rounded(2)),
 
             xfade_ms: FloatParam::new(
@@ -87,7 +104,11 @@ impl Default for TapeStopParams {
             .with_unit(" %")
             .with_value_to_string(formatters::v2s_f32_rounded(1)),
 
+            midi_assign: EnumParam::new("MIDI Assign", MidiAssign::Cc),
+
             override_cc: IntParam::new("CC #", 3, IntRange::Linear { min: 0, max: 31 }),
+
+            override_note: IntParam::new("Note #", 60, IntRange::Linear { min: 0, max: 127 }),
 
             auto_restart: BoolParam::new("Auto Restart", true),
 

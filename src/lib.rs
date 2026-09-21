@@ -11,13 +11,14 @@ pub mod telemetry;
 pub mod ui;
 
 use dsp::TapeStopEngine;
-use params::TapeStopParams;
+use params::{MidiAssign, TapeStopParams};
 use telemetry::TapeStopTelemetry;
 
 pub struct TapeStop {
     params: Arc<TapeStopParams>,
     engine: TapeStopEngine,
     pub telemetry: Arc<TapeStopTelemetry>,
+    last_midi_assign: MidiAssign,
 }
 
 impl Default for TapeStop {
@@ -26,6 +27,7 @@ impl Default for TapeStop {
             params: Arc::new(TapeStopParams::default()),
             engine: TapeStopEngine::new(),
             telemetry: TapeStopTelemetry::new(),
+            last_midi_assign: MidiAssign::Cc,
         }
     }
 }
@@ -95,7 +97,9 @@ impl Plugin for TapeStop {
         let xfade_ms = self.params.xfade_ms.value();
         let drop_curve = self.params.drop_curve.value();
         let stereo_div = self.params.stereo_div.value();
+        let midi_assign = self.params.midi_assign.value();
         let override_cc = self.params.override_cc.value() as u8;
+        let override_note = self.params.override_note.value() as u8;
         let auto_restart = self.params.auto_restart.value();
         let auto_restart_thresh = self.params.auto_restart_thresh.value();
         let power = self.params.power.value();
@@ -107,6 +111,12 @@ impl Plugin for TapeStop {
         let num_channels = buffer.channels();
 
         // 3. Process sample-by-sample with sample-accurate MIDI event handling
+        if midi_assign != self.last_midi_assign {
+            self.engine.clear_held_notes();
+            self.engine.clear_cc_override();
+            self.last_midi_assign = midi_assign;
+        }
+
         let mut next_event = context.next_event();
 
         for sample_idx in 0..num_samples {
@@ -118,14 +128,20 @@ impl Plugin for TapeStop {
 
                 match event {
                     NoteEvent::NoteOn { note, velocity, .. } => {
-                        self.engine.note_on(note, velocity);
+                        if midi_assign == MidiAssign::Cc || note == override_note {
+                            self.engine.note_on(note, velocity);
+                        }
                     }
                     NoteEvent::NoteOff { note, .. } => {
-                        self.engine.note_off(note);
+                        if midi_assign == MidiAssign::Cc || note == override_note {
+                            self.engine.note_off(note);
+                        }
                     }
                     NoteEvent::MidiCC { cc, value, .. } => {
-                        let cc_val = (value * 127.0).round() as u8;
-                        self.engine.handle_midi_cc(cc, cc_val, override_cc);
+                        if midi_assign == MidiAssign::Cc {
+                            let cc_val = (value * 127.0).round() as u8;
+                            self.engine.handle_midi_cc(cc, cc_val, override_cc);
+                        }
                     }
                     _ => {}
                 }
@@ -172,6 +188,8 @@ impl Plugin for TapeStop {
             self.engine.is_braking(),
             self.engine.is_crossfading(),
             self.engine.brake_progress(),
+            self.engine.brake_progress_l(),
+            self.engine.brake_progress_r(),
             max_in_peak,
             max_out_peak,
             self.engine.live_envelope(),

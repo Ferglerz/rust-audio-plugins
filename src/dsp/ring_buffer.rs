@@ -1,13 +1,19 @@
 use crate::dsp::hermite::hermite_interpolate;
 
-/// 2^23 sample ring buffer (~8.388 million samples, over 3 minutes of audio at 44.1kHz).
-pub const BUFFER_SIZE: usize = 1 << 23;
+/// 2^25 sample ring buffer (~33.55 million samples, over 12 minutes of audio at 44.1kHz).
+pub const BUFFER_SIZE: usize = 1 << 25;
 pub const BUFFER_MASK: usize = BUFFER_SIZE - 1;
 
 pub struct StereoRingBuffer {
     left: Vec<f32>,
     right: Vec<f32>,
     write_head: usize,
+}
+
+impl Default for StereoRingBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl StereoRingBuffer {

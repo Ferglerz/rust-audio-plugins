@@ -6,9 +6,6 @@ authors = ["Fergler"]
 license = "GPL-3.0-or-later"
 description = "Tape Stop on MIDI – 70s Analog Tape Brake Effect"
 
-[workspace]
-members = ["xtask"]
-
 [lib]
 crate-type = ["cdylib", "lib"]
 
