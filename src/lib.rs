@@ -121,6 +121,12 @@ impl Plugin for Damian {
                     speech_env,
                     vad_assist: (self.params.pse_voice_det.smoothed.next() as f64) / 100.0,
                 },
+                wall: dsp::WallSettings {
+                    even: self.params.wall_even.smoothed.next() as f64,
+                    odd: self.params.wall_odd.smoothed.next() as f64,
+                    threshold: -(self.params.wall_threshold.smoothed.next() as f64),
+                    on: self.params.wall_on.value(),
+                },
                 dry: self.params.dry.smoothed.next() as f64 / 100.0,
                 wet: self.params.wet.smoothed.next() as f64 / 100.0,
                 output_gain: self.params.output_gain.smoothed.next() as f64,

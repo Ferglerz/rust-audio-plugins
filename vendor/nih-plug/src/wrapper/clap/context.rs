@@ -169,11 +169,9 @@ impl<P: ClapPlugin> GuiContext for WrapperGuiContext<P> {
     unsafe fn raw_set_parameter_normalized(&self, param: ParamPtr, normalized: f32) {
         match self.wrapper.param_ptr_to_hash.get(&param) {
             Some(hash) => {
-                // We queue the parameter change event here, and it will be sent to the host either
-                // at the end of the current processing cycle or after requesting an explicit flush
-                // (when the plugin isn't processing audio). The parameter's actual value will only
-                // be changed when the output event is written to prevent changing parameter values
-                // in the middle of processing audio.
+                // Queue the change for the host (process cycle or `request_flush`). The local
+                // value is applied immediately inside `queue_parameter_event` so GUI edits still
+                // take effect when the host is not flushing or processing.
                 let clap_plain_value = normalized as f64 * param.step_count().unwrap_or(1) as f64;
                 let success = self
                     .wrapper

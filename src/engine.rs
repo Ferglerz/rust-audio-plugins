@@ -1,6 +1,6 @@
 use crate::{
     band::Band,
-    dsp::{gain_db, BandRuntime, CompSettings, VocalComp},
+    dsp::{gain_db, tick_wall, BandRuntime, CompSettings, VocalComp},
     lift::{LiftBand, LiftProcessor, LIFT_ID_BASE, LIFT_LATENCY},
     processing::{Config, Delay, EqPath, ProcessingMode},
     vad::SpeechVad,
@@ -89,6 +89,7 @@ pub struct Shared {
     pub gr_uncapped: AtomicF32,
     pub pse_gr: AtomicF32,
     pub sc_level: AtomicF32,
+    pub wall_level: AtomicF32,
     pub speech_env: AtomicF32,
     pub sample_rate: AtomicF32,
     pub spectrum: [AtomicF32; 128],
@@ -125,6 +126,7 @@ impl Shared {
             gr_uncapped: AtomicF32::new(0.0),
             pse_gr: AtomicF32::new(0.0),
             sc_level: AtomicF32::new(-90.0),
+            wall_level: AtomicF32::new(-90.0),
             speech_env: AtomicF32::new(0.0),
             sample_rate: AtomicF32::new(44100.0),
             spectrum: std::array::from_fn(|_| AtomicF32::new(-90.0)),
@@ -198,6 +200,7 @@ pub struct Engine {
     position: usize,
     in_peak: f64,
     out_peak: f64,
+    wall_peak: f64,
     eq1_mix: f64,
     eq2_mix: f64,
     comp_mix: f64,
@@ -211,6 +214,7 @@ pub struct Engine {
     pub sc_eq_bands: Vec<BandRuntime>,
     sc_eq_mix: f64,
     lift_mix: f64,
+    wall_mix: f64,
     vad: SpeechVad,
     speech_env: f32,
     dyn_gr_scratch: Vec<(u64, f32)>,
@@ -270,6 +274,7 @@ impl Engine {
             position: 0,
             in_peak: 0.0,
             out_peak: 0.0,
+            wall_peak: 0.0,
             eq1_mix: 1.0,
             eq2_mix: 1.0,
             comp_mix: 1.0,
@@ -283,6 +288,7 @@ impl Engine {
             sc_eq_bands,
             sc_eq_mix: 1.0,
             lift_mix: 1.0,
+            wall_mix: 1.0,
             vad,
             speech_env: 0.0,
             dyn_gr_scratch: Vec::new(),
@@ -299,6 +305,7 @@ impl Engine {
         self.samples.fill(Complex::default());
         self.in_peak = 0.0;
         self.out_peak = 0.0;
+        self.wall_peak = 0.0;
         self.solo_filters = [crate::dsp::Cascade::default(); 2];
         self.solo_mix = 0.0;
         self.solo_topology = None;
@@ -447,6 +454,7 @@ impl Engine {
         self.eq2_mix += k * (f64::from(eq2_on) - self.eq2_mix);
         self.sc_eq_mix += k * (f64::from(sc_eq_on) - self.sc_eq_mix);
         self.lift_mix += k * (f64::from(lift_on) - self.lift_mix);
+        self.wall_mix += k * (f64::from(settings.wall.on) - self.wall_mix);
         self.comp_mix += k * (f64::from(comp_on) - self.comp_mix);
         self.comp_pre_mix += k * (f64::from(comp_pre) - self.comp_pre_mix);
         self.bypass_mix += k * (f64::from(bypass) - self.bypass_mix);
@@ -581,6 +589,12 @@ impl Engine {
             (pre_gr, pre_sc)
         };
 
+        self.wall_peak = self.wall_peak.max(x[0].abs()).max(x[1].abs());
+        let clipped = tick_wall(x, settings.wall);
+        for i in 0..2 {
+            x[i] += self.wall_mix * (clipped[i] - x[i]);
+        }
+
         let out_gain = 10.0_f64.powf(settings.output_gain / 20.0);
         for i in 0..2 {
             x[i] *= out_gain;
@@ -627,6 +641,14 @@ impl Engine {
             self.shared
                 .pse_gr
                 .store((pse_gr * (1.0 - self.bypass_mix)) as f32, Ordering::Relaxed);
+            self.shared.wall_level.store(
+                if settings.wall.on && !bypass {
+                    (gain_db(self.wall_peak) as f32).max(-90.0)
+                } else {
+                    -90.0
+                },
+                Ordering::Relaxed,
+            );
         }
         if self.position == 2048 {
             self.position = 0;
@@ -685,8 +707,17 @@ impl Engine {
             if let Ok(mut slot) = self.shared.dyn_gr_uncapped.try_lock() {
                 std::mem::swap(&mut *slot, &mut self.dyn_gr_scratch);
             }
+            self.shared.wall_level.store(
+                if settings.wall.on && !bypass {
+                    (gain_db(self.wall_peak) as f32).max(-90.0)
+                } else {
+                    -90.0
+                },
+                Ordering::Relaxed,
+            );
             self.in_peak = 0.0;
             self.out_peak = 0.0;
+            self.wall_peak = 0.0;
         }
         x
     }

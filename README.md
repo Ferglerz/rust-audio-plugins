@@ -17,10 +17,10 @@ Designed with a sleek, flat charcoal UI, interactive dynamic EQ, classic vocal c
 - **Intelligent Gesture-Based Band Creation**:
   - Double-click anywhere to create a band.
   - Frequency / position-based automatic shape inference:
-    - **Low Cut** (< 50 Hz edge clicks)
-    - **High Cut** (> 13 kHz edge clicks)
-    - **Low Shelf** (pulling the curve at low frequencies)
-    - **High Shelf** (pulling the curve at high frequencies)
+    - **Low Cut** (< 50 Hz edge clicks below 0 dB)
+    - **High Cut** (> 13 kHz edge clicks below 0 dB)
+    - **Low Shelf** (low-frequency edge clicks at or above 0 dB, or pulling the curve at low frequencies)
+    - **High Shelf** (high-frequency edge clicks at or above 0 dB, or pulling the curve at high frequencies)
     - **Notch** (clicks near bottom < -19 dB)
     - **Bell** (default anywhere on graph)
 - **Dynamic Multiband Compression**:

@@ -638,9 +638,50 @@ pub struct CompSettings {
     pub stereo_link: bool,
     pub gate: f64,
     pub pse: PseSettings,
+    pub wall: WallSettings,
     pub dry: f64,
     pub wet: f64,
     pub output_gain: f64,
+}
+#[derive(Clone, Copy)]
+pub struct WallSettings {
+    pub even: f64,
+    pub odd: f64,
+    /// Saturation ceiling in dBFS. 0 = bite at 0 dBFS. Lower = earlier tanh.
+    pub threshold: f64,
+    pub on: bool,
+}
+impl Default for WallSettings {
+    fn default() -> Self {
+        Self {
+            even: 0.0,
+            odd: 0.0,
+            threshold: 0.0,
+            on: true,
+        }
+    }
+}
+
+fn wall_sample(x: f64, even: f64, odd: f64, thresh: f64) -> f64 {
+    if even <= 0.0 && odd <= 0.0 {
+        return x;
+    }
+    let t = 10.0_f64.powf(thresh / 20.0).max(1.0e-6);
+    let th = (x / t).tanh();
+    let odd_path = th * t;
+    let even_path = th * th * t;
+    x + odd * (odd_path - x) + even * even_path
+}
+
+/// Soft WALL: identity when even/odd are 0. Odd blends toward tanh at `threshold`.
+/// Even adds `tanh²` (even harmonics + some DC).
+pub fn tick_wall(x: [f64; 2], settings: WallSettings) -> [f64; 2] {
+    let even = (settings.even * 0.01).clamp(0.0, 1.0);
+    let odd = (settings.odd * 0.01).clamp(0.0, 1.0);
+    [
+        wall_sample(x[0], even, odd, settings.threshold),
+        wall_sample(x[1], even, odd, settings.threshold),
+    ]
 }
 impl Default for CompSettings {
     fn default() -> Self {
@@ -655,6 +696,7 @@ impl Default for CompSettings {
             stereo_link: true,
             gate: -80.0,
             pse: PseSettings::default(),
+            wall: WallSettings::default(),
             dry: 0.0,
             wet: 1.0,
             output_gain: 0.0,
@@ -1195,5 +1237,60 @@ mod tests {
             pse.tick(db_gain(-50.0), -80.0, sr, s);
         }
         assert_eq!(pse.reduction_db, 0.0);
+    }
+    #[test]
+    fn wall_clean_when_even_and_odd_are_zero() {
+        let x = [0.8, -0.4];
+        let y = tick_wall(
+            x,
+            WallSettings {
+                even: 0.0,
+                odd: 0.0,
+                threshold: -24.0,
+                on: true,
+            },
+        );
+        assert_eq!(y, x);
+    }
+    #[test]
+    fn wall_odd_tanh_clips_sooner_at_lower_threshold() {
+        let x = [0.5, 0.5];
+        let high = tick_wall(
+            x,
+            WallSettings {
+                even: 0.0,
+                odd: 100.0,
+                threshold: 0.0,
+                on: true,
+            },
+        );
+        let low = tick_wall(
+            x,
+            WallSettings {
+                even: 0.0,
+                odd: 100.0,
+                threshold: -12.0,
+                on: true,
+            },
+        );
+        assert!(high[0] < x[0]);
+        assert!(low[0] < high[0]);
+        assert!((high[0] - 0.5_f64.tanh()).abs() < 1e-12);
+    }
+    #[test]
+    fn wall_even_adds_positive_even_term() {
+        let x = [-0.6, 0.6];
+        let y = tick_wall(
+            x,
+            WallSettings {
+                even: 100.0,
+                odd: 0.0,
+                threshold: 0.0,
+                on: true,
+            },
+        );
+        assert!(y[0] > x[0]);
+        assert!(y[1] > x[1]);
+        assert!((y[0] - x[0] - (-0.6_f64).tanh().powi(2)).abs() < 1e-12);
     }
 }

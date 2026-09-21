@@ -76,6 +76,14 @@ pub struct StripParams {
     pub pse_listen: BoolParam,
     #[id = "pse_voice_det"]
     pub pse_voice_det: FloatParam,
+    #[id = "wall_on"]
+    pub wall_on: BoolParam,
+    #[id = "wall_even"]
+    pub wall_even: FloatParam,
+    #[id = "wall_odd"]
+    pub wall_odd: FloatParam,
+    #[id = "wall_threshold"]
+    pub wall_threshold: FloatParam,
     #[id = "dry"]
     pub dry: FloatParam,
     #[id = "wet"]
@@ -103,7 +111,7 @@ impl Default for StripParams {
                 }))
         }
         Self {
-            editor_state: ViziaState::new(|| (1164, 656)),
+            editor_state: ViziaState::new(|| (1282, 656)),
             bands: Arc::new(Mutex::new(Vec::new())),
             eq2_bands: Arc::new(Mutex::new(Vec::new())),
             sc_eq_bands: Arc::new(Mutex::new(vec![Band {
@@ -287,6 +295,25 @@ impl Default for StripParams {
             pse_voice_det: param("PSE voice detection", 50.0, 0.0, 100.0, " %")
                 .with_step_size(1.0)
                 .with_smoother(SmoothingStyle::Linear(20.0)),
+            wall_on: BoolParam::new("WALL enabled", true),
+            wall_even: param("WALL even", 0.0, 0.0, 100.0, " %")
+                .with_step_size(1.0)
+                .with_smoother(SmoothingStyle::Linear(20.0)),
+            wall_odd: param("WALL odd", 0.0, 0.0, 100.0, " %")
+                .with_step_size(1.0)
+                .with_smoother(SmoothingStyle::Linear(20.0)),
+            wall_threshold: param("WALL threshold", 0.0, 0.0, 48.0, " dB")
+                .with_smoother(SmoothingStyle::Linear(20.0))
+                .with_value_to_string(Arc::new(|depth| format!("{:.1}", -depth)))
+                .with_string_to_value(Arc::new(|text| {
+                    text.trim()
+                        .trim_end_matches("dB")
+                        .trim()
+                        .parse::<f32>()
+                        .ok()
+                        .filter(|v| v.is_finite())
+                        .map(|v| -v)
+                })),
             dry: param("Dry level", 0.0, 0.0, 100.0, " %"),
             wet: param("Wet level", 100.0, 0.0, 100.0, " %"),
             output_gain: param("Output gain", 0.0, -12.0, 12.0, " dB")

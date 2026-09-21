@@ -1,7 +1,6 @@
 use atomic_refcell::AtomicRefMut;
 use std::cell::Cell;
 use std::collections::VecDeque;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use vst3_sys::vst::IComponentHandler;
 
@@ -158,32 +157,29 @@ impl<P: Vst3Plugin> GuiContext for WrapperGuiContext<P> {
     }
 
     unsafe fn raw_set_parameter_normalized(&self, param: ParamPtr, normalized: f32) {
-        match &*self.inner.component_handler.borrow() {
-            Some(handler) => match self.inner.param_ptr_to_hash.get(&param) {
-                Some(hash) => {
-                    // Only update the parameters manually if the host is not processing audio. If
-                    // the plugin is currently processing audio, the host will pass this change back
-                    // to the plugin in the audio callback. This also prevents the values from
-                    // changing in the middle of the process callback, which would be unsound.
-                    // FIXME: So this doesn't work for REAPER, because they just silently stop
-                    //        processing audio when you bypass the plugin. Great. We can add a time
-                    //        based heuristic to work around this in the meantime.
-                    if !self.inner.is_processing.load(Ordering::SeqCst) {
-                        self.inner.set_normalized_value_by_hash(
-                            *hash,
-                            normalized,
-                            self.inner
-                                .current_buffer_config
-                                .load()
-                                .map(|c| c.sample_rate),
-                        );
-                    }
+        match self.inner.param_ptr_to_hash.get(&param) {
+            Some(hash) => {
+                // Always apply locally. Params are atomics, so a GUI write during process is
+                // sound, and a live host that echoes `perform_edit` into `process()` will set
+                // the same value again. Skipping the local write while `is_processing` is true
+                // leaves sliders dead when the engine disconnects without `setProcessing(false)`.
+                self.inner.set_normalized_value_by_hash(
+                    *hash,
+                    normalized,
+                    self.inner
+                        .current_buffer_config
+                        .load()
+                        .map(|c| c.sample_rate),
+                );
 
-                    handler.perform_edit(*hash, normalized as f64);
+                match &*self.inner.component_handler.borrow() {
+                    Some(handler) => {
+                        handler.perform_edit(*hash, normalized as f64);
+                    }
+                    None => nih_debug_assert_failure!("Component handler not yet set"),
                 }
-                None => nih_debug_assert_failure!("Unknown parameter: {:?}", param),
-            },
-            None => nih_debug_assert_failure!("Component handler not yet set"),
+            }
+            None => nih_debug_assert_failure!("Unknown parameter: {:?}", param),
         }
 
         #[cfg(debug_assertions)]

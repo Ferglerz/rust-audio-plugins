@@ -767,12 +767,25 @@ impl<P: ClapPlugin> Wrapper<P> {
 
     /// Queue a parameter output event to be sent to the host at the end of the audio processing
     /// cycle, and request a parameter flush from the host if the plugin is not currently processing
-    /// audio. The parameter's actual value will only be updated at that point so the value won't
-    /// change in the middle of a processing call.
+    /// audio. `SetValue` is applied locally immediately so GUI edits still take effect when the
+    /// host is not flushing or processing.
     ///
     /// Returns `false` if the parameter value queue was full and the update will not be sent to the
     /// host (it will still be set on the plugin either way).
     pub fn queue_parameter_event(&self, event: OutputParamEvent) -> bool {
+        if let OutputParamEvent::SetValue {
+            param_hash,
+            clap_plain_value,
+        } = &event
+        {
+            let sample_rate = self.current_buffer_config.load().map(|c| c.sample_rate);
+            self.update_plain_value_by_hash(
+                *param_hash,
+                ClapParamUpdate::PlainValueSet(*clap_plain_value),
+                sample_rate,
+            );
+        }
+
         let result = self.output_parameter_events.push(event).is_ok();
 
         // Requesting a flush is fine even during audio processing. This avoids a race condition.
