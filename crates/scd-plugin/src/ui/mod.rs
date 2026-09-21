@@ -8,7 +8,7 @@ use crate::params::{
 use crate::presets::{
     default_send_db, FactoryPreset, PresetScope, UserPreset, DRUMMER_PANS, MAX_USER_PRESETS,
 };
-use crate::vel_map::VelCurve;
+use crate::vel_map::{VelCurve, VelMapState};
 use nih_plug::prelude::*;
 use nih_plug_vizia::{
     create_vizia_editor,
@@ -319,6 +319,7 @@ pub struct ScdEditorView {
     gesture: [Option<ParamPtr>; KitPieceId::COUNT],
     mouse: (f32, f32),
     font: Cell<Option<FontId>>,
+    icon_font: Cell<Option<FontId>>,
     bg_img: Cell<Option<ImageId>>,
     logo_img: Cell<Option<ImageId>>,
     stone_img: Cell<Option<ImageId>>,
@@ -366,6 +367,7 @@ impl ScdEditorView {
             gesture: std::array::from_fn(|_| None),
             mouse: (0.0, 0.0),
             font: Cell::new(None),
+            icon_font: Cell::new(None),
             bg_img: Cell::new(None),
             logo_img: Cell::new(None),
             stone_img: Cell::new(None),
@@ -746,23 +748,7 @@ impl ScdEditorView {
 
     fn vel_switch_track() -> (f32, f32, f32, f32) {
         let (x, y, w, _) = Self::vel_map_modal();
-        (
-            x + 24.0 + MAP_NOTE_W * 2.0 + 10.0,
-            y + Self::VEL_SWITCH_Y,
-            w - 58.0 - MAP_NOTE_W * 2.0,
-            32.0,
-        )
-    }
-
-    fn vel_modal_note_rect(note2: bool) -> (f32, f32, f32, f32) {
-        let (x, y, _, _) = Self::vel_map_modal();
-        let ox = if note2 { MAP_NOTE_W + 4.0 } else { 0.0 };
-        (
-            x + 24.0 + ox,
-            y + Self::VEL_SWITCH_Y + 2.0,
-            MAP_NOTE_W,
-            28.0,
-        )
+        (x + 24.0, y + Self::VEL_SWITCH_Y, w - 48.0, 32.0)
     }
 
     fn vel_group_header_rect(start: usize, count: usize, n: usize) -> (f32, f32, f32, f32) {
@@ -778,8 +764,42 @@ impl ScdEditorView {
         )
     }
 
-    fn art_count(kit_piece: KitPieceId) -> usize {
-        stonehouse().arts(kit_piece).len().max(1)
+    /// Choices shown in the velocity mapping switch. Hi-hat shoulder and tip
+    /// are UI groups; their curves are still stored per underlying articulation.
+    fn vel_art_options(kit_piece: KitPieceId) -> Vec<(usize, String)> {
+        if kit_piece == KitPieceId::Hihat {
+            vec![
+                (0, "Splash".to_string()),
+                (1, "Stomp".to_string()),
+                (2, "Shoulder".to_string()),
+                (7, "Tip".to_string()),
+            ]
+        } else {
+            let names: Vec<String> = stonehouse()
+                .arts(kit_piece)
+                .iter()
+                .map(|art| art.short_name())
+                .collect();
+            art_switch_groups(&names)
+                .into_iter()
+                .flat_map(|group| {
+                    let start = group.start;
+                    group
+                        .labels
+                        .into_iter()
+                        .enumerate()
+                        .map(move |(offset, label)| (start + offset, label))
+                })
+                .collect()
+        }
+    }
+
+    fn vel_art_members(kit_piece: KitPieceId, art: usize) -> Vec<usize> {
+        match (kit_piece, art) {
+            (KitPieceId::Hihat, 2) => (2..7).collect(),
+            (KitPieceId::Hihat, 7) => (7..12).collect(),
+            _ => vec![art],
+        }
     }
 
     fn mapping_art(kit_piece: KitPieceId) -> usize {
@@ -1040,18 +1060,6 @@ impl ScdEditorView {
     }
 
     fn note_target_at(&self, x: f32, y: f32) -> Option<NoteTarget> {
-        if let Some(kit_piece) = self.vel_map_open {
-            for note2 in [false, true] {
-                let (nx, ny, nw, nh) = Self::vel_modal_note_rect(note2);
-                if Self::hit(x, y, nx, ny, nw, nh) {
-                    return Some(NoteTarget {
-                        kit_piece,
-                        art: self.vel_art,
-                        note2,
-                    });
-                }
-            }
-        }
         if self.samples_open {
             for (i, kit_piece) in KitPieceId::ALL.iter().enumerate() {
                 for note2 in [false, true] {
@@ -1087,9 +1095,23 @@ impl ScdEditorView {
 
     fn commit_vel_curve(&self, curve: VelCurve) {
         if let Some(kit_piece) = self.vel_map_open {
-            self.params
-                .vel_maps
-                .set_curve(kit_piece, self.vel_art, curve);
+            Self::set_vel_curve_group(&self.params.vel_maps, kit_piece, self.vel_art, curve);
+        }
+    }
+
+    fn reset_vel_art(&self, kit_piece: KitPieceId) {
+        Self::reset_vel_curve_group(&self.params.vel_maps, kit_piece, self.vel_art);
+    }
+
+    fn set_vel_curve_group(state: &VelMapState, kit_piece: KitPieceId, art: usize, curve: VelCurve) {
+        for member in Self::vel_art_members(kit_piece, art) {
+            state.set_curve(kit_piece, member, curve.clone());
+        }
+    }
+
+    fn reset_vel_curve_group(state: &VelMapState, kit_piece: KitPieceId, art: usize) {
+        for member in Self::vel_art_members(kit_piece, art) {
+            state.reset_art(kit_piece, member);
         }
     }
 
@@ -1190,7 +1212,10 @@ impl ScdEditorView {
 
     fn begin_note_edit(&mut self, cx: &mut EventContext, target: NoteTarget) {
         cx.focus();
-        let over = self.params.note_maps.art_notes(target.kit_piece, target.art);
+        let over = self
+            .params
+            .note_maps
+            .art_notes(target.kit_piece, target.art);
         let buf = if target.note2 {
             NoteMapStateDisplay::n2(target.kit_piece, target.art, over)
         } else {
@@ -1223,14 +1248,11 @@ impl ScdEditorView {
     }
 
     fn note_rect(&self, target: NoteTarget) -> (f32, f32, f32, f32) {
-        if self.vel_map_open == Some(target.kit_piece) && self.vel_art == target.art {
-            return Self::vel_modal_note_rect(target.note2);
-        }
         KitPieceId::ALL
             .iter()
             .position(|p| *p == target.kit_piece)
             .map(|i| Self::mapping_note_rect(i, target.note2))
-            .unwrap_or(Self::vel_modal_note_rect(target.note2))
+            .unwrap_or(Self::mapping_note_rect(0, target.note2))
     }
 
     fn apply_note_value(&self, target: NoteTarget, raw: &str) {
@@ -1298,10 +1320,7 @@ impl ScdEditorView {
     }
 
     fn note_stage(&self, target: NoteTarget) -> (bool, bool, bool) {
-        let on = self
-            .note_edit
-            .as_ref()
-            .is_some_and(|e| e.target == target);
+        let on = self.note_edit.as_ref().is_some_and(|e| e.target == target);
         let hover = self.hover_note == Some(target);
         let press = self.press_note == Some(target);
         (on, hover, press)
@@ -1736,7 +1755,7 @@ fn stroke_arc(
     path.arc(px, py, radius * draw.s, angles.0, angles.1, Solidity::Hole);
     let mut paint = Paint::color(draw.color(color));
     paint.set_line_width(width * draw.s);
-    paint.set_line_cap(LineCap::Round);
+    paint.set_line_cap(LineCap::Butt);
     paint.set_line_join(LineJoin::Round);
     draw.c.stroke_path(&path, &paint);
 }
@@ -1772,11 +1791,11 @@ fn hise_knob(
         if n <= 0.5 {
             let scale = 1.0 - (n / 0.5);
             let left = min_arc + scale * (start_offset - min_arc);
-            (center - left, center + min_arc)
+            (center - left, center - min_arc)
         } else {
             let scale = (n - 0.5) / 0.5;
             let right = min_arc + scale * (start_offset - min_arc);
-            (center - min_arc, center + right)
+            (center + min_arc, center + right)
         }
     } else {
         let sa = start_angle;
@@ -1784,7 +1803,9 @@ fn hise_knob(
         ea = ea.max(sa + 2.0 * min_arc);
         (sa, ea)
     };
-    stroke_arc(draw, (cx, cy), radius, (arc_start, arc_end), THEME, 5.0);
+    if !bipolar || (n - 0.5).abs() > f32::EPSILON {
+        stroke_arc(draw, (cx, cy), radius, (arc_start, arc_end), THEME, 5.0);
+    }
 
     if let Some(label) = label {
         let font_size = size * 2.0 / (3.4 * 3.4);
@@ -1911,7 +1932,15 @@ fn draw_five_stage(
     }
 }
 
-fn draw_lock(draw: &mut Draw<'_>, x: f32, y: f32, size: f32, locked: bool, hovered: bool) {
+fn draw_lock(
+    draw: &mut Draw<'_>,
+    icon_font: Option<FontId>,
+    x: f32,
+    y: f32,
+    size: f32,
+    locked: bool,
+    hovered: bool,
+) {
     let mut color = THEME;
     color.a = if hovered {
         1.0
@@ -1920,22 +1949,18 @@ fn draw_lock(draw: &mut Draw<'_>, x: f32, y: f32, size: f32, locked: bool, hover
     } else {
         0.35
     };
-    let s = draw.s;
-    let cx = draw.ox + (x + size * 0.5 + draw.offset_x) * s;
-    let cy = draw.oy + (y + size * 0.5) * s;
-    let link_w = 12.0 * s;
-    let link_h = 7.5 * s;
-    let radius = 3.4 * s;
-    let mut paint = Paint::color(draw.color(color));
-    paint.set_line_width(2.0 * s);
-    for (angle, dx, dy) in [(-0.55_f32, -2.0, -1.4), (0.55, 2.0, 1.4)] {
-        draw.c.save();
-        draw.c.translate(cx + dx * s, cy + dy * s);
-        draw.c.rotate(angle);
-        let mut path = Path::new();
-        path.rounded_rect(-link_w * 0.5, -link_h * 0.5, link_w, link_h, radius);
-        draw.c.stroke_path(&path, &paint);
-        draw.c.restore();
+    if let Some(icon_font) = icon_font {
+        // Lock and lock-open glyphs from Vizia's bundled Tabler icon font.
+        let glyph = if locked { "\u{eb0e}" } else { "\u{eb0f}" };
+        let old_font = draw.font.replace(icon_font);
+        draw.text_centered(
+            x + size * 0.5,
+            y + size * 0.5 + size * 0.34,
+            glyph,
+            size,
+            color,
+        );
+        draw.font = old_font;
     }
 }
 
@@ -2024,9 +2049,7 @@ impl View for ScdEditorView {
                                     edit.handle_key(cx, *code);
                                     let has_char = matches!(key, Some(Key::Character(_)));
                                     if !has_char && !cx.modifiers().command() {
-                                        if let Some(c) =
-                                            typed_char(*code, cx.modifiers().shift())
-                                        {
+                                        if let Some(c) = typed_char(*code, cx.modifiers().shift()) {
                                             insert_note_digit(edit, c);
                                         }
                                     }
@@ -2373,28 +2396,12 @@ impl View for ScdEditorView {
                         let (modal_x, modal_y, modal_w, modal_h) = Self::vel_map_modal();
                         if Self::hit(x, y, modal_x, modal_y, modal_w, modal_h) {
                             if let Some(kit_piece) = self.vel_map_open {
-                                let n = Self::art_count(kit_piece);
-                                for note2 in [false, true] {
-                                    let (nx, ny, nw, nh) = Self::vel_modal_note_rect(note2);
-                                    if Self::hit(x, y, nx, ny, nw, nh) {
-                                        self.activate_note(
-                                            cx,
-                                            NoteTarget {
-                                                kit_piece,
-                                                art: self.vel_art,
-                                                note2,
-                                            },
-                                        );
-                                        cx.needs_redraw();
-                                        meta.consume();
-                                        return;
-                                    }
-                                }
-                                for i in 0..n {
-                                    let (sx, sy, sw, sh) = Self::vel_seg_rect(i, n);
+                                let options = Self::vel_art_options(kit_piece);
+                                for (i, (art, _)) in options.iter().enumerate() {
+                                    let (sx, sy, sw, sh) = Self::vel_seg_rect(i, options.len());
                                     if Self::hit(x, y, sx, sy, sw, sh) {
                                         self.commit_note_edit();
-                                        self.vel_art = i;
+                                        self.vel_art = *art;
                                         self.vel_selected_node = None;
                                         cx.needs_redraw();
                                         meta.consume();
@@ -2505,12 +2512,8 @@ impl View for ScdEditorView {
                             CC_INVERT.3,
                         ) {
                             let on = self.params.invert_cc.unmodulated_plain_value();
-                            cx.emit(
-                                ParamEvent::BeginSetParameter(&self.params.invert_cc).upcast(),
-                            );
-                            cx.emit(
-                                ParamEvent::SetParameter(&self.params.invert_cc, !on).upcast(),
-                            );
+                            cx.emit(ParamEvent::BeginSetParameter(&self.params.invert_cc).upcast());
+                            cx.emit(ParamEvent::SetParameter(&self.params.invert_cc, !on).upcast());
                             cx.emit(ParamEvent::EndSetParameter(&self.params.invert_cc).upcast());
                         }
                         cx.needs_redraw();
@@ -2563,18 +2566,14 @@ impl View for ScdEditorView {
                                 if let Some(mut curve) = self.vel_curve() {
                                     if let Some(i) = self.hit_vel_node(&curve, mouse_x, mouse_y) {
                                         if self.vel_just_inserted || !curve.delete(i) {
-                                            self.params
-                                                .vel_maps
-                                                .reset_art(kit_piece, self.vel_art);
+                                            self.reset_vel_art(kit_piece);
                                             self.vel_selected_node = None;
                                         } else {
                                             self.vel_selected_node = None;
                                             self.commit_vel_curve(curve);
                                         }
                                     } else {
-                                        self.params
-                                            .vel_maps
-                                            .reset_art(kit_piece, self.vel_art);
+                                        self.reset_vel_art(kit_piece);
                                         self.vel_selected_node = None;
                                     }
                                 }
@@ -2759,6 +2758,13 @@ impl View for ScdEditorView {
                     .ok(),
             );
         }
+        if self.icon_font.get().is_none() {
+            self.icon_font.set(
+                canvas
+                    .add_font_mem(nih_plug_vizia::vizia_assets::fonts::TABLER_ICONS)
+                    .ok(),
+            );
+        }
         ensure_img(&self.bg_img, canvas, BG_PNG);
         ensure_img(&self.logo_img, canvas, LOGO_PNG);
         ensure_img(&self.stone_img, canvas, STONE_PNG);
@@ -2902,6 +2908,7 @@ impl View for ScdEditorView {
         let lock = Self::lock_rect();
         draw_lock(
             &mut draw,
+            self.icon_font.get(),
             lock.0,
             lock.1,
             lock.2,
@@ -3157,11 +3164,18 @@ impl View for ScdEditorView {
             );
             let arts = stonehouse().arts(kit_piece);
             let art_i = self.vel_art.min(arts.len().saturating_sub(1));
-            let art_layers = arts.get(art_i).map(|a| a.layers).unwrap_or(0);
+            let members = Self::vel_art_members(kit_piece, self.vel_art);
+            let art_layers: u32 = members
+                .iter()
+                .filter_map(|i| arts.get(*i))
+                .map(|a| a.layers)
+                .sum();
             let piece_layers: u32 = arts.iter().map(|a| a.layers).sum();
-            let art_label = arts
-                .get(art_i)
-                .map(|a| a.short_name())
+            let art_label = Self::vel_art_options(kit_piece)
+                .into_iter()
+                .find(|(art, _)| *art == self.vel_art)
+                .map(|(_, label)| label)
+                .or_else(|| arts.get(art_i).map(|a| a.short_name()))
                 .unwrap_or_else(|| "Hit".to_string());
             draw.text(
                 modal_x + 24.0,
@@ -3173,62 +3187,38 @@ impl View for ScdEditorView {
                 11.0,
                 THEME,
             );
-            for note2 in [false, true] {
-                let (nx, ny, nw, nh) = Self::vel_modal_note_rect(note2);
-                let target = NoteTarget {
-                    kit_piece,
-                    art: self.vel_art,
-                    note2,
-                };
-                let color = if self.note_altered(kit_piece, self.vel_art, note2) {
-                    NOTE_YELLOW
-                } else {
-                    THEME
-                };
-                if let Some(edit) = self.note_edit.as_ref().filter(|e| e.target == target) {
-                    draw.value_edit(edit, color);
-                    continue;
-                }
-                let (on, hover, press) = self.note_stage(target);
-                draw.rounded_rect(nx, ny, nw, nh, 6.0, SOF_OFF);
-                draw_five_stage(&mut draw, (nx, ny, nw, nh), 6.0, on, hover, press);
-                let label = self.note_label(kit_piece, self.vel_art, note2);
-                draw.text_centered(nx + nw * 0.5, ny + nh * 0.5 + 4.0, &label, 11.0, color);
-            }
-            let n = Self::art_count(kit_piece);
-            let names: Vec<String> = arts.iter().map(|a| a.short_name()).collect();
-            let groups = art_switch_groups(&names);
-            for group in &groups {
-                if let Some(header) = &group.header {
-                    let (hx, hy, hw, hh) =
-                        Self::vel_group_header_rect(group.start, group.count(), n);
-                    draw.rounded_rect(hx + 3.0, hy, (hw - 6.0).max(4.0), hh, hh * 0.5, THEME_DIM);
-                    draw.text_centered(
-                        hx + hw * 0.5,
-                        hy + hh * 0.5 + 3.5,
-                        header,
-                        9.0,
-                        THEME,
-                    );
+            let options = Self::vel_art_options(kit_piece);
+            let n = options.len();
+            if kit_piece != KitPieceId::Hihat {
+                let names: Vec<String> = arts.iter().map(|a| a.short_name()).collect();
+                for group in art_switch_groups(&names) {
+                    if let Some(header) = &group.header {
+                        let (hx, hy, hw, hh) =
+                            Self::vel_group_header_rect(group.start, group.count(), n);
+                        draw.rounded_rect(
+                            hx + 3.0,
+                            hy,
+                            (hw - 6.0).max(4.0),
+                            hh,
+                            hh * 0.5,
+                            THEME_DIM,
+                        );
+                        draw.text_centered(hx + hw * 0.5, hy + hh * 0.5 + 3.5, header, 9.0, THEME);
+                    }
                 }
             }
             let (tx, ty, tw, th) = Self::vel_switch_track();
             draw.rounded_rect(tx, ty, tw, th, th * 0.5, SOF_OFF);
-            let (sx, sy, sw, sh) = Self::vel_seg_rect(self.vel_art.min(n - 1), n);
+            let selected = options
+                .iter()
+                .position(|(art, _)| *art == self.vel_art)
+                .unwrap_or(0);
+            let (sx, sy, sw, sh) = Self::vel_seg_rect(selected, n);
             draw.rounded_rect(sx, sy, sw, sh, sh * 0.5, THEME_DIM);
             let font = if n > 8 { 9.0 } else { 10.0 };
-            for group in &groups {
-                for (offset, label) in group.labels.iter().enumerate() {
-                    let i = group.start + offset;
-                    let (sx, sy, sw, sh) = Self::vel_seg_rect(i, n);
-                    draw.text_centered(
-                        sx + sw * 0.5,
-                        sy + sh * 0.5 + 4.0,
-                        label,
-                        font,
-                        THEME,
-                    );
-                }
+            for (i, (_, label)) in options.iter().enumerate() {
+                let (sx, sy, sw, sh) = Self::vel_seg_rect(i, n);
+                draw.text_centered(sx + sw * 0.5, sy + sh * 0.5 + 4.0, label, font, THEME);
             }
             let curve = self.params.vel_maps.curve(kit_piece, self.vel_art);
             draw_vel_map_graph(&mut draw, &curve, self.vel_selected_node);
@@ -3312,13 +3302,7 @@ impl View for ScdEditorView {
             let (hx, hy, _, _) = Self::mapping_header_rect();
             draw.text(hx + 8.0, hy + 15.0, "N1", 10.0, THEME);
             draw.text(hx + 8.0 + MAP_NOTE_W, hy + 15.0, "N2", 10.0, THEME);
-            draw.text(
-                hx + 8.0 + MAP_NOTE_W * 2.0,
-                hy + 15.0,
-                "Piece",
-                10.0,
-                THEME,
-            );
+            draw.text(hx + 8.0 + MAP_NOTE_W * 2.0, hy + 15.0, "Piece", 10.0, THEME);
             for (i, kit_piece) in KitPieceId::ALL.iter().enumerate() {
                 let (ix, iy, iw, ih) = Self::samples_item_rect(i);
                 if self.vel_map_open == Some(*kit_piece) {
@@ -3346,19 +3330,11 @@ impl View for ScdEditorView {
                     let label = self.note_label(*kit_piece, art, note2);
                     draw.text_centered(nx + nw * 0.5, ny + nh * 0.5 + 4.0, &label, 10.0, color);
                 }
-                let samples: u32 = stonehouse().arts(*kit_piece).iter().map(|a| a.layers).sum();
                 draw.text(
                     ix + 8.0 + MAP_NOTE_W * 2.0,
                     iy + 15.0,
                     kit_piece.name(),
                     11.0,
-                    THEME,
-                );
-                draw.text(
-                    ix + iw - 36.0,
-                    iy + 15.0,
-                    &format!("{samples}"),
-                    10.0,
                     THEME,
                 );
             }
@@ -3523,6 +3499,44 @@ mod tests {
         assert_eq!(five_stage_fill(true, false, false), Some(STAGE_ON));
         assert_eq!(five_stage_fill(true, true, false), Some(STAGE_ON_HOVER));
         assert_eq!(five_stage_fill(true, false, true), Some(STAGE_DOWN));
+    }
+
+    #[test]
+    fn hihat_mapping_groups_route_to_all_underlying_articulations() {
+        let options = ScdEditorView::vel_art_options(KitPieceId::Hihat);
+        assert_eq!(
+            options.iter().map(|(art, _)| *art).collect::<Vec<_>>(),
+            [0, 1, 2, 7]
+        );
+        assert_eq!(
+            ScdEditorView::vel_art_members(KitPieceId::Hihat, 2),
+            vec![2, 3, 4, 5, 6]
+        );
+        assert_eq!(
+            ScdEditorView::vel_art_members(KitPieceId::Hihat, 7),
+            vec![7, 8, 9, 10, 11]
+        );
+        assert_eq!(
+            ScdEditorView::vel_art_members(KitPieceId::Hihat, 1),
+            vec![1]
+        );
+    }
+
+    #[test]
+    fn hihat_mapping_group_edit_and_reset_fan_out() {
+        let state = VelMapState::identity();
+        let mut curve = VelCurve::identity();
+        curve.move_node(0, 0.0, 1.0);
+        ScdEditorView::set_vel_curve_group(&state, KitPieceId::Hihat, 2, curve);
+        for art in 2..7 {
+            assert_eq!(state.lookup(KitPieceId::Hihat, art, 64), 127);
+        }
+        assert_eq!(state.lookup(KitPieceId::Hihat, 1, 64), 64);
+        ScdEditorView::reset_vel_curve_group(&state, KitPieceId::Hihat, 2);
+        for art in 2..7 {
+            assert_eq!(state.curve(KitPieceId::Hihat, art), VelCurve::identity());
+        }
+        assert_eq!(state.lookup(KitPieceId::Hihat, 1, 64), 64);
     }
 
     #[test]
