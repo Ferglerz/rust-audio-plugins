@@ -1,5 +1,5 @@
 use crate::dsp::voice::Voice;
-use scd_core::{KitPieceId, ScdPack, StrikeEntry};
+use scd_core::{KitPieceId, MicChannel, ScdPack, StrikeEntry};
 
 pub const MAX_VOICES: usize = 48;
 
@@ -26,21 +26,22 @@ impl VoicePool {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn trigger_strike(
         &mut self,
         strike: &StrikeEntry,
+        pack: &ScdPack,
         velocity: f32,
         pitch_semi: f32,
         punch: f32,
+        pan: f32,
         sample_rate: f32,
     ) {
-        // Find inactive voice, or steal oldest/quietest
         let voice_idx = self
             .voices
             .iter()
             .position(|v| !v.active)
             .unwrap_or_else(|| {
-                // Steal voice with greatest playhead frame
                 self.voices
                     .iter()
                     .enumerate()
@@ -53,15 +54,7 @@ impl VoicePool {
                     .unwrap_or(0)
             });
 
-        self.voices[voice_idx].trigger(strike, velocity, pitch_semi, punch, sample_rate);
-    }
-
-    pub fn choke_kitpiece(&mut self, kit_piece: KitPieceId, fade_ms: f32, sample_rate: f32) {
-        for v in self.voices.iter_mut() {
-            if v.active && v.kit_piece == kit_piece {
-                v.start_choke(fade_ms, sample_rate);
-            }
-        }
+        self.voices[voice_idx].trigger(strike, pack, velocity, pitch_semi, punch, pan, sample_rate);
     }
 
     pub fn choke_hihat(&mut self, fade_ms: f32, sample_rate: f32) {
@@ -75,12 +68,17 @@ impl VoicePool {
     #[inline(always)]
     pub fn process_sample(
         &mut self,
-        pack: &ScdPack,
-        mic_accum: &mut [f32; 6],
+        mic_accum: &mut [[f32; 2]; MicChannel::COUNT],
+        mix_gains: &[[f32; MicChannel::COUNT]; KitPieceId::COUNT],
+        kit_peaks: &mut [f32; KitPieceId::COUNT],
     ) {
         for v in self.voices.iter_mut() {
             if v.active {
-                v.process_sample(pack, mic_accum);
+                let kp = v.kit_piece as usize;
+                let peak = v.process_sample(mic_accum, &mix_gains[kp]);
+                if peak > kit_peaks[kp] {
+                    kit_peaks[kp] = peak;
+                }
             }
         }
     }

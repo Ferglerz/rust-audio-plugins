@@ -1,0 +1,498 @@
+{
+  "order": [
+    "Kick",
+    "Snare",
+    "Open Snare",
+    "Hihat",
+    "Tom 1",
+    "Tom 2",
+    "Floor Tom",
+    "Ride",
+    "China",
+    "Stack",
+    "Splash",
+    "L Crash",
+    "R Crash"
+  ],
+  "kit_pieces": {
+    "China": {
+      "articulations": [
+        {
+          "name": "China_Bow",
+          "layers": 9,
+          "rem_vol": -12,
+          "note1": 30,
+          "note2": null
+        },
+        {
+          "name": "China_Edge",
+          "layers": 12,
+          "rem_vol": -12,
+          "note1": 31,
+          "note2": null
+        },
+        {
+          "name": "China_Choke",
+          "layers": 12,
+          "rem_vol": -38,
+          "note1": 32,
+          "note2": null
+        }
+      ]
+    },
+    "L Crash": {
+      "articulations": [
+        {
+          "name": "Crash_L_Bell_Shoulder",
+          "layers": 29,
+          "rem_vol": -13,
+          "note1": 74,
+          "note2": null
+        },
+        {
+          "name": "Crash_L_Bell_Tip",
+          "layers": 18,
+          "rem_vol": -13,
+          "note1": 77,
+          "note2": null
+        },
+        {
+          "name": "Crash_L_Shoulder",
+          "layers": 47,
+          "rem_vol": -13,
+          "note1": 55,
+          "note2": null
+        },
+        {
+          "name": "Crash_L_Tip",
+          "layers": 44,
+          "rem_vol": -13,
+          "note1": 49,
+          "note2": null
+        },
+        {
+          "name": "Crash_L_Choke",
+          "layers": 12,
+          "rem_vol": -39,
+          "note1": 54,
+          "note2": null
+        }
+      ]
+    },
+    "R Crash": {
+      "articulations": [
+        {
+          "name": "Crash_R_Bell_Shoulder",
+          "layers": 16,
+          "rem_vol": -13,
+          "note1": 76,
+          "note2": null
+        },
+        {
+          "name": "Crash_R_Bell_Tip",
+          "layers": 18,
+          "rem_vol": -13,
+          "note1": 78,
+          "note2": null
+        },
+        {
+          "name": "Crash_R_Shoulder",
+          "layers": 19,
+          "rem_vol": -13,
+          "note1": 52,
+          "note2": null
+        },
+        {
+          "name": "Crash_R_Tip",
+          "layers": 21,
+          "rem_vol": -13,
+          "note1": 57,
+          "note2": null
+        },
+        {
+          "name": "Crash_R_Choke",
+          "layers": 11,
+          "rem_vol": -39,
+          "note1": 56,
+          "note2": null
+        }
+      ]
+    },
+    "Hihat": {
+      "articulations": [
+        {
+          "name": "HH_Splash",
+          "layers": 4,
+          "rem_vol": -10,
+          "note1": 73,
+          "note2": null
+        },
+        {
+          "name": "HH_Stomp",
+          "layers": 33,
+          "rem_vol": -22,
+          "note1": 44,
+          "note2": null
+        },
+        {
+          "name": "HH_Shoulder_Firm",
+          "layers": 41,
+          "rem_vol": -11,
+          "note1": 26,
+          "note2": 60
+        },
+        {
+          "name": "HH_Shoulder_A",
+          "layers": 41,
+          "rem_vol": -11,
+          "note1": 26,
+          "note2": 61
+        },
+        {
+          "name": "HH_Shoulder_B",
+          "layers": 45,
+          "rem_vol": -10,
+          "note1": 26,
+          "note2": 62
+        },
+        {
+          "name": "HH_Shoulder_C",
+          "layers": 38,
+          "rem_vol": -10,
+          "note1": 26,
+          "note2": 63
+        },
+        {
+          "name": "HH_Shoulder_Open",
+          "layers": 21,
+          "rem_vol": -10,
+          "note1": 26,
+          "note2": 64
+        },
+        {
+          "name": "HH_Tip_Firm",
+          "layers": 48,
+          "rem_vol": -11,
+          "note1": 42,
+          "note2": 66
+        },
+        {
+          "name": "HH_Tip_A",
+          "layers": 37,
+          "rem_vol": -11,
+          "note1": 46,
+          "note2": 67
+        },
+        {
+          "name": "HH_Tip_B",
+          "layers": 46,
+          "rem_vol": -10,
+          "note1": 46,
+          "note2": 68
+        },
+        {
+          "name": "HH_Tip_C",
+          "layers": 25,
+          "rem_vol": -10,
+          "note1": 46,
+          "note2": 69
+        },
+        {
+          "name": "HH_Tip_Open",
+          "layers": 16,
+          "rem_vol": -10,
+          "note1": 46,
+          "note2": 70
+        }
+      ]
+    },
+    "Kick": {
+      "articulations": [
+        {
+          "name": "Kick_Rim",
+          "layers": 16,
+          "rem_vol": -10,
+          "note1": 34,
+          "note2": 10
+        },
+        {
+          "name": "Kick",
+          "layers": 24,
+          "rem_vol": -2,
+          "note1": 36,
+          "note2": 35
+        }
+      ]
+    },
+    "Open Snare": {
+      "articulations": [
+        {
+          "name": "NW_Snare_Rim",
+          "layers": 20,
+          "rem_vol": -12,
+          "note1": 40,
+          "note2": 14
+        },
+        {
+          "name": "NW_Snare_Center_Ruff_Slower",
+          "layers": 17,
+          "rem_vol": -3,
+          "note1": 23,
+          "note2": null
+        },
+        {
+          "name": "NW_Snare_Center_Ruff",
+          "layers": 15,
+          "rem_vol": -3,
+          "note1": 21,
+          "note2": null
+        },
+        {
+          "name": "NW_Snare_Edge_Ruff_Slower",
+          "layers": 22,
+          "rem_vol": -5,
+          "note1": 19,
+          "note2": null
+        },
+        {
+          "name": "NW_Snare_Edge_Ruff",
+          "layers": 15,
+          "rem_vol": -5,
+          "note1": 17,
+          "note2": null
+        },
+        {
+          "name": "NW_Snare_Center",
+          "layers": 28,
+          "rem_vol": -3,
+          "note1": 38,
+          "note2": null
+        },
+        {
+          "name": "NW_Snare_Edge",
+          "layers": 23,
+          "rem_vol": -3,
+          "note1": 39,
+          "note2": null
+        },
+        {
+          "name": "NW_Snare_Rimshot",
+          "layers": 4,
+          "rem_vol": 0,
+          "note1": 41,
+          "note2": null
+        },
+        {
+          "name": "NW_Snare_XStick",
+          "layers": 30,
+          "rem_vol": -5,
+          "note1": 37,
+          "note2": null
+        }
+      ]
+    },
+    "Ride": {
+      "articulations": [
+        {
+          "name": "Ride_Bell_Tip",
+          "layers": 9,
+          "rem_vol": -14,
+          "note1": 53,
+          "note2": null
+        },
+        {
+          "name": "Ride_Bell_Shoulder",
+          "layers": 8,
+          "rem_vol": -14,
+          "note1": 72,
+          "note2": null
+        },
+        {
+          "name": "Ride_Bow_Tip",
+          "layers": 33,
+          "rem_vol": -14,
+          "note1": 51,
+          "note2": null
+        },
+        {
+          "name": "Ride_Bow_Shoulder",
+          "layers": 14,
+          "rem_vol": -14,
+          "note1": 59,
+          "note2": null
+        },
+        {
+          "name": "Ride_Choke",
+          "layers": 15,
+          "rem_vol": -39,
+          "note1": 60,
+          "note2": null
+        },
+        {
+          "name": "Ride_Sizzler",
+          "layers": 24,
+          "rem_vol": -14,
+          "note1": 75,
+          "note2": null
+        }
+      ]
+    },
+    "Snare": {
+      "articulations": [
+        {
+          "name": "Snare_Rim",
+          "layers": 27,
+          "rem_vol": -12,
+          "note1": 40,
+          "note2": 14
+        },
+        {
+          "name": "Snare_StickOnStick",
+          "layers": 16,
+          "rem_vol": -9,
+          "note1": 15,
+          "note2": null
+        },
+        {
+          "name": "Stick_Clicks",
+          "layers": 11,
+          "rem_vol": -7,
+          "note1": 33,
+          "note2": 16
+        },
+        {
+          "name": "Snare_Center",
+          "layers": 57,
+          "rem_vol": -1,
+          "note1": 38,
+          "note2": null
+        },
+        {
+          "name": "Snare_Edge",
+          "layers": 44,
+          "rem_vol": -3,
+          "note1": 39,
+          "note2": null
+        },
+        {
+          "name": "Snare_Rimshot",
+          "layers": 39,
+          "rem_vol": 0,
+          "note1": 41,
+          "note2": null
+        },
+        {
+          "name": "Snare_XStick",
+          "layers": 24,
+          "rem_vol": -5,
+          "note1": 37,
+          "note2": null
+        },
+        {
+          "name": "Snare_Center_Ruff_Slower",
+          "layers": 19,
+          "rem_vol": -1,
+          "note1": 23,
+          "note2": null
+        },
+        {
+          "name": "Snare_Center_Ruff",
+          "layers": 27,
+          "rem_vol": -1,
+          "note1": 21,
+          "note2": null
+        },
+        {
+          "name": "Snare_Edge_Ruff_Slower",
+          "layers": 20,
+          "rem_vol": -1,
+          "note1": 19,
+          "note2": null
+        },
+        {
+          "name": "Snare_Edge_Ruff",
+          "layers": 18,
+          "rem_vol": -1,
+          "note1": 17,
+          "note2": null
+        }
+      ]
+    },
+    "Splash": {
+      "articulations": [
+        {
+          "name": "Splash",
+          "layers": 19,
+          "rem_vol": -8,
+          "note1": 65,
+          "note2": null
+        }
+      ]
+    },
+    "Stack": {
+      "articulations": [
+        {
+          "name": "Stack",
+          "layers": 21,
+          "rem_vol": -5,
+          "note1": 71,
+          "note2": null
+        }
+      ]
+    },
+    "Tom 1": {
+      "articulations": [
+        {
+          "name": "Tom_1_Center",
+          "layers": 33,
+          "rem_vol": -6,
+          "note1": 48,
+          "note2": null
+        },
+        {
+          "name": "Tom_1_Rim",
+          "layers": 18,
+          "rem_vol": -10,
+          "note1": 50,
+          "note2": 11
+        }
+      ]
+    },
+    "Tom 2": {
+      "articulations": [
+        {
+          "name": "Tom_2_Center",
+          "layers": 31,
+          "rem_vol": -6,
+          "note1": 45,
+          "note2": null
+        },
+        {
+          "name": "Tom_2_Rim",
+          "layers": 23,
+          "rem_vol": -10,
+          "note1": 47,
+          "note2": 12
+        }
+      ]
+    },
+    "Floor Tom": {
+      "articulations": [
+        {
+          "name": "Tom_3_Center",
+          "layers": 27,
+          "rem_vol": -5,
+          "note1": 43,
+          "note2": null
+        },
+        {
+          "name": "Tom_3_Rim",
+          "layers": 22,
+          "rem_vol": -10,
+          "note1": 58,
+          "note2": 13
+        }
+      ]
+    }
+  }
+}

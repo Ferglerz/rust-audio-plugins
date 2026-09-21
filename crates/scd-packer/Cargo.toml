@@ -8,5 +8,3 @@ scd-core = { path = "../scd-core" }
 hound = "3.5"
 quick-xml = "0.31"
 rkyv = { version = "0.7", features = ["validation"] }
-byteorder = "1.5"
-walkdir = "2.4"

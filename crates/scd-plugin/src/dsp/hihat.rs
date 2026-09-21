@@ -1,7 +1,8 @@
 /// Hi-hat continuous controller (CC04) state machine & choke logic.
 /// Matches SCD BUILD_DATA.js ccSplits: [0, 16, 34, 59, 84, 127]
-
 pub const CC_SPLITS: [u8; 6] = [0, 16, 34, 59, 84, 127];
+const TIP_NOTES: [u8; 5] = [66, 67, 68, 69, 70];
+const SHOULDER_NOTES: [u8; 5] = [60, 61, 62, 63, 64];
 
 pub struct HiHatTracker {
     pub cc_value: u8,
@@ -18,34 +19,28 @@ impl HiHatTracker {
         Self::default()
     }
 
-    pub fn set_cc4(&mut self, val: u8) {
+    pub fn set_cc(&mut self, val: u8) {
         self.cc_value = val.min(127);
+    }
+
+    /// Apply the header Invert toggle (`127 - value` when enabled).
+    pub fn process_cc(raw: u8, invert: bool) -> u8 {
+        let raw = raw.min(127);
+        if invert {
+            127 - raw
+        } else {
+            raw
+        }
     }
 
     /// Translate note based on CC4 position
     pub fn translate_note(&self, note: u8) -> u8 {
         // Tip notes: Firm=66, A=67, B=68, C=69, Open=70
         // Shoulder notes: Firm=60, A=61, B=62, C=63, Open=64
-        let split_idx = self.get_split_index();
+        let split_idx = self.get_split_index().min(TIP_NOTES.len() - 1);
         match note {
-            46 | 42 => { // Hihat Tip triggers
-                match split_idx {
-                    0 => 66, // Firm
-                    1 => 67, // A
-                    2 => 68, // B
-                    3 => 69, // C
-                    _ => 70, // Open
-                }
-            }
-            26 | 22 => { // Hihat Shoulder triggers
-                match split_idx {
-                    0 => 60, // Firm
-                    1 => 61, // A
-                    2 => 62, // B
-                    3 => 63, // C
-                    _ => 64, // Open
-                }
-            }
+            46 | 42 => TIP_NOTES[split_idx],
+            26 | 22 => SHOULDER_NOTES[split_idx],
             _ => note,
         }
     }
