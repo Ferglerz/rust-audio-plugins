@@ -22,3 +22,16 @@ pub use mouse_cursor::MouseCursor;
 pub use window::*;
 pub use window_info::*;
 pub use window_open_options::*;
+
+/// Available main-screen work area in logical pixels, when queried on the UI thread.
+/// Platforms without a screen query return `None`.
+pub fn available_screen_size() -> Option<Size> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::available_screen_size()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}

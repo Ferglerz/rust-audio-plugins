@@ -124,6 +124,7 @@ peak-meter .ticks__label {
 }
 
 resize-handle {
+  cursor: nwse-resize;
   bottom: 0px;
   color: #696969;
   height: 20px;

@@ -59,8 +59,8 @@ if grep -q "SC HPF" "$UI_STRINGS_FILE"; then
   echo "error: installed plugin still contains SC HPF UI strings" >&2
   exit 1
 fi
-if ! grep -q "DYNAMICS" "$UI_STRINGS_FILE"; then
-  echo "error: installed plugin missing DYNAMICS UI strings" >&2
+if grep -q "DYNAMICS" "$UI_STRINGS_FILE"; then
+  echo "error: installed plugin still contains DYNAMICS UI strings" >&2
   exit 1
 fi
 if grep -q "COMPRESSION" "$UI_STRINGS_FILE"; then

@@ -72,6 +72,8 @@ impl Editor for ViziaEditor {
             widgets::WindowModel {
                 context: context.clone(),
                 vizia_state: vizia_state.clone(),
+                accepted_scale: user_scale_factor,
+                pending_resize: None,
                 last_inner_window_size: AtomicCell::new((
                     current_inner_window_size.width,
                     current_inner_window_size.height,
@@ -95,6 +97,7 @@ impl Editor for ViziaEditor {
         .on_idle({
             let emit_parameters_changed_event = self.emit_parameters_changed_event.clone();
             move |cx| {
+                cx.emit(widgets::ResizeTick);
                 if emit_parameters_changed_event
                     .compare_exchange(true, false, Ordering::AcqRel, Ordering::Relaxed)
                     .is_ok()

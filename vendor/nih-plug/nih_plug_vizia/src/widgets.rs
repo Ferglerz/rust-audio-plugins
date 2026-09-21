@@ -9,6 +9,7 @@ use crossbeam::atomic::AtomicCell;
 use nih_plug::debug::*;
 use nih_plug::prelude::{GuiContext, Param, ParamPtr};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use vizia::prelude::*;
 
 use super::ViziaState;
@@ -124,6 +125,8 @@ pub(crate) struct WindowModel {
     /// The last known unscaled logical window size. Used to prevent sending duplicate resize
     /// requests.
     pub last_inner_window_size: AtomicCell<(u32, u32)>,
+    pub accepted_scale: f64,
+    pub pending_resize: Option<Instant>,
 }
 
 impl Model for ParamModel {
@@ -144,6 +147,10 @@ impl Model for ParamModel {
     }
 }
 
+/// Idle ticks flush the trailing edge of a resize without a background thread.
+#[derive(Clone, Copy)]
+pub(crate) struct ResizeTick;
+
 impl Model for WindowModel {
     fn event(&mut self, cx: &mut EventContext, event: &mut Event) {
         event.map(|gui_context_event, meta| match gui_context_event {
@@ -154,6 +161,31 @@ impl Model for WindowModel {
                 cx.set_window_size(WindowSize { width, height });
 
                 meta.consume();
+            }
+        });
+
+        event.map(|_: &ResizeTick, _| {
+            if self
+                .pending_resize
+                .is_some_and(|at| at.elapsed() >= Duration::from_millis(120))
+            {
+                self.pending_resize = None;
+                let size = (cx.window_size().width, cx.window_size().height);
+                let scale = cx.user_scale_factor();
+                if size == self.last_inner_window_size.load() && scale == self.accepted_scale {
+                    return;
+                }
+                // The host queries Editor::size() synchronously during this request.
+                self.vizia_state.scale_factor.store(scale);
+                if self.context.request_resize() {
+                    self.last_inner_window_size.store(size);
+                    self.accepted_scale = scale;
+                } else {
+                    let (width, height) = self.last_inner_window_size.load();
+                    self.vizia_state.scale_factor.store(self.accepted_scale);
+                    cx.set_window_size(WindowSize { width, height });
+                    cx.set_user_scale_factor(self.accepted_scale);
+                }
             }
         });
 
@@ -169,33 +201,13 @@ impl Model for WindowModel {
                     "The window size set on the vizia context does not match the size returned by \
                      'ViziaState::size_fn'"
                 );
-                let old_logical_size @ (old_logical_width, old_logical_height) =
-                    self.last_inner_window_size.load();
-                let scale_factor = cx.user_scale_factor();
-                let old_user_scale_factor = self.vizia_state.scale_factor.load();
-
-                // Don't do anything if the current size already matches the new size, this could
-                // otherwise also cause a feedback loop on resize failure
-                if logical_size == old_logical_size && scale_factor == old_user_scale_factor {
+                let scale = cx.user_scale_factor();
+                let previous_scale = self.vizia_state.scale_factor.load();
+                if logical_size == self.last_inner_window_size.load() && scale == previous_scale {
                     return;
                 }
-
-                // Our embedded baseview window will have already been resized. If the host does not
-                // accept our new size, then we'll try to undo that
-                self.last_inner_window_size.store(logical_size);
-                self.vizia_state.scale_factor.store(scale_factor);
-                if !self.context.request_resize() {
-                    self.last_inner_window_size.store(old_logical_size);
-                    self.vizia_state.scale_factor.store(old_user_scale_factor);
-
-                    // This will cause the window's size to be reverted on the next event loop
-                    // NOTE: Is resizing back the correct behavior now that the size is computed?
-                    cx.set_window_size(WindowSize {
-                        width: old_logical_width,
-                        height: old_logical_height,
-                    });
-                    cx.set_user_scale_factor(old_user_scale_factor);
-                }
+                self.vizia_state.scale_factor.store(scale);
+                self.pending_resize = Some(Instant::now());
             }
         });
     }

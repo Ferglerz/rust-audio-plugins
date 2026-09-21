@@ -287,6 +287,14 @@ impl<'a> Window<'a> {
             let size = NSSize::new(size.width.round(), size.height.round());
 
             unsafe { NSView::setFrameSize(self.inner.ns_view, size) };
+            if let Some(state) = unsafe { WindowState::try_from_view(&*self.inner.ns_view) } {
+                let window_info = WindowInfo::from_logical_size(
+                    Size::new(size.width, size.height),
+                    state.window_info.get().scale(),
+                );
+                state.window_info.set(window_info);
+                state.trigger_event(Event::Window(crate::WindowEvent::Resized(window_info)));
+            }
             unsafe {
                 let _: () = msg_send![self.inner.ns_view, setNeedsDisplay: YES];
             }
@@ -341,13 +349,21 @@ impl WindowState {
     /// original `Rc<WindowState>` owned by the `NSView` can be dropped at any time
     /// (including during an event handler).
     pub(super) unsafe fn from_view(view: &Object) -> Rc<WindowState> {
+        Self::try_from_view(view).expect("Baseview window state has not been initialized")
+    }
+
+    /// Returns the `WindowState` held by a given `NSView`, if initialization has completed.
+    pub(super) unsafe fn try_from_view(view: &Object) -> Option<Rc<WindowState>> {
         let state_ptr: *const c_void = *view.get_ivar(BASEVIEW_STATE_IVAR);
+        if state_ptr.is_null() {
+            return None;
+        }
 
         let state_rc = Rc::from_raw(state_ptr as *const WindowState);
         let state = Rc::clone(&state_rc);
         let _ = Rc::into_raw(state_rc);
 
-        state
+        Some(state)
     }
 
     pub(super) fn trigger_event(&self, event: Event) -> EventStatus {
@@ -413,5 +429,22 @@ pub fn copy_to_clipboard(string: &str) {
 
         pb.clearContents();
         pb.setString_forType(ns_str, cocoa::appkit::NSPasteboardTypeString);
+    }
+}
+
+/// AppKit screen geometry is only accessed on the main thread. The visible frame
+/// excludes the Dock and menu bar and uses points rather than Retina pixels.
+pub fn available_screen_size() -> Option<Size> {
+    unsafe {
+        let is_main: cocoa::base::BOOL = msg_send![objc::class!(NSThread), isMainThread];
+        if is_main != YES {
+            return None;
+        }
+        let screen: id = msg_send![objc::class!(NSScreen), mainScreen];
+        if screen == nil {
+            return None;
+        }
+        let frame: NSRect = msg_send![screen, visibleFrame];
+        Some(Size::new(frame.size.width, frame.size.height))
     }
 }

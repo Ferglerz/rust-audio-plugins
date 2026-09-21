@@ -98,6 +98,9 @@ pub struct ViziaState {
     /// Whether the editor's window is currently open.
     #[serde(skip)]
     open: AtomicBool,
+    /// Fit before opening on the UI thread, including restored state and display changes.
+    #[serde(skip)]
+    fit_to_screen: AtomicBool,
 }
 
 /// A default implementation for `size_fn` needed to be able to derive the `Deserialize` trait.
@@ -140,6 +143,7 @@ impl ViziaState {
             size_fn: Box::new(size_fn),
             scale_factor: AtomicCell::new(1.0),
             open: AtomicBool::new(false),
+            fit_to_screen: AtomicBool::new(false),
         })
     }
 
@@ -154,14 +158,35 @@ impl ViziaState {
             size_fn: Box::new(size_fn),
             scale_factor: AtomicCell::new(default_scale_factor),
             open: AtomicBool::new(false),
+            fit_to_screen: AtomicBool::new(false),
         })
+    }
+
+    /// Start at 100% relative to artwork originally drawn at 120%, leaving
+    /// at least 25% of the available screen width free and room for host chrome.
+    pub fn new_screen_sized(size_fn: impl Fn() -> (u32, u32) + Send + Sync + 'static) -> Arc<Self> {
+        let state = Self::new_with_default_scale_factor(size_fn, 1.0 / 1.2);
+        state.fit_to_screen.store(true, Ordering::Relaxed);
+        state
+    }
+
+    fn fit_screen_if_available(&self) {
+        if self.fit_to_screen.load(Ordering::Relaxed) && !self.is_open() {
+            if let Some(screen) = baseview::available_screen_size() {
+                self.scale_factor.store(screen_fit_scale(
+                    self.inner_logical_size(),
+                    self.scale_factor.load(),
+                    (screen.width, screen.height),
+                ));
+            }
+        }
     }
 
     /// Returns a `(width, height)` pair for the current size of the GUI in logical pixels, after
     /// applying the user scale factor.
     pub fn scaled_logical_size(&self) -> (u32, u32) {
         let (logical_width, logical_height) = self.inner_logical_size();
-        let scale_factor = self.scale_factor.load();
+        let scale_factor = self.user_scale_factor();
 
         (
             (logical_width as f64 * scale_factor).round() as u32,
@@ -178,6 +203,7 @@ impl ViziaState {
     /// Get the non-DPI related uniform scaling factor the GUI's size will be multiplied with. This
     /// can be changed by changing `cx.user_scale_factor`.
     pub fn user_scale_factor(&self) -> f64 {
+        self.fit_screen_if_available();
         self.scale_factor.load()
     }
 
@@ -185,5 +211,43 @@ impl ViziaState {
     // Called `is_open()` instead of `open()` to avoid the ambiguity.
     pub fn is_open(&self) -> bool {
         self.open.load(Ordering::Acquire)
+    }
+}
+
+fn screen_fit_scale(
+    (width, height): (u32, u32),
+    preferred: f64,
+    (screen_w, screen_h): (f64, f64),
+) -> f64 {
+    if width == 0
+        || height == 0
+        || !screen_w.is_finite()
+        || !screen_h.is_finite()
+        || screen_w <= 0.0
+        || screen_h <= 80.0
+    {
+        return preferred;
+    }
+    preferred
+        .min(screen_w * 0.75 / width as f64)
+        .min((screen_h - 80.0) / height as f64)
+}
+
+#[cfg(test)]
+mod sizing_tests {
+    use super::*;
+    #[test]
+    fn fits_width_and_height_without_upscaling() {
+        assert_eq!(
+            screen_fit_scale((1282, 656), 1.0 / 1.2, (1920.0, 1080.0)),
+            1.0 / 1.2
+        );
+        let scale = screen_fit_scale((1282, 656), 1.0, (1024.0, 600.0));
+        assert!(1282.0 * scale <= 768.0);
+        assert!(656.0 * scale <= 520.0);
+        assert_eq!(
+            screen_fit_scale((1040, 660), 1.0, (1920.0, 600.0)),
+            520.0 / 660.0
+        );
     }
 }

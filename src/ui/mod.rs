@@ -41,7 +41,6 @@ const WALL_W: f32 = 122.0;
 const MODULE_Y: f32 = 92.0;
 const MODULE_H: f32 = 500.0;
 const MODULE_HEADER_H: f32 = 44.0;
-const MODULE_HEADER_BOTTOM: f32 = MODULE_Y + MODULE_HEADER_H;
 const MODULE_HEADER_CTRL: f32 = 24.0;
 const EQ_PAGE_1: usize = 0;
 const EQ_PAGE_2: usize = 1;
@@ -59,9 +58,9 @@ const GY: f32 = 156.0;
 const GW: f32 = EQ_W - EQ_GRAPH_PAD_LEFT - EQ_GRAPH_PAD_RIGHT;
 const GH: f32 = 384.0;
 const GRAPH_BOTTOM: f32 = GY + GH;
-// Headroom under the title divider for the full knee (half-handle 8 + max offset 55).
-const METER_TOP: f32 = MODULE_HEADER_BOTTOM + 72.0;
-const METER_H: f32 = GRAPH_BOTTOM - 16.0 - METER_TOP;
+const EQ_AXIS_LABEL_Y: f32 = GRAPH_BOTTOM + 16.0;
+const METER_TOP: f32 = GY;
+const METER_H: f32 = GRAPH_BOTTOM - METER_TOP;
 const KNEE_METER_OVERHANG: f32 = 4.0;
 const FREQ_AXIS: [(f64, &str); 8] = [
     (50.0, "50"),
@@ -473,7 +472,45 @@ fn module_title_y(size: f32) -> f32 {
     module_header_mid() + size * 0.35
 }
 fn meter_value_y() -> f32 {
-    GRAPH_BOTTOM + 14.0
+    EQ_AXIS_LABEL_Y
+}
+fn catch_gr_to_depth(gr: f32, depth: f32) -> f32 {
+    gr.min(depth.max(0.0))
+}
+fn module_header_cog_rect(module_x: f32, module_w: f32) -> (f32, f32, f32, f32) {
+    (
+        module_x + module_w - 14.0 - 24.0,
+        module_header_ctrl_y(),
+        24.0,
+        MODULE_HEADER_CTRL,
+    )
+}
+fn draw_module_page_button(
+    d: &mut Draw,
+    rect: (f32, f32, f32, f32),
+    controls: bool,
+    bypassed: bool,
+    hover: bool,
+    accent: C,
+) {
+    let color = if bypassed {
+        MUTED
+    } else if hover {
+        accent
+    } else {
+        TEXT
+    };
+    if controls {
+        d.text_centered(
+            rect.0 + rect.2 * 0.5,
+            rect.1 + rect.3 * 0.5 + 5.0,
+            "<",
+            14.0,
+            color,
+        );
+    } else {
+        d.cog_icon(rect.0 + rect.2 * 0.5, rect.1 + rect.3 * 0.5, color);
+    }
 }
 fn clamp_knee_to_meter(x: f32, y: f32, w: f32, h: f32) -> (f32, f32, f32, f32) {
     let min_y = METER_TOP - KNEE_METER_OVERHANG;
@@ -1235,6 +1272,7 @@ pub fn create(params: Arc<StripParams>, shared: Arc<Shared>) -> Option<Box<dyn E
             .width(Stretch(1.0))
             .height(Stretch(1.0))
             .focusable(true);
+            nih_plug_vizia::widgets::ResizeHandle::new(cx);
         },
     )
 }
@@ -1604,34 +1642,16 @@ impl StripView {
         (btn.0, btn.1 + btn.3 + 2.0, 72.0, SCALES.len() as f32 * 24.0)
     }
     fn dyn_cog_button_rect(&self) -> (f32, f32, f32, f32) {
-        let (gx, _, gw, _) = self.dyn_main_gr_meter_rect();
-        let cx = gx + gw * 0.5;
-        let w = 24.0;
-        let h = 24.0;
-        let y = (MODULE_HEADER_BOTTOM + METER_TOP) * 0.5 - h * 0.5;
-        (cx - w * 0.5, y, w, h)
-    }
-    fn dyn_back_button_rect(&self) -> (f32, f32, f32, f32) {
-        self.dyn_cog_button_rect()
+        let b = self.dyn_bounds();
+        module_header_cog_rect(b.0, b.2)
     }
     fn pse_cog_button_rect(&self) -> (f32, f32, f32, f32) {
-        let (gx, _, gw, _) = self.pse_main_gr_meter_rect();
-        let cx = gx + gw * 0.5;
-        let w = 24.0;
-        let h = 24.0;
-        let y = (MODULE_HEADER_BOTTOM + METER_TOP) * 0.5 - h * 0.5;
-        (cx - w * 0.5, y, w, h)
-    }
-    fn pse_back_button_rect(&self) -> (f32, f32, f32, f32) {
-        self.pse_cog_button_rect()
+        let b = self.pse_bounds();
+        module_header_cog_rect(b.0, b.2)
     }
     fn wall_cog_button_rect(&self) -> (f32, f32, f32, f32) {
-        let (sx, _, sw, _) = self.wall_main_thresh_slider_rect();
-        let cx = sx + sw * 0.5;
-        let w = 24.0;
-        let h = 24.0;
-        let y = (MODULE_HEADER_BOTTOM + METER_TOP) * 0.5 - h * 0.5;
-        (cx - w * 0.5, y, w, h)
+        let b = self.wall_bounds();
+        module_header_cog_rect(b.0, b.2)
     }
     fn wall_main_thresh_slider_rect(&self) -> (f32, f32, f32, f32) {
         let wx = self.wall_bounds().0;
@@ -1640,9 +1660,6 @@ impl StripView {
     fn wall_main_thresh_handle_rect(&self, thresh_y: f32) -> (f32, f32, f32, f32) {
         let (sx, _, sw, _) = self.wall_main_thresh_slider_rect();
         (sx - 5.0, thresh_y - 8.0, sw + 10.0, 16.0)
-    }
-    fn wall_back_button_rect(&self) -> (f32, f32, f32, f32) {
-        self.wall_cog_button_rect()
     }
     fn dyn_power_button_rect(&self) -> (f32, f32, f32, f32) {
         let dx = self.dyn_bounds().0;
@@ -2909,18 +2926,54 @@ impl View for StripView {
                         cx.needs_redraw();
                         return;
                     }
+                    if inside(x, y, self.dyn_cog_button_rect()) {
+                        match self.dyn_page {
+                            DynPage::Main => {
+                                self.dyn_page = DynPage::Controls;
+                                self.dyn_anim_target.set(1.0);
+                            }
+                            DynPage::Controls => {
+                                self.dyn_page = DynPage::Main;
+                                self.dyn_anim_target.set(0.0);
+                            }
+                        }
+                        cx.needs_redraw();
+                        return;
+                    }
+                    if inside(x, y, self.pse_cog_button_rect()) {
+                        match self.pse_page {
+                            PsePage::Main => {
+                                self.pse_page = PsePage::Controls;
+                                self.pse_anim_target.set(1.0);
+                            }
+                            PsePage::Controls => {
+                                self.pse_page = PsePage::Main;
+                                self.pse_anim_target.set(0.0);
+                            }
+                        }
+                        cx.needs_redraw();
+                        return;
+                    }
+                    if inside(x, y, self.wall_cog_button_rect()) {
+                        match self.wall_page {
+                            WallPage::Main => {
+                                self.wall_page = WallPage::Controls;
+                                self.wall_anim_target.set(1.0);
+                            }
+                            WallPage::Controls => {
+                                self.wall_page = WallPage::Main;
+                                self.wall_anim_target.set(0.0);
+                            }
+                        }
+                        cx.needs_redraw();
+                        return;
+                    }
                     match self.pse_page {
                         PsePage::Main => {
                             if (self.pse_anim_progress.get() - self.pse_anim_target.get()).abs()
                                 > 0.01
                                 && inside(x, y, self.pse_bounds())
                             {
-                                return;
-                            }
-                            if inside(x, y, self.pse_cog_button_rect()) {
-                                self.pse_page = PsePage::Controls;
-                                self.pse_anim_target.set(1.0);
-                                cx.needs_redraw();
                                 return;
                             }
                             let r = self.pse_main_thresh_slider_rect();
@@ -2985,12 +3038,6 @@ impl View for StripView {
                             {
                                 return;
                             }
-                            if inside(x, y, self.pse_back_button_rect()) {
-                                self.pse_page = PsePage::Main;
-                                self.pse_anim_target.set(0.0);
-                                cx.needs_redraw();
-                                return;
-                            }
                             if inside(x, y, self.pse_detect_mode_rect()) {
                                 self.toggle(cx, &self.params.pse_peak);
                                 cx.needs_redraw();
@@ -3004,12 +3051,6 @@ impl View for StripView {
                                 > 0.01
                                 && inside(x, y, self.dyn_bounds())
                             {
-                                return;
-                            }
-                            if inside(x, y, self.dyn_cog_button_rect()) {
-                                self.dyn_page = DynPage::Controls;
-                                self.dyn_anim_target.set(1.0);
-                                cx.needs_redraw();
                                 return;
                             }
                             let r = self.dyn_main_thresh_slider_rect();
@@ -3076,12 +3117,6 @@ impl View for StripView {
                             {
                                 return;
                             }
-                            if inside(x, y, self.dyn_back_button_rect()) {
-                                self.dyn_page = DynPage::Main;
-                                self.dyn_anim_target.set(0.0);
-                                cx.needs_redraw();
-                                return;
-                            }
                         }
                     }
                     match self.wall_page {
@@ -3090,12 +3125,6 @@ impl View for StripView {
                                 > 0.01
                                 && inside(x, y, self.wall_bounds())
                             {
-                                return;
-                            }
-                            if inside(x, y, self.wall_cog_button_rect()) {
-                                self.wall_page = WallPage::Controls;
-                                self.wall_anim_target.set(1.0);
-                                cx.needs_redraw();
                                 return;
                             }
                             let r = self.wall_main_thresh_slider_rect();
@@ -3132,12 +3161,6 @@ impl View for StripView {
                                 > 0.01
                                 && inside(x, y, self.wall_bounds())
                             {
-                                return;
-                            }
-                            if inside(x, y, self.wall_back_button_rect()) {
-                                self.wall_page = WallPage::Main;
-                                self.wall_anim_target.set(0.0);
-                                cx.needs_redraw();
                                 return;
                             }
                         }
@@ -3984,7 +4007,7 @@ impl View for StripView {
             for (freq, label) in FREQ_AXIS {
                 let x = freq_x_at(freq, gx, gw);
                 d.line(x, GY, x, GRAPH_BOTTOM, LINE, 1.0);
-                d.text_centered(x, GRAPH_BOTTOM + 16.0, label, 12.0, MUTED);
+                d.text_centered(x, EQ_AXIS_LABEL_Y, label, 12.0, MUTED);
             }
             d.area(
                 &spectrum,
@@ -4207,7 +4230,7 @@ impl View for StripView {
             for (freq, label) in FREQ_AXIS {
                 let x = freq_x_at(freq, gx, gw);
                 d.line(x, GY, x, GRAPH_BOTTOM, LINE, 1.0);
-                d.text_centered(x, GRAPH_BOTTOM + 16.0, label, 12.0, MUTED);
+                d.text_centered(x, EQ_AXIS_LABEL_Y, label, 12.0, MUTED);
             }
             d.area(
                 &spectrum,
@@ -4596,6 +4619,18 @@ impl View for StripView {
             15.0,
             if pse_bypassed { MUTED } else { TEXT },
         );
+        let pse_cog_r = self.pse_cog_button_rect();
+        draw_module_page_button(
+            &mut d,
+            pse_cog_r,
+            self.pse_page == PsePage::Controls,
+            pse_bypassed,
+            !pse_bypassed
+                && self
+                    .idle_hover()
+                    .is_some_and(|(hx, hy)| inside(hx, hy, pse_cog_r)),
+            PSE_BLUE,
+        );
 
         d.scissor(px, py, pw, ph);
         let pse_eased = quintic_page_progress(self.pse_anim_progress.get());
@@ -4604,20 +4639,6 @@ impl View for StripView {
         if pse_main_off > -pw && pse_main_off < pw {
             d.offset_x = pse_main_off;
             {
-                let cog_r = self.pse_cog_button_rect();
-                let cog_hover = !pse_bypassed
-                    && self
-                        .idle_hover()
-                        .is_some_and(|(hx, hy)| inside(hx, hy, cog_r));
-                let cog_color = if pse_bypassed {
-                    MUTED
-                } else if cog_hover {
-                    PSE_BLUE
-                } else {
-                    TEXT
-                };
-                d.cog_icon(cog_r.0 + cog_r.2 * 0.5, cog_r.1 + cog_r.3 * 0.5, cog_color);
-
                 let (sx, sy, sw, sh) = self.pse_main_thresh_slider_rect();
                 let (gx_m, gy_m, gw_m, gh_m) = self.pse_main_gr_meter_rect();
                 d.rect(sx, sy, sw, sh, LINE);
@@ -4659,12 +4680,13 @@ impl View for StripView {
                 } else {
                     self.shared.pse_gr.load(Ordering::Relaxed)
                 };
+                let depth_norm = self.param(7).unmodulated_normalized_value();
+                let pse_gr = catch_gr_to_depth(pse_gr, depth_norm * 20.0);
                 let gr_bar_h = gh_m * (pse_gr / 20.0).clamp(0.0, 1.0);
                 if !pse_bypassed && gr_bar_h > 0.5 {
                     d.rect(gx_m, gy_m, gw_m, gr_bar_h, PSE_BLUE);
                 }
 
-                let depth_norm = self.param(7).unmodulated_normalized_value();
                 let depth_y = gy_m + gh_m * depth_norm;
                 let depth_handle = self.pse_main_depth_handle_rect(depth_y);
                 let depth_hover = !pse_bypassed
@@ -4746,25 +4768,6 @@ impl View for StripView {
         if pse_ctrl_off > -pw && pse_ctrl_off < pw {
             d.offset_x = pse_ctrl_off;
             {
-                let back_r = self.pse_back_button_rect();
-                let back_hover = !pse_bypassed
-                    && self
-                        .idle_hover()
-                        .is_some_and(|(hx, hy)| inside(hx, hy, back_r));
-                d.text_centered(
-                    back_r.0 + back_r.2 * 0.5,
-                    back_r.1 + 16.0,
-                    "<",
-                    14.0,
-                    if pse_bypassed {
-                        MUTED
-                    } else if back_hover {
-                        PSE_BLUE
-                    } else {
-                        TEXT
-                    },
-                );
-
                 for (i, label) in [(8, "HYSTERESIS"), (2, "VOICE DET"), (10, "TIME")] {
                     let p = self.param(i);
                     let value = if i == 10 {
@@ -4879,9 +4882,21 @@ impl View for StripView {
         d.text(
             dx + 44.0,
             module_title_y(15.0),
-            "DYNAMICS",
+            "COMP",
             15.0,
             if comp_bypassed { MUTED } else { TEXT },
+        );
+        let dyn_cog_r = self.dyn_cog_button_rect();
+        draw_module_page_button(
+            &mut d,
+            dyn_cog_r,
+            self.dyn_page == DynPage::Controls,
+            comp_bypassed,
+            !comp_bypassed
+                && self
+                    .idle_hover()
+                    .is_some_and(|(hx, hy)| inside(hx, hy, dyn_cog_r)),
+            GOLD,
         );
 
         d.scissor(dx, dy, dw, dh);
@@ -4891,20 +4906,6 @@ impl View for StripView {
         if dyn_main_off > -dw && dyn_main_off < dw {
             d.offset_x = dyn_main_off;
             {
-                let cog_r = self.dyn_cog_button_rect();
-                let cog_hover = !comp_bypassed
-                    && self
-                        .idle_hover()
-                        .is_some_and(|(hx, hy)| inside(hx, hy, cog_r));
-                let cog_color = if comp_bypassed {
-                    MUTED
-                } else if cog_hover {
-                    GOLD
-                } else {
-                    TEXT
-                };
-                d.cog_icon(cog_r.0 + cog_r.2 * 0.5, cog_r.1 + cog_r.3 * 0.5, cog_color);
-
                 let (sx, sy, sw, sh) = self.dyn_main_thresh_slider_rect();
                 let (gx_m, gy_m, gw_m, gh_m) = self.dyn_main_gr_meter_rect();
                 d.rect(sx, sy, sw, sh, LINE);
@@ -4951,6 +4952,8 @@ impl View for StripView {
                 } else {
                     self.shared.gr_uncapped.load(Ordering::Relaxed)
                 };
+                let depth_norm = self.param(14).unmodulated_normalized_value();
+                let gr = catch_gr_to_depth(gr, depth_norm * GR_METER_DB);
                 let (gr_bar_h, gr_uncapped_h) = gr_meter_bar_heights(gr, gr_uncapped, gh_m);
                 if !comp_bypassed && gr_uncapped_h > gr_bar_h + 0.5 {
                     d.rect(gx_m, gy_m + gr_bar_h, gw_m, gr_uncapped_h - gr_bar_h, MUTED);
@@ -4959,7 +4962,6 @@ impl View for StripView {
                     d.rect(gx_m, gy_m, gw_m, gr_bar_h, GOLD);
                 }
 
-                let depth_norm = self.param(14).unmodulated_normalized_value();
                 let depth_y = gy_m + gh_m * depth_norm;
                 let depth_handle = self.dyn_main_depth_handle_rect(depth_y);
                 let depth_hover = !comp_bypassed
@@ -5039,25 +5041,6 @@ impl View for StripView {
         if dyn_ctrl_off > -dw && dyn_ctrl_off < dw {
             d.offset_x = dyn_ctrl_off;
             {
-                let back_r = self.dyn_back_button_rect();
-                let back_hover = !comp_bypassed
-                    && self
-                        .idle_hover()
-                        .is_some_and(|(hx, hy)| inside(hx, hy, back_r));
-                d.text_centered(
-                    back_r.0 + back_r.2 * 0.5,
-                    back_r.1 + 16.0,
-                    "<",
-                    14.0,
-                    if comp_bypassed {
-                        MUTED
-                    } else if back_hover {
-                        GOLD
-                    } else {
-                        TEXT
-                    },
-                );
-
                 for (i, label, color) in [
                     (5, "ATTACK", GOLD),
                     (11, "RELEASE", GOLD),
@@ -5109,6 +5092,18 @@ impl View for StripView {
             15.0,
             if wall_bypassed { MUTED } else { TEXT },
         );
+        let wall_cog_r = self.wall_cog_button_rect();
+        draw_module_page_button(
+            &mut d,
+            wall_cog_r,
+            self.wall_page == WallPage::Controls,
+            wall_bypassed,
+            !wall_bypassed
+                && self
+                    .idle_hover()
+                    .is_some_and(|(hx, hy)| inside(hx, hy, wall_cog_r)),
+            WALL_COLOR,
+        );
 
         d.scissor(wx, wy, ww, wh);
         let wall_eased = quintic_page_progress(self.wall_anim_progress.get());
@@ -5117,20 +5112,6 @@ impl View for StripView {
         if wall_main_off > -ww && wall_main_off < ww {
             d.offset_x = wall_main_off;
             {
-                let cog_r = self.wall_cog_button_rect();
-                let cog_hover = !wall_bypassed
-                    && self
-                        .idle_hover()
-                        .is_some_and(|(hx, hy)| inside(hx, hy, cog_r));
-                let cog_color = if wall_bypassed {
-                    MUTED
-                } else if cog_hover {
-                    WALL_COLOR
-                } else {
-                    TEXT
-                };
-                d.cog_icon(cog_r.0 + cog_r.2 * 0.5, cog_r.1 + cog_r.3 * 0.5, cog_color);
-
                 let (sx, sy, sw, sh) = self.wall_main_thresh_slider_rect();
                 d.rect(sx, sy, sw, sh, LINE);
 
@@ -5201,24 +5182,6 @@ impl View for StripView {
         if wall_ctrl_off > -ww && wall_ctrl_off < ww {
             d.offset_x = wall_ctrl_off;
             {
-                let back_r = self.wall_back_button_rect();
-                let back_hover = !wall_bypassed
-                    && self
-                        .idle_hover()
-                        .is_some_and(|(hx, hy)| inside(hx, hy, back_r));
-                d.text_centered(
-                    back_r.0 + back_r.2 * 0.5,
-                    back_r.1 + 16.0,
-                    "<",
-                    14.0,
-                    if wall_bypassed {
-                        MUTED
-                    } else if back_hover {
-                        WALL_COLOR
-                    } else {
-                        TEXT
-                    },
-                );
                 for (i, label) in [(16, "EVEN"), (17, "ODD")] {
                     let p = self.param(i);
                     let value =
@@ -6253,8 +6216,10 @@ mod tests {
         assert_eq!(gr_meter.0, slider.0 + slider.2 + 16.0);
         assert_eq!(gr_meter.1, slider.1);
         assert_eq!(gr_meter.3, slider.3);
-        assert_eq!(slider.1 + slider.3, GRAPH_BOTTOM - 16.0);
-        assert_eq!(gr_meter.1 + gr_meter.3, GRAPH_BOTTOM - 16.0);
+        assert_eq!(slider.1, GY);
+        assert_eq!(slider.1 + slider.3, GRAPH_BOTTOM);
+        assert_eq!(gr_meter.1 + gr_meter.3, GRAPH_BOTTOM);
+        assert_eq!(meter_value_y(), EQ_AXIS_LABEL_Y);
         let knee_at_top = view.dyn_main_knee_rect(slider.1, 0.0);
         assert_eq!(knee_at_top.1, slider.1 - KNEE_METER_OVERHANG);
         assert!(knee_at_top.1 + knee_at_top.3 <= slider.1 + slider.3 + KNEE_METER_OVERHANG);
@@ -6267,15 +6232,14 @@ mod tests {
         let pse_knee_at_top = view.pse_main_knee_rect(slider.1, 0.0);
         assert_eq!(pse_knee_at_top.1, slider.1 - KNEE_METER_OVERHANG);
         let cog = view.dyn_cog_button_rect();
-        assert_eq!(cog.0 + cog.2 * 0.5, gr_meter.0 + gr_meter.2 * 0.5);
-        assert!(cog.1 >= MODULE_HEADER_BOTTOM);
-        assert!(cog.1 + cog.3 <= gr_meter.1);
+        assert_eq!(cog.1, module_header_ctrl_y());
+        assert_eq!(cog.1, bypass.1);
+        assert_eq!(cog.3, MODULE_HEADER_CTRL);
+        assert_eq!(cog.0, view.dyn_bounds().0 + DYN_W - 14.0 - 24.0);
+        assert!(cog.0 > view.dyn_power_button_rect().0 + view.dyn_power_button_rect().2);
         let pse_cog = view.pse_cog_button_rect();
         assert_eq!(pse_cog.1, cog.1);
-        assert_eq!(
-            pse_cog.0 + pse_cog.2 * 0.5,
-            view.pse_main_gr_meter_rect().0 + view.pse_main_gr_meter_rect().2 * 0.5
-        );
+        assert_eq!(pse_cog.0, view.pse_bounds().0 + PSE_W - 14.0 - 24.0);
         let scale_btn = view.scale_button_rect();
         assert_eq!(
             scale_btn.0 + scale_btn.2 * 0.5,
@@ -6394,11 +6358,8 @@ mod tests {
         ));
         let wall_cog = view.wall_cog_button_rect();
         assert_eq!(wall_cog.1, cog.1);
-        assert!(wall_cog.0 >= view.wall_bounds().0);
-        assert_eq!(
-            wall_cog.0 + wall_cog.2 * 0.5,
-            wall_slider.0 + wall_slider.2 * 0.5
-        );
+        assert_eq!(wall_cog.0, view.wall_bounds().0 + WALL_W - 14.0 - 24.0);
+        assert!(wall_cog.0 > view.wall_power_button_rect().0 + view.wall_power_button_rect().2);
 
         let params_pre = Arc::new(StripParams {
             comp_pre: BoolParam::new("Dynamics routing", true),
@@ -6448,6 +6409,10 @@ mod tests {
         assert_eq!(overflow_reduction(-6.0, -2.0), None);
         assert_eq!(uncapped_for(3, &[(1, 2.0), (3, 11.5)]), Some(11.5));
         assert_eq!(uncapped_for(2, &[(1, 2.0)]), None);
+        assert_eq!(catch_gr_to_depth(20.0, 10.0), 10.0);
+        assert_eq!(catch_gr_to_depth(5.0, 10.0), 5.0);
+        assert_eq!(catch_gr_to_depth(10.0, 10.0), 10.0);
+        assert_eq!(catch_gr_to_depth(8.0, -1.0), 0.0);
     }
 
     #[test]
