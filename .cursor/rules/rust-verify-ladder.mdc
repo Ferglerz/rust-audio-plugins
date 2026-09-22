@@ -1,0 +1,32 @@
+---
+description: Default cargo check; run tests only for DSP/runtime doubt
+alwaysApply: true
+---
+
+# Rust verify ladder
+
+Do not run `cargo test` after every edit. Tests stay in the repo. Default verify is a compile-check of the crate you touched.
+
+## Default
+
+`cargo check -p <crate>`
+
+Crate names: `damian-channel-strip`, `flattery`, `tape_stop`, `pleasant-ui`.
+
+- No `--workspace`
+- No `--all-targets` unless tests or examples themselves changed
+- Never check or test vendored crates: `nih_plug`, `nih_plug_vizia`, `baseview`, `vizia_baseview`
+
+## Run tests when
+
+- DSP, engine, params, math, or processing changed
+- `cargo check` is clean but runtime behavior is in doubt
+- The user asks, or a failure needs a targeted re-run
+
+Then: `cargo test -p <crate> <optional_filter> --quiet`
+
+Quote failing test names and the decisive assertion only. Do not paste passing test lists.
+
+## Full suite
+
+CI or an explicit user request. Not every agent turn.

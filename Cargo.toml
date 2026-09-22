@@ -12,3 +12,10 @@ resolver = "2"
 
 [patch."https://github.com/RustAudio/baseview.git"]
 baseview = { path = "Damian Channel Strip/vendor/baseview" }
+
+[patch."https://github.com/robbert-vdh/nih-plug.git"]
+nih_plug = { path = "Damian Channel Strip/vendor/nih-plug" }
+nih_plug_vizia = { path = "Damian Channel Strip/vendor/nih-plug/nih_plug_vizia" }
+
+[patch."https://github.com/robbert-vdh/vizia.git"]
+vizia_baseview = { path = "Damian Channel Strip/vendor/vizia_baseview" }

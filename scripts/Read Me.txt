@@ -1,0 +1,30 @@
+Install (macOS)
+
+These plugins are unsigned. A downloaded Install.command will always hit
+Gatekeeper. You do not need that script.
+
+Clear quarantine in Terminal, then copy the plugins yourself.
+
+1. Open Terminal (Applications → Utilities → Terminal).
+
+2. Type this, then press space. Do not press Return yet:
+
+   xattr -cr
+
+3. Drag the unzipped plugin folder onto the Terminal window.
+   The folder path appears after the command.
+
+4. Press Return.
+
+5. In Finder choose Go → Go to Folder… and paste:
+
+   ~/Library/Audio/Plug-Ins/VST3
+
+6. Copy the .vst3 folders from the unzipped folder into that VST3 folder.
+   Replace existing copies if asked.
+
+7. Rescan plugins in the DAW.
+
+Local Finder copies do not re-apply quarantine after step 4.
+If a plugin still says it is damaged, run step 2–4 on the copy inside
+~/Library/Audio/Plug-Ins/VST3 as well.
