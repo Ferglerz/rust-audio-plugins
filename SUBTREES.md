@@ -1,35 +1,69 @@
 # Subtree development
 
-`scd-rust/` is a Git subtree imported with full history from
-https://github.com/Ferglerz/scd-rust.git. Its Cargo workspace remains separate;
-run its Cargo commands from `scd-rust/`. It uses the shared `pleasant-ui/`
-directory in this repository.
+All plugins and the shared UI are Git subtrees with their full histories:
 
-Run these Git commands from the audio-plugins repository root, with a clean
-working tree. On a new clone, first register the remote:
+- `Damian Channel Strip/`: https://github.com/Ferglerz/Damian-Channel-Strip.git
+- `Flattery/`: https://github.com/Ferglerz/Flattery.git
+- `Tape Stop/`: https://github.com/Ferglerz/Tape-Stop.git
+- `pleasant-ui/`: https://github.com/Ferglerz/pleasant-ui.git
+- `scd-rust/`: https://github.com/Ferglerz/scd-rust.git
+
+A normal clone includes their tracked files; no submodule initialization is
+needed. Commit edits normally in audio-plugins, including coordinated changes
+across plugins and shared code.
+
+## Remote setup
+
+Remotes are local Git configuration. On a new clone, register them once:
 
 ```sh
+git remote add damian https://github.com/Ferglerz/Damian-Channel-Strip.git
+git remote add flattery https://github.com/Ferglerz/Flattery.git
+git remote add tape-stop https://github.com/Ferglerz/Tape-Stop.git
+git remote add pleasant-ui https://github.com/Ferglerz/pleasant-ui.git
 git remote add scd-rust https://github.com/Ferglerz/scd-rust.git
 ```
 
-Import changes from the standalone repository:
+## Two-way sync
+
+Run from the audio-plugins root with a clean working tree. Import upstream
+changes using the matching folder and remote:
 
 ```sh
+git subtree pull --prefix="Damian Channel Strip" damian main
+git subtree pull --prefix=Flattery flattery main
+git subtree pull --prefix="Tape Stop" tape-stop main
+git subtree pull --prefix=pleasant-ui pleasant-ui main
 git subtree pull --prefix=scd-rust scd-rust main
 ```
 
-Commit local edits normally in audio-plugins, then export the scd-rust commits:
+Export committed changes to an individual repository:
 
 ```sh
+git subtree push --prefix="Damian Channel Strip" damian main
+git subtree push --prefix=Flattery flattery main
+git subtree push --prefix="Tape Stop" tape-stop main
+git subtree push --prefix=pleasant-ui pleasant-ui main
 git subtree push --prefix=scd-rust scd-rust main
 ```
 
-To publish a feature branch instead, replace the final `main` with the desired
-remote branch name. Pull and resolve upstream changes before exporting if the
-remote has advanced. Do not force-push to bypass divergence.
+Run only the commands for repositories you intend to sync. Replace the final
+`main` on a push with a feature branch name to publish for review. Pull and
+resolve upstream changes before exporting if the remote has advanced; do not
+force-push to bypass divergence. Keep these full-history imports consistent by
+omitting `--squash`.
 
-A normal `git push origin` publishes audio-plugins only. Subtree pushes export
-only `scd-rust/`; changes to `pleasant-ui/` are not included. A standalone
-scd-rust checkout currently requires a sibling `pleasant-ui/` checkout.
+A normal `git push origin main` publishes audio-plugins only. Subtree pushes
+export only the selected folder and do not include changes to sibling folders.
+Publishing coordinated changes to separate repositories takes separate pushes.
 
-The other plugins and pleasant-ui remain submodules for now.
+## Cargo workspaces and shared code
+
+The original plugins and `pleasant-ui` use the root Cargo workspace.
+`scd-rust` retains its separate Cargo workspace; run its Cargo commands from
+`scd-rust/`.
+
+All plugins use the shared `pleasant-ui/` directory. Standalone plugin checkouts
+currently require a sibling `pleasant-ui/` checkout. Root Cargo dependency
+patches also remain part of the integrated build configuration; subtree export
+does not automatically include them in standalone plugin repositories.
