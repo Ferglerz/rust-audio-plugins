@@ -42,9 +42,9 @@ pub fn transform_color(c: Color, light: bool) -> Color {
     } else if c == MUTED {
         rgb(95, 105, 114)
     } else if c == GOLD {
-        rgb(145, 98, 24)
+        rgb(214, 148, 22)
     } else if c == TEAL {
-        rgb(21, 122, 104)
+        rgb(12, 154, 128)
     } else if c.r.max(c.g).max(c.b) < 0.35 {
         Color {
             r: 0.90 - c.r * 0.35,

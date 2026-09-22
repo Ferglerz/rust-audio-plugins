@@ -6,6 +6,15 @@ pub fn linear_to_db(lin: f64) -> f64 {
     20.0 * lin.max(1e-9).log10()
 }
 
+/// Damian-style peaking influence in 0..=1. Independent of neighboring bands.
+pub fn bell_influence(freq: f64, center_hz: f64, q: f64) -> f64 {
+    let center = center_hz.max(20.0);
+    let q = q.clamp(0.15, 18.0);
+    let w = freq.max(1e-6) / center;
+    let denom = 1.0 + q * q * (w - 1.0 / w).powi(2);
+    (1.0 / denom.sqrt()).clamp(0.0, 1.0)
+}
+
 /// Standard log frequency coordinate mapping (e.g. 20 Hz to 20 kHz)
 pub fn freq_x(freq: f64, x: f32, w: f32, min_hz: f64, max_hz: f64) -> f32 {
     let norm = (freq.max(min_hz).ln() - min_hz.ln()) / (max_hz.ln() - min_hz.ln());
