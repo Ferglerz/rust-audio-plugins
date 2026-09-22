@@ -1,0 +1,29 @@
+// Surround FFT Flattener - STFT processing (analysis/synthesis)
+// Main orchestration file - helper functions moved to focused modules
+
+@init
+
+// Main STFT processing function - orchestrates all stages
+function sff_process_stereo_frame() (
+  // Stage 1: Build spectrum from ring buffer
+  sff_build_spectrum_from_ring();
+  
+  // Stage 2: Perform FFT analysis
+  sff_analyze_spectrum();
+  
+  // Stage 3: Compute magnitude caches
+  sff_compute_magnitude_caches();
+  
+  // Stage 4: Apply RMS smoothing if enabled
+  sff_apply_magnitude_smoothing();
+  
+  // Stage 5: Compute gain deltas
+  sff_compute_gain_deltas();
+  
+  // Stage 6: Apply gains to spectra
+  sff_apply_gains_to_spectra();
+  
+  // Note: No IFFT/OLA stage here.
+  // Flattery uses FFT only for analysis; audio rendering is filter-bank based.
+);
+

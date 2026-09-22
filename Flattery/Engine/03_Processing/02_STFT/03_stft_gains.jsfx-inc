@@ -1,0 +1,95 @@
+// Surround FFT Flattener - STFT Gain Application
+
+@init
+
+// Helper: Apply gain to spec bin (positive and negative frequencies)
+// For real signals: DC (k=0) and Nyquist (k=N/2) are real-only, others have negative mirror
+// Uses global fft_size directly instead of passing as parameter
+function sff_apply_gain_to_spec_bin(spec_base, k, g_lin) local(kn) (
+  sff_spec_set_re(spec_base, k, sff_spec_re(spec_base, k) * g_lin);
+  sff_spec_set_im(spec_base, k, sff_spec_im(spec_base, k) * g_lin);
+  // Mirror to negative frequency bin (for k > 0 and k < N/2)
+  // DC (k=0) and Nyquist (k=N/2) don't have negative frequency mirrors
+  (k > 0 && k < pos_bin_count) ? (
+    kn = (fft_size - k)|0;
+    sff_spec_set_re(spec_base, kn, sff_spec_re(spec_base, kn) * g_lin);
+    sff_spec_set_im(spec_base, kn, sff_spec_im(spec_base, kn) * g_lin);
+  ) : 0;
+);
+
+// Helper: Compute effective strength for a bin based on delta sign
+// Uses boost strength for positive deltas, cut strength for negative deltas
+function sff_compute_effective_strength(bin, delta_db) (
+  delta_db > 0 ? strength_boost_internal : strength_cut_internal;
+);
+
+// Unified gain application function
+// is_linked: 0 = process single channel with stereo link blending
+//            1 = process both channels with identical gains (full link)
+// When is_linked=0: uses spec_base, gain_db_base, delta_db_base, mag_base, is_right
+// When is_linked=1: uses sff_spec_L/R, sff_gain_db_link, sff_delta_db_link, averaged magnitudes
+function sff_apply_gains_core(spec_base, gain_db_base, delta_db_base, mag_base, is_right, is_linked) 
+  local(k, target_gain_db, smooth_gain_db, g_lin, link, ind_delta, link_delta, delta, str_eff, active, mag_val) (
+  link = stereo_link * 0.01;
+
+  is_linked ? memset(sff_display_gain_db, 0, sff_display_bin_count);
+
+  k = 0;
+  loop(pos_bin_count,
+    is_linked ? (
+      // Linked mode: use averaged magnitudes and link delta only
+      mag_val = sff_stereo_avg(magL_base[k], magR_base[k]);
+      delta = sff_delta_db_link[k];
+    ) : (
+      // Individual mode: blend individual and link deltas
+      mag_val = mag_base[k];
+      ind_delta = delta_db_base[k];
+      link_delta = sff_delta_db_link[k];
+      delta = ind_delta * (1 - link) + link_delta * link;
+    );
+    
+    active = sff_bin_is_active(k, mag_val);
+    str_eff = sff_compute_effective_strength(k, delta);
+
+    target_gain_db = active ? sff_clamp_gain(delta * str_eff, max_boost_db, max_cut_db) : 0;
+    smooth_gain_db = sff_smooth_gain_db(is_linked ? sff_gain_db_link : gain_db_base, k, target_gain_db);
+    
+    abs(smooth_gain_db) >= 0.001 ? (
+      g_lin = sff_db_to_linear(smooth_gain_db);
+      is_linked ? (
+        // Apply to both spectra
+        sff_apply_gain_to_spec_bin(sff_spec_L, k, g_lin);
+        sff_apply_gain_to_spec_bin(sff_spec_R, k, g_lin);
+      ) : (
+        // Apply to single spectrum
+        sff_apply_gain_to_spec_bin(spec_base, k, g_lin);
+      );
+    ) : 0;
+    sff_display_write_gain_db(k, smooth_gain_db, is_linked ? 0 : is_right);
+
+    k += 1;
+  );
+);
+
+// Apply gains to a single spectrum (wrapper for backward compatibility)
+function sff_apply_gains_to_spec(spec_base, gain_db_base, delta_db_base, mag_base, is_right) (
+  sff_apply_gains_core(spec_base, gain_db_base, delta_db_base, mag_base, is_right, 0);
+);
+
+// Apply linked gains to both spectra (wrapper for backward compatibility)
+function sff_apply_linked_gains_to_specs() (
+  sff_apply_gains_core(0, 0, 0, 0, 0, 1);
+);
+
+// Apply gains to spectra (uses cached deltas + smoothing every hop)
+function sff_apply_gains_to_spectra() (
+  stereo_link >= 99.5 ? (
+    sff_apply_linked_gains_to_specs();
+  ) : (
+    // Clear display gain accumulator each hop (we overwrite then average with R)
+    memset(sff_display_gain_db, 0, sff_display_bin_count);
+    sff_apply_gains_to_spec(sff_spec_L, sff_gain_db_L, sff_delta_db_L, magL_base, 0);
+    sff_apply_gains_to_spec(sff_spec_R, sff_gain_db_R, sff_delta_db_R, magR_base, 1);
+  );
+);
+

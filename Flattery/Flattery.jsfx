@@ -1,0 +1,72 @@
+desc:Flattery (WIP)
+// Frequency-domain "leveling" based on adjacent FFT bins.
+// Pre (feedforward) analysis only. Modular includes live under this folder.
+// This version uses the Flattery Engine library
+
+options:gfx_hz=30
+
+// --- User parameters  ---
+// Core
+slider1:flattery_fft_size_sel=2<0,6,1{128,256,512,1024,2048,4096,8192}>FFT Size
+slider2:flattery_strength_boost=35<0,200,1>Strength Boost (%)
+slider3:flattery_strength_cut=35<0,200,1>Strength Cut (%)
+slider4:flattery_max_boost_db=12<0,48,0.1>Max Boost (dB)
+slider5:flattery_max_cut_db=12<0,48,0.1>Max Cut (dB)
+slider6:flattery_output_gain_db=0<-12,12,0.01>Output Gain (dB)
+
+// Processing mode
+slider7:flattery_ms_mode=1<0,1,1{LR,MS}>Process Domain
+slider8:flattery_stereo_link=0<0,100,1>Stereo Link (%)
+slider9:flattery_neighbor_radius=1<1,12,1>-Radius (bins)
+slider11:flattery_amplify_mode=0<0,1,1{Reduce,Amplify}>Difference Mode
+
+// Timing
+slider12:flattery_attack_ms=2<0.1,200,0.1>Attack (ms)
+slider13:flattery_release_ms=30<1,2000,1>Release (ms)
+slider14:flattery_input_rms_ms=0<0,10,0.1>Input RMS (ms)
+
+// Operating range + cut band
+slider15:flattery_min_operate_db=-120<-120,0,0.1>Operate Min (dB)
+slider16:flattery_max_operate_db=0<-120,0,0.1>Operate Max (dB)
+slider17:flattery_low_cut_hz=20<10,20000,1>-Low Cut (Hz)
+slider18:flattery_high_cut_hz=20000<20,20000,1>-High Cut (Hz)
+
+// Tilt filter
+slider19:flattery_tilt=0<-100,100,1>-Tilt (%)
+slider20:flattery_tilt_freq_hz=1800<20,20000,1>-Tilt Frequency (Hz)
+
+// --- Import Flattery Engine Library ---
+// Single entry point for all engine modules (parameters, FFT, processing, API)
+import Engine/flattery_engine.jsfx-inc
+
+// --- Import UI Modules ---
+import UI/01_ui_constants.jsfx-inc
+import UI/02_ui_coordinates.jsfx-inc
+import UI/03_ui_rendering_helpers.jsfx-inc
+import UI/04_ui_graph_rendering.jsfx-inc
+import UI/05_ui_interaction.jsfx-inc
+import UI/06_ui_orchestration.jsfx-inc
+import UI/07_ui.jsfx-inc
+import UI/08_ui_api.jsfx-inc
+
+@init
+  // Initialize engine from sliders (handles allocation and setup automatically)
+  flattery_init_from_sliders();
+
+@slider
+  // Update engine from sliders (handles parameter sync automatically)
+  flattery_update_from_sliders();
+
+@sample
+  // Process audio through engine
+  flattery_process_sample();
+
+@gfx 900 260
+  // Check if UI changed a slider and update engine immediately
+  sff_ui_slider_changed ? (
+    flattery_update_from_sliders();
+    sff_ui_slider_changed = 0;
+  );
+  // Render UI using engine parameters
+  flattery_render_ui(0);  // 0 = use current engine parameters
+
