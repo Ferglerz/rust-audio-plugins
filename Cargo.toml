@@ -8,6 +8,7 @@ members = [
     "Tape Stop",
     "Tape Stop/xtask",
 ]
+exclude = ["scd-rust"]
 resolver = "2"
 
 [patch."https://github.com/RustAudio/baseview.git"]
