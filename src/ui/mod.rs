@@ -1,5 +1,5 @@
 use crate::{
-    dsp::s_curve,
+    dsp::{inv_s_curve, s_curve},
     params::{MidiAssign, TapeStopParams},
     telemetry::TapeStopTelemetry,
 };
@@ -33,8 +33,8 @@ fn prefs() -> &'static AppearanceStore {
     PREFS.get_or_init(|| AppearanceStore::new("Tape Stop"))
 }
 
-const UI_W: f32 = 1040.0;
-const UI_H: f32 = 520.0;
+const UI_W: f32 = 1112.0;
+const UI_H: f32 = 438.0;
 const HEADER_HEIGHT: f32 = 70.0;
 
 const THEME_BUTTON: (f32, f32, f32, f32) = (866.0, 22.0, 72.0, 26.0);
@@ -56,7 +56,7 @@ const DROP_TIME_SLIDER: (f32, f32, f32, f32) = (
 );
 const DROP_READOUT_W: f32 = 46.0 + DROP_SLIDER_GAP + DROP_SLIDER_W;
 const DROP_READOUT_H: f32 = 36.0;
-const DROP_CHROME: Color = rgb(18, 22, 28);
+const DROP_CHROME: Color = PANEL;
 const AXIS_LABEL_Y: f32 = GRAPH_Y + GRAPH_H + 32.0;
 const DROP_READOUT_TEXT_Y: f32 = DROP_READOUT_H * 0.5 + 5.0;
 const DROP_TIME_READOUT: (f32, f32, f32, f32) = (
@@ -75,36 +75,111 @@ const STOP_BUTTON: (f32, f32, f32, f32) = (
     STOP_SIZE,
 );
 
-const MIDI_CTRL_H: f32 = 36.0;
-const MIDI_LABEL: (f32, f32, f32, f32) = (
-    STOP_BUTTON.0 + STOP_BUTTON.2 + 12.0,
-    STOP_BUTTON.1 + (STOP_SIZE - MIDI_CTRL_H) * 0.5,
-    56.0,
-    MIDI_CTRL_H,
-);
-const MIDI_FIELD: (f32, f32, f32, f32) =
-    (MIDI_LABEL.0 + MIDI_LABEL.2, MIDI_LABEL.1, 64.0, MIDI_CTRL_H);
+const MIDI_SLOT_W: f32 = 136.0;
 
-const CONTENT_W: f32 = GRAPH_W + DROP_SLIDER_GAP + DROP_SLIDER_W;
-const ROW_H: f32 = 52.0;
-const ROW_GAP: f32 = 12.0;
-const ROW_Y: f32 = DROP_TIME_READOUT.1 + DROP_READOUT_H + 16.0;
-const AUTO_RESTART_BUTTON: (f32, f32, f32, f32) = (GRAPH_X, ROW_Y, 140.0, ROW_H);
-const METER_W: f32 = 710.0 * 0.35;
-const METER_THRESH: (f32, f32, f32, f32) = (
-    AUTO_RESTART_BUTTON.0 + AUTO_RESTART_BUTTON.2 + ROW_GAP,
-    ROW_Y,
-    METER_W,
-    ROW_H,
-);
-const CTRL_REST_X: f32 = METER_THRESH.0 + METER_THRESH.2 + ROW_GAP;
-const CTRL_REST_W: f32 = GRAPH_X + CONTENT_W - CTRL_REST_X;
-const CTRL_W: f32 = (CTRL_REST_W - ROW_GAP) * 0.5;
-const XFADE_SLIDER: (f32, f32, f32, f32) = (CTRL_REST_X, ROW_Y, CTRL_W, ROW_H);
-const STEREO_DIV_SLIDER: (f32, f32, f32, f32) =
-    (CTRL_REST_X + CTRL_W + ROW_GAP, ROW_Y, CTRL_W, ROW_H);
+const TRIGGER_GAP: f32 = 10.0;
+const TRIGGER_W: f32 = 80.0;
+const TRIGGER_BYPASS: f32 = 22.0;
+const COG_SIZE: f32 = 22.0;
+const AXIS_GAP: f32 = 8.0;
+const AXIS_LABEL_W: f32 = 70.0;
+const AXIS_VALUE_W: f32 = 56.0;
 
 const CURVE_NODE_HIT: f32 = 16.0;
+
+fn trigger_column() -> (f32, f32, f32, f32) {
+    (
+        DROP_TIME_SLIDER.0 + DROP_TIME_SLIDER.2 + TRIGGER_GAP,
+        DROP_TIME_SLIDER.1,
+        DROP_SLIDER_W,
+        DROP_TIME_SLIDER.3,
+    )
+}
+
+fn trigger_title_rect() -> (f32, f32, f32, f32) {
+    let column = trigger_column();
+    (column.0, column.1 - 18.0, TRIGGER_W, 16.0)
+}
+
+fn trigger_bypass_rect() -> (f32, f32, f32, f32) {
+    let column = trigger_column();
+    (
+        column.0 + TRIGGER_W - 6.0 - TRIGGER_BYPASS,
+        column.1 + 6.0,
+        TRIGGER_BYPASS,
+        TRIGGER_BYPASS,
+    )
+}
+
+fn trigger_value_rect() -> (f32, f32, f32, f32) {
+    let column = trigger_column();
+    (column.0, DROP_TIME_READOUT.1, TRIGGER_W, DROP_TIME_READOUT.3)
+}
+
+fn trigger_bar_rect() -> (f32, f32, f32, f32) {
+    let column = trigger_column();
+    (
+        column.0 + 10.0,
+        column.1 + 10.0,
+        column.2 - 20.0,
+        column.3 - 20.0,
+    )
+}
+
+fn midi_slot() -> (f32, f32, f32, f32) {
+    (GRAPH_X, DROP_TIME_READOUT.1, MIDI_SLOT_W, DROP_READOUT_H)
+}
+
+fn midi_label_rect() -> (f32, f32, f32, f32) {
+    let slot = midi_slot();
+    (slot.0, slot.1, 52.0, slot.3)
+}
+
+fn midi_value_rect() -> (f32, f32, f32, f32) {
+    let slot = midi_slot();
+    let label = midi_label_rect();
+    (label.0 + label.2, slot.1, slot.2 - label.2, slot.3)
+}
+
+fn cog_rect() -> (f32, f32, f32, f32) {
+    let readout = DROP_TIME_READOUT;
+    (
+        readout.0 - AXIS_GAP - COG_SIZE,
+        readout.1 + (readout.3 - COG_SIZE) * 0.5,
+        COG_SIZE,
+        COG_SIZE,
+    )
+}
+
+fn axis_slot(index: usize) -> (f32, f32, f32, f32) {
+    let cog = cog_rect();
+    let midi = midi_slot();
+    let x0 = midi.0 + midi.2 + AXIS_GAP;
+    let total = cog.0 - AXIS_GAP - x0;
+    let width = (total - AXIS_GAP * 2.0) / 3.0;
+    (
+        x0 + index as f32 * (width + AXIS_GAP),
+        DROP_TIME_READOUT.1,
+        width,
+        DROP_READOUT_H,
+    )
+}
+
+fn axis_bar_rect(slot: (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
+    let x = slot.0 + 8.0 + AXIS_LABEL_W;
+    let width = (slot.2 - 16.0 - AXIS_LABEL_W - AXIS_VALUE_W).max(8.0);
+    let height = 8.0;
+    (x, slot.1 + (slot.3 - height) * 0.5, width, height)
+}
+
+fn axis_value_rect(slot: (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
+    (
+        slot.0 + slot.2 - 8.0 - AXIS_VALUE_W,
+        slot.1,
+        AXIS_VALUE_W,
+        slot.3,
+    )
+}
 
 pub fn format_ms(seconds: f32) -> String {
     format!("{:.0}ms", (seconds * 1000.0).round())
@@ -124,6 +199,7 @@ pub fn snap_drop_time(val: f32) -> f32 {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum KnobId {
     DropTime,
+    Return,
     Xfade,
     Curve,
     StereoDiv,
@@ -160,6 +236,8 @@ pub struct TapeStopView {
     hover: Option<(f32, f32)>,
     curve_hover_anim: Cell<f32>,
     bypass_anim: ButtonAnim,
+    auto_restart_anim: ButtonAnim,
+    show_axis_controls: bool,
 }
 
 impl TapeStopView {
@@ -174,10 +252,6 @@ impl TapeStopView {
         }
     }
 
-    fn midi_value_rect() -> (f32, f32, f32, f32) {
-        MIDI_FIELD
-    }
-
     fn start_edit(
         &mut self,
         cx: &mut EventContext,
@@ -189,9 +263,14 @@ impl TapeStopView {
         self.edit = Some(ValueEdit::new(id, rect, val_str));
     }
 
+    fn idle_hover(&self) -> Option<(f32, f32)> {
+        pleasant_ui::idle_hover(self.hover, self.drag.is_some())
+    }
+
     fn param(&self, id: KnobId) -> &FloatParam {
         match id {
             KnobId::DropTime => &self.params.drop_time,
+            KnobId::Return => &self.params.return_sec,
             KnobId::Xfade => &self.params.xfade_ms,
             KnobId::Curve => &self.params.drop_curve,
             KnobId::StereoDiv => &self.params.stereo_div,
@@ -203,15 +282,12 @@ impl TapeStopView {
     fn slider_rect(id: KnobId) -> (f32, f32, f32, f32) {
         match id {
             KnobId::DropTime => DROP_TIME_SLIDER,
-            KnobId::Xfade => XFADE_SLIDER,
-            KnobId::StereoDiv => STEREO_DIV_SLIDER,
-            KnobId::RestartThresh => METER_THRESH,
+            KnobId::Return => axis_slot(0),
+            KnobId::Xfade => axis_slot(1),
+            KnobId::StereoDiv => axis_slot(2),
+            KnobId::RestartThresh => trigger_column(),
             _ => (0.0, 0.0, 0.0, 0.0),
         }
-    }
-
-    fn slider_bar_rect(r: (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
-        (r.0 + 12.0, r.1 + 28.0, r.2 - 24.0, 16.0)
     }
 
     fn drop_bar_rect() -> (f32, f32, f32, f32) {
@@ -219,15 +295,11 @@ impl TapeStopView {
         (r.0 + 10.0, r.1 + 10.0, r.2 - 20.0, r.3 - 20.0)
     }
 
-    fn slider_value_rect(r: (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
-        (r.0 + r.2 - 80.0, r.1 + 4.0, 72.0, 20.0)
-    }
-
     fn thresh_handle_rect(&self) -> (f32, f32, f32, f32) {
-        let bar = Self::slider_bar_rect(METER_THRESH);
+        let bar = trigger_bar_rect();
         let t_norm = self.get_knob_norm(KnobId::RestartThresh);
-        let thresh_x = bar.0 + bar.2 * t_norm.clamp(0.0, 1.0);
-        (thresh_x - 8.0, bar.1 - 5.0, 16.0, bar.3 + 10.0)
+        let y = bar.1 + bar.3 * (1.0 - t_norm.clamp(0.0, 1.0));
+        (bar.0 - 6.0, y - 4.0, bar.2 + 12.0, 8.0)
     }
 
     fn inside(px: f32, py: f32, rect: (f32, f32, f32, f32)) -> bool {
@@ -236,6 +308,12 @@ impl TapeStopView {
 
     fn curve_node_pos() -> (f32, f32) {
         (GRAPH_X + GRAPH_W * 0.5, GRAPH_Y + GRAPH_H * 0.5)
+    }
+
+    fn live_playhead(speed: f32, curve_exp: f32) -> (f32, f32) {
+        let y_n = 1.0 - speed.clamp(0.0, 1.0);
+        let t = inv_s_curve(y_n, curve_exp);
+        (GRAPH_X + t * GRAPH_W, GRAPH_Y + y_n * GRAPH_H)
     }
 
     fn hit_curve_node(px: f32, py: f32) -> bool {
@@ -304,6 +382,11 @@ impl TapeStopView {
                 format_ms(self.params.drop_time.value()),
                 COLORS[4],
             ),
+            KnobId::Return => (
+                "RETURN",
+                format_ms(self.params.return_sec.value()),
+                COLORS[0],
+            ),
             KnobId::Xfade => (
                 "CROSSFADE",
                 format!("{:.1}ms", self.params.xfade_ms.value()),
@@ -343,6 +426,7 @@ impl TapeStopView {
             let text = edit.text;
             let parsed = match target {
                 KnobId::DropTime => parse_number_with_units(&text, &[("ms", 1.0), ("s", 1000.0)]),
+                KnobId::Return => parse_number_with_units(&text, &[("ms", 1.0), ("s", 1000.0)]),
                 KnobId::Xfade => parse_number_with_units(&text, &[("ms", 1.0), ("s", 1000.0)]),
                 KnobId::StereoDiv => parse_number_with_units(&text, &[("%", 1.0)]),
                 KnobId::RestartThresh => parse_number_with_units(&text, &[("db", 1.0)]),
@@ -362,6 +446,9 @@ impl TapeStopView {
                     let snapped = snap_drop_time(v as f32 / 1000.0);
                     let norm = self.params.drop_time.preview_normalized(snapped);
                     self.emit_param_norm(cx, self.params.drop_time.as_ptr(), norm);
+                } else if target == KnobId::Return {
+                    let norm = self.params.return_sec.preview_normalized(v as f32 / 1000.0);
+                    self.emit_param_norm(cx, self.params.return_sec.as_ptr(), norm);
                 } else {
                     let p = self.param(target);
                     let norm = p.preview_normalized(v as f32);
@@ -409,7 +496,7 @@ impl TapeStopView {
         for i in 0..=5 {
             let x = gx + gw * (i as f32 / 5.0);
             d.line(x, gy, x, gy + gh, LINE, 1.0);
-            if i < 5 {
+            if i < 5 && !self.show_axis_controls {
                 let t = drop_time * i as f32 / 5.0;
                 d.text_centered(x, AXIS_LABEL_Y, &format_ms(t), 10.5, MUTED);
             }
@@ -444,7 +531,9 @@ impl TapeStopView {
         d.poly(&curve, curve_color, 2.0);
 
         let (nx, ny) = Self::curve_node_pos();
-        let node_hovered = self.hover.is_some_and(|(x, y)| Self::hit_curve_node(x, y))
+        let node_hovered = self
+            .idle_hover()
+            .is_some_and(|(x, y)| Self::hit_curve_node(x, y))
             || matches!(self.drag, Some(DragState::Curve { .. }));
         let target = if node_hovered { 1.0 } else { 0.0 };
         let previous = self.curve_hover_anim.get();
@@ -469,13 +558,11 @@ impl TapeStopView {
         }
 
         if braking || speed_l < 0.99 || speed_r < 0.99 {
-            let live_x_l = gx + prog_l.clamp(0.0, 1.0) * gw;
-            let y_l = gy + (1.0 - speed_l.clamp(0.0, 1.0)) * gh;
+            let (live_x_l, y_l) = Self::live_playhead(speed_l, curve_exp);
             d.circle(live_x_l, y_l, 6.0, TEAL, false);
             d.circle(live_x_l, y_l, 3.0, TEXT, true);
             if (speed_l - speed_r).abs() > 0.01 || (prog_l - prog_r).abs() > 0.01 {
-                let live_x_r = gx + prog_r.clamp(0.0, 1.0) * gw;
-                let y_r = gy + (1.0 - speed_r.clamp(0.0, 1.0)) * gh;
+                let (live_x_r, y_r) = Self::live_playhead(speed_r, curve_exp);
                 d.circle(live_x_r, y_r, 6.0, COLORS[4], false);
                 d.circle(live_x_r, y_r, 3.0, TEXT, true);
             }
@@ -504,6 +591,7 @@ impl TapeStopView {
         let bar = Self::drop_bar_rect();
 
         d.fill_rounded_poly(&Self::drop_l_points(), 8.0, DROP_CHROME);
+        d.stroke_rounded_poly(&Self::drop_l_points(), 8.0, LINE, 1.0);
         d.rect(bar.0, bar.1, bar.2, bar.3, LINE);
         let fill_h = bar.3 * n.clamp(0.0, 1.0);
         if fill_h > 0.5 {
@@ -526,9 +614,201 @@ impl TapeStopView {
             color,
         );
         if self.edit.is_none() {
-            if let Some((hx, hy)) = self.hover {
+            if let Some((hx, hy)) = self.idle_hover() {
                 if Self::inside(hx, hy, readout) {
                     d.value_underline(readout, color);
+                }
+            }
+        }
+    }
+
+    fn draw_audio_trigger(&self, d: &mut Draw) {
+        let column = trigger_column();
+        let auto_on = self.params.auto_restart.value();
+        let flash = self.telemetry.transient_flash.load(Ordering::Relaxed);
+        let (_, t_val, t_color) = self.knob_info(KnobId::RestartThresh);
+        d.rounded_rect(column.0, column.1, column.2, column.3, 8.0, DROP_CHROME);
+        let outline = if auto_on && flash > 0.05 {
+            COLORS[5]
+        } else if auto_on {
+            t_color
+        } else {
+            LINE
+        };
+        d.outline_rounded(column.0, column.1, column.2, column.3, 8.0, outline, 1.0);
+
+        let title = trigger_title_rect();
+        let title_color = if !auto_on {
+            MUTED
+        } else if flash > 0.05 {
+            COLORS[5]
+        } else {
+            t_color
+        };
+        d.text(title.0, title.1 + 12.0, "AUTO TRIGGER", 10.0, title_color);
+
+        let bypass_r = trigger_bypass_rect();
+        let bypass_hovered = self
+            .idle_hover()
+            .is_some_and(|(hx, hy)| Self::inside(hx, hy, bypass_r));
+        let bypass_click = self.auto_restart_anim.step();
+        d.bypass_button(bypass_r, !auto_on, t_color, bypass_hovered, bypass_click);
+
+        let bar = trigger_bar_rect();
+        d.rect(bar.0, bar.1, bar.2, bar.3, LINE);
+        let peak_n = Self::peak_norm(self.telemetry.input_peak.load(Ordering::Relaxed));
+        if auto_on && peak_n > 0.01 {
+            let fill_h = bar.3 * peak_n;
+            d.rect(bar.0, bar.1 + bar.3 - fill_h, bar.2, fill_h, TEAL);
+        }
+
+        let handle = self.thresh_handle_rect();
+        let handle_hovered = self.hover_thresh.get()
+            || matches!(
+                self.drag,
+                Some(DragState::Slider {
+                    id: KnobId::RestartThresh,
+                    ..
+                })
+            );
+        let handle_col = if !auto_on {
+            MUTED
+        } else if handle_hovered {
+            TEXT
+        } else {
+            t_color
+        };
+        d.rect(handle.0, handle.1, handle.2, handle.3, handle_col);
+        d.grip_lines(handle, handle_col, false);
+
+        let val_r = trigger_value_rect();
+        let value_color = if auto_on { t_color } else { MUTED };
+        if let Some(edit) = self
+            .edit
+            .as_ref()
+            .filter(|edit| edit.target == KnobId::RestartThresh)
+        {
+            d.value_edit(edit, value_color);
+        } else {
+            d.text_centered(
+                val_r.0 + val_r.2 * 0.5,
+                val_r.1 + val_r.3 * 0.5 + 4.0,
+                &t_val,
+                11.0,
+                value_color,
+            );
+            if auto_on && self.edit.is_none() {
+                if let Some((hx, hy)) = self.idle_hover() {
+                    if Self::inside(hx, hy, val_r) {
+                        d.value_underline(val_r, t_color);
+                    }
+                }
+            }
+        }
+    }
+
+    fn draw_midi_slot(&self, d: &mut Draw) {
+        let slot = midi_slot();
+        let label_r = midi_label_rect();
+        let val_r = midi_value_rect();
+        let midi_id = self.midi_number_id();
+        let (midi_label, midi_val, midi_color) = self.knob_info(midi_id);
+        d.rounded_rect(slot.0, slot.1, slot.2, slot.3, 8.0, DROP_CHROME);
+        d.outline_rounded(slot.0, slot.1, slot.2, slot.3, 8.0, LINE, 1.0);
+        let label_hover = self
+            .idle_hover()
+            .is_some_and(|(hx, hy)| Self::inside(hx, hy, label_r));
+        d.text(
+            slot.0 + 10.0,
+            slot.1 + slot.3 * 0.5 + 4.0,
+            midi_label,
+            10.0,
+            if label_hover { GOLD } else { MUTED },
+        );
+        if let Some(edit) = self.edit.as_ref().filter(|edit| edit.target == midi_id) {
+            d.value_edit(edit, midi_color);
+        } else {
+            d.text_centered(
+                val_r.0 + val_r.2 * 0.5,
+                val_r.1 + val_r.3 * 0.5 + 4.0,
+                &midi_val,
+                11.0,
+                midi_color,
+            );
+            if self.edit.is_none() {
+                if let Some((hx, hy)) = self.idle_hover() {
+                    if Self::inside(hx, hy, val_r) {
+                        d.value_underline(val_r, midi_color);
+                    }
+                }
+            }
+        }
+    }
+
+    fn draw_axis_cog(&self, d: &mut Draw) {
+        let cog = cog_rect();
+        let hovered = self
+            .idle_hover()
+            .is_some_and(|(hx, hy)| Self::inside(hx, hy, cog));
+        let color = if self.show_axis_controls || hovered {
+            GOLD
+        } else {
+            MUTED
+        };
+        d.cog_icon(cog.0 + cog.2 * 0.5, cog.1 + cog.3 * 0.5, color);
+    }
+
+    fn draw_axis_slider(&self, d: &mut Draw, id: KnobId) {
+        let slot = Self::slider_rect(id);
+        let (label, val_str, color) = self.knob_info(id);
+        let n = self.get_knob_norm(id);
+        let bar = axis_bar_rect(slot);
+        let val_r = axis_value_rect(slot);
+        d.rounded_rect(slot.0, slot.1, slot.2, slot.3, 8.0, DROP_CHROME);
+        d.outline_rounded(slot.0, slot.1, slot.2, slot.3, 8.0, LINE, 1.0);
+        d.text(
+            slot.0 + 10.0,
+            slot.1 + slot.3 * 0.5 + 4.0,
+            label,
+            10.0,
+            MUTED,
+        );
+        d.rect(bar.0, bar.1, bar.2, bar.3, LINE);
+        if id == KnobId::StereoDiv {
+            let mid = bar.0 + bar.2 * 0.5;
+            let x = bar.0 + bar.2 * n.clamp(0.0, 1.0);
+            let (fill_x, fill_w) = if x >= mid {
+                (mid, x - mid)
+            } else {
+                (x, mid - x)
+            };
+            if fill_w > 0.5 {
+                d.rect(fill_x, bar.1, fill_w, bar.3, color);
+            }
+        } else {
+            let fill_w = bar.2 * n.clamp(0.0, 1.0);
+            if fill_w > 0.5 {
+                d.rect(bar.0, bar.1, fill_w, bar.3, color);
+            }
+        }
+        let thumb_x = bar.0 + bar.2 * n.clamp(0.0, 1.0);
+        d.rect(thumb_x - 3.0, bar.1 - 3.0, 6.0, bar.3 + 6.0, color);
+
+        if let Some(edit) = self.edit.as_ref().filter(|edit| edit.target == id) {
+            d.value_edit(edit, color);
+        } else {
+            d.text_centered(
+                val_r.0 + val_r.2 * 0.5,
+                val_r.1 + val_r.3 * 0.5 + 4.0,
+                &val_str,
+                11.0,
+                color,
+            );
+            if self.edit.is_none() {
+                if let Some((hx, hy)) = self.idle_hover() {
+                    if Self::inside(hx, hy, val_r) {
+                        d.value_underline(val_r, color);
+                    }
                 }
             }
         }
@@ -637,32 +917,20 @@ impl View for TapeStopView {
                         return;
                     }
 
-                    if Self::inside(mouse_x, mouse_y, AUTO_RESTART_BUTTON) {
+                    if Self::inside(mouse_x, mouse_y, cog_rect()) {
+                        self.show_axis_controls = !self.show_axis_controls;
+                        cx.needs_redraw();
+                        return;
+                    }
+
+                    if Self::inside(mouse_x, mouse_y, trigger_bypass_rect()) {
                         let next = if self.params.auto_restart.value() {
                             0.0
                         } else {
                             1.0
                         };
                         self.emit_param_norm(cx, self.params.auto_restart.as_ptr(), next);
-                        cx.needs_redraw();
-                        return;
-                    }
-
-                    if Self::inside(mouse_x, mouse_y, MIDI_LABEL) {
-                        let next = match self.midi_assign() {
-                            MidiAssign::Cc => 1.0,
-                            MidiAssign::Note => 0.0,
-                        };
-                        self.emit_param_norm(cx, self.params.midi_assign.as_ptr(), next);
-                        cx.needs_redraw();
-                        return;
-                    }
-
-                    let midi_val_r = Self::midi_value_rect();
-                    if Self::inside(mouse_x, mouse_y, midi_val_r) {
-                        let id = self.midi_number_id();
-                        let (_, val_str, _) = self.knob_info(id);
-                        self.start_edit(cx, id, midi_val_r, val_str);
+                        self.auto_restart_anim.trigger_click();
                         cx.needs_redraw();
                         return;
                     }
@@ -689,30 +957,70 @@ impl View for TapeStopView {
                         return;
                     }
 
-                    for &id in &[KnobId::Xfade, KnobId::StereoDiv, KnobId::RestartThresh] {
-                        if !self.knob_enabled(id) {
-                            continue;
-                        }
-                        let r = Self::slider_rect(id);
-                        let val_r = Self::slider_value_rect(r);
-                        let bar_r = Self::slider_bar_rect(r);
-
-                        if Self::inside(mouse_x, mouse_y, val_r) {
-                            let (_, val_str, _) = self.knob_info(id);
-                            self.start_edit(cx, id, val_r, val_str);
+                    if self.show_axis_controls {
+                        if Self::inside(mouse_x, mouse_y, midi_label_rect()) {
+                            let next = match self.midi_assign() {
+                                MidiAssign::Cc => 1.0,
+                                MidiAssign::Note => 0.0,
+                            };
+                            self.emit_param_norm(cx, self.params.midi_assign.as_ptr(), next);
                             cx.needs_redraw();
                             return;
                         }
+                        if Self::inside(mouse_x, mouse_y, midi_value_rect()) {
+                            let id = self.midi_number_id();
+                            let (_, val_str, _) = self.knob_info(id);
+                            self.start_edit(cx, id, midi_value_rect(), val_str);
+                            cx.needs_redraw();
+                            return;
+                        }
+                        for &id in &[KnobId::Return, KnobId::Xfade, KnobId::StereoDiv] {
+                            let r = Self::slider_rect(id);
+                            let val_r = axis_value_rect(r);
+                            let bar_r = axis_bar_rect(r);
+                            if Self::inside(mouse_x, mouse_y, val_r) {
+                                let (_, val_str, _) = self.knob_info(id);
+                                self.start_edit(cx, id, val_r, val_str);
+                                cx.needs_redraw();
+                                return;
+                            }
+                            if Self::inside(mouse_x, mouse_y, r) {
+                                let new_norm = ((mouse_x - bar_r.0) / bar_r.2).clamp(0.0, 1.0);
+                                self.emit_knob_norm(cx, id, new_norm);
+                                self.drag = Some(DragState::Slider {
+                                    id,
+                                    start_x: mouse_x,
+                                    start_y: mouse_y,
+                                    start_norm: new_norm,
+                                    vertical: false,
+                                });
+                                cx.needs_redraw();
+                                return;
+                            }
+                        }
+                    }
 
-                        if Self::inside(mouse_x, mouse_y, r) {
-                            let new_norm = ((mouse_x - bar_r.0) / bar_r.2).clamp(0.0, 1.0);
-                            self.emit_knob_norm(cx, id, new_norm);
+                    if self.knob_enabled(KnobId::RestartThresh) {
+                        let val_r = trigger_value_rect();
+                        if Self::inside(mouse_x, mouse_y, val_r) {
+                            let (_, val_str, _) = self.knob_info(KnobId::RestartThresh);
+                            self.start_edit(cx, KnobId::RestartThresh, val_r, val_str);
+                            cx.needs_redraw();
+                            return;
+                        }
+                        if Self::inside(mouse_x, mouse_y, trigger_column())
+                            && !Self::inside(mouse_x, mouse_y, trigger_bypass_rect())
+                            && !Self::inside(mouse_x, mouse_y, trigger_title_rect())
+                        {
+                            let bar_r = trigger_bar_rect();
+                            let new_norm = (1.0 - (mouse_y - bar_r.1) / bar_r.3).clamp(0.0, 1.0);
+                            self.emit_knob_norm(cx, KnobId::RestartThresh, new_norm);
                             self.drag = Some(DragState::Slider {
-                                id,
+                                id: KnobId::RestartThresh,
                                 start_x: mouse_x,
                                 start_y: mouse_y,
                                 start_norm: new_norm,
-                                vertical: false,
+                                vertical: true,
                             });
                             cx.needs_redraw();
                             return;
@@ -742,21 +1050,29 @@ impl View for TapeStopView {
                         cx.needs_redraw();
                         return;
                     }
-                    for &id in &[KnobId::Xfade, KnobId::StereoDiv, KnobId::RestartThresh] {
-                        if !self.knob_enabled(id) {
-                            continue;
+                    if self.show_axis_controls {
+                        for &id in &[KnobId::Return, KnobId::Xfade, KnobId::StereoDiv] {
+                            let r = Self::slider_rect(id);
+                            let val_r = axis_value_rect(r);
+                            if Self::inside(mouse_x, mouse_y, val_r) {
+                                continue;
+                            }
+                            if Self::inside(mouse_x, mouse_y, r) {
+                                self.reset_knob(cx, id);
+                                self.drag = None;
+                                cx.needs_redraw();
+                                return;
+                            }
                         }
-                        let r = Self::slider_rect(id);
-                        let val_r = Self::slider_value_rect(r);
-                        if Self::inside(mouse_x, mouse_y, val_r) {
-                            continue;
-                        }
-                        if Self::inside(mouse_x, mouse_y, r) {
-                            self.reset_knob(cx, id);
-                            self.drag = None;
-                            cx.needs_redraw();
-                            return;
-                        }
+                    }
+                    if self.knob_enabled(KnobId::RestartThresh)
+                        && Self::inside(mouse_x, mouse_y, trigger_column())
+                        && !Self::inside(mouse_x, mouse_y, trigger_value_rect())
+                        && !Self::inside(mouse_x, mouse_y, trigger_bypass_rect())
+                    {
+                        self.reset_knob(cx, KnobId::RestartThresh);
+                        self.drag = None;
+                        cx.needs_redraw();
                     }
                 }
 
@@ -769,25 +1085,27 @@ impl View for TapeStopView {
                     self.hover = Some((mouse_x, mouse_y));
                     cx.needs_redraw();
 
-                    let (sx, sy, sw, sh) = STOP_BUTTON;
-                    let scx = sx + sw * 0.5;
-                    let scy = sy + sh * 0.5;
-                    let dx = mouse_x - scx;
-                    let dy = mouse_y - scy;
-                    let hover_stop = dx * dx + dy * dy <= (sw * 0.5 + 4.0) * (sw * 0.5 + 4.0);
-                    if hover_stop != self.hover_stop.get() {
-                        self.hover_stop.set(hover_stop);
-                        cx.needs_redraw();
-                    }
+                    if self.drag.is_none() {
+                        let (sx, sy, sw, sh) = STOP_BUTTON;
+                        let scx = sx + sw * 0.5;
+                        let scy = sy + sh * 0.5;
+                        let dx = mouse_x - scx;
+                        let dy = mouse_y - scy;
+                        let hover_stop = dx * dx + dy * dy <= (sw * 0.5 + 4.0) * (sw * 0.5 + 4.0);
+                        if hover_stop != self.hover_stop.get() {
+                            self.hover_stop.set(hover_stop);
+                            cx.needs_redraw();
+                        }
 
-                    let handle_hit = {
-                        let h = self.thresh_handle_rect();
-                        (h.0 - 4.0, h.1 - 2.0, h.2 + 8.0, h.3 + 4.0)
-                    };
-                    let hover_thresh = Self::inside(mouse_x, mouse_y, handle_hit);
-                    if hover_thresh != self.hover_thresh.get() {
-                        self.hover_thresh.set(hover_thresh);
-                        cx.needs_redraw();
+                        let handle_hit = {
+                            let h = self.thresh_handle_rect();
+                            (h.0 - 4.0, h.1 - 2.0, h.2 + 8.0, h.3 + 4.0)
+                        };
+                        let hover_thresh = Self::inside(mouse_x, mouse_y, handle_hit);
+                        if hover_thresh != self.hover_thresh.get() {
+                            self.hover_thresh.set(hover_thresh);
+                            cx.needs_redraw();
+                        }
                     }
 
                     match self.drag {
@@ -798,10 +1116,10 @@ impl View for TapeStopView {
                             start_norm,
                             vertical,
                         }) => {
-                            let bar_r = if vertical {
-                                Self::drop_bar_rect()
-                            } else {
-                                Self::slider_bar_rect(Self::slider_rect(id))
+                            let bar_r = match id {
+                                KnobId::DropTime => Self::drop_bar_rect(),
+                                KnobId::RestartThresh => trigger_bar_rect(),
+                                _ => axis_bar_rect(Self::slider_rect(id)),
                             };
                             let (delta, span) = if vertical {
                                 (start_y - mouse_y, bar_r.3)
@@ -834,6 +1152,8 @@ impl View for TapeStopView {
 
                 WindowEvent::MouseLeave => {
                     self.hover = None;
+                    self.hover_stop.set(false);
+                    self.hover_thresh.set(false);
                     cx.needs_redraw();
                 }
 
@@ -862,7 +1182,6 @@ impl View for TapeStopView {
 
         let bypassed = self.params.bypass.value();
         let braking = self.telemetry.is_braking.load(Ordering::Relaxed);
-        let inactive = bypassed;
 
         d.rect(0.0, 0.0, UI_W, UI_H, BG);
         d.rect(0.0, 0.0, UI_W, HEADER_HEIGHT, PANEL);
@@ -877,7 +1196,7 @@ impl View for TapeStopView {
             MUTED,
         );
         let bypass_hovered = self
-            .hover
+            .idle_hover()
             .is_some_and(|(hx, hy)| Self::inside(hx, hy, BYPASS_BUTTON));
         let bypass_click = self.bypass_anim.step();
         d.bypass_button(BYPASS_BUTTON, bypassed, TEAL, bypass_hovered, bypass_click);
@@ -921,216 +1240,24 @@ impl View for TapeStopView {
             d.circle(scx, scy, rip_r, rip_col, false);
         }
 
-        d.circle(scx, scy, sw * 0.5, stop_color, stop_active);
+        let mut stop_fill = rgb(0, 0, 0);
+        stop_fill.a = 0.5;
+        d.circle(scx, scy, sw * 0.5, stop_fill, true);
         d.circle(scx, scy, sw * 0.5, stop_color, false);
         d.text_centered(
             scx,
             scy + 6.0,
             if stop_active { "REW" } else { "STOP" },
             16.0,
-            if stop_active { BG } else { TEXT },
+            if stop_active { GOLD } else { TEXT },
         );
 
-        // Compact MIDI assign control to the right of STOP
-        let midi_id = self.midi_number_id();
-        let (midi_label, midi_val, midi_color) = self.knob_info(midi_id);
-        let midi_edit = self.edit.as_ref().filter(|edit| edit.target == midi_id);
-        let midi_label_hover = self
-            .hover
-            .is_some_and(|(hx, hy)| Self::inside(hx, hy, MIDI_LABEL));
-        d.text(
-            MIDI_LABEL.0 + 4.0,
-            MIDI_LABEL.1 + MIDI_LABEL.3 * 0.5 + 5.0,
-            midi_label,
-            13.0,
-            if inactive {
-                MUTED
-            } else if midi_label_hover {
-                GOLD
-            } else {
-                TEXT
-            },
-        );
-        if midi_label_hover && !inactive {
-            d.value_underline(MIDI_LABEL, GOLD);
-        }
-        d.rect(
-            MIDI_FIELD.0,
-            MIDI_FIELD.1,
-            MIDI_FIELD.2,
-            MIDI_FIELD.3,
-            rgb(18, 22, 28),
-        );
-        d.outline(MIDI_FIELD, if midi_edit.is_some() { GOLD } else { LINE });
-        if let Some(edit) = midi_edit {
-            d.value_edit(edit, midi_color);
-        } else {
-            d.text_centered(
-                MIDI_FIELD.0 + MIDI_FIELD.2 * 0.5,
-                MIDI_FIELD.1 + MIDI_FIELD.3 * 0.5 + 5.0,
-                &midi_val,
-                14.0,
-                if inactive { MUTED } else { midi_color },
-            );
-            if !inactive && self.edit.is_none() {
-                if let Some((hx, hy)) = self.hover {
-                    if Self::inside(hx, hy, MIDI_FIELD) {
-                        d.value_underline(MIDI_FIELD, midi_color);
-                    }
-                }
-            }
-        }
-
-        // Auto restart, threshold meter, crossfade, stereo div
-        let auto_on = self.params.auto_restart.value();
-        let flash = self.telemetry.transient_flash.load(Ordering::Relaxed);
-        d.button(
-            AUTO_RESTART_BUTTON,
-            "AUTO RESTART",
-            auto_on,
-            if auto_on && flash > 0.05 {
-                COLORS[5]
-            } else {
-                COLORS[2]
-            },
-        );
-        if auto_on {
-            let led = if flash > 0.05 {
-                COLORS[5]
-            } else {
-                rgb(46, 89, 51)
-            };
-            d.circle(
-                AUTO_RESTART_BUTTON.0 + AUTO_RESTART_BUTTON.2 - 12.0,
-                AUTO_RESTART_BUTTON.1 + AUTO_RESTART_BUTTON.3 * 0.5,
-                4.0,
-                led,
-                true,
-            );
-        }
-
-        // Combined Input Meter & Threshold Handle inside Grouped Panel
-        let mr = METER_THRESH;
-        let bar_r = Self::slider_bar_rect(mr);
-        let val_r = Self::slider_value_rect(mr);
-        let (t_label, t_val, t_color) = self.knob_info(KnobId::RestartThresh);
-        let in_peak = self.telemetry.input_peak.load(Ordering::Relaxed);
-        let peak_n = Self::peak_norm(in_peak);
-
-        d.rect(mr.0, mr.1, mr.2, mr.3, Color::rgba(27, 31, 37, 225));
-        d.outline(
-            mr,
-            if !auto_on {
-                LINE
-            } else {
-                Color {
-                    r: (LINE.r + t_color.r * 0.3).min(1.0),
-                    g: (LINE.g + t_color.g * 0.3).min(1.0),
-                    b: (LINE.b + t_color.b * 0.3).min(1.0),
-                    a: 1.0,
-                }
-            },
-        );
-        d.text(
-            mr.0 + 12.0,
-            mr.1 + 18.0,
-            t_label,
-            9.5,
-            if auto_on { MUTED } else { LINE },
-        );
-
-        if let Some(edit) = &self.edit {
-            if edit.target == KnobId::RestartThresh {
-                d.value_edit(edit, t_color);
-            } else {
-                d.text_centered(
-                    val_r.0 + val_r.2 * 0.5,
-                    val_r.1 + 15.0,
-                    &t_val,
-                    11.0,
-                    if auto_on { t_color } else { MUTED },
-                );
-            }
-        } else {
-            d.text_centered(
-                val_r.0 + val_r.2 * 0.5,
-                val_r.1 + 15.0,
-                &t_val,
-                11.0,
-                if auto_on { t_color } else { MUTED },
-            );
-            if auto_on && self.edit.is_none() {
-                if let Some((hx, hy)) = self.hover {
-                    if Self::inside(hx, hy, val_r) {
-                        d.value_underline(val_r, t_color);
-                    }
-                }
-            }
-        }
-
-        // Meter background bar
-        d.rect(bar_r.0, bar_r.1, bar_r.2, bar_r.3, LINE);
-        // Live signal fill
-        if peak_n > 0.01 {
-            d.rect(bar_r.0, bar_r.1, bar_r.2 * peak_n, bar_r.3, TEAL);
-        }
-
-        // Rotated threshold handle (vertical bar moving horizontally across the meter)
-        let handle_rect = self.thresh_handle_rect();
-        let handle_hovered = self.hover_thresh.get()
-            || matches!(
-                self.drag,
-                Some(DragState::Slider {
-                    id: KnobId::RestartThresh,
-                    ..
-                })
-            );
-        let handle_col = if !auto_on {
-            MUTED
-        } else if handle_hovered {
-            TEXT
-        } else {
-            t_color
-        };
-        d.rect(
-            handle_rect.0,
-            handle_rect.1,
-            handle_rect.2,
-            handle_rect.3,
-            handle_col,
-        );
-        d.grip_lines(handle_rect, handle_col, true);
-
-        for &id in &[KnobId::Xfade, KnobId::StereoDiv] {
-            let r = Self::slider_rect(id);
-            let (label, val_str, color) = self.knob_info(id);
-            let n = self.get_knob_norm(id);
-            let val_r = Self::slider_value_rect(r);
-            let bipolar = id == KnobId::StereoDiv;
-
-            if let Some(edit) = &self.edit {
-                if edit.target == id {
-                    if bipolar {
-                        d.control_bipolar(r, label, "", n, color);
-                    } else {
-                        d.control(r, label, "", n, color);
-                    }
-                    d.value_edit(edit, color);
-                    continue;
-                }
-            }
-
-            if bipolar {
-                d.control_bipolar(r, label, &val_str, n, color);
-            } else {
-                d.control(r, label, &val_str, n, color);
-            }
-            if self.edit.is_none() {
-                if let Some((hx, hy)) = self.hover {
-                    if Self::inside(hx, hy, val_r) {
-                        d.value_underline(val_r, color);
-                    }
-                }
+        self.draw_audio_trigger(&mut d);
+        self.draw_axis_cog(&mut d);
+        if self.show_axis_controls {
+            self.draw_midi_slot(&mut d);
+            for &id in &[KnobId::Return, KnobId::Xfade, KnobId::StereoDiv] {
+                self.draw_axis_slider(&mut d, id);
             }
         }
     }
@@ -1161,6 +1288,8 @@ pub fn create(
                 hover: None,
                 curve_hover_anim: Cell::new(0.0),
                 bypass_anim: ButtonAnim::new(),
+                auto_restart_anim: ButtonAnim::new(),
+                show_axis_controls: false,
             }
             .build(cx, |cx| {
                 let timer = cx.add_timer(Duration::from_millis(16), None, |cx, action| {
@@ -1172,7 +1301,6 @@ pub fn create(
             })
             .width(Stretch(1.0))
             .height(Stretch(1.0));
-            nih_plug_vizia::widgets::ResizeHandle::new(cx);
         },
     )
 }
@@ -1206,8 +1334,13 @@ mod tests {
         assert!(STOP_BUTTON.1 >= GRAPH_Y);
         assert!(STOP_BUTTON.0 + STOP_BUTTON.2 <= GRAPH_X + GRAPH_W);
         assert!(STOP_BUTTON.1 + STOP_BUTTON.3 <= GRAPH_Y + GRAPH_H);
-        assert!(MIDI_LABEL.0 >= STOP_BUTTON.0 + STOP_BUTTON.2);
-        assert!(MIDI_FIELD.0 >= MIDI_LABEL.0 + MIDI_LABEL.2);
+        let midi = midi_slot();
+        let ret = axis_slot(0);
+        assert!((midi.1 - ret.1).abs() < f32::EPSILON);
+        assert!((midi.3 - ret.3).abs() < f32::EPSILON);
+        assert!(midi.0 + midi.2 <= ret.0);
+        assert!(midi.1 >= GRAPH_Y + GRAPH_H);
+        assert!(midi_value_rect().0 >= midi_label_rect().0 + midi_label_rect().2 - 0.5);
     }
 
     #[test]
@@ -1219,12 +1352,45 @@ mod tests {
         let bar = TapeStopView::drop_bar_rect();
         assert!((bar.1 + bar.3 - (GRAPH_Y + GRAPH_H)).abs() < f32::EPSILON);
         assert!(DROP_TIME_READOUT.1 >= GRAPH_Y + GRAPH_H);
-        assert!(METER_THRESH.2 < 250.0);
-        assert!((XFADE_SLIDER.1 - STEREO_DIV_SLIDER.1).abs() < f32::EPSILON);
-        assert!(XFADE_SLIDER.0 >= METER_THRESH.0 + METER_THRESH.2);
-        assert!(ROW_Y >= DROP_TIME_READOUT.1 + DROP_TIME_READOUT.3);
-        assert!(ROW_Y + ROW_H <= UI_H);
         assert!((DROP_TIME_READOUT.1 + DROP_READOUT_TEXT_Y - AXIS_LABEL_Y).abs() < f32::EPSILON);
+        let trigger = trigger_column();
+        assert!(trigger.0 >= DROP_TIME_SLIDER.0 + DROP_TIME_SLIDER.2);
+        assert!((trigger.1 - DROP_TIME_SLIDER.1).abs() < f32::EPSILON);
+        assert!((trigger.2 - DROP_TIME_SLIDER.2).abs() < f32::EPSILON);
+        assert!((trigger.3 - DROP_TIME_SLIDER.3).abs() < f32::EPSILON);
+        assert!(trigger.0 + trigger.2 <= UI_W);
+        let drop_bar = TapeStopView::drop_bar_rect();
+        let trig_bar = trigger_bar_rect();
+        assert!((trig_bar.1 - drop_bar.1).abs() < f32::EPSILON);
+        assert!((trig_bar.2 - drop_bar.2).abs() < f32::EPSILON);
+        assert!((trig_bar.3 - drop_bar.3).abs() < f32::EPSILON);
+        let title = trigger_title_rect();
+        assert!(title.1 + title.3 <= trigger.1);
+        let bypass = trigger_bypass_rect();
+        assert!((bypass.1 - (trigger.1 + 6.0)).abs() < f32::EPSILON);
+        assert!(
+            (bypass.0 - (trigger.0 + TRIGGER_W - 6.0 - TRIGGER_BYPASS)).abs() < f32::EPSILON
+        );
+        assert!(bypass.0 + bypass.2 <= UI_W);
+        let value = trigger_value_rect();
+        assert!((value.1 - DROP_TIME_READOUT.1).abs() < f32::EPSILON);
+        assert!((value.3 - DROP_TIME_READOUT.3).abs() < f32::EPSILON);
+        assert!((value.0 - trigger.0).abs() < f32::EPSILON);
+        let cog = cog_rect();
+        assert!(cog.0 + cog.2 <= DROP_TIME_READOUT.0);
+        assert!(
+            (cog.1 + cog.3 * 0.5 - (DROP_TIME_READOUT.1 + DROP_TIME_READOUT.3 * 0.5)).abs() < 1.0
+        );
+        let ret = axis_slot(0);
+        let xfade = axis_slot(1);
+        let stereo = axis_slot(2);
+        assert!(midi_slot().0 + midi_slot().2 <= ret.0);
+        assert!((ret.3 - DROP_READOUT_H).abs() < f32::EPSILON);
+        assert!((ret.1 - DROP_TIME_READOUT.1).abs() < f32::EPSILON);
+        assert!(ret.0 + ret.2 <= xfade.0);
+        assert!(xfade.0 + xfade.2 <= stereo.0);
+        assert!(stereo.0 + stereo.2 <= cog.0);
+        assert!(axis_bar_rect(ret).2 > 8.0);
         let pts = TapeStopView::drop_l_points();
         let s = DROP_TIME_SLIDER;
         let r = DROP_TIME_READOUT;

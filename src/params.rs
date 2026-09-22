@@ -23,6 +23,10 @@ pub struct TapeStopParams {
     #[id = "xfade_ms"]
     pub xfade_ms: FloatParam,
 
+    /// Time to spin back up and meet the live write head [0.05s - 8.0s]
+    #[id = "return_sec"]
+    pub return_sec: FloatParam,
+
     /// Deceleration Curve Exponent [0.1 - 4.0]
     #[id = "drop_curve"]
     pub drop_curve: FloatParam,
@@ -63,7 +67,7 @@ pub struct TapeStopParams {
 impl Default for TapeStopParams {
     fn default() -> Self {
         Self {
-            editor_state: ViziaState::new_screen_sized(|| (1040, 520)),
+            editor_state: ViziaState::new_screen_sized(|| (1112, 438)),
 
             drop_time: FloatParam::new(
                 "Drop Time",
@@ -89,6 +93,19 @@ impl Default for TapeStopParams {
             )
             .with_unit(" ms")
             .with_value_to_string(formatters::v2s_f32_rounded(1)),
+
+            return_sec: FloatParam::new(
+                "Return",
+                0.50,
+                FloatRange::Skewed {
+                    min: 0.05,
+                    max: 8.0,
+                    factor: FloatRange::skew_factor(-1.5),
+                },
+            )
+            .with_unit(" s")
+            .with_step_size(0.01)
+            .with_value_to_string(formatters::v2s_f32_rounded(2)),
 
             drop_curve: FloatParam::new("Curve", 1.0, FloatRange::Linear { min: 0.1, max: 4.0 })
                 .with_value_to_string(formatters::v2s_f32_rounded(2)),

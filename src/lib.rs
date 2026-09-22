@@ -95,6 +95,7 @@ impl Plugin for TapeStop {
         // 2. Fetch parameter values
         let drop_time = self.params.drop_time.value();
         let xfade_ms = self.params.xfade_ms.value();
+        let return_sec = self.params.return_sec.value();
         let drop_curve = self.params.drop_curve.value();
         let stereo_div = self.params.stereo_div.value();
         let midi_assign = self.params.midi_assign.value();
@@ -165,6 +166,7 @@ impl Plugin for TapeStop {
                 in_r,
                 drop_time,
                 xfade_ms,
+                return_sec,
                 drop_curve,
                 stereo_div,
                 auto_restart,

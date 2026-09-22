@@ -47,6 +47,18 @@ impl StereoRingBuffer {
         self.write_head
     }
 
+    /// Raw left sample at an integer buffer index (wraps).
+    #[inline(always)]
+    pub fn left_at(&self, index: isize) -> f32 {
+        self.left[(index as usize) & BUFFER_MASK]
+    }
+
+    /// Raw right sample at an integer buffer index (wraps).
+    #[inline(always)]
+    pub fn right_at(&self, index: isize) -> f32 {
+        self.right[(index as usize) & BUFFER_MASK]
+    }
+
     /// Read an interpolated sample for the Left channel at a fractional position.
     #[inline(always)]
     pub fn read_left(&self, pos: f64) -> f32 {

@@ -1,4 +1,4 @@
-use crate::dsp::ring_buffer::StereoRingBuffer;
+use crate::dsp::ring_buffer::{StereoRingBuffer, BUFFER_SIZE};
 
 /// S-curve deceleration function shared between DSP and UI visualization.
 #[inline(always)]
@@ -15,8 +15,124 @@ pub fn s_curve(t: f32, exp: f32) -> f32 {
     }
 }
 
+/// Inverse of [`s_curve`]. Maps a 0..=1 curve amount back onto the time axis.
+#[inline(always)]
+pub fn inv_s_curve(y: f32, exp: f32) -> f32 {
+    let y = y.clamp(0.0, 1.0);
+    let exp = exp.max(1.0e-3);
+    if y <= 0.0 {
+        0.0
+    } else if y >= 1.0 {
+        1.0
+    } else if y < 0.5 {
+        0.5 * (2.0 * y).powf(1.0 / exp)
+    } else {
+        1.0 - 0.5 * (2.0 * (1.0 - y)).powf(1.0 / exp)
+    }
+}
+
 /// Semitone drop constant: 1.0 - 2^(-1/12) ≈ 0.0561256873183065
 const SEMI_DROP: f64 = 1.0 - 0.9438743126816935;
+
+/// Catch-up playback is not allowed to exceed this multiple of realtime.
+const MAX_RETURN_SPEED: f64 = 8.0;
+
+/// Shortest crossfade when pre/post channels do not match.
+const XFADE_FLOOR_MS: f32 = 5.0;
+
+fn lag_samples(write_head: usize, play_pos: f64) -> f64 {
+    let size = BUFFER_SIZE as f64;
+    let lag = (write_head as f64 - play_pos).rem_euclid(size);
+    if lag > size * 0.5 {
+        0.0
+    } else {
+        lag
+    }
+}
+
+/// Quadratic bump coefficient so average speed is `1 + lag/n`, with s(0)=s0 and s(1)=1.
+fn return_coeff(s0: f64, lag: f64, n: f64) -> f64 {
+    let excess = if n > 0.0 { lag / n } else { 0.0 };
+    3.0 * (1.0 + 2.0 * excess - s0)
+}
+
+fn return_speed_at(s0: f64, coeff: f64, u: f64) -> f64 {
+    let u = u.clamp(0.0, 1.0);
+    s0 + (1.0 - s0) * u + coeff * u * (1.0 - u)
+}
+
+fn return_peak(s0: f64, coeff: f64) -> f64 {
+    if coeff.abs() < 1e-9 {
+        return s0.max(1.0);
+    }
+    let u = (1.0 - s0 + coeff) / (2.0 * coeff);
+    if !(0.0..=1.0).contains(&u) {
+        s0.max(1.0)
+    } else {
+        return_speed_at(s0, coeff, u)
+    }
+}
+
+fn minimum_return_len(s0: f64, lag: f64, requested: f64) -> f64 {
+    let requested = requested.max(1.0);
+    if return_peak(s0, return_coeff(s0, lag, requested)) <= MAX_RETURN_SPEED {
+        return requested;
+    }
+    let mut hi = (lag / 1.0).max(requested * 2.0);
+    for _ in 0..48 {
+        if return_peak(s0, return_coeff(s0, lag, hi)) <= MAX_RETURN_SPEED {
+            break;
+        }
+        hi *= 1.5;
+    }
+    let mut lo = requested;
+    for _ in 0..48 {
+        let mid = 0.5 * (lo + hi);
+        if return_peak(s0, return_coeff(s0, lag, mid)) <= MAX_RETURN_SPEED {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    hi
+}
+
+fn channel_match(a: &[f32], b: &[f32]) -> f32 {
+    let n = a.len().min(b.len());
+    if n == 0 {
+        return 1.0;
+    }
+    let nf = n as f32;
+    let energy = |xs: &[f32]| xs.iter().take(n).map(|x| x * x).sum::<f32>();
+    let energy_eps = 1e-10 * nf;
+    if energy(a) < energy_eps || energy(b) < energy_eps {
+        return 1.0;
+    }
+    let mean_a = a.iter().take(n).sum::<f32>() / nf;
+    let mean_b = b.iter().take(n).sum::<f32>() / nf;
+    let mut cov = 0.0f32;
+    let mut var_a = 0.0f32;
+    let mut var_b = 0.0f32;
+    for i in 0..n {
+        let da = a[i] - mean_a;
+        let db = b[i] - mean_b;
+        cov += da * db;
+        var_a += da * da;
+        var_b += db * db;
+    }
+    let var_eps = 1e-8 * nf;
+    if var_a < var_eps && var_b < var_eps {
+        return if (mean_a - mean_b).abs() < 1e-3 {
+            1.0
+        } else {
+            0.0
+        };
+    }
+    if var_a < var_eps || var_b < var_eps {
+        return 0.0;
+    }
+    (cov / (var_a * var_b).sqrt()).clamp(-1.0, 1.0)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TapeState {
@@ -33,7 +149,7 @@ pub struct TapeStopEngine {
     play_pos_l: f64,
     play_pos_r: f64,
 
-    // Current instantaneous playback speeds [0.0, 1.0]
+    // Current instantaneous playback speeds. Above 1 while catching up to the write head.
     speed_l: f64,
     speed_r: f64,
 
@@ -44,10 +160,20 @@ pub struct TapeStopEngine {
     stop_samples_r: f64,
     max_stop_samples: f64,
 
-    // Crossfade release state
+    // Crossfade release state. Length is latched when the return starts.
     is_crossfading: bool,
     xfade_pos_samples: f64,
     xfade_len_samples: f64,
+
+    // Catch-up back to the write head before the join crossfade.
+    is_returning: bool,
+    pending_release: bool,
+    return_pos: f64,
+    return_len: f64,
+    return_s0_l: f64,
+    return_s0_r: f64,
+    return_a_l: f64,
+    return_a_r: f64,
 
     // MIDI Note tracking
     active_note_count: usize,
@@ -89,6 +215,14 @@ impl TapeStopEngine {
             is_crossfading: false,
             xfade_pos_samples: 0.0,
             xfade_len_samples: 2205.0,
+            is_returning: false,
+            pending_release: false,
+            return_pos: 0.0,
+            return_len: 1.0,
+            return_s0_l: 1.0,
+            return_s0_r: 1.0,
+            return_a_l: 0.0,
+            return_a_r: 0.0,
             active_note_count: 0,
             manual_trigger: false,
             envelope: 0.0,
@@ -121,6 +255,9 @@ impl TapeStopEngine {
         self.brake_pos_samples = 0.0;
         self.is_crossfading = false;
         self.xfade_pos_samples = 0.0;
+        self.is_returning = false;
+        self.pending_release = false;
+        self.return_pos = 0.0;
         self.active_note_count = 0;
         self.manual_trigger = false;
         self.envelope = 0.0;
@@ -171,16 +308,19 @@ impl TapeStopEngine {
             self.is_braking = true;
             self.brake_pos_samples = 0.0;
             self.is_crossfading = false;
+            self.is_returning = false;
+            self.pending_release = false;
             self.lockout_samples = 0.06 * self.sample_rate;
             // Align playhead to current live write head
             let head = self.ring_buffer.write_head() as f64;
             self.play_pos_l = head;
             self.play_pos_r = head;
         } else if !should_brake && self.is_braking {
-            // Release tape brake -> begin smooth crossfade back to live audio
+            // Release tape brake. Catch-up starts on the next processed sample.
             self.is_braking = false;
-            self.is_crossfading = true;
-            self.xfade_pos_samples = 0.0;
+            self.is_crossfading = false;
+            self.is_returning = true;
+            self.pending_release = true;
         }
     }
 
@@ -217,6 +357,7 @@ impl TapeStopEngine {
         in_r: f32,
         drop_time_sec: f32,
         xfade_ms: f32,
+        return_sec: f32,
         drop_curve: f32,
         stereo_div_pct: f32,
         auto_restart: bool,
@@ -251,7 +392,6 @@ impl TapeStopEngine {
         self.stop_samples_l = (stop_samples_base * (1.0 - div_mult).max(0.1)).max(1.0);
         self.stop_samples_r = (stop_samples_base * (1.0 + div_mult).max(0.1)).max(1.0);
         self.max_stop_samples = self.stop_samples_l.max(self.stop_samples_r);
-        self.xfade_len_samples = ((xfade_ms as f64 * self.sample_rate as f64) / 1000.0).max(1.0);
 
         // 3. Update continuous CC speed smoothing if active
         if self.cc_override_active {
@@ -266,15 +406,20 @@ impl TapeStopEngine {
             } else if auto_restart {
                 let thresh_lin = 10.0f32.powf(auto_restart_thresh_db / 20.0);
                 if in_peak >= thresh_lin || self.envelope >= thresh_lin {
-                    // Transient triggered auto restart!
+                    // Transient triggered auto restart.
                     self.is_braking = false;
-                    self.is_crossfading = true;
-                    self.xfade_pos_samples = 0.0;
+                    self.is_crossfading = false;
+                    self.is_returning = true;
+                    self.pending_release = true;
                     self.active_note_count = 0;
                     self.manual_trigger = false;
                     self.transient_flash = 1.0;
                 }
             }
+        }
+
+        if self.pending_release {
+            self.begin_return(xfade_ms, return_sec);
         }
 
         // 5. State evaluation & speed computation
@@ -304,6 +449,28 @@ impl TapeStopEngine {
             self.play_pos_l += speed_l;
             self.play_pos_r += speed_r;
 
+            let out_l = self.ring_buffer.read_left(self.play_pos_l);
+            let out_r = self.ring_buffer.read_right(self.play_pos_r);
+            (out_l, out_r)
+        } else if self.is_returning {
+            let u = ((self.return_pos + 0.5) / self.return_len).clamp(0.0, 1.0);
+            self.speed_l =
+                return_speed_at(self.return_s0_l, self.return_a_l, u).clamp(0.0, MAX_RETURN_SPEED);
+            self.speed_r =
+                return_speed_at(self.return_s0_r, self.return_a_r, u).clamp(0.0, MAX_RETURN_SPEED);
+            self.play_pos_l += self.speed_l;
+            self.play_pos_r += self.speed_r;
+            self.return_pos += 1.0;
+            if self.return_pos >= self.return_len {
+                let head = self.ring_buffer.write_head() as f64;
+                self.play_pos_l = head;
+                self.play_pos_r = head;
+                self.speed_l = 1.0;
+                self.speed_r = 1.0;
+                self.is_returning = false;
+                self.is_crossfading = true;
+                self.xfade_pos_samples = 0.0;
+            }
             let out_l = self.ring_buffer.read_left(self.play_pos_l);
             let out_r = self.ring_buffer.read_right(self.play_pos_r);
             (out_l, out_r)
@@ -341,6 +508,56 @@ impl TapeStopEngine {
         }
     }
 
+    fn begin_return(&mut self, xfade_ms: f32, return_sec: f32) {
+        self.pending_release = false;
+        self.is_returning = true;
+        self.is_braking = false;
+        self.is_crossfading = false;
+        self.return_pos = 0.0;
+
+        let head = self.ring_buffer.write_head();
+        let lag_l = lag_samples(head, self.play_pos_l);
+        let lag_r = lag_samples(head, self.play_pos_r);
+        let requested = (return_sec as f64 * self.sample_rate as f64).max(1.0);
+        let n = minimum_return_len(self.speed_l, lag_l, requested).max(minimum_return_len(
+            self.speed_r,
+            lag_r,
+            requested,
+        ));
+        self.return_len = n.max(1.0);
+        self.return_s0_l = self.speed_l;
+        self.return_s0_r = self.speed_r;
+        self.return_a_l = return_coeff(self.speed_l, lag_l, self.return_len);
+        self.return_a_r = return_coeff(self.speed_r, lag_r, self.return_len);
+
+        let matched = self.release_match().clamp(0.0, 1.0);
+        let knob = xfade_ms.clamp(XFADE_FLOOR_MS, 500.0);
+        let len_ms = XFADE_FLOOR_MS + (knob - XFADE_FLOOR_MS) * matched;
+        self.xfade_len_samples = (len_ms as f64 * self.sample_rate as f64 / 1000.0).max(1.0);
+    }
+
+    fn release_match(&self) -> f32 {
+        let n = ((0.01 * self.sample_rate) as usize).clamp(64, 1024);
+        let head = self.ring_buffer.write_head() as isize;
+        let mut live_l = vec![0.0f32; n];
+        let mut live_r = vec![0.0f32; n];
+        let mut stopped_l = vec![0.0f32; n];
+        let mut stopped_r = vec![0.0f32; n];
+        for i in 0..n {
+            let back = (n - 1 - i) as isize;
+            live_l[i] = self.ring_buffer.left_at(head - 1 - back);
+            live_r[i] = self.ring_buffer.right_at(head - 1 - back);
+            let steps = (n - 1 - i) as f64;
+            stopped_l[i] = self
+                .ring_buffer
+                .read_left(self.play_pos_l - self.speed_l * steps);
+            stopped_r[i] = self
+                .ring_buffer
+                .read_right(self.play_pos_r - self.speed_r * steps);
+        }
+        channel_match(&stopped_l, &live_l).min(channel_match(&stopped_r, &live_r))
+    }
+
     // --- Telemetry Getters ---
 
     #[inline(always)]
@@ -361,6 +578,26 @@ impl TapeStopEngine {
     #[inline(always)]
     pub fn is_crossfading(&self) -> bool {
         self.is_crossfading
+    }
+
+    #[inline(always)]
+    pub fn is_returning(&self) -> bool {
+        self.is_returning
+    }
+
+    #[inline(always)]
+    pub fn latched_xfade_ms(&self) -> f32 {
+        (self.xfade_len_samples * 1000.0 / self.sample_rate as f64) as f32
+    }
+
+    #[inline(always)]
+    pub fn play_lag_left(&self) -> f64 {
+        lag_samples(self.ring_buffer.write_head(), self.play_pos_l)
+    }
+
+    #[inline(always)]
+    pub fn play_lag_right(&self) -> f64 {
+        lag_samples(self.ring_buffer.write_head(), self.play_pos_r)
     }
 
     #[inline(always)]
