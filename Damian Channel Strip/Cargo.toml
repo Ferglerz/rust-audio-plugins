@@ -1,0 +1,36 @@
+[package]
+name = "damian-channel-strip"
+version = "0.1.0"
+edition = "2021"
+authors = ["Fergler"]
+license = "GPL-3.0-or-later"
+description = "Damian Birdsey signature dynamic EQ and vocal channel strip"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[features]
+default = []
+debug-alloc = ["nih_plug/assert_process_allocs"]
+
+[dependencies]
+nih_plug = { path = "vendor/nih-plug" }
+nih_plug_vizia = { path = "vendor/nih-plug/nih_plug_vizia" }
+atomic_float = "1"
+crossbeam-queue = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rustfft = "6"
+pleasant-ui = { path = "../pleasant-ui" }
+ort = { version = "2.0.0-rc.13", default-features = true }
+
+[patch."https://github.com/RustAudio/baseview.git"]
+baseview = { path = "vendor/baseview" }
+
+[profile.release]
+lto = "thin"
+opt-level = 3
+strip = "symbols"
+
+[profile.dev]
+opt-level = 1
