@@ -1,0 +1,10 @@
+[package]
+name = "scd-packer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+scd-core = { path = "../scd-core" }
+hound = "3.5"
+quick-xml = "0.31"
+rkyv = { version = "0.7", features = ["validation"] }

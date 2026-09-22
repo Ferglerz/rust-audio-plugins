@@ -1,0 +1,22 @@
+[workspace]
+members = [
+    "crates/scd-core",
+    "crates/scd-packer",
+    "crates/scd-plugin",
+    "xtask",
+]
+exclude = ["vendor/nih-plug"]
+resolver = "2"
+
+[patch."https://github.com/robbert-vdh/nih-plug.git"]
+nih_plug = { path = "vendor/nih-plug" }
+nih_plug_vizia = { path = "vendor/nih-plug/nih_plug_vizia" }
+nih_plug_xtask = { path = "vendor/nih-plug/nih_plug_xtask" }
+
+[profile.release]
+lto = "thin"
+opt-level = 3
+strip = "symbols"
+
+[profile.dev]
+opt-level = 1
