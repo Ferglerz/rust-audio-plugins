@@ -209,6 +209,14 @@ impl ScdPlugin {
                     resolved.pack_note
                 };
 
+                if let Some(piece) = resolved.kit_piece.or_else(|| {
+                    self.pack.as_ref().and_then(|pack| pack.kit_piece_for_note(pack_note))
+                }) {
+                    if let Some(slot) = self.params.midi_velocities[piece as usize].get(resolved.art) {
+                        slot.store(vel_u8, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+
                 if self
                     .pack
                     .as_ref()

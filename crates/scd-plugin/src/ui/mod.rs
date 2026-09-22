@@ -28,7 +28,7 @@ use scd_core::{KitPieceId, MicChannel};
 use std::cell::Cell;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub const WINDOW_W: f32 = EDITOR_WIDTH as f32;
 pub const WINDOW_H: f32 = EDITOR_HEIGHT as f32;
@@ -304,6 +304,7 @@ pub struct ScdEditorView {
     vel_selected_node: Option<usize>,
     vel_just_inserted: bool,
     vel_ignore_up: bool,
+    vel_hits: Vec<(KitPieceId, usize, u8, Instant)>,
     note_edit: Option<ValueEdit<NoteTarget>>,
     zoom_open: bool,
     zoom_pct: i32,
@@ -352,6 +353,7 @@ impl ScdEditorView {
             vel_selected_node: None,
             vel_just_inserted: false,
             vel_ignore_up: false,
+            vel_hits: Vec::new(),
             note_edit: None,
             zoom_open: false,
             zoom_pct,
@@ -729,7 +731,7 @@ impl ScdEditorView {
 
     const VEL_MODAL_W: f32 = 1040.0;
     const VEL_MODAL_H: f32 = 448.0;
-    const VEL_HEADER_H: f32 = 16.0;
+    const VEL_HEADER_H: f32 = 26.0;
     const VEL_SWITCH_Y: f32 = 134.0;
 
     fn vel_map_modal() -> (f32, f32, f32, f32) {
@@ -780,7 +782,10 @@ impl ScdEditorView {
                 .iter()
                 .map(|art| art.short_name())
                 .collect();
-            art_switch_groups(&names)
+            let groups = art_switch_groups(&names);
+            let headers: Vec<_> = groups.iter().filter_map(|g| g.header.as_ref()).collect();
+            groups
+                .clone()
                 .into_iter()
                 .flat_map(|group| {
                     let start = group.start;
@@ -790,8 +795,31 @@ impl ScdEditorView {
                         .enumerate()
                         .map(move |(offset, label)| (start + offset, label))
                 })
+                .filter(|(art, _)| !headers.iter().any(|header| **header == names[*art]))
                 .collect()
         }
+    }
+
+    /// Header selection refers to its own articulation, not its children.
+    fn vel_headers(kit_piece: KitPieceId) -> Vec<(String, Option<usize>, usize, usize)> {
+        if kit_piece == KitPieceId::Hihat {
+            return Vec::new();
+        }
+        let names: Vec<_> = stonehouse()
+            .arts(kit_piece)
+            .iter()
+            .map(|a| a.short_name())
+            .collect();
+        let options = Self::vel_art_options(kit_piece);
+        art_switch_groups(&names)
+            .into_iter()
+            .filter_map(|group| {
+                let header = group.header?;
+                let start = options.iter().position(|(art, _)| *art == group.start)?;
+                let art = names.iter().position(|name| *name == header);
+                Some((header, art, start, group.labels.len()))
+            })
+            .collect()
     }
 
     fn vel_art_members(kit_piece: KitPieceId, art: usize) -> Vec<usize> {
@@ -817,7 +845,12 @@ impl ScdEditorView {
         let pad = 4.0;
         let inner_w = (w - pad * 2.0).max(1.0);
         let seg_w = inner_w / n.max(1) as f32;
-        (x + pad + i as f32 * seg_w, y + pad, seg_w, h - pad * 2.0)
+        (
+            x + pad + i as f32 * seg_w + 7.0,
+            y + pad,
+            (seg_w - 14.0).max(1.0),
+            h - pad * 2.0,
+        )
     }
 
     fn graph_to_xy(x: f32, y: f32) -> (f32, f32) {
@@ -1081,6 +1114,12 @@ impl ScdEditorView {
         self.samples_open = false;
         self.close_preset_menus();
         self.sub_kick_open = false;
+        self.vel_hits.clear();
+        for arts in &self.params.midi_velocities {
+            for velocity in arts {
+                velocity.store(0, Ordering::Relaxed);
+            }
+        }
         self.vel_map_open = Some(kit_piece);
         self.vel_art = 0;
         self.vel_selected_node = None;
@@ -1103,7 +1142,12 @@ impl ScdEditorView {
         Self::reset_vel_curve_group(&self.params.vel_maps, kit_piece, self.vel_art);
     }
 
-    fn set_vel_curve_group(state: &VelMapState, kit_piece: KitPieceId, art: usize, curve: VelCurve) {
+    fn set_vel_curve_group(
+        state: &VelMapState,
+        kit_piece: KitPieceId,
+        art: usize,
+        curve: VelCurve,
+    ) {
         for member in Self::vel_art_members(kit_piece, art) {
             state.set_curve(kit_piece, member, curve.clone());
         }
@@ -1115,11 +1159,34 @@ impl ScdEditorView {
         }
     }
 
-    fn handle_delete_pos(nx: f32, ny: f32, hx: f32, hy: f32) -> (f32, f32) {
-        let dx = hx - nx;
-        let dy = hy - ny;
+    fn node_delete_pos(curve: &VelCurve, i: usize) -> (f32, f32) {
+        let node = &curve.nodes[i];
+        let (nx, ny) = Self::norm_to_graph(node.x, node.y);
+        let (ix, iy) = Self::norm_to_graph(node.in_handle.x, node.in_handle.y);
+        let (ox, oy) = Self::norm_to_graph(node.out_handle.x, node.out_handle.y);
+        let (mut dx, mut dy) = (ox - ix, oy - iy);
+        if dx.hypot(dy) < 1.0 {
+            let (ax, ay) = Self::norm_to_graph(curve.nodes[i - 1].x, curve.nodes[i - 1].y);
+            let (bx, by) = Self::norm_to_graph(curve.nodes[i + 1].x, curve.nodes[i + 1].y);
+            dx = bx - ax;
+            dy = by - ay;
+        }
         let len = dx.hypot(dy).max(1.0);
-        (hx - dy / len * 14.0, hy + dx / len * 14.0)
+        let offset = (-dy / len * 20.0, dx / len * 20.0);
+        let (gx, gy, gw, gh) = Self::vel_map_graph();
+        let candidate = (nx + offset.0, ny + offset.1);
+        if Self::hit(
+            candidate.0,
+            candidate.1,
+            gx + 8.0,
+            gy + 8.0,
+            gw - 16.0,
+            gh - 16.0,
+        ) {
+            candidate
+        } else {
+            (nx - offset.0, ny - offset.1)
+        }
     }
 
     fn hit_vel_delete_x(&self, curve: &VelCurve, x: f32, y: f32) -> Option<usize> {
@@ -1127,22 +1194,8 @@ impl ScdEditorView {
         if i == 0 || i + 1 >= curve.nodes.len() {
             return None;
         }
-        let node = curve.nodes.get(i)?;
-        const R: f32 = 8.0;
-        let (nx, ny) = Self::norm_to_graph(node.x, node.y);
-        let last = curve.nodes.len().saturating_sub(1);
-        let mut hits = Vec::new();
-        if i < last {
-            let (hx, hy) = Self::norm_to_graph(node.out_handle.x, node.out_handle.y);
-            hits.push(Self::handle_delete_pos(nx, ny, hx, hy));
-        }
-        if i > 0 {
-            let (hx, hy) = Self::norm_to_graph(node.in_handle.x, node.in_handle.y);
-            hits.push(Self::handle_delete_pos(nx, ny, hx, hy));
-        }
-        hits.into_iter()
-            .any(|(px, py)| (px - x).hypot(py - y) <= R)
-            .then_some(i)
+        let (px, py) = Self::node_delete_pos(curve, i);
+        ((px - x).hypot(py - y) <= 8.0).then_some(i)
     }
 
     fn hit_vel_node(&self, curve: &VelCurve, x: f32, y: f32) -> Option<usize> {
@@ -1635,6 +1688,10 @@ fn paint_glass_modal(
     draw.outline_rounded(modal_x, modal_y, modal_w, modal_h, radius, GLASS_EDGE, 1.25);
 }
 
+fn midi_hit_alpha(age: f32) -> f32 {
+    (1.0 - (age - 0.5).max(0.0) / 2.0).clamp(0.0, 1.0)
+}
+
 fn draw_vel_map_graph(draw: &mut Draw<'_>, curve: &VelCurve, selected: Option<usize>) {
     let (gx, gy, gw, gh) = ScdEditorView::vel_map_graph();
     draw.rounded_rect(gx, gy, gw, gh, 4.0, THEME_DIM);
@@ -1655,21 +1712,17 @@ fn draw_vel_map_graph(draw: &mut Draw<'_>, curve: &VelCurve, selected: Option<us
                 let (ox, oy) = to_pt(node.out_handle.x, node.out_handle.y);
                 draw.line(nx, ny, ox, oy, THEME_DIM, 1.0);
                 draw.circle(ox, oy, 4.0, THEME, true);
-                if i > 0 && i + 1 < curve.nodes.len() {
-                    let (dx, dy) = ScdEditorView::handle_delete_pos(nx, ny, ox, oy);
-                    draw_delete_x(draw, dx, dy);
-                }
             }
             if i > 0 {
                 let (ix, iy) = to_pt(node.in_handle.x, node.in_handle.y);
                 draw.line(nx, ny, ix, iy, THEME_DIM, 1.0);
                 draw.circle(ix, iy, 4.0, THEME, true);
-                if i + 1 < curve.nodes.len() {
-                    let (dx, dy) = ScdEditorView::handle_delete_pos(nx, ny, ix, iy);
-                    draw_delete_x(draw, dx, dy);
-                }
             }
         }
+    }
+    if let Some(i) = selected.filter(|i| *i > 0 && *i + 1 < curve.nodes.len()) {
+        let (dx, dy) = ScdEditorView::node_delete_pos(curve, i);
+        draw_delete_x(draw, dx, dy);
     }
     for (i, node) in curve.nodes.iter().enumerate() {
         let (nx, ny) = to_pt(node.x, node.y);
@@ -2017,6 +2070,24 @@ impl View for ScdEditorView {
             }
         });
         event.map(|_: &NoteLearnPoll, _| {
+            let now = Instant::now();
+            self.vel_hits
+                .retain(|(_, _, _, at)| now.duration_since(*at).as_secs_f32() < 2.5);
+            for piece in KitPieceId::ALL {
+                for art in 0..crate::vel_map::MAX_ARTS {
+                    let velocity =
+                        self.params.midi_velocities[piece as usize][art].swap(0, Ordering::Relaxed);
+                    if velocity != 0
+                        && self.vel_map_open == Some(piece)
+                        && Self::vel_art_members(piece, self.vel_art).contains(&art)
+                    {
+                        // One trail per velocity keeps memory bounded even under dense MIDI.
+                        self.vel_hits
+                            .retain(|(p, a, v, _)| (*p, *a, *v) != (piece, art, velocity));
+                        self.vel_hits.push((piece, art, velocity, now));
+                    }
+                }
+            }
             if self.apply_note_learn() {
                 cx.needs_redraw();
             }
@@ -2397,6 +2468,21 @@ impl View for ScdEditorView {
                         if Self::hit(x, y, modal_x, modal_y, modal_w, modal_h) {
                             if let Some(kit_piece) = self.vel_map_open {
                                 let options = Self::vel_art_options(kit_piece);
+                                for (_, art, start, count) in Self::vel_headers(kit_piece) {
+                                    let (hx, hy, hw, hh) =
+                                        Self::vel_group_header_rect(start, count, options.len());
+                                    if let Some(art) =
+                                        art.filter(|_| Self::hit(x, y, hx, hy, hw, hh))
+                                    {
+                                        self.commit_note_edit();
+                                        self.vel_art = art;
+                                        self.vel_selected_node = None;
+                                        self.vel_ignore_up = true;
+                                        cx.needs_redraw();
+                                        meta.consume();
+                                        return;
+                                    }
+                                }
                                 for (i, (art, _)) in options.iter().enumerate() {
                                     let (sx, sy, sw, sh) = Self::vel_seg_rect(i, options.len());
                                     if Self::hit(x, y, sx, sy, sw, sh) {
@@ -2411,6 +2497,7 @@ impl View for ScdEditorView {
                             }
                             if let Some(curve) = self.vel_curve() {
                                 if let Some(i) = self.hit_vel_delete_x(&curve, x, y) {
+                                    self.vel_ignore_up = true;
                                     let mut curve = curve;
                                     if curve.delete(i) {
                                         self.vel_selected_node = None;
@@ -3189,32 +3276,25 @@ impl View for ScdEditorView {
             );
             let options = Self::vel_art_options(kit_piece);
             let n = options.len();
-            if kit_piece != KitPieceId::Hihat {
-                let names: Vec<String> = arts.iter().map(|a| a.short_name()).collect();
-                for group in art_switch_groups(&names) {
-                    if let Some(header) = &group.header {
-                        let (hx, hy, hw, hh) =
-                            Self::vel_group_header_rect(group.start, group.count(), n);
-                        draw.rounded_rect(
-                            hx + 3.0,
-                            hy,
-                            (hw - 6.0).max(4.0),
-                            hh,
-                            hh * 0.5,
-                            THEME_DIM,
-                        );
-                        draw.text_centered(hx + hw * 0.5, hy + hh * 0.5 + 3.5, header, 9.0, THEME);
-                    }
-                }
-            }
             let (tx, ty, tw, th) = Self::vel_switch_track();
             draw.rounded_rect(tx, ty, tw, th, th * 0.5, SOF_OFF);
-            let selected = options
-                .iter()
-                .position(|(art, _)| *art == self.vel_art)
-                .unwrap_or(0);
-            let (sx, sy, sw, sh) = Self::vel_seg_rect(selected, n);
-            draw.rounded_rect(sx, sy, sw, sh, sh * 0.5, THEME_DIM);
+            for (header, art, start, count) in Self::vel_headers(kit_piece) {
+                let (hx, hy, hw, hh) = Self::vel_group_header_rect(start, count, n);
+                let (hx, hw) = (hx + 2.0, hw - 4.0);
+                let fill = if art == Some(self.vel_art) {
+                    THEME_DIM
+                } else {
+                    SOF_OFF
+                };
+                fill_rounded_varying(&mut draw, hx, hy, hw, hh, (6.0, 6.0, 0.0, 0.0), fill);
+                draw.line(hx, hy + 6.0, hx, ty + th, THEME_DIM, 1.0);
+                draw.line(hx + hw, hy + 6.0, hx + hw, ty + th, THEME_DIM, 1.0);
+                draw.text_centered(hx + hw * 0.5, hy + hh * 0.5 + 3.5, &header, 10.0, THEME);
+            }
+            if let Some(selected) = options.iter().position(|(art, _)| *art == self.vel_art) {
+                let (sx, sy, sw, sh) = Self::vel_seg_rect(selected, n);
+                draw.rounded_rect(sx, sy, sw, sh, sh * 0.5, THEME_DIM);
+            }
             let font = if n > 8 { 9.0 } else { 10.0 };
             for (i, (_, label)) in options.iter().enumerate() {
                 let (sx, sy, sw, sh) = Self::vel_seg_rect(i, n);
@@ -3222,6 +3302,14 @@ impl View for ScdEditorView {
             }
             let curve = self.params.vel_maps.curve(kit_piece, self.vel_art);
             draw_vel_map_graph(&mut draw, &curve, self.vel_selected_node);
+            let (gx, gy, gw, gh) = Self::vel_map_graph();
+            for &(piece, art, velocity, at) in &self.vel_hits {
+                if piece == kit_piece && members.contains(&art) {
+                    let alpha = midi_hit_alpha(at.elapsed().as_secs_f32());
+                    let x = gx + (velocity as f32 - 1.0) / 126.0 * gw;
+                    draw.line(x, gy, x, gy + gh, Color::rgbaf(1.0, 0.85, 0.4, alpha), 1.5);
+                }
+            }
         }
 
         if self.zoom_open {
@@ -3464,6 +3552,52 @@ pub fn create(params: Arc<ScdParams>) -> Option<Box<dyn Editor>> {
 mod tests {
     use super::*;
     use crate::params::editor_logical_size;
+
+    #[test]
+    fn mapping_headers_select_base_samples_without_duplicate_choices() {
+        let options = ScdEditorView::vel_art_options(KitPieceId::OpenSnare);
+        assert_eq!(
+            options.iter().map(|(art, _)| *art).collect::<Vec<_>>(),
+            [0, 1, 2, 3, 4, 7, 8]
+        );
+        let headers = ScdEditorView::vel_headers(KitPieceId::OpenSnare);
+        assert_eq!(
+            headers,
+            vec![
+                ("Center".into(), Some(5), 1, 2),
+                ("Edge".into(), Some(6), 3, 2)
+            ]
+        );
+        for (_, _, start, count) in headers {
+            let (hx, _, hw, _) = ScdEditorView::vel_group_header_rect(start, count, options.len());
+            let (left, _, _, _) = ScdEditorView::vel_seg_rect(start, options.len());
+            let (right, _, width, _) =
+                ScdEditorView::vel_seg_rect(start + count - 1, options.len());
+            assert!(left > hx + 2.0 && right + width < hx + hw - 2.0);
+        }
+    }
+
+    #[test]
+    fn mapping_delete_is_near_node_and_perpendicular_to_tangent() {
+        let mut curve = VelCurve::identity();
+        let i = curve.insert_at(0.5).unwrap();
+        let node = &curve.nodes[i];
+        let (nx, ny) = ScdEditorView::norm_to_graph(node.x, node.y);
+        let (ix, iy) = ScdEditorView::norm_to_graph(node.in_handle.x, node.in_handle.y);
+        let (ox, oy) = ScdEditorView::norm_to_graph(node.out_handle.x, node.out_handle.y);
+        let (dx, dy) = ScdEditorView::node_delete_pos(&curve, i);
+        assert!(((dx - nx).hypot(dy - ny) - 20.0).abs() < 0.001);
+        assert!(((dx - nx) * (ox - ix) + (dy - ny) * (oy - iy)).abs() < 0.02);
+    }
+
+    #[test]
+    fn mapping_midi_holds_then_fades_for_two_seconds() {
+        assert_eq!(midi_hit_alpha(0.0), 1.0);
+        assert_eq!(midi_hit_alpha(0.5), 1.0);
+        assert_eq!(midi_hit_alpha(1.5), 0.5);
+        assert_eq!(midi_hit_alpha(2.5), 0.0);
+        assert_eq!(midi_hit_alpha(3.0), 0.0);
+    }
 
     #[test]
     fn nearest_zoom_snaps_to_preset_levels() {

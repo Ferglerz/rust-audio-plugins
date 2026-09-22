@@ -358,6 +358,9 @@ pub struct ScdParams {
 
     /// Last processed hi-hat CC (0–127). `255` means none received yet.
     pub cc_display: AtomicU8,
+
+    /// Pending incoming velocity per resolved articulation; zero means no new hit.
+    pub midi_velocities: [[AtomicU8; crate::vel_map::MAX_ARTS]; KitPieceId::COUNT],
 }
 
 impl Default for ScdParams {
@@ -391,6 +394,7 @@ impl Default for ScdParams {
             r_crash: ChannelStripParams::new("R Crash", 0.0, 0.0),
             vu: Arc::new(VuMeters::default()),
             cc_display: AtomicU8::new(255),
+            midi_velocities: std::array::from_fn(|_| std::array::from_fn(|_| AtomicU8::new(0))),
         }
     }
 }
