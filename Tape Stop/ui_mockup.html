@@ -1,0 +1,1310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tape Stop Effect // 70s Retro Curvy UI Mockup</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@600;700;800&family=Nunito:wght@700;800;900&family=JetBrains+Mono:wght@600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --frame-cream: #eee5d2;
+      --frame-outline: #22272f;
+      
+      /* Unified, seamless dark background */
+      --bg-dark-unified: #141920;
+      --bg-module-dark: #0e1216;
+      --bg-graph: #0a0d11;
+
+      --color-cyan: #4ce1f0;
+      --color-orange: #ff9624;
+      --color-yellow: #ffd236;
+      --color-lime: #b6f856;
+      --color-magenta: #ff66b2;
+      --color-lilac: #d978f8;
+      --color-teal-power: #48a5b2;
+      --color-teal-power-hover: #5dc3d1;
+
+      --text-cream: #f7f2e7;
+      --text-muted: #8d9da9;
+      
+      --font-display: 'Fredoka', 'Nunito', sans-serif;
+      --font-body: 'Nunito', sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    body {
+      background-color: #0c0e12;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      color: var(--text-cream);
+      font-family: var(--font-body);
+      padding: 24px;
+    }
+
+    .preview-header {
+      margin-bottom: 20px;
+      text-align: center;
+    }
+
+    .preview-header h1 {
+      font-family: var(--font-display);
+      font-size: 16px;
+      font-weight: 800;
+      letter-spacing: 2px;
+      color: var(--color-cyan);
+      text-transform: uppercase;
+    }
+
+    .preview-header p {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    /* ------------------------------------------------------------- */
+    /* 1. OUTERMOST WARM OFF-WHITE ROUNDED BEZEL                     */
+    /* Mathematically Aligned Outer Radius: R_outer = 56px           */
+    /* Inner edge: 56 - 14 = 42px | Content edge: 42 - 6 = 36px      */
+    /* ------------------------------------------------------------- */
+    .outer-bezel {
+      width: 1040px;
+      height: 590px;
+      background-color: var(--bg-dark-unified);
+      border: 14px solid var(--frame-cream);
+      outline: 3.5px solid var(--frame-outline);
+      border-radius: 56px;
+      box-shadow: 0 35px 80px -15px rgba(0, 0, 0, 0.95);
+      padding: 6px; /* Strictly uniform 6px dark gap */
+      display: flex;
+      position: relative;
+    }
+
+    /* ------------------------------------------------------------- */
+    /* 2. INNER SCULPTED CREAM FACEPLATE PANEL                       */
+    /* Concentric Radius: R_faceplate = 36px                         */
+    /* ------------------------------------------------------------- */
+    .inner-faceplate {
+      width: 1000px;
+      height: 550px;
+      background-color: transparent;
+      position: relative;
+      overflow: hidden;
+      border-radius: 36px;
+    }
+
+    /* SVG faceplate chassis with shared concentric centers */
+    .faceplate-svg-chassis {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 1000px;
+      height: 550px;
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    /* Content container layered cleanly above faceplate */
+    .faceplate-content {
+      position: relative;
+      z-index: 2;
+      width: 1000px;
+      height: 550px;
+      display: flex;
+      flex-direction: column;
+      padding: 14px;
+      gap: 14px;
+    }
+
+    /* ------------------------------------------------------------- */
+    /* TOP HEADER: Logo + Title + Top-Right Pod                      */
+    /* Radius: R_module = 22px (Center aligned at x=36, y=36)        */
+    /* ------------------------------------------------------------- */
+    .header-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 58px;
+      background-color: var(--bg-dark-unified);
+      border: 3.5px solid var(--frame-outline);
+      border-radius: 22px;
+      padding: 0 14px 0 20px;
+      position: relative;
+    }
+
+    .logo-group {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .tape-logo-svg {
+      width: 66px;
+      height: 40px;
+    }
+
+    .plugin-title {
+      font-family: var(--font-display);
+      font-size: 34px;
+      font-weight: 800;
+      letter-spacing: 1.2px;
+      color: var(--color-cyan);
+      text-transform: uppercase;
+    }
+
+    /* Top Right Pod (Input / Output / Bypass) */
+    .top-right-pod {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      padding-right: 6px;
+    }
+
+    .pod-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 3px;
+      cursor: pointer;
+      color: var(--text-cream);
+      transition: all 0.15s ease;
+    }
+
+    .pod-btn:hover {
+      color: var(--color-cyan);
+    }
+
+    .pod-btn.active {
+      color: var(--color-cyan);
+    }
+
+    .pod-icon {
+      width: 19px;
+      height: 19px;
+      stroke-width: 2.5;
+    }
+
+    .pod-label {
+      font-family: var(--font-display);
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.6px;
+      text-transform: uppercase;
+    }
+
+    /* ------------------------------------------------------------- */
+    /* MIDDLE WORKSPACE (Left Knobs + Main Graph)                    */
+    /* ------------------------------------------------------------- */
+    .middle-workspace {
+      display: flex;
+      gap: 14px;
+      height: 336px;
+      position: relative;
+    }
+
+    /* Left Column: Drop Time & Crossfade */
+    .left-column {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      width: 200px;
+      height: 100%;
+    }
+
+    .module-card {
+      background-color: var(--bg-module-dark);
+      border: 3.5px solid var(--frame-outline);
+      border-radius: 22px;
+      padding: 10px 14px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+      flex: 1;
+      position: relative;
+    }
+
+    .module-card-header {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+    }
+
+    .module-card-title {
+      font-family: var(--font-display);
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.4px;
+      text-align: center;
+      text-transform: uppercase;
+    }
+
+    .title-magenta { color: var(--color-magenta); }
+    .title-lime { color: var(--color-lime); }
+    .title-lilac { color: var(--color-lilac); }
+    .title-cyan { color: var(--color-cyan); }
+
+    .curve-icon-badge {
+      position: absolute;
+      right: 0;
+      top: 0;
+      width: 18px;
+      height: 18px;
+      stroke: var(--text-muted);
+      fill: none;
+    }
+
+    /* Round 70s Knob Component */
+    .knob-wrapper {
+      position: relative;
+      width: 86px;
+      height: 86px;
+      cursor: ns-resize;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .knob-canvas {
+      width: 86px;
+      height: 86px;
+      display: block;
+    }
+
+    .knob-readout {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-cream);
+      margin-top: 2px;
+    }
+
+    /* Center Graph Container (Radius: 22px) */
+    .graph-frame {
+      flex: 1;
+      height: 100%;
+      background-color: var(--bg-graph);
+      border: 3.5px solid var(--frame-outline);
+      border-radius: 22px;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .graph-canvas-container {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    /* ------------------------------------------------------------- */
+    /* BOTTOM ROW: Curve + Stereo Div + CC # + Power                 */
+    /* Height: 86px, Gap: 14px                                       */
+    /* ------------------------------------------------------------- */
+    .bottom-row {
+      display: flex;
+      gap: 14px;
+      height: 86px;
+      align-items: center;
+      position: relative;
+    }
+
+    /* Bottom Left: Curve Knob Capsule (304px, Radius: 22px) */
+    .capsule-curve {
+      background-color: var(--bg-module-dark);
+      border: 3.5px solid var(--frame-outline);
+      border-radius: 22px;
+      padding: 6px 16px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      height: 86px;
+      width: 304px;
+      flex-shrink: 0;
+    }
+
+    .curve-knob-wrapper {
+      width: 68px;
+      height: 68px;
+      cursor: ns-resize;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .curve-knob-canvas {
+      width: 68px;
+      height: 68px;
+      display: block;
+    }
+
+    .curve-text-col {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .curve-heading {
+      font-family: var(--font-display);
+      font-size: 15px;
+      font-weight: 800;
+      color: var(--color-lilac);
+      text-transform: uppercase;
+    }
+
+    .curve-subtext {
+      font-family: var(--font-body);
+      font-size: 10.5px;
+      font-weight: 700;
+      color: var(--text-muted);
+    }
+
+    .curve-readout {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-cream);
+    }
+
+    /* Bottom Center: Stereo Divergence Capsule Slider (326px, Radius: 22px) */
+    .capsule-stereo {
+      background-color: var(--bg-module-dark);
+      border: 3.5px solid var(--frame-outline);
+      border-radius: 22px;
+      padding: 8px 18px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      gap: 8px;
+      height: 86px;
+      width: 326px;
+      flex-shrink: 0;
+    }
+
+    .stereo-heading {
+      font-family: var(--font-display);
+      font-size: 13.5px;
+      font-weight: 800;
+      color: var(--color-cyan);
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+
+    .stereo-track {
+      width: 100%;
+      height: 24px;
+      background-color: #182029;
+      border: 2px solid #283340;
+      border-radius: 12px;
+      position: relative;
+      cursor: ew-resize;
+      overflow: hidden;
+    }
+
+    .stereo-fill {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 50%;
+      width: 0%;
+      background: var(--color-cyan);
+      border-radius: 10px;
+    }
+
+    .stereo-thumb {
+      position: absolute;
+      top: 2px;
+      left: calc(50% - 10px);
+      width: 20px;
+      height: 16px;
+      background-color: #182029;
+      border: 2px solid var(--color-cyan);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 2px;
+    }
+
+    .thumb-notch {
+      width: 2px;
+      height: 8px;
+      background-color: var(--color-cyan);
+      border-radius: 1px;
+    }
+
+    /* Bottom Center-Right: CC # Capsule (100px, Radius: 22px) */
+    .capsule-cc {
+      background-color: var(--bg-module-dark);
+      border: 3.5px solid var(--frame-outline);
+      border-radius: 22px;
+      padding: 8px 14px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      height: 86px;
+      width: 100px;
+      flex-shrink: 0;
+      cursor: ns-resize;
+    }
+
+    .cc-heading {
+      font-family: var(--font-display);
+      font-size: 13.5px;
+      font-weight: 800;
+      color: var(--color-magenta);
+      text-transform: uppercase;
+    }
+
+    .cc-badge-box {
+      background-color: var(--color-magenta);
+      color: #0c0f13;
+      font-family: var(--font-display);
+      font-size: 14px;
+      font-weight: 800;
+      padding: 2px 18px;
+      border-radius: 10px;
+    }
+
+    /* ------------------------------------------------------------- */
+    /* BOTTOM-RIGHT: SEAMLESS RECESSED POWER BUTTON AREA (186px)     */
+    /* ------------------------------------------------------------- */
+    .power-pocket-area {
+      height: 86px;
+      width: 186px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      flex-shrink: 0;
+    }
+
+    /* Flat 70s 2D Power Button */
+    .btn-power-pill {
+      background-color: var(--color-teal-power);
+      border: 3.5px solid var(--frame-outline);
+      color: #0c181c;
+      font-family: var(--font-display);
+      font-size: 15px;
+      font-weight: 800;
+      letter-spacing: 1px;
+      padding: 12px 30px;
+      border-radius: 20px;
+      cursor: pointer;
+      transition: background-color 0.1s ease;
+      text-transform: uppercase;
+      box-shadow: none; /* Flat 2D */
+    }
+
+    .btn-power-pill:hover {
+      background-color: var(--color-teal-power-hover);
+    }
+
+    .btn-power-pill:active {
+      background-color: #3b93a0;
+    }
+
+    .btn-power-pill.bypassed {
+      background-color: #3b4652;
+      color: #7b8a96;
+    }
+
+    /* Test Bar */
+    .test-bar {
+      display: flex;
+      gap: 14px;
+      margin-top: 20px;
+      align-items: center;
+    }
+
+    .btn-test-trigger {
+      background-color: var(--color-orange);
+      border: 2.5px solid #242a32;
+      color: #0c0f13;
+      font-family: var(--font-display);
+      font-size: 13px;
+      font-weight: 800;
+      padding: 9px 24px;
+      border-radius: 20px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .btn-test-trigger:hover {
+      background-color: #ffa845;
+    }
+
+    .btn-test-trigger.braking {
+      background-color: #ff3366;
+      color: #fff;
+    }
+
+    .test-hint {
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      color: var(--text-muted);
+    }
+
+    .kbd-key {
+      background: #1e293b;
+      border: 1px solid #334155;
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: var(--text-cream);
+      font-weight: 700;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="preview-header">
+    <h1>TAPE STOP EFFECT // 70s RETRO CURVY UI</h1>
+    <p>Mathematically exact concentric offsets sharing the same arc centers (56px &rarr; 42px &rarr; 36px &rarr; 22px)</p>
+  </div>
+
+  <!-- 1. OUTERMOST OFF-WHITE ROUNDED BEZEL (R_outer = 56px, R_inner = 42px) -->
+  <div class="outer-bezel">
+    
+    <!-- 2. INNER SCULPTED FACEPLATE PANEL (R_outer = 36px, Padding = 14px, Modules = 22px) -->
+    <div class="inner-faceplate">
+      
+      <!-- 
+        EXACT PARALLEL CONCENTRIC SVG PATH:
+        All arcs share the exact same center origin as their nested module:
+        - Corner (x=36, y=36): Faceplate r=36, Module r=22 -> constant 14px ribbon everywhere
+        - Corner (x=964, y=36): Faceplate r=36, Header r=22 -> constant 14px ribbon everywhere
+        - Corner (x=36, y=514): Faceplate r=36, Curve r=22 -> constant 14px ribbon everywhere
+        - Graph bottom-right (x=964, y=414): Graph r=22, Power fillet r=36 -> constant 14px ribbon everywhere
+        - CC# bottom-right (x=744, y=514): CC# r=22, Power fillet r=36 -> constant 14px ribbon everywhere
+      -->
+      <svg class="faceplate-svg-chassis" viewBox="0 0 1000 550" preserveAspectRatio="none">
+        <path d="M 36 0 
+                 L 964 0 
+                 A 36 36 0 0 1 1000 36 
+                 L 1000 414 
+                 A 36 36 0 0 1 964 450 
+                 L 802 450 
+                 A 22 22 0 0 0 780 472 
+                 L 780 514 
+                 A 36 36 0 0 1 744 550 
+                 L 36 550 
+                 A 36 36 0 0 1 0 514 
+                 L 0 36 
+                 A 36 36 0 0 1 36 0 
+                 Z" 
+              fill="#eee5d2" 
+              stroke="#22272f" 
+              stroke-width="3.5" 
+              stroke-linejoin="round"/>
+      </svg>
+
+      <!-- UI Modules & Content layered on top -->
+      <div class="faceplate-content">
+        
+        <!-- TOP HEADER: Logo + Title + Top-Right Pod (Radius: 22px) -->
+        <div class="header-row">
+          <div class="logo-group">
+            <!-- 70s Tape Reel & Waveform SVG -->
+            <svg class="tape-logo-svg" viewBox="0 0 80 50" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="24" cy="24" r="16" stroke="#ffffff" stroke-width="4.5"/>
+              <circle cx="24" cy="24" r="9" stroke="#ffffff" stroke-width="3.5"/>
+              <circle cx="24" cy="24" r="3.5" fill="#ffffff"/>
+              <path d="M 24 40 C 34 40, 36 40, 42 40 L 45 28 L 50 14 L 54 36 L 58 20 L 62 30 L 66 24 L 76 24" 
+                    stroke="#ffffff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+
+            <span class="plugin-title">TAPE STOP EFFECT</span>
+          </div>
+
+          <!-- Top Right Pod: Input / Output / Bypass -->
+          <div class="top-right-pod">
+            <div class="pod-btn">
+              <svg class="pod-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round">
+                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+              </svg>
+              <span class="pod-label">INPUT</span>
+            </div>
+
+            <div class="pod-btn">
+              <svg class="pod-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+              </svg>
+              <span class="pod-label">OUTPUT</span>
+            </div>
+
+            <div class="pod-btn" id="podBypass">
+              <svg class="pod-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round">
+                <path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path>
+                <line x1="12" y1="2" x2="12" y2="12"></line>
+              </svg>
+              <span class="pod-label">BYPASS</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- MIDDLE WORKSPACE (Left Knobs + Center Graph) -->
+        <div class="middle-workspace">
+          
+          <!-- Left Column: Drop Time & Crossfade Knobs (Radius: 22px) -->
+          <div class="left-column">
+            
+            <!-- Knob 1: Drop Time (s) -->
+            <div class="module-card" data-param="dropTime" data-min="0.01" data-max="5.0" data-val="0.50" data-unit="s">
+              <div class="module-card-header">
+                <span class="module-card-title title-magenta">DROP TIME (s)</span>
+                <svg class="curve-icon-badge" viewBox="0 0 24 24">
+                  <path d="M 4 20 Q 8 20, 14 10 T 20 4" stroke-width="2.5" stroke-linecap="round"/>
+                </svg>
+              </div>
+              <div class="knob-wrapper">
+                <canvas class="knob-canvas" width="172" height="172" data-color="#ff9624" data-track="#ff66b2"></canvas>
+              </div>
+              <div class="knob-readout">0.50 s</div>
+            </div>
+
+            <!-- Knob 2: Crossfade (ms) -->
+            <div class="module-card" data-param="xfadeMs" data-min="5" data-max="500" data-val="50" data-unit="ms">
+              <div class="module-card-header">
+                <span class="module-card-title title-lime">CROSSFADE (ms)</span>
+              </div>
+              <div class="knob-wrapper">
+                <canvas class="knob-canvas" width="172" height="172" data-color="#b6f856" data-track="#6db824"></canvas>
+              </div>
+              <div class="knob-readout">50 ms</div>
+            </div>
+
+          </div>
+
+          <!-- Center Graph Container (Radius: 22px) -->
+          <div class="graph-frame">
+            <div class="graph-canvas-container">
+              <canvas id="graphCanvas"></canvas>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- BOTTOM ROW: Curve + Stereo Div + CC # + Seamless Recessed Power -->
+        <div class="bottom-row">
+          
+          <!-- Bottom Left: Curve Knob Capsule (304px, Radius: 22px) -->
+          <div class="capsule-curve" data-param="dropCurve" data-min="0.1" data-max="4.0" data-val="1.00">
+            <div class="curve-knob-wrapper">
+              <canvas class="curve-knob-canvas" width="136" height="136" data-color="#d978f8" data-track="#9938b8"></canvas>
+            </div>
+            <div class="curve-text-col">
+              <span class="curve-heading">CURVE</span>
+              <span class="curve-subtext">(Deceleration exponent)</span>
+              <span class="curve-readout">1.00</span>
+            </div>
+          </div>
+
+          <!-- Bottom Center: Stereo Divergence Capsule Slider (326px, Radius: 22px) -->
+          <div class="capsule-stereo" id="stereoSliderBlock">
+            <span class="stereo-heading">STEREO DIV (%)</span>
+            <div class="stereo-track" id="stereoTrack">
+              <div class="stereo-fill" id="stereoFill"></div>
+              <div class="stereo-thumb" id="stereoThumb">
+                <div class="thumb-notch"></div>
+                <div class="thumb-notch"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Bottom Center-Right: CC # Capsule (100px, Radius: 22px) -->
+          <div class="capsule-cc" id="ccBlock">
+            <span class="cc-heading">CC #</span>
+            <div class="cc-badge-box" id="ccBadge">3</div>
+          </div>
+
+          <!-- Bottom Right: Seamless Power Button Area (186px) -->
+          <div class="power-pocket-area">
+            <button class="btn-power-pill" id="btnPower">POWER</button>
+          </div>
+
+        </div>
+
+      </div>
+
+    </div>
+
+  </div>
+
+  <!-- Interactive Test Bar -->
+  <div class="test-bar">
+    <button class="btn-test-trigger" id="btnTestStop">
+      ▶ TEST TAPE STOP (<span class="kbd-key">SPACEBAR</span>)
+    </button>
+    <span class="test-hint">Hold down mouse or spacebar to brake tape, release to restore.</span>
+  </div>
+
+  <!-- JavaScript Simulator & Rendering Engine -->
+  <script>
+    const state = {
+      dropTime: 0.50,       // seconds
+      xfadeMs: 50,          // ms
+      dropCurve: 1.00,      // exponent
+      stereoDiv: 0,         // % (-100 to +100)
+      overrideCC: 3,        // CC #
+      power: true,
+      bypassed: false,
+
+      // Live Audio / Tape Physics state
+      isStopping: false,
+      stopPos: 0,
+      sampleRate: 44100,
+      speedL: 1.0,
+      speedR: 1.0,
+      isCrossfading: false,
+      xfadePos: 0,
+      xfadeLen: 2205,
+      oldSpeedL: 1.0,
+      oldSpeedR: 1.0,
+    };
+
+    // HiDPI Canvas Helper
+    function setupCanvas(canvas) {
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.parentElement.getBoundingClientRect();
+      const w = rect.width > 0 ? rect.width : (canvas.clientWidth || 400);
+      const h = rect.height > 0 ? rect.height : (canvas.clientHeight || 250);
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+      const ctx = canvas.getContext('2d');
+      ctx.scale(dpr, dpr);
+      return { ctx, width: w, height: h };
+    }
+
+    // 70s STYLE ROUND KNOB RENDERER
+    function renderKnob(canvas, norm, knobColor, trackColor) {
+      const dpr = window.devicePixelRatio || 1;
+      const size = canvas.parentElement.clientWidth || 86;
+      canvas.width = size * dpr;
+      canvas.height = size * dpr;
+      const ctx = canvas.getContext('2d');
+      ctx.scale(dpr, dpr);
+
+      const cx = size / 2;
+      const cy = size / 2;
+      const outerR = (size / 2) - 5;
+      const knobR = outerR - 8;
+
+      ctx.clearRect(0, 0, size, size);
+
+      // Track Arc (135° to 405°)
+      const startAngle = 0.75 * Math.PI;
+      const sweepAngle = 1.5 * Math.PI;
+      const endAngle = startAngle + sweepAngle;
+      const activeAngle = startAngle + norm * sweepAngle;
+
+      // Outer Inactive Track
+      ctx.beginPath();
+      ctx.arc(cx, cy, outerR, startAngle, endAngle);
+      ctx.strokeStyle = '#222b36';
+      ctx.lineWidth = 4.5;
+      ctx.lineCap = 'round';
+      ctx.stroke();
+
+      // Outer Active Track
+      if (norm > 0.01) {
+        ctx.beginPath();
+        ctx.arc(cx, cy, outerR, startAngle, activeAngle);
+        ctx.strokeStyle = trackColor;
+        ctx.lineWidth = 4.5;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+      }
+
+      // Knob Body
+      ctx.beginPath();
+      ctx.arc(cx, cy, knobR, 0, Math.PI * 2);
+      ctx.fillStyle = knobColor;
+      ctx.fill();
+      ctx.strokeStyle = '#0c0f13';
+      ctx.lineWidth = 3.5;
+      ctx.stroke();
+
+      // Pointer Line (Thick black 70s notch)
+      const indAngle = startAngle + norm * sweepAngle;
+      const px1 = cx + Math.cos(indAngle) * (knobR * 0.25);
+      const py1 = cy + Math.sin(indAngle) * (knobR * 0.25);
+      const px2 = cx + Math.cos(indAngle) * (knobR * 0.85);
+      const py2 = cy + Math.sin(indAngle) * (knobR * 0.85);
+
+      ctx.beginPath();
+      ctx.moveTo(px1, py1);
+      ctx.lineTo(px2, py2);
+      ctx.strokeStyle = '#0c0f13';
+      ctx.lineWidth = 3.5;
+      ctx.lineCap = 'round';
+      ctx.stroke();
+    }
+
+    const knobUpdaters = [];
+
+    // Attach Knob Interactions
+    document.querySelectorAll('[data-param]').forEach(elem => {
+      const canvas = elem.querySelector('canvas');
+      if (!canvas) return;
+
+      const param = elem.dataset.param;
+      const min = parseFloat(elem.dataset.min);
+      const max = parseFloat(elem.dataset.max);
+      const unit = elem.dataset.unit || '';
+      const readout = elem.querySelector('.knob-readout') || elem.querySelector('.curve-readout');
+      const knobColor = canvas.dataset.color;
+      const trackColor = canvas.dataset.track;
+
+      function updateKnob() {
+        const val = state[param];
+        const norm = Math.max(0, Math.min(1, (val - min) / (max - min)));
+        renderKnob(canvas, norm, knobColor, trackColor);
+        if (readout) {
+          readout.textContent = `${val.toFixed(2)}${unit ? ' ' + unit : ''}`;
+        }
+      }
+
+      knobUpdaters.push(updateKnob);
+
+      let isDragging = false;
+      let startY = 0;
+      let startVal = 0;
+
+      elem.addEventListener('mousedown', e => {
+        isDragging = true;
+        startY = e.clientY;
+        startVal = state[param];
+        document.body.style.cursor = 'ns-resize';
+        e.preventDefault();
+      });
+
+      window.addEventListener('mousemove', e => {
+        if (!isDragging) return;
+        const dy = startY - e.clientY;
+        const range = max - min;
+        const delta = (dy / 150) * range;
+        const newVal = Math.max(min, Math.min(max, startVal + delta));
+        state[param] = newVal;
+        updateKnob();
+      });
+
+      window.addEventListener('mouseup', () => {
+        if (isDragging) {
+          isDragging = false;
+          document.body.style.cursor = '';
+        }
+      });
+    });
+
+    // Stereo Divergence Slider
+    const stereoTrack = document.getElementById('stereoTrack');
+    const stereoFill = document.getElementById('stereoFill');
+    const stereoThumb = document.getElementById('stereoThumb');
+
+    function updateStereoSlider(val) {
+      state.stereoDiv = val;
+      const thumbPercent = ((val + 100) / 200) * 100;
+      stereoThumb.style.left = `calc(${thumbPercent}% - 10px)`;
+
+      if (val >= 0) {
+        stereoFill.style.left = '50%';
+        stereoFill.style.width = `${(val / 200) * 100}%`;
+      } else {
+        const leftPercent = ((val + 100) / 200) * 100;
+        stereoFill.style.left = `${leftPercent}%`;
+        stereoFill.style.width = `${Math.abs(val / 200) * 100}%`;
+      }
+    }
+
+    updateStereoSlider(0);
+
+    let isStereoDragging = false;
+    stereoTrack.addEventListener('mousedown', e => {
+      isStereoDragging = true;
+      setStereoFromMouse(e);
+    });
+
+    function setStereoFromMouse(e) {
+      const rect = stereoTrack.getBoundingClientRect();
+      const norm = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      const val = Math.round(-100 + norm * 200);
+      updateStereoSlider(val);
+    }
+
+    window.addEventListener('mousemove', e => {
+      if (isStereoDragging) setStereoFromMouse(e);
+    });
+
+    window.addEventListener('mouseup', () => {
+      isStereoDragging = false;
+    });
+
+    // CC # Selector
+    const ccBlock = document.getElementById('ccBlock');
+    const ccBadge = document.getElementById('ccBadge');
+
+    let ccDragging = false;
+    let ccStartY = 0;
+    let ccStartVal = 3;
+
+    ccBlock.addEventListener('mousedown', e => {
+      ccDragging = true;
+      ccStartY = e.clientY;
+      ccStartVal = state.overrideCC;
+      e.preventDefault();
+    });
+
+    window.addEventListener('mousemove', e => {
+      if (!ccDragging) return;
+      const dy = ccStartY - e.clientY;
+      const newVal = Math.max(0, Math.min(31, Math.round(ccStartVal + dy / 10)));
+      state.overrideCC = newVal;
+      ccBadge.textContent = newVal;
+    });
+
+    window.addEventListener('mouseup', () => {
+      ccDragging = false;
+    });
+
+    // Power & Bypass Buttons
+    const btnPower = document.getElementById('btnPower');
+    const podBypass = document.getElementById('podBypass');
+
+    btnPower.addEventListener('click', () => {
+      state.power = !state.power;
+      btnPower.classList.toggle('bypassed', !state.power);
+      btnPower.textContent = state.power ? 'POWER' : 'OFF';
+    });
+
+    podBypass.addEventListener('click', () => {
+      state.bypassed = !state.bypassed;
+      podBypass.classList.toggle('active', state.bypassed);
+    });
+
+    // Tape Stop Audition Trigger
+    const btnTestStop = document.getElementById('btnTestStop');
+
+    function startTapeStop() {
+      if (state.isStopping) return;
+      state.isStopping = true;
+      state.stopPos = 0;
+      state.isCrossfading = false;
+      btnTestStop.classList.add('braking');
+      btnTestStop.textContent = '⏸ BRAKING ENGAGED...';
+    }
+
+    function releaseTapeStop() {
+      if (!state.isStopping && !state.isCrossfading) return;
+      state.isStopping = false;
+      state.isCrossfading = true;
+      state.xfadePos = 0;
+      state.xfadeLen = Math.floor((state.xfadeMs * state.sampleRate) / 1000);
+      state.oldSpeedL = state.speedL;
+      state.oldSpeedR = state.speedR;
+      btnTestStop.classList.remove('braking');
+      btnTestStop.textContent = '▶ TEST TAPE STOP (SPACEBAR)';
+    }
+
+    btnTestStop.addEventListener('mousedown', startTapeStop);
+    btnTestStop.addEventListener('mouseup', releaseTapeStop);
+
+    window.addEventListener('keydown', e => {
+      if (e.code === 'Space' && !e.repeat) {
+        startTapeStop();
+        e.preventDefault();
+      }
+    });
+
+    window.addEventListener('keyup', e => {
+      if (e.code === 'Space') {
+        releaseTapeStop();
+        e.preventDefault();
+      }
+    });
+
+    // Physics Engine
+    function updatePhysics(dtSamples) {
+      if (!state.power || state.bypassed) {
+        state.speedL = 1.0;
+        state.speedR = 1.0;
+        return;
+      }
+
+      const semiDrop = 1.0 - Math.exp((-1.0 / 12.0) * Math.log(2.0));
+      const stopSamplesBase = (state.dropTime * state.sampleRate) / semiDrop;
+      const divMult = state.stereoDiv / 200.0;
+      const stopSamplesL = stopSamplesBase * Math.max(0.1, (1.0 - divMult));
+      const stopSamplesR = stopSamplesBase * Math.max(0.1, (1.0 + divMult));
+      const maxStopSamples = Math.max(stopSamplesL, stopSamplesR);
+
+      state.stopSamplesL = stopSamplesL;
+      state.stopSamplesR = stopSamplesR;
+      state.maxStopSamples = maxStopSamples;
+
+      if (state.isStopping) {
+        state.stopPos += dtSamples;
+        if (state.stopPos > maxStopSamples) state.stopPos = maxStopSamples;
+
+        const progL = Math.min(1.0, state.stopPos / stopSamplesL);
+        const progR = Math.min(1.0, state.stopPos / stopSamplesR);
+
+        const curvedL = progL > 0 ? Math.pow(progL, state.dropCurve) : 0;
+        const curvedR = progR > 0 ? Math.pow(progR, state.dropCurve) : 0;
+
+        state.speedL = Math.max(0.0, 1.0 - curvedL);
+        state.speedR = Math.max(0.0, 1.0 - curvedR);
+      } else if (state.isCrossfading) {
+        state.xfadePos += dtSamples;
+        if (state.xfadePos >= state.xfadeLen) {
+          state.isCrossfading = false;
+          state.speedL = 1.0;
+          state.speedR = 1.0;
+        } else {
+          const t = state.xfadePos / state.xfadeLen;
+          const smoothFade = t * t * (3 - 2 * t);
+          state.speedL = state.oldSpeedL * (1.0 - smoothFade) + 1.0 * smoothFade;
+          state.speedR = state.oldSpeedR * (1.0 - smoothFade) + 1.0 * smoothFade;
+        }
+      } else {
+        state.speedL = 1.0;
+        state.speedR = 1.0;
+      }
+    }
+
+    // 70s Retro Graph Canvas
+    const graphCanvas = document.getElementById('graphCanvas');
+
+    function renderGraph() {
+      const { ctx, width: w, height: h } = setupCanvas(graphCanvas);
+      if (w <= 0 || h <= 0) return;
+      ctx.clearRect(0, 0, w, h);
+
+      const padLeft = 44;
+      const padBottom = 32;
+      const padTop = 24;
+      const padRight = 28;
+
+      const gw = w - padLeft - padRight;
+      const gh = h - padTop - padBottom;
+
+      // Grid Lines
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.16)';
+      ctx.lineWidth = 1.5;
+
+      const xDivs = 6;
+      for (let i = 0; i <= xDivs; i++) {
+        const gx = padLeft + (i / xDivs) * gw;
+        ctx.beginPath();
+        ctx.moveTo(gx, padTop);
+        ctx.lineTo(gx, padTop + gh);
+        ctx.stroke();
+      }
+
+      const yDivs = 4;
+      for (let i = 0; i <= yDivs; i++) {
+        const gy = padTop + (i / yDivs) * gh;
+        ctx.beginPath();
+        ctx.moveTo(padLeft, gy);
+        ctx.lineTo(padLeft + gw, gy);
+        ctx.stroke();
+      }
+
+      // Outer Axis Border
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(padLeft, padTop, gw, gh);
+
+      // Y-Axis Typography
+      ctx.font = '700 11px "Nunito", sans-serif';
+      ctx.fillStyle = '#f7f2e7';
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'middle';
+
+      const yLabels = ['14', '+3', '6', '3', '0'];
+      yLabels.forEach((lbl, i) => {
+        const gy = padTop + (i / (yLabels.length - 1)) * gh;
+        ctx.fillText(lbl, padLeft - 8, gy);
+      });
+
+      // Y-Axis Title
+      ctx.save();
+      ctx.translate(14, padTop + gh / 2);
+      ctx.rotate(-Math.PI / 2);
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#8d9da9';
+      ctx.font = '800 10.5px "Fredoka", sans-serif';
+      ctx.fillText('Pitch (Octaves/Semitones)', 0, 0);
+      ctx.restore();
+
+      // X-Axis Typography
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      const xLabels = ['0', '0.5', '1', '1.5', '2', '2.5', '3.0'];
+      xLabels.forEach((lbl, i) => {
+        const gx = padLeft + (i / (xLabels.length - 1)) * gw;
+        ctx.fillText(lbl, gx, padTop + gh + 6);
+      });
+
+      // X-Axis Title
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#8d9da9';
+      ctx.font = '800 10.5px "Fredoka", sans-serif';
+      ctx.fillText('Time (Seconds)', padLeft + gw / 2, padTop + gh + 19);
+
+      // 70s S-Curve / Pitch Drop Curve (Orange)
+      const curveStartVal = 0.18;
+      const curveEndVal = 0.98;
+
+      ctx.beginPath();
+      ctx.strokeStyle = '#ff9624';
+      ctx.lineWidth = 4.0;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      const totalPoints = 120;
+      for (let i = 0; i <= totalPoints; i++) {
+        const t = i / totalPoints;
+        const sProg = t < 0.5 
+          ? 0.5 * Math.pow(2 * t, state.dropCurve) 
+          : 1.0 - 0.5 * Math.pow(2 * (1 - t), state.dropCurve);
+        
+        const normY = curveStartVal + sProg * (curveEndVal - curveStartVal);
+        const px = padLeft + t * gw;
+        const py = padTop + normY * gh;
+
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+
+      // Yellow Anchor Dots along Curve
+      const anchorFractions = [0.0, 0.33, 0.52, 0.70, 0.85, 1.0];
+      const anchorPoints = anchorFractions.map(t => {
+        const sProg = t < 0.5 
+          ? 0.5 * Math.pow(2 * t, state.dropCurve) 
+          : 1.0 - 0.5 * Math.pow(2 * (1 - t), state.dropCurve);
+        const normY = curveStartVal + sProg * (curveEndVal - curveStartVal);
+        return {
+          x: padLeft + t * gw,
+          y: padTop + normY * gh,
+          t
+        };
+      });
+
+      anchorPoints.forEach((pt) => {
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, 5.0, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffd236';
+        ctx.fill();
+        ctx.strokeStyle = '#0c0f13';
+        ctx.lineWidth = 2.0;
+        ctx.stroke();
+      });
+
+      // Text Labels along Curve: "START", "PITCH DROP", "STOP"
+      ctx.font = '800 12px "Fredoka", sans-serif';
+      ctx.fillStyle = '#ffffff';
+
+      // START
+      ctx.textAlign = 'left';
+      ctx.fillText('START', anchorPoints[0].x + 4, anchorPoints[0].y - 14);
+
+      // PITCH DROP
+      ctx.save();
+      ctx.translate(anchorPoints[3].x + 8, anchorPoints[3].y - 12);
+      ctx.rotate(-0.35);
+      ctx.textAlign = 'left';
+      ctx.fillText('PITCH DROP', 0, 0);
+      ctx.restore();
+
+      // STOP
+      ctx.save();
+      ctx.translate(anchorPoints[anchorPoints.length - 1].x - 10, anchorPoints[anchorPoints.length - 1].y - 16);
+      ctx.rotate(-0.95);
+      ctx.textAlign = 'center';
+      ctx.fillText('STOP', 0, 0);
+      ctx.restore();
+
+      // Live Animated Braking Progress Indicator
+      if (state.isStopping || state.speedL < 0.999) {
+        const liveT = state.isStopping ? Math.min(1.0, state.stopPos / state.maxStopSamples) : 0;
+        const liveProg = liveT < 0.5 
+          ? 0.5 * Math.pow(2 * liveT, state.dropCurve) 
+          : 1.0 - 0.5 * Math.pow(2 * (1 - liveT), state.dropCurve);
+        
+        const liveNormY = curveStartVal + liveProg * (curveEndVal - curveStartVal);
+        const liveX = padLeft + liveT * gw;
+        const liveY = padTop + liveNormY * gh;
+
+        // Glowing live cursor ring
+        ctx.beginPath();
+        ctx.arc(liveX, liveY, 9.0, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(76, 225, 240, 0.45)';
+        ctx.fill();
+        ctx.strokeStyle = '#4ce1f0';
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(liveX, liveY, 4.0, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+      }
+    }
+
+    // Initial render when DOM is ready
+    window.addEventListener('DOMContentLoaded', () => {
+      knobUpdaters.forEach(fn => fn());
+      renderGraph();
+    });
+
+    window.addEventListener('load', () => {
+      knobUpdaters.forEach(fn => fn());
+      renderGraph();
+    });
+
+    // Main Loop
+    let lastTime = performance.now();
+
+    function mainLoop(now) {
+      const dt = Math.min(0.05, (now - lastTime) / 1000);
+      lastTime = now;
+
+      const samples = Math.floor(dt * state.sampleRate);
+      updatePhysics(samples);
+      renderGraph();
+
+      requestAnimationFrame(mainLoop);
+    }
+
+    requestAnimationFrame(mainLoop);
+  </script>
+</body>
+</html>
