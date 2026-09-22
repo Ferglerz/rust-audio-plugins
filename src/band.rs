@@ -112,13 +112,13 @@ impl Band {
 pub fn infer_shape(x: f32, y: f32, curve_drag: bool) -> Shape {
     // Screen y: 0 = top (boost), 0.5 = 0 dB. Cuts only when clearly below 0 dB.
     let prefer_shelf = curve_drag || y <= 0.65;
-    if x < 0.18 {
+    if x < 0.22 {
         if prefer_shelf {
             Shape::LowShelf
         } else {
             Shape::LowCut
         }
-    } else if x > 0.82 {
+    } else if x > 0.78 {
         if prefer_shelf {
             Shape::HighShelf
         } else {
@@ -179,7 +179,9 @@ mod tests {
         assert_eq!(infer_shape(0.99, 0.8, false), Shape::HighCut);
         assert_eq!(infer_shape(0.1, 0.8, false), Shape::LowCut);
         assert_eq!(infer_shape(0.9, 0.8, false), Shape::HighCut);
-        assert_eq!(infer_shape(0.2, 0.2, false), Shape::Bell);
+        assert_eq!(infer_shape(0.2, 0.2, false), Shape::LowShelf);
+        assert_eq!(infer_shape(0.8, 0.2, false), Shape::HighShelf);
+        assert_eq!(infer_shape(0.25, 0.2, false), Shape::Bell);
         assert_eq!(infer_shape(0.1, 0.2, true), Shape::LowShelf);
         assert_eq!(infer_shape(0.9, 0.8, true), Shape::HighShelf);
         assert_eq!(infer_shape(0.5, 0.98, false), Shape::Notch);

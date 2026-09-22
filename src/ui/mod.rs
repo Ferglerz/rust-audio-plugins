@@ -58,7 +58,7 @@ const GY: f32 = 156.0;
 const GW: f32 = EQ_W - EQ_GRAPH_PAD_LEFT - EQ_GRAPH_PAD_RIGHT;
 const GH: f32 = 384.0;
 const GRAPH_BOTTOM: f32 = GY + GH;
-const EQ_AXIS_LABEL_Y: f32 = GRAPH_BOTTOM + 16.0;
+const EQ_AXIS_LABEL_Y: f32 = GRAPH_BOTTOM + 32.0;
 const METER_TOP: f32 = GY;
 const METER_H: f32 = GRAPH_BOTTOM - METER_TOP;
 const KNEE_METER_OVERHANG: f32 = 4.0;
@@ -295,9 +295,7 @@ fn y_db(y: f32, range: f64) -> f64 {
 /// land on a vertex instead of being skipped by a coarse chord.
 fn eq_curve_xs(gx: f32, gw: f32, extra_freqs: impl IntoIterator<Item = f64>) -> Vec<f32> {
     let n = gw.max(2.0).ceil() as usize;
-    let mut xs: Vec<f32> = (0..=n)
-        .map(|i| gx + gw * (i as f32 / n as f32))
-        .collect();
+    let mut xs: Vec<f32> = (0..=n).map(|i| gx + gw * (i as f32 / n as f32)).collect();
     for f in extra_freqs {
         if f.is_finite() && f > 0.0 {
             let x = freq_x_at(f, gx, gw);
@@ -310,14 +308,7 @@ fn eq_curve_xs(gx: f32, gw: f32, extra_freqs: impl IntoIterator<Item = f64>) -> 
     xs.dedup_by(|a, b| (*a - *b).abs() < 0.15);
     xs
 }
-fn eq_db_on_xs(
-    coeff: &BandCoeffs,
-    xs: &[f32],
-    gx: f32,
-    gw: f32,
-    sr: f64,
-    eq_sr: f64,
-) -> Vec<f64> {
+fn eq_db_on_xs(coeff: &BandCoeffs, xs: &[f32], gx: f32, gw: f32, sr: f64, eq_sr: f64) -> Vec<f64> {
     let nyq = sr * 0.49;
     xs.iter()
         .map(|&x| coeff.response(x_freq_at(x, gx, gw).min(nyq), eq_sr))
@@ -480,6 +471,27 @@ fn module_title_y(size: f32) -> f32 {
 }
 fn meter_value_y() -> f32 {
     EQ_AXIS_LABEL_Y
+}
+
+fn rect_center_x(r: (f32, f32, f32, f32)) -> f32 {
+    r.0 + r.2 * 0.5
+}
+
+fn meter_value_rect(meter: (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
+    let cx = rect_center_x(meter);
+    (cx - 25.0, meter_value_y() - 14.0, 50.0, 22.0)
+}
+fn stacked_knob_slots(module_x: f32, module_w: f32, count: usize) -> Vec<(f32, f32, f32, f32)> {
+    let top = MODULE_Y + MODULE_HEADER_H + 14.0;
+    let bottom = MODULE_Y + MODULE_H - 12.0;
+    let gap = 8.0;
+    let n = count.max(1) as f32;
+    let h = (bottom - top - gap * (n - 1.0)) / n;
+    let x = module_x + 8.0;
+    let w = module_w - 16.0;
+    (0..count)
+        .map(|i| (x, top + i as f32 * (h + gap), w, h))
+        .collect()
 }
 fn catch_gr_to_depth(gr: f32, depth: f32) -> f32 {
     gr.min(depth.max(0.0))
@@ -1279,7 +1291,6 @@ pub fn create(params: Arc<StripParams>, shared: Arc<Shared>) -> Option<Box<dyn E
             .width(Stretch(1.0))
             .height(Stretch(1.0))
             .focusable(true);
-            nih_plug_vizia::widgets::ResizeHandle::new(cx);
         },
     )
 }
@@ -1495,7 +1506,7 @@ impl StripView {
         self.params.comp_pre.value()
     }
     fn idle_hover(&self) -> Option<(f32, f32)> {
-        self.hover.filter(|_| self.drag.is_none())
+        pleasant_ui::idle_hover(self.hover, self.drag.is_some())
     }
     fn eq_bounds(&self) -> (f32, f32, f32, f32) {
         let x = if self.is_pre() {
@@ -1661,8 +1672,9 @@ impl StripView {
         module_header_cog_rect(b.0, b.2)
     }
     fn wall_main_thresh_slider_rect(&self) -> (f32, f32, f32, f32) {
-        let wx = self.wall_bounds().0;
-        (wx + 30.0, METER_TOP, 38.0, METER_H)
+        let (wx, _, ww, _) = self.wall_bounds();
+        let sw = 38.0;
+        (wx + (ww - sw) * 0.5, METER_TOP, sw, METER_H)
     }
     fn wall_main_thresh_handle_rect(&self, thresh_y: f32) -> (f32, f32, f32, f32) {
         let (sx, _, sw, _) = self.wall_main_thresh_slider_rect();
@@ -1755,28 +1767,32 @@ impl StripView {
     }
     fn wall_knob_rect(&self, i: usize) -> (f32, f32, f32, f32) {
         let wx = self.wall_bounds().0;
+        let slots = stacked_knob_slots(wx, WALL_W, 2);
         match i {
-            16 => (wx + 6.0, 226.0, 56.0, 86.0),
-            17 => (wx + 68.0, 226.0, 56.0, 86.0),
-            _ => (wx + 6.0, 226.0, 56.0, 86.0),
+            16 => slots[0],
+            17 => slots[1],
+            _ => slots[0],
         }
     }
     fn global_rect(&self, i: usize) -> (f32, f32, f32, f32) {
         let dx = self.dyn_bounds().0;
         match self.dyn_page {
-            DynPage::Controls => match i {
-                5 => (dx + 6.0, 226.0, 56.0, 86.0),
-                11 => (dx + 68.0, 226.0, 56.0, 86.0),
-                6 => (dx + 37.0, 314.0, 56.0, 86.0),
-                3 => (dx + 6.0, 402.0, 56.0, 86.0),
-                4 => (dx + 68.0, 402.0, 56.0, 86.0),
-                _ => (0.0, -1000.0, 0.0, 0.0),
-            },
+            DynPage::Controls => {
+                let slots = stacked_knob_slots(dx, DYN_W, 5);
+                match i {
+                    5 => slots[0],
+                    11 => slots[1],
+                    6 => slots[2],
+                    3 => slots[3],
+                    4 => slots[4],
+                    _ => (0.0, -1000.0, 0.0, 0.0),
+                }
+            }
             DynPage::Main => {
                 if i == 14 {
-                    (dx + 68.0, meter_value_y() - 14.0, 50.0, 22.0)
+                    meter_value_rect(self.dyn_main_gr_meter_rect())
                 } else if i == 0 {
-                    (dx + 6.0, meter_value_y() - 14.0, 50.0, 22.0)
+                    meter_value_rect(self.dyn_main_thresh_slider_rect())
                 } else {
                     (dx + 6.0, 226.0, 56.0, 86.0)
                 }
@@ -1784,7 +1800,11 @@ impl StripView {
         }
     }
     fn knob_value_rect(r: (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
-        (r.0 + 6.0, r.1 + 63.0, r.2 - 12.0, 19.0)
+        if r.2 <= 64.0 && r.3 <= 96.0 {
+            (r.0 + 6.0, r.1 + 63.0, r.2 - 12.0, 19.0)
+        } else {
+            (r.0 + 8.0, r.1 + r.3 - 28.0, r.2 - 16.0, 22.0)
+        }
     }
     fn global_value_rect(&self, i: usize) -> (f32, f32, f32, f32) {
         if self.dyn_page == DynPage::Main && matches!(i, 0 | 14) {
@@ -1795,16 +1815,14 @@ impl StripView {
     }
     fn pse_value_rect(&self, i: usize) -> (f32, f32, f32, f32) {
         if self.pse_page == PsePage::Main && i == 1 {
-            let px = self.pse_bounds().0;
-            (px + 12.0, meter_value_y() - 14.0, 50.0, 22.0)
+            meter_value_rect(self.pse_main_thresh_slider_rect())
         } else {
             Self::knob_value_rect(self.pse_knob_rect(i))
         }
     }
     fn wall_value_rect(&self, i: usize) -> (f32, f32, f32, f32) {
         if self.wall_page == WallPage::Main && i == 18 {
-            let wx = self.wall_bounds().0;
-            (wx + 6.0, meter_value_y() - 14.0, 50.0, 22.0)
+            meter_value_rect(self.wall_main_thresh_slider_rect())
         } else {
             Self::knob_value_rect(self.wall_knob_rect(i))
         }
@@ -2512,7 +2530,8 @@ impl StripView {
                 } else {
                     let cur = p.unmodulated_normalized_value();
                     let delta = (dy * if shift { 0.0015 } else { 0.007 }) as f32;
-                    let norm = (cur + if i == 0 || i == 18 { -delta } else { delta }).clamp(0.0, 1.0);
+                    let norm =
+                        (cur + if i == 0 || i == 18 { -delta } else { delta }).clamp(0.0, 1.0);
                     cx.emit(RawParamEvent::SetParameterNormalized(p.as_ptr(), norm));
                 }
             }
@@ -3149,11 +3168,7 @@ impl View for StripView {
                                 handle.3 + 4.0,
                             );
                             if inside(x, y, handle_hit)
-                                || inside(
-                                    x,
-                                    y,
-                                    (r.0 - 10.0, r.1 - 10.0, r.2 + 20.0, r.3 + 20.0),
-                                )
+                                || inside(x, y, (r.0 - 10.0, r.1 - 10.0, r.2 + 20.0, r.3 + 20.0))
                             {
                                 self.drag = Some(Target::Global(18));
                                 self.last_drag = (x, y);
@@ -4156,18 +4171,22 @@ impl View for StripView {
                 let dyn_hover = self
                     .idle_hover()
                     .is_some_and(|(hx, hy)| hud_dyn_btn_hit(g, hx, hy));
-                band_hud(
-                    &mut d,
-                    b,
-                    is_solo,
-                    color,
-                    self.graph_db,
-                    config.mode == ProcessingMode::LinearPhase,
-                    gx,
-                    gw,
-                    dyn_hover,
-                    self.dyn_band_anim.step(),
-                );
+                // Node-drag clearance: hide the selected-band HUD card while dragging by node
+                // so the underlying graph stays fully visible.
+                if !matches!(self.drag, Some(Target::Node(_))) {
+                    band_hud(
+                        &mut d,
+                        b,
+                        is_solo,
+                        color,
+                        self.graph_db,
+                        config.mode == ProcessingMode::LinearPhase,
+                        gx,
+                        gw,
+                        dyn_hover,
+                        self.dyn_band_anim.step(),
+                    );
+                }
             }
 
             // Hover cursor on EQ 1
@@ -4610,13 +4629,8 @@ impl View for StripView {
         let (px, py, pw, ph) = self.pse_bounds();
         let (dx, dy, dw, dh) = self.dyn_bounds();
         let is_pre = self.is_pre();
-        let is_animating = (next_p - target_p).abs() > 0.005;
 
-        if is_animating {
-            d.rect(px, py, pw, ph, C::rgba(21, 24, 29, 215));
-        } else {
-            d.rect(px, py, pw, ph, PANEL);
-        }
+        d.rect(px, py, pw, ph, PANEL);
         d.outline((px, py, pw, ph), LINE);
         let pse_power_r = self.pse_power_button_rect();
         let pse_hovered = self
@@ -4759,7 +4773,7 @@ impl View for StripView {
                     p1.normalized_value_to_string(p1.unmodulated_normalized_value(), true)
                 };
                 d.text_centered(
-                    px + 37.0,
+                    rect_center_x(self.pse_main_thresh_slider_rect()),
                     meter_value_y(),
                     &gate_val_str,
                     12.0,
@@ -4769,7 +4783,7 @@ impl View for StripView {
                     .param(7)
                     .normalized_value_to_string(self.param(7).unmodulated_normalized_value(), true);
                 d.text_centered(
-                    px + 93.0,
+                    rect_center_x(self.pse_main_gr_meter_rect()),
                     meter_value_y(),
                     &depth_val,
                     11.0,
@@ -4879,11 +4893,7 @@ impl View for StripView {
         d.reset_scissor();
         d.offset_x = 0.0;
 
-        if is_animating {
-            d.rect(dx, dy, dw, dh, C::rgba(21, 24, 29, 215));
-        } else {
-            d.rect(dx, dy, dw, dh, PANEL);
-        }
+        d.rect(dx, dy, dw, dh, PANEL);
         d.outline((dx, dy, dw, dh), LINE);
         let dyn_power_r = self.dyn_power_button_rect();
         let dyn_hovered = self
@@ -5031,7 +5041,7 @@ impl View for StripView {
                 let thresh_val_str =
                     p0.normalized_value_to_string(p0.unmodulated_normalized_value(), true);
                 d.text_centered(
-                    dx + 37.0,
+                    rect_center_x(self.dyn_main_thresh_slider_rect()),
                     meter_value_y(),
                     &thresh_val_str,
                     12.0,
@@ -5042,7 +5052,7 @@ impl View for StripView {
                     true,
                 );
                 d.text_centered(
-                    dx + 93.0,
+                    rect_center_x(self.dyn_main_gr_meter_rect()),
                     meter_value_y(),
                     &depth_val,
                     11.0,
@@ -5079,11 +5089,7 @@ impl View for StripView {
 
         let wall_bypassed = !self.params.wall_on.value();
         let (wx, wy, ww, wh) = self.wall_bounds();
-        if is_animating {
-            d.rect(wx, wy, ww, wh, C::rgba(21, 24, 29, 215));
-        } else {
-            d.rect(wx, wy, ww, wh, PANEL);
-        }
+        d.rect(wx, wy, ww, wh, PANEL);
         d.outline((wx, wy, ww, wh), LINE);
         let wall_power_r = self.wall_power_button_rect();
         let wall_hovered = self
@@ -5183,7 +5189,7 @@ impl View for StripView {
                 let thresh_val =
                     p18.normalized_value_to_string(p18.unmodulated_normalized_value(), true);
                 d.text_centered(
-                    wx + 37.0,
+                    rect_center_x(self.wall_main_thresh_slider_rect()),
                     meter_value_y(),
                     &thresh_val,
                     12.0,
@@ -6343,15 +6349,26 @@ mod tests {
         let thresh_val = view.global_value_rect(0);
         assert_eq!(thresh_val, view.global_rect(0));
         assert!(thresh_val.1 + thresh_val.3 <= FOOTER_LINE_Y);
+        assert!(
+            (rect_center_x(thresh_val) - rect_center_x(slider)).abs() < 0.5,
+            "DYN threshold value must sit under the meter"
+        );
+        let dyn_depth_val = view.global_value_rect(14);
+        assert!(
+            (rect_center_x(dyn_depth_val) - rect_center_x(gr_meter)).abs() < 0.5,
+            "DYN depth value must sit under the GR meter"
+        );
+        let pse_thresh_val = view.pse_value_rect(1);
+        assert!(
+            (rect_center_x(pse_thresh_val) - rect_center_x(pse_slider)).abs() < 0.5,
+            "PSE threshold value must sit under the meter"
+        );
         assert!(view
             .value_at(out_r.0 + 20.0, out_r.1 + out_r.3 * 0.5)
             .is_none());
         let routing = view.footer_comp_routing_rect();
         assert!(view
-            .value_at(
-                routing.0 + routing.2 * 0.5,
-                routing.1 + routing.3 * 0.5
-            )
+            .value_at(routing.0 + routing.2 * 0.5, routing.1 + routing.3 * 0.5)
             .is_none());
 
         view.dyn_page = DynPage::Controls;
@@ -6359,10 +6376,12 @@ mod tests {
         let attack = view.global_rect(5);
         let release = view.global_rect(11);
         let ratio = view.global_rect(6);
-        assert_eq!((attack.2, attack.3), (56.0, 86.0));
-        assert_eq!(attack.1, release.1);
-        assert!(attack.0 < release.0);
-        assert!(ratio.1 > attack.1);
+        assert!(attack.2 > 90.0);
+        assert!(attack.3 > 70.0);
+        assert_eq!(attack.0, release.0);
+        assert!(release.1 > attack.1 + attack.3 - 1.0);
+        assert!(ratio.1 > release.1);
+        assert!(view.global_rect(4).1 > view.global_rect(3).1);
         let routing = view.footer_comp_routing_rect();
         let auto = view.footer_auto_rect();
         let link = view.footer_link_rect();
@@ -6404,18 +6423,23 @@ mod tests {
         ));
         let wall_thresh_val = view.wall_value_rect(18);
         assert_eq!(wall_thresh_val.1, meter_value_y() - 14.0);
+        assert!(
+            (rect_center_x(wall_slider) - rect_center_x(view.wall_bounds())).abs() < 0.5,
+            "WALL meter must sit on the module midline"
+        );
+        assert!(
+            (rect_center_x(wall_thresh_val) - rect_center_x(wall_slider)).abs() < 0.5,
+            "WALL threshold value must sit under the meter"
+        );
         view.wall_page = WallPage::Controls;
         assert_eq!(view.wall_controls(), &[16, 17]);
         let even_r = view.wall_knob_rect(16);
         let odd_r = view.wall_knob_rect(17);
-        assert_eq!((even_r.2, even_r.3), (56.0, 86.0));
-        assert_eq!(even_r.1, odd_r.1);
-        assert!(even_r.0 < odd_r.0);
-        assert!(inside(
-            even_r.0 + 8.0,
-            even_r.1 + 8.0,
-            view.wall_bounds()
-        ));
+        assert!(even_r.2 > 90.0);
+        assert!(even_r.3 > 160.0);
+        assert_eq!(even_r.0, odd_r.0);
+        assert!(odd_r.1 > even_r.1 + even_r.3 - 1.0);
+        assert!(inside(even_r.0 + 8.0, even_r.1 + 8.0, view.wall_bounds()));
         let wall_cog = view.wall_cog_button_rect();
         assert_eq!(wall_cog.1, cog.1);
         assert_eq!(wall_cog.0, view.wall_bounds().0 + WALL_W - 14.0 - 24.0);

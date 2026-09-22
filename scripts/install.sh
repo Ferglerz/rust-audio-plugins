@@ -2,11 +2,12 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+WORKSPACE="$(cd "$ROOT/.." && pwd)"
 cd "$ROOT"
 
-# Always build into this repo's target. Agent shells inject CARGO_TARGET_DIR into a
-# sandbox cache; cargo metadata follows that and install would copy stale artifacts.
-export CARGO_TARGET_DIR="$ROOT/target"
+# Workspace target only. Agent shells inject CARGO_TARGET_DIR into a sandbox
+# cache; cargo metadata would follow that and install would copy stale artifacts.
+export CARGO_TARGET_DIR="$WORKSPACE/target"
 export CARGO_INCREMENTAL=0
 
 PLUGIN_NAME="Damian Channel Strip.vst3"

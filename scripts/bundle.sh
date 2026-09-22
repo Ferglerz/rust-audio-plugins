@@ -2,9 +2,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+WORKSPACE="$(cd "$ROOT/.." && pwd)"
 cd "$ROOT"
 
-export CARGO_TARGET_DIR="$ROOT/target"
+export CARGO_TARGET_DIR="$WORKSPACE/target"
 export CARGO_INCREMENTAL=0
 
 echo "Bundling release VST3..."

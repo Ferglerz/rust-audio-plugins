@@ -6,7 +6,7 @@
 //! to copy the widgets and modify them to your personal taste.
 
 use crossbeam::atomic::AtomicCell;
-use nih_plug::prelude::{GuiContext, Param, ParamPtr};
+use nih_plug::prelude::{nih_error, GuiContext, Param, ParamPtr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use vizia::prelude::*;
