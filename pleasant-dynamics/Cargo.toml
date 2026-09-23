@@ -1,0 +1,10 @@
+[package]
+name = "pleasant-dynamics"
+version = "0.1.0"
+edition = "2021"
+authors = ["Fergler"]
+license = "GPL-3.0-or-later"
+description = "Host-independent compressor, PSE, and saturation processors"
+
+[dependencies]
+pleasant-dsp = { path = "../pleasant-dsp" }

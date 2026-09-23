@@ -58,3 +58,70 @@ impl AppearanceStore {
         *light
     }
 }
+
+/// Optional third skin for plugins that provide an image-based interface.
+/// Existing two-state callers keep using `AppearanceStore` unchanged.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Appearance {
+    #[default]
+    Dark,
+    Light,
+    Analog,
+}
+
+impl Appearance {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Dark => Self::Light,
+            Self::Light => Self::Analog,
+            Self::Analog => Self::Dark,
+        }
+    }
+
+    pub fn read(app_name: &str) -> Self {
+        let value = app_appearance_path(app_name).and_then(|p| std::fs::read_to_string(p).ok());
+        Self::parse(value.as_deref().unwrap_or_default())
+    }
+
+    fn parse(value: &str) -> Self {
+        match value.trim() {
+            "light" => Self::Light,
+            "analog" => Self::Analog,
+            _ => Self::Dark,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Dark => "dark",
+            Self::Light => "light",
+            Self::Analog => "analog",
+        }
+    }
+
+    pub fn write(self, app_name: &str) {
+        if let Some(path) = app_appearance_path(app_name) {
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(path, format!("{}\n", self.as_str()));
+        }
+    }
+}
+
+#[cfg(test)]
+mod appearance_tests {
+    use super::Appearance;
+
+    #[test]
+    fn three_state_cycle_and_persistence_compatibility() {
+        let mut mode = Appearance::Dark;
+        for expected in [Appearance::Light, Appearance::Analog, Appearance::Dark] {
+            mode = mode.next();
+            assert_eq!(mode, expected);
+            assert_eq!(Appearance::parse(&format!("{}\n", mode.as_str())), mode);
+        }
+        assert_eq!(Appearance::parse(""), Appearance::Dark);
+        assert_eq!(Appearance::parse("unknown"), Appearance::Dark);
+    }
+}

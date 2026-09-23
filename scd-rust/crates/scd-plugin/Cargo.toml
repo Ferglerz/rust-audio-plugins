@@ -8,8 +8,9 @@ crate-type = ["cdylib", "lib"]
 
 [dependencies]
 scd-core = { path = "../scd-core" }
-nih_plug = { path = "../../vendor/nih-plug" }
-nih_plug_vizia = { path = "../../vendor/nih-plug/nih_plug_vizia" }
+nih_plug = { path = "../../../Damian Channel Strip/vendor/nih-plug" }
+nih_plug_vizia = { path = "../../../Damian Channel Strip/vendor/nih-plug/nih_plug_vizia" }
+pleasant-curves = { path = "../../../pleasant-curves" }
 pleasant-ui = { path = "../../../pleasant-ui" }
 atomic_float = "1"
 serde = { version = "1", features = ["derive"] }

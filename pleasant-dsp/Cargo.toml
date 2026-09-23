@@ -1,0 +1,12 @@
+[package]
+name = "pleasant-dsp"
+version = "0.1.0"
+edition = "2021"
+authors = ["Fergler"]
+license = "GPL-3.0-or-later"
+description = "Host-independent numerical and DSP primitives for Pleasant Audio plugins"
+
+[features]
+default = []
+
+[dependencies]

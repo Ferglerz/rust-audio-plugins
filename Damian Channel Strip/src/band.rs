@@ -49,6 +49,20 @@ impl Shape {
         matches!(self, Self::Bell | Self::LowShelf | Self::HighShelf)
     }
 }
+
+impl From<Shape> for pleasant_eq::EqShape {
+    fn from(shape: Shape) -> Self {
+        match shape {
+            Shape::Bell => Self::Bell,
+            Shape::LowShelf => Self::LowShelf,
+            Shape::HighShelf => Self::HighShelf,
+            Shape::LowCut => Self::LowCut,
+            Shape::HighCut => Self::HighCut,
+            Shape::Notch => Self::Notch,
+            Shape::BandPass => Self::BandPass,
+        }
+    }
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Band {
@@ -104,6 +118,25 @@ impl Band {
         safe(&mut self.attack, 0.1, 200.0, 15.0);
         safe(&mut self.release, 10.0, 2000.0, 140.0);
         safe(&mut self.range, -24.0, 24.0, 6.0);
+    }
+}
+
+impl From<&Band> for pleasant_eq::BandSettings {
+    fn from(band: &Band) -> Self {
+        Self {
+            shape: band.shape.into(),
+            order: band.order,
+            frequency_hz: band.freq,
+            gain_db: band.gain,
+            q: band.q,
+            enabled: band.enabled,
+            dynamic: band.dynamic,
+            threshold_db: band.threshold,
+            ratio: band.ratio,
+            attack_ms: band.attack,
+            release_ms: band.release,
+            range_db: band.range,
+        }
     }
 }
 /// Background clicks at the outer edges create cuts only below 0 dB. Boosts at

@@ -17,6 +17,7 @@ pub use vizia;
 
 pub mod assets;
 mod editor;
+mod editor_scale;
 pub mod vizia_assets;
 pub mod widgets;
 
@@ -101,6 +102,17 @@ pub struct ViziaState {
     /// Fit before opening on the UI thread, including restored state and display changes.
     #[serde(skip)]
     fit_to_screen: AtomicBool,
+    /// Plugin name used to store the last size for new instances.
+    /// Instance state still owns this object's scale factor.
+    #[serde(skip, default)]
+    plugin_id: &'static str,
+    /// Scale waiting to be written after a resize settles.
+    #[serde(skip, default = "empty_pending_scale")]
+    pending_remember: AtomicCell<Option<f64>>,
+}
+
+fn empty_pending_scale() -> AtomicCell<Option<f64>> {
+    AtomicCell::new(None)
 }
 
 /// A default implementation for `size_fn` needed to be able to derive the `Deserialize` trait.
@@ -139,12 +151,7 @@ impl ViziaState {
     /// multiplied by the DPI scaling factor. This size can be computed based on the plugin's
     /// current state.
     pub fn new(size_fn: impl Fn() -> (u32, u32) + Send + Sync + 'static) -> Arc<ViziaState> {
-        Arc::new(ViziaState {
-            size_fn: Box::new(size_fn),
-            scale_factor: AtomicCell::new(1.0),
-            open: AtomicBool::new(false),
-            fit_to_screen: AtomicBool::new(false),
-        })
+        Self::create("", size_fn, 1.0, false)
     }
 
     /// The same as [`new()`][Self::new()], but with a separate initial scale factor. This scale
@@ -154,20 +161,51 @@ impl ViziaState {
         size_fn: impl Fn() -> (u32, u32) + Send + Sync + 'static,
         default_scale_factor: f64,
     ) -> Arc<ViziaState> {
+        Self::create("", size_fn, default_scale_factor, false)
+    }
+
+    /// Start from the last resized size for `plugin_id`, or 100% of artwork
+    /// drawn at 120% when nothing has been saved yet. Leaves at least 25% of
+    /// the available screen width free and room for host chrome.
+    ///
+    /// Restoring a plugin instance overwrites this scale from that instance's
+    /// persisted editor state.
+    pub fn new_screen_sized(
+        plugin_id: &'static str,
+        size_fn: impl Fn() -> (u32, u32) + Send + Sync + 'static,
+    ) -> Arc<Self> {
+        let scale = editor_scale::load_scale(plugin_id).unwrap_or_else(editor_scale::default_scale);
+        Self::create(plugin_id, size_fn, scale, true)
+    }
+
+    fn create(
+        plugin_id: &'static str,
+        size_fn: impl Fn() -> (u32, u32) + Send + Sync + 'static,
+        default_scale_factor: f64,
+        fit_to_screen: bool,
+    ) -> Arc<Self> {
         Arc::new(ViziaState {
             size_fn: Box::new(size_fn),
             scale_factor: AtomicCell::new(default_scale_factor),
             open: AtomicBool::new(false),
-            fit_to_screen: AtomicBool::new(false),
+            fit_to_screen: AtomicBool::new(fit_to_screen),
+            plugin_id,
+            pending_remember: AtomicCell::new(None),
         })
     }
 
-    /// Start at 100% relative to artwork originally drawn at 120%, leaving
-    /// at least 25% of the available screen width free and room for host chrome.
-    pub fn new_screen_sized(size_fn: impl Fn() -> (u32, u32) + Send + Sync + 'static) -> Arc<Self> {
-        let state = Self::new_with_default_scale_factor(size_fn, 1.0 / 1.2);
-        state.fit_to_screen.store(true, Ordering::Relaxed);
-        state
+    pub(crate) fn remember_scale(&self, scale: f64) {
+        if self.plugin_id.is_empty() || editor_scale::clamp_scale(scale).is_none() {
+            return;
+        }
+        self.pending_remember.store(Some(scale));
+    }
+
+    pub(crate) fn flush_remembered_scale(&self) {
+        let Some(scale) = self.pending_remember.swap(None) else {
+            return;
+        };
+        editor_scale::save_scale(self.plugin_id, scale);
     }
 
     fn fit_screen_if_available(&self) {
@@ -249,5 +287,42 @@ mod sizing_tests {
             screen_fit_scale((1040, 660), 1.0, (1920.0, 600.0)),
             520.0 / 660.0
         );
+    }
+
+    #[test]
+    fn new_instance_loads_last_scale_and_restored_instance_keeps_its_own() {
+        use crossbeam::atomic::AtomicCell;
+        use nih_plug::params::persist::PersistentField;
+        use std::fs;
+        use std::sync::atomic::AtomicBool;
+
+        let _guard = editor_scale::lock_scale_dir();
+        let dir = std::env::temp_dir().join("pleasant-editor-scale-state-test");
+        let _ = fs::remove_dir_all(&dir);
+        std::env::set_var("PLEASANT_EDITOR_SCALE_DIR", &dir);
+        editor_scale::save_scale("Test Plugin", 1.37);
+
+        let state = ViziaState::new_screen_sized("Test Plugin", || (1282, 656));
+        assert_eq!(state.scale_factor.load(), 1.37);
+
+        let restored = ViziaState {
+            size_fn: Box::new(|| (0, 0)),
+            scale_factor: AtomicCell::new(0.91),
+            open: AtomicBool::new(false),
+            fit_to_screen: AtomicBool::new(false),
+            plugin_id: "",
+            pending_remember: AtomicCell::new(None),
+        };
+        PersistentField::set(&state, restored);
+        assert_eq!(state.scale_factor.load(), 0.91);
+        assert_eq!(editor_scale::load_scale("Test Plugin"), Some(1.37));
+
+        state.remember_scale(1.55);
+        state.flush_remembered_scale();
+        assert_eq!(editor_scale::load_scale("Test Plugin"), Some(1.55));
+        assert_eq!(state.scale_factor.load(), 0.91);
+
+        std::env::remove_var("PLEASANT_EDITOR_SCALE_DIR");
+        let _ = fs::remove_dir_all(&dir);
     }
 }

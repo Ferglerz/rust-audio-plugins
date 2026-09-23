@@ -1,2 +1,5 @@
 /target
 .DS_Store
+
+# Original Composure repository metadata, preserved during workspace migration.
+/.composure-git-backup/

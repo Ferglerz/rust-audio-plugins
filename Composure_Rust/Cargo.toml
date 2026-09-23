@@ -6,9 +6,6 @@ authors = ["Fergler"]
 license = "GPL-3.0-or-later"
 description = "Composure – a curve-based dynamic processor"
 
-[workspace]
-members = ["xtask"]
-
 [lib]
 crate-type = ["cdylib", "lib"]
 
@@ -17,6 +14,7 @@ default = []
 debug-alloc = ["nih_plug/assert_process_allocs"]
 
 [dependencies]
+pleasant-ui = { path = "../pleasant-ui" }
 nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" }
 nih_plug_vizia = { git = "https://github.com/robbert-vdh/nih-plug.git" }
 atomic_float = "1"
@@ -28,13 +26,3 @@ crossbeam-queue = "0.3.12"
 [dev-dependencies]
 approx = "0.5"
 
-[profile.release]
-lto = "fat"
-opt-level = 3
-strip = "symbols"
-codegen-units = 1
-
-[profile.profiling]
-inherits = "release"
-debug = true
-strip = false

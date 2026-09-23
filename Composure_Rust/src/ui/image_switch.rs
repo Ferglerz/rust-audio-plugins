@@ -6,13 +6,17 @@ use nih_plug_vizia::widgets::param_base::ParamWidgetBase;
 
 use crate::params::{ComposureParams, ProgramReleaseMode};
 
-use super::ui_assets as assets;
 use super::param_widget_ext;
-use super::theme;
 use super::texture_cache::draw_tex;
+use super::theme;
+use super::ui_assets as assets;
 
 pub fn draw_switch(canvas: &mut Canvas, bounds: BoundingBox, on: bool, opacity: f32) {
-    let png = if on { assets::SWITCH_UP } else { assets::SWITCH_DN };
+    let png = if on {
+        assets::SWITCH_UP
+    } else {
+        assets::SWITCH_DN
+    };
     let key = if on { "switch_up" } else { "switch_dn" };
     // Widget is placed at JSFX_x - SWITCH_LEFT_OVERHANG so the 83px art is not clipped.
     draw_tex(
@@ -53,6 +57,15 @@ impl View for ImageSwitch {
     }
 
     fn draw(&self, cx: &mut DrawContext, canvas: &mut Canvas) {
+        if super::appearance::draw_control(
+            cx,
+            canvas,
+            &self.param_base,
+            super::appearance::Control::Switch,
+            self.param_base.modulated_normalized_value(),
+        ) {
+            return;
+        }
         let on = param_widget_ext::bool_param_on(&self.param_base);
         draw_switch(canvas, cx.bounds(), on, cx.opacity());
     }
@@ -82,9 +95,8 @@ impl ProgModeSwitch {
         P: Param + 'static,
         F: Fn(&Arc<ComposureParams>) -> &P + Copy + 'static,
     {
-        let mode_label = params.map(|p: &Arc<ComposureParams>| {
-            p.prog_release_mode.value().short_label().to_string()
-        });
+        let mode_label = params
+            .map(|p: &Arc<ComposureParams>| p.prog_release_mode.value().short_label().to_string());
 
         ProgModeSwitch {
             param_base: ParamWidgetBase::new(cx, params, map),
@@ -106,6 +118,15 @@ impl View for ProgModeSwitch {
     }
 
     fn draw(&self, cx: &mut DrawContext, canvas: &mut Canvas) {
+        if super::appearance::draw_control(
+            cx,
+            canvas,
+            &self.param_base,
+            super::appearance::Control::Switch,
+            self.param_base.modulated_normalized_value(),
+        ) {
+            return;
+        }
         let mode = match self.param_base.modulated_plain_value().round() as i32 {
             0 => ProgramReleaseMode::InputDependent,
             1 => ProgramReleaseMode::GrDependent,
@@ -153,6 +174,15 @@ impl View for DetectionModeButton {
     }
 
     fn draw(&self, cx: &mut DrawContext, canvas: &mut Canvas) {
+        if super::appearance::draw_control(
+            cx,
+            canvas,
+            &self.param_base,
+            super::appearance::Control::Switch,
+            self.param_base.modulated_normalized_value(),
+        ) {
+            return;
+        }
         let bounds = cx.bounds();
         let opacity = cx.opacity();
         let feedforward = self.param_base.modulated_plain_value() >= 0.5;
@@ -161,7 +191,9 @@ impl View for DetectionModeButton {
         } else {
             ("feedback_on", assets::FEEDBACK_ON)
         };
-        draw_tex(canvas, key, png, bounds.x, bounds.y, bounds.w, bounds.h, opacity);
+        draw_tex(
+            canvas, key, png, bounds.x, bounds.y, bounds.w, bounds.h, opacity,
+        );
     }
 
     fn event(&mut self, cx: &mut EventContext, event: &mut Event) {

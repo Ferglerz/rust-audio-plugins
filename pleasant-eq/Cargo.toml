@@ -1,0 +1,17 @@
+[package]
+name = "pleasant-eq"
+version = "0.1.0"
+edition = "2021"
+authors = ["Fergler"]
+license = "GPL-3.0-or-later"
+description = "Prepared host-independent equalizer processing for Pleasant Audio plugins"
+
+[features]
+default = ["dynamic", "natural-phase", "linear-phase"]
+dynamic = []
+natural-phase = []
+linear-phase = ["dep:rustfft"]
+
+[dependencies]
+pleasant-dsp = { path = "../pleasant-dsp" }
+rustfft = { version = "6", optional = true }

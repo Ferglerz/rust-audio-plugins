@@ -1,6 +1,15 @@
 [workspace]
 members = [
+    "pleasant-curves",
+    "pleasant-dynamics",
+    "pleasant-dsp",
+    "pleasant-eq",
     "pleasant-ui",
+    "Composure_Rust",
+    "Composure_Rust/xtask",
+    "examples/pleasant-curves-headless",
+    "examples/pleasant-dsp-headless",
+    "examples/pleasant-eq-headless",
     "Damian Channel Strip",
     "Damian Channel Strip/xtask",
     "Flattery",

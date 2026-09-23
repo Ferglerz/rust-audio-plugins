@@ -3,7 +3,7 @@
 #root {
   background-color: #202020;
   color: #ebebeb;
-  font-size: 13px;
+  font-size: 13;
   overflow: hidden;
   child-space: 0px;
 }
@@ -18,7 +18,7 @@
 
 .group-title {
   color: #d9d9d9;
-  font-size: 12px;
+  font-size: 12;
   font-weight: 600;
   height: 22px;
   text-align: center;
@@ -27,15 +27,15 @@
 
 .parallax-label {
   color: #ffffff;
-  font-size: 11px;
-  height: 11px;
+  font-size: 11;
+  height: 14px;
   text-align: center;
 }
 
 .readout-slider-label {
   color: #ffffff;
-  font-size: 11px;
-  height: 11px;
+  font-size: 11;
+  height: 14px;
   text-align: center;
 }
 
@@ -84,7 +84,7 @@ jsfx-button {
 
 .jsfx-button-label {
   color: #ebebeb;
-  font-size: 11px;
+  font-size: 11;
   font-weight: 600;
   text-align: center;
   child-left: 4px;
@@ -97,7 +97,7 @@ production-knob .param-label {
 
 .graph-point-count {
   color: #b3b3b3;
-  font-size: 11px;
+  font-size: 11;
   width: 48px;
   height: 16px;
 }
@@ -112,7 +112,7 @@ graph-range-button {
 
 .graph-range-label {
   color: #b3b3b3;
-  font-size: 11px;
+  font-size: 11;
   width: 100%;
   height: 100%;
   child-left: 4px;
@@ -121,25 +121,25 @@ graph-range-button {
 
 .graph-axis-label {
   color: #b3b3b3;
-  font-size: 11px;
+  font-size: 11;
   text-align: right;
 }
 
 .graph-ctrl-hint {
   color: #999999cc;
-  font-size: 9px;
+  font-size: 9;
   text-align: right;
 }
 
 .control-readout {
   color: #999999cc;
-  font-size: 18px;
+  font-size: 18;
   height: 24px;
 }
 
 .prog-mode-label {
   color: #ebebeb;
-  font-size: 9px;
+  font-size: 9;
   text-align: center;
 }
 
@@ -149,7 +149,7 @@ debug-toggle {
 
 .debug-panel-text {
   color: #e6e6e6;
-  font-size: 11px;
+  font-size: 11;
   child-left: 8px;
   child-top: 6px;
 }
@@ -161,3 +161,28 @@ filter-param-slider {
   border-radius: 2px;
 }
 
+
+/* Pleasant skins share the original widget events and parameter bindings. */
+.pleasant .prog-mode-label { display: none; }
+.pleasant .parallax-label, .pleasant .readout-slider-label { color: #8f99a4; font-size: 13; }
+.pleasant .control-readout { color: #e1bb65; font-size: 14; }
+.pleasant .jsfx-button-label { color: #e5e9ed; font-size: 13; }
+.light .parallax-label, .light .readout-slider-label { color: #5f6972; }
+.light .control-readout { color: #9e701c; }
+.light .jsfx-button-label { color: #1e252c; }
+.appearance-button {
+  background-color: #1b1f25;
+  color: #e1bb65;
+  border-width: 1px;
+  border-color: #3a4048;
+  border-radius: 0px;
+  font-size: 13;
+  child-space: 1s;
+}
+.appearance-button:hover { background-color: #2d323a; }
+
+.pleasant { font-family: "JetBrains Mono"; }
+.pleasant .jsfx-button-label { child-space: 1s; font-weight: normal; }
+.light .graph-axis-label { color: #5f6972; }
+.light .appearance-button { background-color: #e9e6df; color: #9e701c; border-color: #c8c4bb; }
+.light .appearance-button:hover { background-color: #d4d2cb; }

@@ -5,19 +5,15 @@ alwaysApply: true
 
 # Plugin builds
 
-Release plugin build:
+Release build and install (VST3 + CLAP, macOS user plugin folders):
 
 ```bash
-cargo xtask bundle composure --release
+./scripts/install.sh
 ```
 
-After a successful bundle, install CLAP to the user plugins folder (macOS):
+The script bundles with `cargo xtask bundle composure --release`, then copies and ad-hoc signs:
 
-```bash
-mkdir -p ~/Library/Audio/Plug-Ins/CLAP/
-cp -R target/bundled/composure.clap ~/Library/Audio/Plug-Ins/CLAP/
-```
+- `~/Library/Audio/Plug-Ins/VST3/Composure.vst3`
+- `~/Library/Audio/Plug-Ins/CLAP/Composure.clap`
 
-`cargo xtask bundle` runs this install step automatically on macOS when the CLAP bundle exists.
-
-When asked to compile or build the plugin, use the bundle command above—not plain `cargo build`.
+When asked to compile, build, or install the plugin, run `./scripts/install.sh` from `Composure_Rust` — not plain `cargo build`.

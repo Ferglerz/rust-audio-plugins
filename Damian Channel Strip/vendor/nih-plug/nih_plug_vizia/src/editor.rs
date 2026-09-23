@@ -74,6 +74,8 @@ impl Editor for ViziaEditor {
                 vizia_state: vizia_state.clone(),
                 accepted_scale: user_scale_factor,
                 pending_resize: None,
+                host_logical: None,
+                host_resize_at: None,
                 last_inner_window_size: AtomicCell::new((
                     current_inner_window_size.width,
                     current_inner_window_size.height,

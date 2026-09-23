@@ -7,11 +7,11 @@ use nih_plug_vizia::widgets::param_base::ParamWidgetBase;
 
 use crate::params::ComposureParams;
 
-use super::ui_assets as assets;
 use super::display::UiDisplay;
 use super::param_widget_ext::{self, ParamDragSession};
 use super::step_points::StepSet;
 use super::texture_cache::draw_tex;
+use super::ui_assets as assets;
 
 const KNOB_TEMPLATE_PX: f32 = 125.0;
 const KNOB_IMAGE_W: f32 = 92.0;
@@ -42,14 +42,11 @@ fn knob_indicator(
     let mut line = Path::new();
     line.move_to(x0, y0);
     line.line_to(x1, y1);
-    canvas.stroke_path(
-        &line,
-        &{
-            let mut p = Paint::color(VgColor::rgbaf(0.067, 0.733, 1.0, opacity));
-            p.set_line_width(1.5);
-            p
-        },
-    );
+    canvas.stroke_path(&line, &{
+        let mut p = Paint::color(VgColor::rgbaf(0.067, 0.733, 1.0, opacity));
+        p.set_line_width(1.5);
+        p
+    });
 }
 
 // ── Image knob ───────────────────────────────────────────────────────────────
@@ -93,6 +90,15 @@ impl View for ImageKnob {
         let bounds = cx.bounds();
         let opacity = cx.opacity();
         let norm = param_widget_ext::ui_normalized(&self.param_base, self.step_set);
+        if super::appearance::draw_control(
+            cx,
+            canvas,
+            &self.param_base,
+            super::appearance::Control::Knob,
+            norm,
+        ) {
+            return;
+        }
         let cxp = bounds.x + bounds.w * 0.5;
         let cyp = bounds.y + bounds.h * 0.5;
         let scale = bounds.w / KNOB_TEMPLATE_PX;

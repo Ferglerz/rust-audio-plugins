@@ -126,6 +126,9 @@ pub(crate) struct WindowModel {
     pub last_inner_window_size: AtomicCell<(u32, u32)>,
     pub accepted_scale: f64,
     pub pending_resize: Option<Instant>,
+    /// Unscaled logical size after a host drag, applied once it settles.
+    pub host_logical: Option<(u32, u32)>,
+    pub host_resize_at: Option<Instant>,
 }
 
 impl Model for ParamModel {
@@ -165,6 +168,27 @@ impl Model for WindowModel {
 
         event.map(|_: &ResizeTick, _| {
             if self
+                .host_resize_at
+                .is_some_and(|at| at.elapsed() >= Duration::from_millis(120))
+            {
+                self.host_resize_at = None;
+                if let Some((width, _)) = self.host_logical.take() {
+                    let (artwork_w, _) = self.vizia_state.inner_logical_size();
+                    if let Some(scale) = crate::editor_scale::scale_from_host_resize(
+                        artwork_w,
+                        width,
+                        cx.user_scale_factor(),
+                    ) {
+                        // Host already resized the window. Keep the reported size
+                        // in agreement without asking the host to resize again.
+                        self.vizia_state.scale_factor.store(scale);
+                        self.vizia_state.remember_scale(scale);
+                        self.vizia_state.flush_remembered_scale();
+                    }
+                }
+            }
+
+            if self
                 .pending_resize
                 .is_some_and(|at| at.elapsed() >= Duration::from_millis(120))
             {
@@ -179,6 +203,8 @@ impl Model for WindowModel {
                 if self.context.request_resize() {
                     self.last_inner_window_size.store(size);
                     self.accepted_scale = scale;
+                    self.vizia_state.remember_scale(scale);
+                    self.vizia_state.flush_remembered_scale();
                 } else {
                     let (width, height) = self.last_inner_window_size.load();
                     self.vizia_state.scale_factor.store(self.accepted_scale);
@@ -193,9 +219,10 @@ impl Model for WindowModel {
             if let WindowEvent::GeometryChanged { .. } = window_event {
                 let logical_size = (cx.window_size().width, cx.window_size().height);
                 let scale = cx.user_scale_factor();
-                let previous_scale = self.vizia_state.scale_factor.load();
                 let last = self.last_inner_window_size.load();
-                if logical_size == last && scale == previous_scale {
+                // Compare against the scale the UI is using. A settled host
+                // resize updates the persisted scale without changing this.
+                if logical_size == last && (scale - self.accepted_scale).abs() < 1e-6 {
                     return;
                 }
 
@@ -205,6 +232,9 @@ impl Model for WindowModel {
                 let expected = self.vizia_state.inner_logical_size();
                 if logical_size != last && logical_size != expected {
                     self.last_inner_window_size.store(logical_size);
+                    self.accepted_scale = scale;
+                    self.host_logical = Some(logical_size);
+                    self.host_resize_at = Some(Instant::now());
                     self.pending_resize = None;
                     return;
                 }

@@ -1,101 +1,11 @@
-use crate::dsp::ring_buffer::{StereoRingBuffer, BUFFER_SIZE};
-
-/// S-curve deceleration function shared between DSP and UI visualization.
-#[inline(always)]
-pub fn s_curve(t: f32, exp: f32) -> f32 {
-    let t = t.clamp(0.0, 1.0);
-    if t <= 0.0 {
-        0.0
-    } else if t >= 1.0 {
-        1.0
-    } else if t < 0.5 {
-        0.5 * (2.0 * t).powf(exp)
-    } else {
-        1.0 - 0.5 * (2.0 * (1.0 - t)).powf(exp)
-    }
-}
-
-/// Inverse of [`s_curve`]. Maps a 0..=1 curve amount back onto the time axis.
-#[inline(always)]
-pub fn inv_s_curve(y: f32, exp: f32) -> f32 {
-    let y = y.clamp(0.0, 1.0);
-    let exp = exp.max(1.0e-3);
-    if y <= 0.0 {
-        0.0
-    } else if y >= 1.0 {
-        1.0
-    } else if y < 0.5 {
-        0.5 * (2.0 * y).powf(1.0 / exp)
-    } else {
-        1.0 - 0.5 * (2.0 * (1.0 - y)).powf(1.0 / exp)
-    }
-}
-
-/// Semitone drop constant: 1.0 - 2^(-1/12) ≈ 0.0561256873183065
-const SEMI_DROP: f64 = 1.0 - 0.9438743126816935;
-
-/// Catch-up playback is not allowed to exceed this multiple of realtime.
-const MAX_RETURN_SPEED: f64 = 8.0;
+use super::ring_buffer::{StereoRingBuffer, BUFFER_SIZE};
+pub use super::trajectory::{inv_s_curve, s_curve};
+use super::trajectory::{
+    lag_samples, minimum_return_len, return_coeff, return_speed_at, MAX_RETURN_SPEED, SEMI_DROP,
+};
 
 /// Shortest crossfade when pre/post channels do not match.
 const XFADE_FLOOR_MS: f32 = 5.0;
-
-fn lag_samples(write_head: usize, play_pos: f64) -> f64 {
-    let size = BUFFER_SIZE as f64;
-    let lag = (write_head as f64 - play_pos).rem_euclid(size);
-    if lag > size * 0.5 {
-        0.0
-    } else {
-        lag
-    }
-}
-
-/// Quadratic bump coefficient so average speed is `1 + lag/n`, with s(0)=s0 and s(1)=1.
-fn return_coeff(s0: f64, lag: f64, n: f64) -> f64 {
-    let excess = if n > 0.0 { lag / n } else { 0.0 };
-    3.0 * (1.0 + 2.0 * excess - s0)
-}
-
-fn return_speed_at(s0: f64, coeff: f64, u: f64) -> f64 {
-    let u = u.clamp(0.0, 1.0);
-    s0 + (1.0 - s0) * u + coeff * u * (1.0 - u)
-}
-
-fn return_peak(s0: f64, coeff: f64) -> f64 {
-    if coeff.abs() < 1e-9 {
-        return s0.max(1.0);
-    }
-    let u = (1.0 - s0 + coeff) / (2.0 * coeff);
-    if !(0.0..=1.0).contains(&u) {
-        s0.max(1.0)
-    } else {
-        return_speed_at(s0, coeff, u)
-    }
-}
-
-fn minimum_return_len(s0: f64, lag: f64, requested: f64) -> f64 {
-    let requested = requested.max(1.0);
-    if return_peak(s0, return_coeff(s0, lag, requested)) <= MAX_RETURN_SPEED {
-        return requested;
-    }
-    let mut hi = (lag / 1.0).max(requested * 2.0);
-    for _ in 0..48 {
-        if return_peak(s0, return_coeff(s0, lag, hi)) <= MAX_RETURN_SPEED {
-            break;
-        }
-        hi *= 1.5;
-    }
-    let mut lo = requested;
-    for _ in 0..48 {
-        let mid = 0.5 * (lo + hi);
-        if return_peak(s0, return_coeff(s0, lag, mid)) <= MAX_RETURN_SPEED {
-            hi = mid;
-        } else {
-            lo = mid;
-        }
-    }
-    hi
-}
 
 fn channel_match(a: &[f32], b: &[f32]) -> f32 {
     let n = a.len().min(b.len());
@@ -192,6 +102,10 @@ pub struct TapeStopEngine {
     smoothed_cc_speed: f64,
     last_cc_msb: Option<u8>,
     last_cc_lsb: Option<u8>,
+    match_live_l: [f32; 1024],
+    match_live_r: [f32; 1024],
+    match_stopped_l: [f32; 1024],
+    match_stopped_r: [f32; 1024],
 }
 
 impl TapeStopEngine {
@@ -235,6 +149,10 @@ impl TapeStopEngine {
             smoothed_cc_speed: 1.0,
             last_cc_msb: None,
             last_cc_lsb: None,
+            match_live_l: [0.0; 1024],
+            match_live_r: [0.0; 1024],
+            match_stopped_l: [0.0; 1024],
+            match_stopped_r: [0.0; 1024],
         }
     }
 
@@ -516,8 +434,8 @@ impl TapeStopEngine {
         self.return_pos = 0.0;
 
         let head = self.ring_buffer.write_head();
-        let lag_l = lag_samples(head, self.play_pos_l);
-        let lag_r = lag_samples(head, self.play_pos_r);
+        let lag_l = lag_samples(head, self.play_pos_l, BUFFER_SIZE);
+        let lag_r = lag_samples(head, self.play_pos_r, BUFFER_SIZE);
         let requested = (return_sec as f64 * self.sample_rate as f64).max(1.0);
         let n = minimum_return_len(self.speed_l, lag_l, requested).max(minimum_return_len(
             self.speed_r,
@@ -536,26 +454,25 @@ impl TapeStopEngine {
         self.xfade_len_samples = (len_ms as f64 * self.sample_rate as f64 / 1000.0).max(1.0);
     }
 
-    fn release_match(&self) -> f32 {
+    fn release_match(&mut self) -> f32 {
         let n = ((0.01 * self.sample_rate) as usize).clamp(64, 1024);
         let head = self.ring_buffer.write_head() as isize;
-        let mut live_l = vec![0.0f32; n];
-        let mut live_r = vec![0.0f32; n];
-        let mut stopped_l = vec![0.0f32; n];
-        let mut stopped_r = vec![0.0f32; n];
         for i in 0..n {
             let back = (n - 1 - i) as isize;
-            live_l[i] = self.ring_buffer.left_at(head - 1 - back);
-            live_r[i] = self.ring_buffer.right_at(head - 1 - back);
+            self.match_live_l[i] = self.ring_buffer.left_at(head - 1 - back);
+            self.match_live_r[i] = self.ring_buffer.right_at(head - 1 - back);
             let steps = (n - 1 - i) as f64;
-            stopped_l[i] = self
+            self.match_stopped_l[i] = self
                 .ring_buffer
                 .read_left(self.play_pos_l - self.speed_l * steps);
-            stopped_r[i] = self
+            self.match_stopped_r[i] = self
                 .ring_buffer
                 .read_right(self.play_pos_r - self.speed_r * steps);
         }
-        channel_match(&stopped_l, &live_l).min(channel_match(&stopped_r, &live_r))
+        channel_match(&self.match_stopped_l[..n], &self.match_live_l[..n]).min(channel_match(
+            &self.match_stopped_r[..n],
+            &self.match_live_r[..n],
+        ))
     }
 
     // --- Telemetry Getters ---
@@ -592,12 +509,12 @@ impl TapeStopEngine {
 
     #[inline(always)]
     pub fn play_lag_left(&self) -> f64 {
-        lag_samples(self.ring_buffer.write_head(), self.play_pos_l)
+        lag_samples(self.ring_buffer.write_head(), self.play_pos_l, BUFFER_SIZE)
     }
 
     #[inline(always)]
     pub fn play_lag_right(&self) -> f64 {
-        lag_samples(self.ring_buffer.write_head(), self.play_pos_r)
+        lag_samples(self.ring_buffer.write_head(), self.play_pos_r, BUFFER_SIZE)
     }
 
     #[inline(always)]

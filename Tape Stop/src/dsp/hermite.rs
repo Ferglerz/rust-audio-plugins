@@ -4,11 +4,7 @@
 /// between y1 and y2, returns the interpolated sample value.
 #[inline(always)]
 pub fn hermite_interpolate(y0: f32, y1: f32, y2: f32, y3: f32, frac: f32) -> f32 {
-    let c1 = 0.5 * (y2 - y0);
-    let c2 = y0 - 2.5 * y1 + 2.0 * y2 - 0.5 * y3;
-    let c3 = 0.5 * (y3 - y0) + 1.5 * (y1 - y2);
-
-    ((c3 * frac + c2) * frac + c1) * frac + y1
+    pleasant_dsp::interpolation::hermite_f32(y0, y1, y2, y3, frac)
 }
 
 #[cfg(test)]

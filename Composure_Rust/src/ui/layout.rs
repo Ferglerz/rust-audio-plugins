@@ -5,7 +5,7 @@
 //! in JSFX gfx space, then mapped to the 0.32 BG asset via `theme::sx()` (JSFX blits
 //! BG at 0.29 horizontally — see `theme::LAYOUT_X_SCALE`).
 
-use super::theme;
+use super::{appearance, theme};
 
 const UI_PANEL_X: f32 = 25.0;
 const SLIDER_H: f32 = 27.0;
@@ -212,6 +212,104 @@ impl ControlLayout {
             offset_knob: (map_x(toolbar_x_jsfx + io_x), tb_knob_y),
         }
     }
+
+    /// Pleasant skin frames. Analog stays on [`Self::from_jsfx`].
+    pub fn pleasant() -> Self {
+        let analog = Self::from_jsfx();
+        let src_left = analog.hp_slider.0;
+        let src_right = analog.lp_slider.0 + analog.lp_slider.2;
+        let dst_left = appearance::DET_X + 14.0;
+        let dst_right = appearance::DET_X + appearance::DET_W - 14.0;
+        let span = src_right - src_left;
+        let dst_span = dst_right - dst_left;
+        let fit_x = |x: f32| dst_left + (x - src_left) / span * dst_span;
+        let fit_w = |w: f32| w / span * dst_span;
+
+        let row_y = [78.0, 128.0, 178.0, 228.0];
+        let env_x = appearance::ENV_X + (appearance::ENV_W - theme::KNOB_SIZE) * 0.5;
+        let env_y0 = appearance::ENV_Y + appearance::MODULE_HEADER_H + 8.0;
+        let env_step = theme::KNOB_SIZE + 18.0;
+
+        let harm_cx = appearance::HARM_X + appearance::HARM_W * 0.5;
+        let slider_x = harm_cx - theme::PARALLAX_SLIDER_W * 0.5;
+        let switch_x = harm_cx - theme::SWITCH_SLOT_W * 0.5;
+        let knob_x = harm_cx - theme::KNOB_SIZE * 0.5;
+        let mut hy = appearance::ENV_Y + appearance::MODULE_HEADER_H + 6.0;
+        let harmonic_type_switch = (switch_x, hy);
+        hy += 56.0 + 16.0;
+        let harmonic_drive = (slider_x, hy);
+        hy += theme::PARALLAX_SLOT_H + 16.0;
+        let harmonic_mix = (slider_x, hy);
+        hy += theme::PARALLAX_SLOT_H + 16.0;
+        let harmonic_even = (slider_x, hy);
+        hy += theme::PARALLAX_SLOT_H + 16.0;
+        let harmonic_odd = (slider_x, hy);
+        hy += theme::PARALLAX_SLOT_H + 14.0;
+        let makeup_knob = (knob_x, hy);
+
+        let bar_knob_y =
+            appearance::BAR_Y + (appearance::BAR_H - theme::KNOB_SIZE) * 0.5;
+        let bar_sw_y = appearance::BAR_Y + (appearance::BAR_H - 56.0) * 0.5;
+        let strength_x = appearance::BAR_X + 16.0;
+        let right = appearance::BAR_X + appearance::BAR_W - 16.0;
+        let offset_x = right - theme::KNOB_SIZE;
+        let rms_x = offset_x - 8.0 - theme::KNOB_SIZE;
+        let norm_x = rms_x - 12.0 - theme::SWITCH_SLOT_W;
+        let ms_x = norm_x - 12.0 - theme::SWITCH_SLOT_W;
+
+        Self {
+            attack_knob: (env_x, env_y0),
+            release_knob: (env_x, env_y0 + env_step),
+            hold_knob: (env_x, env_y0 + env_step * 2.0),
+            hp_slider: (fit_x(analog.hp_slider.0), row_y[0], fit_w(analog.hp_slider.2)),
+            listen_btn: (fit_x(analog.listen_btn.0), row_y[0], fit_w(analog.listen_btn.2)),
+            sc_btn: (fit_x(analog.sc_btn.0), row_y[0], fit_w(analog.sc_btn.2)),
+            lp_slider: (fit_x(analog.lp_slider.0), row_y[0], fit_w(analog.lp_slider.2)),
+            lookahead_slider: (
+                fit_x(analog.lookahead_slider.0),
+                row_y[1],
+                fit_w(analog.lookahead_slider.2),
+            ),
+            brickwall_btn: (
+                fit_x(analog.brickwall_btn.0),
+                row_y[1],
+                fit_w(analog.brickwall_btn.2),
+            ),
+            prog_blend_slider: (
+                fit_x(analog.prog_blend_slider.0),
+                row_y[2],
+                fit_w(analog.prog_blend_slider.2),
+            ),
+            inverse_btn: (
+                fit_x(analog.inverse_btn.0),
+                row_y[2],
+                fit_w(analog.inverse_btn.2),
+            ),
+            attack_curve_slider: (
+                fit_x(analog.attack_curve_slider.0),
+                row_y[3],
+                fit_w(analog.attack_curve_slider.2),
+            ),
+            release_curve_slider: (
+                fit_x(analog.release_curve_slider.0),
+                270.0,
+                fit_w(analog.release_curve_slider.2),
+            ),
+            detection_btn: (fit_x(analog.detection_btn.0), row_y[3]),
+            harmonic_type_switch,
+            harmonic_drive,
+            harmonic_mix,
+            harmonic_even,
+            harmonic_odd,
+            makeup_knob,
+            strength_knob: (strength_x, bar_knob_y),
+            prog_mode_switch: (strength_x + theme::KNOB_SIZE + 12.0, bar_sw_y),
+            ms_switch: (ms_x, bar_sw_y),
+            norm_switch: (norm_x, bar_sw_y),
+            rms_knob: (rms_x, bar_knob_y),
+            offset_knob: (offset_x, bar_knob_y),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -263,6 +361,30 @@ mod tests {
     #[test]
     fn graph_is_square_on_bg_asset() {
         assert!((theme::GRAPH_SIZE - theme::GRAPH_SIZE_X).abs() < 0.01);
+    }
+
+    #[test]
+    fn pleasant_transfer_takes_width_from_timing_and_bar_aligns() {
+        assert!(appearance::TRANS_W > appearance::DET_W);
+        assert!((appearance::TRANS_W - 456.0).abs() < 0.1);
+        let bar_right = appearance::BAR_X + appearance::BAR_W;
+        let transfer_right = appearance::TRANS_X + appearance::TRANS_W;
+        assert!((appearance::BAR_X - appearance::DET_X).abs() < 0.1);
+        assert!((bar_right - transfer_right).abs() < 0.1);
+        let l = ControlLayout::pleasant();
+        let det_right = appearance::DET_X + appearance::DET_W;
+        assert!(l.lp_slider.0 + l.lp_slider.2 <= det_right - 10.0);
+        assert!(l.strength_knob.0 >= appearance::BAR_X);
+        assert!(l.offset_knob.0 + theme::KNOB_SIZE <= bar_right);
+        let label_x = appearance::PLEASANT_GRAPH_X - theme::sx(30.0);
+        assert!(label_x > appearance::TRANS_X + 8.0);
+        let (meter_l, meter_r) = appearance::meter_x(0);
+        assert!(meter_r + theme::METER_W < appearance::TRANS_X + appearance::TRANS_W);
+        assert!(meter_l > appearance::PLEASANT_GRAPH_X + theme::GRAPH_SIZE);
+        let env_bottom = l.hold_knob.1 + theme::KNOB_SIZE;
+        assert!(env_bottom <= appearance::ENV_Y + appearance::SIDE_H - 8.0);
+        let harm_bottom = l.makeup_knob.1 + theme::KNOB_SIZE;
+        assert!(harm_bottom <= appearance::ENV_Y + appearance::SIDE_H - 8.0);
     }
 
     #[test]

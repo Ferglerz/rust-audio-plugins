@@ -9,8 +9,8 @@ exclude = ["vendor/nih-plug"]
 resolver = "2"
 
 [patch."https://github.com/robbert-vdh/nih-plug.git"]
-nih_plug = { path = "vendor/nih-plug" }
-nih_plug_vizia = { path = "vendor/nih-plug/nih_plug_vizia" }
+nih_plug = { path = "../Damian Channel Strip/vendor/nih-plug" }
+nih_plug_vizia = { path = "../Damian Channel Strip/vendor/nih-plug/nih_plug_vizia" }
 nih_plug_xtask = { path = "vendor/nih-plug/nih_plug_xtask" }
 
 [profile.release]
@@ -20,3 +20,10 @@ strip = "symbols"
 
 [profile.dev]
 opt-level = 1
+
+# Keep all four plugins on the same host resizing implementation.
+[patch."https://github.com/RustAudio/baseview.git"]
+baseview = { path = "../Damian Channel Strip/vendor/baseview" }
+
+[patch."https://github.com/robbert-vdh/vizia.git"]
+vizia_baseview = { path = "../Damian Channel Strip/vendor/vizia_baseview" }

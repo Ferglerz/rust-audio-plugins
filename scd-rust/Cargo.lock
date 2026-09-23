@@ -429,7 +429,6 @@ dependencies = [
 [[package]]
 name = "baseview"
 version = "0.1.0"
-source = "git+https://github.com/RustAudio/baseview.git?rev=2c1b1a7b0fef1a29a5150a6a8f6fef6a0cbab8c4#2c1b1a7b0fef1a29a5150a6a8f6fef6a0cbab8c4"
 dependencies = [
  "cocoa",
  "core-foundation",
@@ -2311,12 +2310,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
+name = "pleasant-curves"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "pleasant-dsp"
+version = "0.1.0"
+
+[[package]]
 name = "pleasant-ui"
 version = "0.1.0"
 dependencies = [
  "atomic_float 1.1.0",
  "nih_plug",
  "nih_plug_vizia",
+ "pleasant-dsp",
 ]
 
 [[package]]
@@ -2791,6 +2802,7 @@ dependencies = [
  "atomic_float 1.1.0",
  "nih_plug",
  "nih_plug_vizia",
+ "pleasant-curves",
  "pleasant-ui",
  "scd-core",
  "serde",
@@ -3407,7 +3419,6 @@ dependencies = [
 [[package]]
 name = "vizia_baseview"
 version = "0.1.0"
-source = "git+https://github.com/robbert-vdh/vizia.git?tag=patched-2024-05-06#e3fab5530cda9cb90f679508d9f058bd62189d36"
 dependencies = [
  "baseview",
  "femtovg",

@@ -515,7 +515,7 @@ impl Default for ComposureParams {
 
             mid_side_mode: BoolParam::new("Mid/Side", false),
 
-            editor_state: ViziaState::new(|| (1182, 504)),
+            editor_state: ViziaState::new_screen_sized("Composure", || (1182, 504)),
             graph_store: GraphStore::default(),
         }
     }

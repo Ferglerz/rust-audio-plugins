@@ -5,38 +5,22 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
-pub const MAX_NODES: usize = 16;
+pub use pleasant_curves::{VelCurve, VelHandle, VelNode, MAX_NODES};
+
 pub const MAX_ARTS: usize = MAX_ARTICULATIONS;
-const MIN_GAP: f32 = 1.0 / 126.0;
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
-pub struct VelHandle {
-    pub x: f32,
-    pub y: f32,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
-pub struct VelNode {
-    pub x: f32,
-    pub y: f32,
-    pub in_handle: VelHandle,
-    pub out_handle: VelHandle,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct VelCurve {
-    pub nodes: Vec<VelNode>,
-}
+/// The extra persisted slot is a kit-piece curve applied after articulation mapping.
+pub const ALL_ART: usize = MAX_ARTS;
+const MAP_SLOTS: usize = MAX_ARTS + 1;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct VelMapBank {
     #[serde(deserialize_with = "deserialize_curves")]
-    pub curves: [[VelCurve; MAX_ARTS]; KitPieceId::COUNT],
+    pub curves: [[VelCurve; MAP_SLOTS]; KitPieceId::COUNT],
 }
 
 fn deserialize_curves<'de, D>(
     deserializer: D,
-) -> Result<[[VelCurve; MAX_ARTS]; KitPieceId::COUNT], D::Error>
+) -> Result<[[VelCurve; MAP_SLOTS]; KitPieceId::COUNT], D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -58,15 +42,15 @@ where
     }
 }
 
-fn pad_arts(mut arts: Vec<VelCurve>) -> [VelCurve; MAX_ARTS] {
-    arts.truncate(MAX_ARTS);
-    while arts.len() < MAX_ARTS {
+fn pad_arts(mut arts: Vec<VelCurve>) -> [VelCurve; MAP_SLOTS] {
+    arts.truncate(MAP_SLOTS);
+    while arts.len() < MAP_SLOTS {
         arts.push(VelCurve::identity());
     }
     std::array::from_fn(|i| arts[i].clone())
 }
 
-fn pad_bank(mut rows: Vec<Vec<VelCurve>>) -> [[VelCurve; MAX_ARTS]; KitPieceId::COUNT] {
+fn pad_bank(mut rows: Vec<Vec<VelCurve>>) -> [[VelCurve; MAP_SLOTS]; KitPieceId::COUNT] {
     rows.truncate(KitPieceId::COUNT);
     while rows.len() < KitPieceId::COUNT {
         rows.push(Vec::new());
@@ -75,283 +59,11 @@ fn pad_bank(mut rows: Vec<Vec<VelCurve>>) -> [[VelCurve; MAX_ARTS]; KitPieceId::
 }
 
 pub struct VelMapState {
-    curves: Mutex<[[VelCurve; MAX_ARTS]; KitPieceId::COUNT]>,
-    tables: [[VelTable; MAX_ARTS]; KitPieceId::COUNT],
+    curves: Mutex<[[VelCurve; MAP_SLOTS]; KitPieceId::COUNT]>,
+    tables: [[VelTable; MAP_SLOTS]; KitPieceId::COUNT],
 }
 
 struct VelTable([AtomicU8; 128]);
-
-impl VelHandle {
-    fn new(x: f32, y: f32) -> Self {
-        Self { x, y }
-    }
-}
-
-impl VelNode {
-    fn identity_start() -> Self {
-        Self {
-            x: 0.0,
-            y: 0.0,
-            in_handle: VelHandle::new(0.0, 0.0),
-            out_handle: VelHandle::new(1.0 / 3.0, 1.0 / 3.0),
-        }
-    }
-
-    fn identity_end() -> Self {
-        Self {
-            x: 1.0,
-            y: 1.0,
-            in_handle: VelHandle::new(2.0 / 3.0, 2.0 / 3.0),
-            out_handle: VelHandle::new(1.0, 1.0),
-        }
-    }
-
-    fn translate(&mut self, dx: f32, dy: f32) {
-        self.x += dx;
-        self.y += dy;
-        self.in_handle.x += dx;
-        self.in_handle.y += dy;
-        self.out_handle.x += dx;
-        self.out_handle.y += dy;
-    }
-
-    fn set_out_handle(&mut self, x: f32, y: f32) {
-        self.out_handle.x = x;
-        self.out_handle.y = y;
-        self.in_handle.x = 2.0 * self.x - x;
-        self.in_handle.y = 2.0 * self.y - y;
-    }
-
-    fn set_in_handle(&mut self, x: f32, y: f32) {
-        self.in_handle.x = x;
-        self.in_handle.y = y;
-        self.out_handle.x = 2.0 * self.x - x;
-        self.out_handle.y = 2.0 * self.y - y;
-    }
-}
-
-impl VelCurve {
-    pub fn identity() -> Self {
-        Self {
-            nodes: vec![VelNode::identity_start(), VelNode::identity_end()],
-        }
-    }
-
-    pub fn sanitize(mut self) -> Self {
-        if self.nodes.len() < 2 {
-            return Self::identity();
-        }
-        self.nodes.truncate(MAX_NODES);
-        self.nodes.sort_by(|a, b| a.x.total_cmp(&b.x));
-        self.nodes[0].x = 0.0;
-        let last = self.nodes.len() - 1;
-        self.nodes[last].x = 1.0;
-        for node in &mut self.nodes {
-            node.x = node.x.clamp(0.0, 1.0);
-            node.y = node.y.clamp(0.0, 1.0);
-            node.in_handle.y = node.in_handle.y.clamp(-1.0, 2.0);
-            node.out_handle.y = node.out_handle.y.clamp(-1.0, 2.0);
-        }
-        self.constrain_handles();
-        self
-    }
-
-    /// Keep each cubic's X control points ordered `P0 ≤ C0 ≤ C1 ≤ P1`.
-    /// That makes `dx/dt ≥ 0`, so the graph cannot fold backwards.
-    fn constrain_handles(&mut self) {
-        let n = self.nodes.len();
-        if n < 2 {
-            return;
-        }
-        self.nodes[0].in_handle.x = self.nodes[0].in_handle.x.clamp(0.0, self.nodes[0].x);
-        self.nodes[n - 1].out_handle.x = self.nodes[n - 1]
-            .out_handle
-            .x
-            .clamp(self.nodes[n - 1].x, 1.0);
-        for i in 0..n - 1 {
-            let lo = self.nodes[i].x;
-            let hi = self.nodes[i + 1].x;
-            let hi = hi.max(lo);
-            self.nodes[i].out_handle.x = self.nodes[i].out_handle.x.clamp(lo, hi);
-            self.nodes[i + 1].in_handle.x = self.nodes[i + 1].in_handle.x.clamp(lo, hi);
-            if self.nodes[i].out_handle.x > self.nodes[i + 1].in_handle.x {
-                let mid = 0.5 * (self.nodes[i].out_handle.x + self.nodes[i + 1].in_handle.x);
-                self.nodes[i].out_handle.x = mid;
-                self.nodes[i + 1].in_handle.x = mid;
-            }
-        }
-    }
-
-    pub fn eval_y(&self, x: f32) -> f32 {
-        let x = x.clamp(0.0, 1.0);
-        let nodes = &self.nodes;
-        if nodes.len() < 2 {
-            return x;
-        }
-        if x <= nodes[0].x {
-            return nodes[0].y;
-        }
-        let last = nodes.len() - 1;
-        if x >= nodes[last].x {
-            return nodes[last].y;
-        }
-        for i in 0..last {
-            let a = &nodes[i];
-            let b = &nodes[i + 1];
-            if x >= a.x && x <= b.x {
-                let t = solve_t(a.x, a.out_handle.x, b.in_handle.x, b.x, x);
-                return cubic(a.y, a.out_handle.y, b.in_handle.y, b.y, t).clamp(0.0, 1.0);
-            }
-        }
-        x
-    }
-
-    pub fn rasterize(&self) -> [u8; 128] {
-        let mut table = [1u8; 128];
-        for vel in 1..=127u8 {
-            table[vel as usize] = norm_to_midi(self.eval_y(midi_to_norm(vel)));
-        }
-        table[0] = table[1];
-        table
-    }
-
-    pub fn lookup(&self, vel: u8) -> u8 {
-        self.rasterize()[vel.min(127) as usize]
-    }
-
-    pub fn sample_points(&self, steps_per_segment: usize) -> Vec<(f32, f32)> {
-        let steps = steps_per_segment.max(2);
-        let mut pts = Vec::new();
-        if self.nodes.len() < 2 {
-            return pts;
-        }
-        for i in 0..self.nodes.len() - 1 {
-            let a = &self.nodes[i];
-            let b = &self.nodes[i + 1];
-            let start = if i == 0 { 0 } else { 1 };
-            for s in start..=steps {
-                let t = s as f32 / steps as f32;
-                let x = cubic(a.x, a.out_handle.x, b.in_handle.x, b.x, t);
-                let y = cubic(a.y, a.out_handle.y, b.in_handle.y, b.y, t);
-                pts.push((x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)));
-            }
-        }
-        pts
-    }
-
-    pub fn insert_at(&mut self, x: f32) -> Option<usize> {
-        if self.nodes.len() >= MAX_NODES {
-            return None;
-        }
-        let x = x.clamp(MIN_GAP, 1.0 - MIN_GAP);
-        for node in &self.nodes {
-            if (node.x - x).abs() < MIN_GAP {
-                return None;
-            }
-        }
-        let y = self.eval_y(x);
-        let idx = self
-            .nodes
-            .iter()
-            .position(|n| n.x > x)
-            .unwrap_or(self.nodes.len());
-        if idx == 0 || idx >= self.nodes.len() {
-            return None;
-        }
-        let prev = self.nodes[idx - 1];
-        let next = self.nodes[idx];
-        let dx = (next.x - prev.x) / 6.0;
-        let dy = (next.y - prev.y) / 6.0;
-        self.nodes.insert(
-            idx,
-            VelNode {
-                x,
-                y,
-                in_handle: VelHandle::new(x - dx, y - dy),
-                out_handle: VelHandle::new(x + dx, y + dy),
-            },
-        );
-        self.constrain_handles();
-        Some(idx)
-    }
-
-    pub fn delete(&mut self, index: usize) -> bool {
-        if index == 0 || index + 1 >= self.nodes.len() || self.nodes.len() <= 2 {
-            return false;
-        }
-        self.nodes.remove(index);
-        true
-    }
-
-    pub fn move_node(&mut self, index: usize, x: f32, y: f32) {
-        if index >= self.nodes.len() {
-            return;
-        }
-        let y = y.clamp(0.0, 1.0);
-        let x = if index == 0 {
-            0.0
-        } else if index + 1 == self.nodes.len() {
-            1.0
-        } else {
-            let lo = self.nodes[index - 1].x + MIN_GAP;
-            let hi = self.nodes[index + 1].x - MIN_GAP;
-            x.clamp(lo, hi)
-        };
-        let dx = x - self.nodes[index].x;
-        let dy = y - self.nodes[index].y;
-        self.nodes[index].translate(dx, dy);
-        self.nodes[index].y = self.nodes[index].y.clamp(0.0, 1.0);
-        self.nodes[index].in_handle.y = self.nodes[index].in_handle.y.clamp(-1.0, 2.0);
-        self.nodes[index].out_handle.y = self.nodes[index].out_handle.y.clamp(-1.0, 2.0);
-        self.constrain_handles();
-    }
-
-    pub fn drag_out_handle(&mut self, index: usize, x: f32, y: f32) {
-        if index >= self.nodes.len() {
-            return;
-        }
-        let lo = self.nodes[index].x;
-        let mut hi = if index + 1 < self.nodes.len() {
-            self.nodes[index + 1].x
-        } else {
-            1.0
-        };
-        if index + 1 < self.nodes.len() {
-            hi = hi.min(self.nodes[index + 1].in_handle.x);
-        }
-        self.nodes[index].set_out_handle(x.clamp(lo, hi.max(lo)), y);
-        self.constrain_handles();
-    }
-
-    pub fn drag_in_handle(&mut self, index: usize, x: f32, y: f32) {
-        if index >= self.nodes.len() {
-            return;
-        }
-        let hi = self.nodes[index].x;
-        let mut lo = if index > 0 {
-            self.nodes[index - 1].x
-        } else {
-            0.0
-        };
-        if index > 0 {
-            lo = lo.max(self.nodes[index - 1].out_handle.x);
-        }
-        self.nodes[index].set_in_handle(x.clamp(lo.min(hi), hi), y);
-        self.constrain_handles();
-    }
-
-    pub fn hit_node(&self, x: f32, y: f32, radius: f32) -> Option<usize> {
-        self.nodes
-            .iter()
-            .enumerate()
-            .filter_map(|(i, n)| {
-                let d = (n.x - x).hypot(n.y - y);
-                (d <= radius).then_some((i, d))
-            })
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(i, _)| i)
-    }
-}
 
 impl VelMapBank {
     pub fn identity() -> Self {
@@ -390,15 +102,16 @@ impl VelMapState {
     }
 
     pub fn lookup(&self, kit_piece: KitPieceId, art: usize, vel: u8) -> u8 {
-        self.tables[kit_piece as usize][art.min(MAX_ARTS - 1)].get(vel)
+        let tables = &self.tables[kit_piece as usize];
+        tables[ALL_ART].get(tables[art.min(MAX_ARTS - 1)].get(vel))
     }
 
     pub fn curve(&self, kit_piece: KitPieceId, art: usize) -> VelCurve {
-        self.lock_curves()[kit_piece as usize][art.min(MAX_ARTS - 1)].clone()
+        self.lock_curves()[kit_piece as usize][art.min(ALL_ART)].clone()
     }
 
     pub fn set_curve(&self, kit_piece: KitPieceId, art: usize, curve: VelCurve) {
-        let art = art.min(MAX_ARTS - 1);
+        let art = art.min(ALL_ART);
         let curve = curve.sanitize();
         let raster = curve.rasterize();
         self.lock_curves()[kit_piece as usize][art] = curve;
@@ -410,7 +123,7 @@ impl VelMapState {
     }
 
     pub fn reset_piece(&self, kit_piece: KitPieceId) {
-        for art in 0..MAX_ARTS {
+        for art in 0..MAP_SLOTS {
             self.reset_art(kit_piece, art);
         }
     }
@@ -436,9 +149,8 @@ impl VelMapState {
     }
 
     fn replace_bank(&self, bank: VelMapBank) {
-        let curves = std::array::from_fn(|i| {
-            std::array::from_fn(|a| bank.curves[i][a].clone().sanitize())
-        });
+        let curves =
+            std::array::from_fn(|i| std::array::from_fn(|a| bank.curves[i][a].clone().sanitize()));
         for (i, arts) in curves.iter().enumerate() {
             for (a, curve) in arts.iter().enumerate() {
                 self.tables[i][a].store(&curve.rasterize());
@@ -447,7 +159,7 @@ impl VelMapState {
         *self.lock_curves() = curves;
     }
 
-    fn lock_curves(&self) -> std::sync::MutexGuard<'_, [[VelCurve; MAX_ARTS]; KitPieceId::COUNT]> {
+    fn lock_curves(&self) -> std::sync::MutexGuard<'_, [[VelCurve; MAP_SLOTS]; KitPieceId::COUNT]> {
         self.curves.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
@@ -479,40 +191,78 @@ pub fn norm_to_midi(norm: f32) -> u8 {
     (norm.clamp(0.0, 1.0) * 126.0).round() as u8 + 1
 }
 
-fn cubic(p0: f32, c0: f32, c1: f32, p1: f32, t: f32) -> f32 {
-    let u = 1.0 - t;
-    u * u * u * p0 + 3.0 * u * u * t * c0 + 3.0 * u * t * t * c1 + t * t * t * p1
+trait VelCurveMidiExt {
+    fn rasterize(&self) -> [u8; 128];
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn lookup(&self, velocity: u8) -> u8;
 }
 
-fn cubic_dt(p0: f32, c0: f32, c1: f32, p1: f32, t: f32) -> f32 {
-    let u = 1.0 - t;
-    3.0 * u * u * (c0 - p0) + 6.0 * u * t * (c1 - c0) + 3.0 * t * t * (p1 - c1)
-}
-
-fn solve_t(p0: f32, c0: f32, c1: f32, p1: f32, x: f32) -> f32 {
-    let span = p1 - p0;
-    let mut t = if span.abs() < 1e-6 {
-        0.5
-    } else {
-        ((x - p0) / span).clamp(0.0, 1.0)
-    };
-    for _ in 0..12 {
-        let f = cubic(p0, c0, c1, p1, t) - x;
-        if f.abs() < 1e-5 {
-            break;
+impl VelCurveMidiExt for VelCurve {
+    fn rasterize(&self) -> [u8; 128] {
+        let mut table = [1_u8; 128];
+        for velocity in 1..=127_u8 {
+            table[velocity as usize] = norm_to_midi(self.eval_y(midi_to_norm(velocity)));
         }
-        let d = cubic_dt(p0, c0, c1, p1, t);
-        if d.abs() < 1e-6 {
-            break;
-        }
-        t = (t - f / d).clamp(0.0, 1.0);
+        table[0] = table[1];
+        table
     }
-    t
+
+    fn lookup(&self, velocity: u8) -> u8 {
+        self.rasterize()[velocity.min(127) as usize]
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn all_mapping_composes_after_articulation_and_persists() {
+        let state = VelMapState::identity();
+        let mut art = VelCurve::identity();
+        art.move_node(1, 1.0, 0.5);
+        let mut all = VelCurve::identity();
+        all.move_node(0, 0.0, 0.25);
+        state.set_curve(KitPieceId::Kick, 0, art.clone());
+        state.set_curve(KitPieceId::Kick, ALL_ART, all.clone());
+        for velocity in 1..=127 {
+            assert_eq!(
+                state.lookup(KitPieceId::Kick, 0, velocity),
+                all.lookup(art.lookup(velocity))
+            );
+            assert_eq!(
+                state.lookup(KitPieceId::Kick, 1, velocity),
+                all.lookup(velocity)
+            );
+            assert_eq!(state.lookup(KitPieceId::Snare, 0, velocity), velocity);
+        }
+        let json = serde_json::to_string(&state.snapshot()).unwrap();
+        let restored = VelMapState::identity();
+        restored.load_bank(serde_json::from_str(&json).unwrap());
+        assert_eq!(restored.snapshot(), state.snapshot());
+        assert_eq!(
+            restored.lookup(KitPieceId::Kick, 0, 100),
+            all.lookup(art.lookup(100))
+        );
+        restored.reset_art(KitPieceId::Kick, ALL_ART);
+        assert_eq!(restored.curve(KitPieceId::Kick, 0), art);
+        assert_eq!(restored.lookup(KitPieceId::Kick, 0, 100), art.lookup(100));
+        state.reset_piece(KitPieceId::Kick);
+        assert_eq!(state.lookup(KitPieceId::Kick, 0, 100), 100);
+    }
+
+    #[test]
+    fn legacy_bank_defaults_all_to_identity() {
+        let mut art = VelCurve::identity();
+        art.move_node(1, 1.0, 0.5);
+        let old_rows = vec![vec![art.clone(); MAX_ARTS]; KitPieceId::COUNT];
+        let bank: VelMapBank =
+            serde_json::from_value(serde_json::json!({"curves": old_rows})).unwrap();
+        let state = VelMapState::identity();
+        state.load_bank(bank);
+        assert_eq!(state.curve(KitPieceId::Kick, ALL_ART), VelCurve::identity());
+        assert_eq!(state.lookup(KitPieceId::Kick, 0, 100), art.lookup(100));
+    }
 
     #[test]
     fn identity_raster_is_one_to_127() {

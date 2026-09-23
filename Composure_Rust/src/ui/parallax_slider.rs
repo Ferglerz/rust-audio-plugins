@@ -7,11 +7,11 @@ use nih_plug_vizia::widgets::util;
 
 use crate::params::ComposureParams;
 
-use super::ui_assets as assets;
 use super::display::UiDisplay;
 use super::param_widget_ext::{self, ParamDragSession};
 use super::step_points::StepSet;
 use super::texture_cache::draw_tex;
+use super::ui_assets as assets;
 
 const FADER_IMG_W: f32 = 36.0;
 const FADER_IMG_H: f32 = 45.0;
@@ -67,6 +67,15 @@ impl View for ParallaxSlider {
         let bounds = cx.bounds();
         let opacity = cx.opacity();
         let norm = param_widget_ext::ui_normalized(&self.param_base, self.step_set);
+        if super::appearance::draw_control(
+            cx,
+            canvas,
+            &self.param_base,
+            super::appearance::Control::Slider(super::readout_controls::SliderFill::LeftToRight),
+            norm,
+        ) {
+            return;
+        }
         let scaled_w = FADER_IMG_W;
         let scaled_h = FADER_IMG_H;
 
@@ -116,8 +125,7 @@ impl View for ParallaxSlider {
             WindowEvent::MouseDown(MouseButton::Left) => {
                 if param_widget_ext::reset_to_default_on_command_click(cx, &self.param_base) {
                 } else {
-                    let ui_norm =
-                        util::remap_current_entity_x_coordinate(cx, cx.mouse().cursorx);
+                    let ui_norm = util::remap_current_entity_x_coordinate(cx, cx.mouse().cursorx);
                     param_widget_ext::param_drag_begin_horizontal(
                         &mut self.drag,
                         cx,
@@ -144,8 +152,7 @@ impl View for ParallaxSlider {
             }
             WindowEvent::MouseMove(_, _) => {
                 if self.drag.active {
-                    let ui_norm =
-                        util::remap_current_entity_x_coordinate(cx, cx.mouse().cursorx);
+                    let ui_norm = util::remap_current_entity_x_coordinate(cx, cx.mouse().cursorx);
                     param_widget_ext::param_drag_move_horizontal(
                         cx,
                         &self.param_base,

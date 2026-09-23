@@ -115,6 +115,15 @@ impl View for ReadoutSlider {
         let bounds = cx.bounds();
         let opacity = cx.opacity();
         let norm = param_widget_ext::ui_normalized(&self.param_base, self.step_set);
+        if super::appearance::draw_control(
+            cx,
+            canvas,
+            &self.param_base,
+            super::appearance::Control::Slider(self.fill),
+            norm,
+        ) {
+            return;
+        }
 
         let mut track = Path::new();
         track.rect(bounds.x, bounds.y, bounds.w, bounds.h);
@@ -131,8 +140,7 @@ impl View for ReadoutSlider {
             WindowEvent::MouseDown(MouseButton::Left) => {
                 if param_widget_ext::reset_to_default_on_command_click(cx, &self.param_base) {
                 } else {
-                    let ui_norm =
-                        util::remap_current_entity_x_coordinate(cx, cx.mouse().cursorx);
+                    let ui_norm = util::remap_current_entity_x_coordinate(cx, cx.mouse().cursorx);
                     param_widget_ext::param_drag_begin_horizontal(
                         &mut self.drag,
                         cx,
@@ -159,8 +167,7 @@ impl View for ReadoutSlider {
             }
             WindowEvent::MouseMove(_, _) => {
                 if self.drag.active {
-                    let ui_norm =
-                        util::remap_current_entity_x_coordinate(cx, cx.mouse().cursorx);
+                    let ui_norm = util::remap_current_entity_x_coordinate(cx, cx.mouse().cursorx);
                     param_widget_ext::param_drag_move_horizontal(
                         cx,
                         &self.param_base,
@@ -233,6 +240,15 @@ impl View for JsfxParamButton {
         let bounds = cx.bounds();
         let opacity = cx.opacity();
         let on = param_widget_ext::bool_param_on(&self.param_base);
+        if super::appearance::draw_control(
+            cx,
+            canvas,
+            &self.param_base,
+            super::appearance::Control::Button,
+            if on { 1.0 } else { 0.0 },
+        ) {
+            return;
+        }
         let (r, g, b) = if on {
             (0.528, 0.396, 0.132)
         } else {
@@ -245,14 +261,11 @@ impl View for JsfxParamButton {
 
         let mut border = Path::new();
         border.rect(bounds.x, bounds.y, bounds.w, bounds.h);
-        canvas.stroke_path(
-            &border,
-            &{
-                let mut p = Paint::color(VgColor::rgbaf(0.6, 0.6, 0.6, opacity));
-                p.set_line_width(1.0);
-                p
-            },
-        );
+        canvas.stroke_path(&border, &{
+            let mut p = Paint::color(VgColor::rgbaf(0.6, 0.6, 0.6, opacity));
+            p.set_line_width(1.0);
+            p
+        });
     }
 
     fn event(&mut self, cx: &mut EventContext, event: &mut Event) {

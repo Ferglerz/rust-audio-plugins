@@ -16,6 +16,8 @@ debug-alloc = ["nih_plug/assert_process_allocs"]
 [dependencies]
 nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" }
 nih_plug_vizia = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+pleasant-curves = { path = "../pleasant-curves" }
+pleasant-dsp = { path = "../pleasant-dsp" }
 pleasant-ui = { path = "../pleasant-ui" }
 atomic_float = "1"
 crossbeam-queue = "0.3.12"

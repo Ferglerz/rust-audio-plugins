@@ -1,0 +1,8 @@
+[package]
+name = "pleasant-eq-headless"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+pleasant-eq = { path = "../../pleasant-eq" }

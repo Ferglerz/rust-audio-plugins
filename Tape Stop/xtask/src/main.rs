@@ -41,14 +41,6 @@ fn get_all_bundle_paths() -> Vec<(PathBuf, &'static str)> {
     let mut paths = vec![
         (bundled.join("tape_stop.clap"), "target CLAP bundle"),
         (bundled.join("tape_stop.vst3"), "target VST3 bundle"),
-        (
-            PathBuf::from("/Library/Audio/Plug-Ins/CLAP/tape_stop.clap"),
-            "System CLAP plugin",
-        ),
-        (
-            PathBuf::from("/Library/Audio/Plug-Ins/VST3/tape_stop.vst3"),
-            "System VST3 plugin",
-        ),
     ];
 
     if let Some(home) = std::env::var_os("HOME") {
@@ -159,13 +151,12 @@ fn install_bundles() -> nih_plug_xtask::Result<()> {
         return Ok(());
     }
 
-    let mut clap_destinations = vec![PathBuf::from("/Library/Audio/Plug-Ins/CLAP")];
-    let mut vst3_destinations = vec![PathBuf::from("/Library/Audio/Plug-Ins/VST3")];
-
-    if let Some(home) = std::env::var_os("HOME") {
-        clap_destinations.push(PathBuf::from(&home).join("Library/Audio/Plug-Ins/CLAP"));
-        vst3_destinations.push(PathBuf::from(&home).join("Library/Audio/Plug-Ins/VST3"));
-    }
+    let Some(home) = std::env::var_os("HOME") else {
+        return Ok(());
+    };
+    let home = PathBuf::from(home);
+    let clap_destinations = [home.join("Library/Audio/Plug-Ins/CLAP")];
+    let vst3_destinations = [home.join("Library/Audio/Plug-Ins/VST3")];
 
     let bundled = bundled_dir();
     copy_bundle(

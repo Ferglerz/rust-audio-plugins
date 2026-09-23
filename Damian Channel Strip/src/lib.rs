@@ -75,6 +75,7 @@ impl Plugin for Damian {
     }
     fn reset(&mut self) {
         self.engine.reset();
+        self.shared.reset_gr_peaks();
     }
     fn process(
         &mut self,
@@ -82,6 +83,10 @@ impl Plugin for Damian {
         _: &mut AuxiliaryBuffers,
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
+        let playing = context.transport().playing;
+        if self.shared.note_transport_playing(playing) {
+            self.shared.reset_gr_peaks();
+        }
         self.shared.requested_config.store(
             self.params.processing_config().encode(),
             std::sync::atomic::Ordering::Relaxed,
@@ -146,6 +151,7 @@ impl Plugin for Damian {
                 *s = out[i] as f32;
             }
         }
+        self.shared.update_gr_peaks_while_playing(playing);
         let num_samples = buffer.samples();
         let block_secs = num_samples as f32 / self.engine.sample_rate() as f32;
         self.engine.end_block(block_secs);

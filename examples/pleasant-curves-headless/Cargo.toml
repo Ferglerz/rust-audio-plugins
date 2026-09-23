@@ -1,0 +1,9 @@
+[package]
+name = "pleasant-curves-headless"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+pleasant-curves = { path = "../../pleasant-curves" }
+serde_json = "1"

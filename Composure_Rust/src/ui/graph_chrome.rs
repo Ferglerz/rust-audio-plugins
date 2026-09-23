@@ -28,7 +28,9 @@ where
     Label::new(cx, point_lens)
         .class("graph-point-count")
         .position_type(PositionType::SelfDirected)
-        .left(Pixels(theme::GRAPH_X + theme::sx(8.0)))
+        .left(super::EditorData::appearance.map(|mode| {
+            Pixels(super::appearance::graph_x(*mode) + theme::sx(8.0))
+        }))
         .top(Pixels(theme::GRAPH_Y + 9.0));
 
     build_axis_labels(cx, params);
@@ -44,7 +46,9 @@ where
     Label::new(cx, hint_lens)
         .class("graph-ctrl-hint")
         .position_type(PositionType::SelfDirected)
-        .left(Pixels(theme::GRAPH_X + theme::GRAPH_SIZE_X - theme::sx(168.0)))
+        .left(super::EditorData::appearance.map(|mode| {
+            Pixels(super::appearance::graph_x(*mode) + theme::GRAPH_SIZE_X - theme::sx(168.0))
+        }))
         .top(Pixels(theme::GRAPH_Y + theme::GRAPH_SIZE - 20.0))
         .width(Pixels(160.0))
         .height(Pixels(14.0));
@@ -73,7 +77,9 @@ where
         Label::new(cx, label_lens)
             .class("graph-axis-label")
             .position_type(PositionType::SelfDirected)
-            .left(Pixels(theme::GRAPH_X - theme::sx(30.0)))
+            .left(super::EditorData::appearance.map(|mode| {
+                Pixels(super::appearance::graph_x(*mode) - theme::sx(30.0))
+            }))
             .top(top_lens)
             .width(Pixels(26.0))
             .height(Pixels(12.0));
