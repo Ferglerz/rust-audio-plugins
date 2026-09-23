@@ -7,6 +7,7 @@ All plugins and the shared UI are Git subtrees with their full histories:
 - `Tape Stop/`: https://github.com/Ferglerz/Tape-Stop.git
 - `pleasant-ui/`: https://github.com/Ferglerz/pleasant-ui.git
 - `scd-rust/`: https://github.com/Ferglerz/scd-rust.git
+- `Composure_Rust/`: https://github.com/Ferglerz/Composure_Rust.git
 
 A normal clone includes their tracked files; no submodule initialization is
 needed. Commit edits normally in audio-plugins, including coordinated changes
@@ -22,6 +23,7 @@ git remote add flattery https://github.com/Ferglerz/Flattery.git
 git remote add tape-stop https://github.com/Ferglerz/Tape-Stop.git
 git remote add pleasant-ui https://github.com/Ferglerz/pleasant-ui.git
 git remote add scd-rust https://github.com/Ferglerz/scd-rust.git
+git remote add composure https://github.com/Ferglerz/Composure_Rust.git
 ```
 
 ## Two-way sync
@@ -35,6 +37,7 @@ git subtree pull --prefix=Flattery flattery main
 git subtree pull --prefix="Tape Stop" tape-stop main
 git subtree pull --prefix=pleasant-ui pleasant-ui main
 git subtree pull --prefix=scd-rust scd-rust main
+git subtree pull --prefix=Composure_Rust composure main
 ```
 
 Export committed changes to an individual repository:
@@ -45,6 +48,7 @@ git subtree push --prefix=Flattery flattery main
 git subtree push --prefix="Tape Stop" tape-stop main
 git subtree push --prefix=pleasant-ui pleasant-ui main
 git subtree push --prefix=scd-rust scd-rust main
+git subtree push --prefix=Composure_Rust composure main
 ```
 
 Run only the commands for repositories you intend to sync. Replace the final
