@@ -21,9 +21,9 @@ pub(super) const HUD_VALUE_SIZE: f32 = HUD_LABEL_SIZE;
 pub(super) const HUD_SHAPE_TEXT: f32 = HUD_LABEL_SIZE;
 pub(super) const HUD_COG: f32 = 24.0;
 pub(super) const HUD_RIGHT_GAP: f32 = 6.0;
-pub(super) const HUD_DYN_FIELD_H: f32 = 40.0;
+pub(super) const HUD_DYN_FIELD_H: f32 = 34.0;
 pub(super) const HUD_DYN_VALUE_W: f32 = 72.0;
-pub(super) const AXIS_STRIP_H: f32 = HUD_DYN_FIELD_H;
+pub(super) const AXIS_STRIP_H: f32 = 48.0;
 pub(super) const NODE_CHROME_BTN: f32 = 22.0;
 pub(super) const NODE_CHROME_GAP: f32 = 4.0;
 pub(super) const NODE_CHROME_CLEAR: f32 = 18.0;
@@ -137,12 +137,7 @@ pub(super) fn hud_cog_rect_at(gx: f32, gw: f32, by: f32, bh: f32) -> (f32, f32, 
     (x, by + (bh - HUD_COG).max(0.0) * 0.5, HUD_COG, HUD_COG)
 }
 
-pub(super) fn hud_content_x_w(
-    gx: f32,
-    gw: f32,
-    show_dyn_btn: bool,
-    show_cog: bool,
-) -> (f32, f32) {
+pub(super) fn hud_content_x_w(gx: f32, gw: f32, show_dyn_btn: bool, show_cog: bool) -> (f32, f32) {
     if show_dyn_btn {
         let by = axis_strip_y();
         let right = if show_cog {
@@ -267,10 +262,25 @@ pub(super) fn hud_dyn_field_rect_at(
     gw: f32,
 ) -> (f32, f32, f32, f32) {
     let g = hud_geom_for_at(b, range, gx, gw);
-    let cols = 5.0;
-    let col_w = (g.bw - HUD_COL_GAP * (cols - 1.0)).max(0.0) / cols;
-    let x = g.bx + i.min(4) as f32 * (col_w + HUD_COL_GAP);
-    (x, g.by, col_w, g.bh)
+    if i == 0 {
+        return (g.bx, g.by, 0.0, 0.0);
+    }
+    let range_w = 116.0_f32.min(g.bw * 0.25);
+    let other_w = ((g.bw - range_w - HUD_COL_GAP * 3.0) / 3.0).max(0.0);
+    let (x, w) = if i == 1 {
+        (g.bx, range_w)
+    } else {
+        (
+            g.bx + range_w + HUD_COL_GAP + (i.min(4) - 2) as f32 * (other_w + HUD_COL_GAP),
+            other_w,
+        )
+    };
+    if i == 1 {
+        (x, g.by, w, g.bh)
+    } else {
+        // Slider labels share the meter and Range readout baseline.
+        (x, hud_control_text_y() - 16.0, w, HUD_DYN_FIELD_H)
+    }
 }
 
 pub(super) fn hud_dyn_value_rect_at(
@@ -282,7 +292,7 @@ pub(super) fn hud_dyn_value_rect_at(
 ) -> (f32, f32, f32, f32) {
     let r = hud_dyn_field_rect_at(b, range, i, gx, gw);
     if i == 1 {
-        let w = (r.2 * 0.55).max(HUD_DYN_VALUE_W);
+        let w = 52.0;
         return (r.0 + r.2 - w, r.1, w, r.3);
     }
     (
@@ -361,8 +371,7 @@ pub(super) fn node_chrome_rects(
             let y = (node_y - NODE_CHROME_BTN * 0.5)
                 .clamp(GY + 4.0, GRAPH_BOTTOM - NODE_CHROME_BTN - 4.0);
             let solo_x = (node_x - NODE_CHROME_CLEAR - NODE_CHROME_BTN).max(gx + 4.0);
-            let close_x =
-                (node_x + NODE_CHROME_CLEAR).min(gx + gw - NODE_CHROME_BTN - 4.0);
+            let close_x = (node_x + NODE_CHROME_CLEAR).min(gx + gw - NODE_CHROME_BTN - 4.0);
             let solo = (solo_x, y, NODE_CHROME_BTN, NODE_CHROME_BTN);
             let close = (close_x, y, NODE_CHROME_BTN, NODE_CHROME_BTN);
             (solo, close)
@@ -465,13 +474,8 @@ pub(super) fn band_rect_at(i: usize, gx: f32, gw: f32) -> (f32, f32, f32, f32) {
 }
 
 pub(super) fn band_slot_rect_at(i: usize, gx: f32, gw: f32, count: usize) -> (f32, f32, f32, f32) {
-    let slot = (gw - 46.0) / count as f32;
-    (
-        gx + 38.0 + i as f32 * slot,
-        GRAPH_BOTTOM - LIFT_DOCK_H,
-        (slot - 4.0).max(80.0),
-        52.0,
-    )
+    let slot = (gw - 16.0) / count as f32;
+    (gx + 8.0 + i as f32 * slot, GY, (slot - 4.0).max(80.0), 52.0)
 }
 
 pub(super) fn band_bar_rect_at(i: usize, gx: f32, gw: f32) -> (f32, f32, f32, f32) {
@@ -491,4 +495,3 @@ pub(super) fn hz(f: f64) -> String {
         format!("{:.0} Hz", f)
     }
 }
-

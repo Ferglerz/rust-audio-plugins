@@ -96,12 +96,13 @@ pub struct TapeStopEngine {
     lockout_samples: f32,
     transient_flash: f32,
 
-    // 14-bit MIDI CC override
+    // MIDI CC override; CC 0-31 use 14-bit pairs, higher CCs use 7-bit values.
     cc_override_active: bool,
     target_cc_speed: f64,
     smoothed_cc_speed: f64,
     last_cc_msb: Option<u8>,
     last_cc_lsb: Option<u8>,
+    configured_cc: Option<u8>,
     match_live_l: [f32; 1024],
     match_live_r: [f32; 1024],
     match_stopped_l: [f32; 1024],
@@ -149,6 +150,7 @@ impl TapeStopEngine {
             smoothed_cc_speed: 1.0,
             last_cc_msb: None,
             last_cc_lsb: None,
+            configured_cc: None,
             match_live_l: [0.0; 1024],
             match_live_r: [0.0; 1024],
             match_stopped_l: [0.0; 1024],
@@ -186,6 +188,7 @@ impl TapeStopEngine {
         self.smoothed_cc_speed = 1.0;
         self.last_cc_msb = None;
         self.last_cc_lsb = None;
+        self.configured_cc = None;
     }
 
     // --- MIDI Trigger Handling ---
@@ -216,6 +219,7 @@ impl TapeStopEngine {
         self.smoothed_cc_speed = 1.0;
         self.last_cc_msb = None;
         self.last_cc_lsb = None;
+        self.configured_cc = None;
     }
 
     fn evaluate_trigger_state(&mut self) {
@@ -242,18 +246,25 @@ impl TapeStopEngine {
         }
     }
 
-    // --- 14-bit MIDI CC Continuous Speed Control ---
+    // --- MIDI CC Continuous Speed Control ---
 
     pub fn handle_midi_cc(&mut self, cc_num: u8, value: u8, configured_cc: u8) {
-        let target_msb = configured_cc;
-        let target_lsb = configured_cc.wrapping_add(32);
+        if self.configured_cc != Some(configured_cc) {
+            self.clear_cc_override();
+            self.configured_cc = Some(configured_cc);
+        }
 
-        if cc_num == target_msb {
-            self.last_cc_msb = Some(value);
-            self.update_14bit_cc();
-        } else if cc_num == target_lsb {
-            self.last_cc_lsb = Some(value);
-            self.update_14bit_cc();
+        if configured_cc <= 31 {
+            if cc_num == configured_cc {
+                self.last_cc_msb = Some(value);
+                self.update_14bit_cc();
+            } else if cc_num == configured_cc + 32 {
+                self.last_cc_lsb = Some(value);
+                self.update_14bit_cc();
+            }
+        } else if cc_num == configured_cc {
+            self.target_cc_speed = 1.0 - f64::from(value.min(127)) / 127.0;
+            self.cc_override_active = true;
         }
     }
 

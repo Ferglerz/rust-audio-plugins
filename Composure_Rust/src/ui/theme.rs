@@ -34,10 +34,7 @@ pub const GRAPH_SIZE_X: f32 = sx(GRAPH_SIZE_JSFX);
 pub const GRAPH_SIZE: f32 = GRAPH_SIZE_X;
 
 pub const METER_X: f32 = sx(582.0 + 232.0 + 11.0);
-pub const METER_Y: f32 = GRAPH_Y;
 pub const METER_W: f32 = sx(23.0);
-/// JSFX `get_meter_h()` — same span as the graph.
-pub const METER_H: f32 = GRAPH_SIZE;
 pub const METER_REFLECTION_GAP: f32 = 21.0;
 pub const METER_REFLECTION_H: f32 = 7.0;
 pub const METER_GAP: f32 = sx(4.0);

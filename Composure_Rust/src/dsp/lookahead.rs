@@ -28,11 +28,14 @@ pub struct LookaheadBuffer {
 
 impl LookaheadBuffer {
     pub fn new(srate: f64) -> Self {
+        // Prepare the full slider range before processing starts. A later move
+        // from zero to positive lookahead must not allocate in the callback.
+        let buffer_size = buffer_size_for_srate(srate);
         Self {
-            buffer_l: Vec::new(),
-            buffer_r: Vec::new(),
-            buffer_size: 0,
-            mask: 0,
+            buffer_l: vec![0.0; buffer_size],
+            buffer_r: vec![0.0; buffer_size],
+            buffer_size,
+            mask: buffer_size - 1,
             pos: 0,
             delay_samples: 0,
             delay_from: 0,
@@ -43,29 +46,16 @@ impl LookaheadBuffer {
         }
     }
 
-    fn ensure_allocated(&mut self) {
-        if self.buffer_size > 0 {
-            return;
-        }
-        let buffer_size = buffer_size_for_srate(self.srate);
-        self.buffer_l = vec![0.0; buffer_size];
-        self.buffer_r = vec![0.0; buffer_size];
-        self.buffer_size = buffer_size;
-        self.mask = buffer_size - 1;
-    }
-
     pub fn set_sample_rate(&mut self, srate: f64) {
         self.srate = srate;
-        if self.buffer_size > 0 {
-            let new_size = buffer_size_for_srate(srate);
-            if new_size != self.buffer_size {
-                self.buffer_l.resize(new_size, 0.0);
-                self.buffer_r.resize(new_size, 0.0);
-                self.buffer_size = new_size;
-                self.mask = new_size - 1;
-                self.pos = 0;
-                self.crossfade_remaining = 0;
-            }
+        let new_size = buffer_size_for_srate(srate);
+        if new_size != self.buffer_size {
+            self.buffer_l.resize(new_size, 0.0);
+            self.buffer_r.resize(new_size, 0.0);
+            self.buffer_size = new_size;
+            self.mask = new_size - 1;
+            self.pos = 0;
+            self.crossfade_remaining = 0;
         }
     }
 
@@ -74,7 +64,6 @@ impl LookaheadBuffer {
             self.last_applied_delay_samples = 0;
             return;
         }
-        self.ensure_allocated();
         let new_samples = ((lookahead_ms * 0.001 * self.srate).floor() as usize)
             .min(self.buffer_size.saturating_sub(1));
         if new_samples == self.last_applied_delay_samples && self.crossfade_remaining == 0 {
@@ -94,8 +83,7 @@ impl LookaheadBuffer {
             && new_samples > 0
         {
             self.delay_from = self.delay_samples;
-            self.crossfade_total =
-                (DELAY_CROSSFADE_MS * 0.001 * self.srate).ceil() as usize;
+            self.crossfade_total = (DELAY_CROSSFADE_MS * 0.001 * self.srate).ceil() as usize;
             self.crossfade_remaining = self.crossfade_total.max(1);
         }
         self.delay_samples = new_samples;
@@ -110,10 +98,7 @@ impl LookaheadBuffer {
             return (0.0, 0.0);
         }
         let delayed_pos = (self.pos + self.buffer_size - delay) & self.mask;
-        (
-            self.buffer_l[delayed_pos],
-            self.buffer_r[delayed_pos],
-        )
+        (self.buffer_l[delayed_pos], self.buffer_r[delayed_pos])
     }
 
     pub fn process(&mut self, input_l: f64, input_r: f64) -> (f64, f64) {
@@ -129,10 +114,7 @@ impl LookaheadBuffer {
             let (old_l, old_r) = self.read_delayed(self.delay_from);
             let t = 1.0 - (self.crossfade_remaining as f64 / self.crossfade_total as f64);
             self.crossfade_remaining -= 1;
-            (
-                old_l * (1.0 - t) + new_l * t,
-                old_r * (1.0 - t) + new_r * t,
-            )
+            (old_l * (1.0 - t) + new_l * t, old_r * (1.0 - t) + new_r * t)
         } else if self.delay_samples > 0 {
             self.read_delayed(self.delay_samples)
         } else {
@@ -144,10 +126,8 @@ impl LookaheadBuffer {
     }
 
     pub fn reset(&mut self) {
-        if self.buffer_size > 0 {
-            self.buffer_l.fill(0.0);
-            self.buffer_r.fill(0.0);
-        }
+        self.buffer_l.fill(0.0);
+        self.buffer_r.fill(0.0);
         self.pos = 0;
         self.crossfade_remaining = 0;
         self.last_applied_delay_samples = self.delay_samples;
@@ -159,10 +139,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn zero_latency_no_allocation() {
+    fn zero_latency_has_prepared_capacity() {
         let la = LookaheadBuffer::new(48000.0);
-        assert_eq!(la.buffer_size, 0);
+        assert_eq!(la.buffer_size, 131_072);
         assert_eq!(la.latency_samples(), 0);
+    }
+
+    #[test]
+    fn first_positive_delay_reuses_prepared_buffers() {
+        let mut la = LookaheadBuffer::new(48000.0);
+        let left = la.buffer_l.as_ptr();
+        let right = la.buffer_r.as_ptr();
+        la.update_delay_ms(1.0);
+        assert_eq!(la.buffer_l.as_ptr(), left);
+        assert_eq!(la.buffer_r.as_ptr(), right);
+        assert_eq!(la.latency_samples(), 48);
     }
 
     #[test]
@@ -203,6 +194,9 @@ mod tests {
         la.process(2.0, 2.0);
         la.update_delay_ms(1.0);
         let (l, _) = la.process(3.0, 3.0);
-        assert!(l.abs() > 0.0, "buffer should retain audio after delay change");
+        assert!(
+            l.abs() > 0.0,
+            "buffer should retain audio after delay change"
+        );
     }
 }

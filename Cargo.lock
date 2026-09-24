@@ -589,8 +589,6 @@ checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
 [[package]]
 name = "block"
 version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d8c1fef690941d3e7788d328517591fecc684c084084702d6ff1641e993699a"
 
 [[package]]
 name = "block-buffer"
@@ -899,6 +897,7 @@ dependencies = [
  "crossbeam-queue",
  "nih_plug",
  "nih_plug_vizia",
+ "pleasant-eq",
  "pleasant-ui",
  "serde",
  "serde_json",
@@ -2213,6 +2212,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "melange-primitives"
+version = "0.1.7"
+source = "git+https://github.com/hal0zer0/melange?rev=7ecb36c#7ecb36c7e237c66929a39f936734b8b5a63f128d"
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2803,6 +2807,31 @@ dependencies = [
  "libc",
  "pkg-config",
  "vcpkg",
+]
+
+[[package]]
+name = "openwurli-dsp"
+version = "0.7.0"
+source = "git+https://github.com/Ferglerz/openwurli.git?rev=6614ab9519471e956ecb0c82edc4fcf295f724dc#6614ab9519471e956ecb0c82edc4fcf295f724dc"
+dependencies = [
+ "melange-primitives",
+]
+
+[[package]]
+name = "openwurli-ui"
+version = "0.1.0"
+dependencies = [
+ "nih_plug",
+ "nih_plug_vizia",
+ "openwurli-dsp",
+ "pleasant-ui",
+]
+
+[[package]]
+name = "openwurli-ui-xtask"
+version = "0.1.0"
+dependencies = [
+ "nih_plug_xtask",
 ]
 
 [[package]]
@@ -3854,7 +3883,6 @@ dependencies = [
 name = "tape-stop-xtask"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "nih_plug_xtask",
 ]
 

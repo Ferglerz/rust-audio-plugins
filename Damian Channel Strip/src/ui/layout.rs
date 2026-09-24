@@ -6,24 +6,25 @@ use std::time::Duration;
 
 pub(super) const LIFT_COLOR: C = rgb(110, 215, 255);
 pub(super) const UI_W: f32 = 1282.0;
-pub(super) const UI_H: f32 = 656.0;
+pub(super) const UI_H: f32 = 672.0;
 pub(super) const HEADER_H: f32 = 82.0;
 pub(super) const MARGIN: f32 = 16.0;
 pub(super) const GAP: f32 = 12.0;
-pub(super) const DYN_W: f32 = 122.0;
-pub(super) const PSE_W: f32 = 122.0;
-pub(super) const WALL_W: f32 = 122.0;
+pub(super) const DYN_W: f32 = 116.0;
+pub(super) const PSE_W: f32 = 116.0;
+pub(super) const WALL_W: f32 = 116.0;
 pub(super) const MODULE_Y: f32 = 92.0;
-pub(super) const MODULE_H: f32 = 500.0;
+pub(super) const MODULE_H: f32 = 516.0;
 pub(super) const MODULE_HEADER_H: f32 = 44.0;
 pub(super) const MODULE_HEADER_CTRL: f32 = 24.0;
+pub(super) const MODULE_HEADER_INSET: f32 = 10.0;
 pub(super) const EQ_PAGE_1: usize = 0;
 pub(super) const EQ_PAGE_2: usize = 1;
 pub(super) const EQ_PAGE_LIFT: usize = 2;
 pub(super) const EQ_PAGE_SC: usize = 3;
 pub(super) const EQ_W: f32 = UI_W - 2.0 * MARGIN - 3.0 * GAP - DYN_W - PSE_W - WALL_W;
-pub(super) const FOOTER_LINE_Y: f32 = 608.0;
-pub(super) const FOOTER_BTN_Y: f32 = 616.0;
+pub(super) const FOOTER_LINE_Y: f32 = MODULE_Y + MODULE_H + 16.0;
+pub(super) const FOOTER_BTN_Y: f32 = FOOTER_LINE_Y + 8.0;
 pub(super) const EQ_GRAPH_PAD_LEFT: f32 = 54.0;
 pub(super) const EQ_GRAPH_PAD_RIGHT: f32 = 26.0;
 #[cfg(test)]
@@ -54,7 +55,7 @@ pub(super) const SC_EQ_ID_BASE: u64 = 20_000;
 pub(super) const GRAPH_CLIP_W: f32 = EQ_W;
 pub(super) const PSE_BLUE: C = rgb(108, 176, 242);
 pub(super) const WALL_COLOR: C = rgb(220, 108, 88);
-pub(super) const PSE_CONTROLS_KNOBS: [usize; 3] = [8, 2, 10];
+pub(super) const PSE_CONTROLS_KNOBS: [usize; 3] = [8, 10, 2];
 pub(super) const WALL_CONTROLS_KNOBS: [usize; 2] = [16, 17];
 pub(super) const WALL_MAIN_KNOBS: [usize; 1] = [18];
 
@@ -71,7 +72,7 @@ pub(super) fn band_display_num(id: u64) -> u64 {
 pub(super) fn quintic_page_progress(progress: f32) -> f32 {
     let unit = progress.floor();
     let frac = progress - unit;
-    unit + frac * frac * frac * (frac * (frac * 6.0 - 15.0) + 10.0)
+    unit + pleasant_ui::page_slide::ease(frac)
 }
 
 pub(super) fn view_scale(bounds: BoundingBox) -> Option<f32> {
@@ -122,7 +123,9 @@ pub(super) fn output_gain_value_rect() -> (f32, f32, f32, f32) {
     (r.0 + r.2 - 62.0, r.1 + 2.0, 56.0, 16.0)
 }
 
-pub(super) const SCALES: [f64; 7] = [6.0, 12.0, 24.0, 36.0, 48.0, 60.0, 72.0];
+pub(super) const SCALES: [f64; 12] = [
+    6.0, 12.0, 18.0, 24.0, 30.0, 36.0, 42.0, 48.0, 54.0, 60.0, 66.0, 72.0,
+];
 
 /// Graph scale button (±24 ▾) and its dropdown rows.
 pub(super) const SCALE_BUTTON_TEXT: f32 = 13.0;

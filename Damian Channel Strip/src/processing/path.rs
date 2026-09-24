@@ -21,7 +21,7 @@ impl EqPath {
         }
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn tick(&mut self, input: [f64; 2], bands: &mut [BandRuntime], sr: f64) -> [f64; 2] {
         match self {
             Self::Direct => cascade(input, bands, sr),

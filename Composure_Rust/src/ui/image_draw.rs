@@ -23,15 +23,7 @@ impl CachedTexture {
         self.id.set(None);
     }
 
-    pub fn draw(
-        &self,
-        canvas: &mut Canvas,
-        x: f32,
-        y: f32,
-        w: f32,
-        h: f32,
-        alpha: f32,
-    ) {
+    pub fn draw(&self, canvas: &mut Canvas, x: f32, y: f32, w: f32, h: f32, alpha: f32) {
         let id = self.ensure_id(canvas);
         let mut path = Path::new();
         path.rect(x, y, w, h);
@@ -42,8 +34,7 @@ impl CachedTexture {
         if let Some(id) = self.id.get() {
             return id;
         }
-        let img =
-            image::load_from_memory_with_format(self.png, ImageFormat::Png).expect("ui png");
+        let img = image::load_from_memory_with_format(self.png, ImageFormat::Png).expect("ui png");
         let id = canvas
             .create_image(
                 ImageSource::try_from(&img).expect("ui png source"),

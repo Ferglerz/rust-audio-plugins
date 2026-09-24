@@ -1,6 +1,9 @@
 use crate::{
     band::Band,
-    dsp::{gain_db, tick_wall, BandInputMeters, BandRuntime, CompSettings, VocalComp},
+    dsp::{
+        gain_db, tick_wall, BandInputMeters, BandRuntime, CompSettings, VocalComp,
+        DYNAMIC_BAND_METER_RESERVE,
+    },
     lift::{LiftBand, LiftProcessor, LIFT_ID_BASE, LIFT_LATENCY},
     processing::{Config, ProcessingMode},
     vad::SpeechVad,
@@ -88,7 +91,7 @@ impl Shared {
             solo_id: std::sync::atomic::AtomicU64::new(0),
             band_gr: AtomicF32::new(0.0),
             dyn_gr_uncapped: Mutex::new(Vec::new()),
-            dyn_band_input: Mutex::new(Vec::new()),
+            dyn_band_input: Mutex::new(Vec::with_capacity(DYNAMIC_BAND_METER_RESERVE)),
             pending: ArrayQueue::new(1),
             retired: ArrayQueue::new(2),
             stop: Arc::new(AtomicBool::new(false)),
@@ -172,6 +175,7 @@ pub struct Engine {
     samples: Vec<Complex<f32>>,
     scratch: Vec<Complex<f32>>,
     window: [f32; 2048],
+    spectrum_bin_ranges: [(usize, usize); 128],
     position: usize,
     in_peak: f64,
     out_peak: f64,
@@ -250,6 +254,14 @@ impl Engine {
             window: std::array::from_fn(|i| {
                 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / 2048.0).cos()
             }),
+            spectrum_bin_ranges: std::array::from_fn(|i| {
+                let lo = 20.0_f64 * 1000.0_f64.powf(i as f64 / 128.0);
+                let hi = 20.0_f64 * 1000.0_f64.powf((i + 1) as f64 / 128.0);
+                (
+                    (lo / sr * 2048.0).floor() as usize,
+                    ((hi / sr * 2048.0).ceil() as usize).min(1023),
+                )
+            }),
             position: 0,
             in_peak: 0.0,
             out_peak: 0.0,
@@ -273,7 +285,7 @@ impl Engine {
             vad,
             speech_env: 0.0,
             dyn_gr_scratch: Vec::with_capacity(128),
-            dyn_input_scratch: Vec::with_capacity(128),
+            dyn_input_scratch: Vec::with_capacity(DYNAMIC_BAND_METER_RESERVE),
             band_input: BandInputMeters::new(sr),
         }
     }
@@ -309,14 +321,6 @@ impl Engine {
     }
     pub fn sample_rate(&self) -> f64 {
         self.sr
-    }
-    #[allow(dead_code)]
-    pub fn inject_speech_env(&mut self, env: Option<f32>) {
-        self.vad.inject_speech_env(env);
-        if let Some(v) = env {
-            self.speech_env = v;
-            self.shared.speech_env.store(v, Ordering::Relaxed);
-        }
     }
     pub fn end_block(&mut self, block_secs: f32) {
         self.vad.end_block(block_secs);
@@ -618,9 +622,9 @@ impl Engine {
                     .chain(self.bank.eq2_bands.iter())
                     .map(|b| &b.band),
             );
-            self.dyn_input_scratch = self.band_input.levels_db();
+            self.band_input.write_levels_db(&mut self.dyn_input_scratch);
             if let Ok(mut slot) = self.shared.dyn_band_input.try_lock() {
-                *slot = self.dyn_input_scratch.clone();
+                std::mem::swap(&mut *slot, &mut self.dyn_input_scratch);
             }
             self.shared.sc_level.store(
                 if comp_on && !bypass {
@@ -655,10 +659,7 @@ impl Engine {
             self.fft
                 .process_with_scratch(&mut self.samples, &mut self.scratch);
             for i in 0..128 {
-                let lo = 20.0_f64 * 1000.0_f64.powf(i as f64 / 128.0);
-                let hi = 20.0_f64 * 1000.0_f64.powf((i + 1) as f64 / 128.0);
-                let start = (lo / self.sr * 2048.0).floor() as usize;
-                let end = ((hi / self.sr * 2048.0).ceil() as usize).min(1023);
+                let (start, end) = self.spectrum_bin_ranges[i];
                 let mut mag = 0.0_f32;
                 if start <= end {
                     for bin in start.max(1)..=end {

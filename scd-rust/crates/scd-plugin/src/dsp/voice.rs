@@ -6,7 +6,8 @@ const NATIVE_SR: f64 = 44100.0;
 
 #[derive(Clone, Copy)]
 struct MicTap {
-    data: &'static [f32],
+    start: usize,
+    len: usize,
     channels: u8,
     length_frames: u32,
 }
@@ -75,8 +76,9 @@ impl Voice {
                     pack_sr = slice.sample_rate as f64;
                     saw_slice = true;
                 }
-                pack.get_sample_slice(&slice).map(|data| MicTap {
-                    data,
+                pack.sample_range(&slice).map(|range| MicTap {
+                    start: range.start,
+                    len: range.end - range.start,
                     channels: slice.channels,
                     length_frames: slice.length_frames,
                 })
@@ -104,6 +106,7 @@ impl Voice {
     #[inline(always)]
     pub fn process_sample(
         &mut self,
+        audio_samples: &[f32],
         mic_accum: &mut [[f32; 2]; MicChannel::COUNT],
         mic_gains: &[f32; MicChannel::COUNT],
     ) -> f32 {
@@ -124,7 +127,9 @@ impl Voice {
                 continue;
             }
             any_slice_alive = true;
-            let data = tap.data;
+            let Some(data) = audio_samples.get(tap.start..tap.start + tap.len) else {
+                continue;
+            };
             let mic_gain = gain * mic_gains[mic_idx];
             let (out_l, out_r) = if tap.channels == 2 {
                 let base = frame_idx * 2;

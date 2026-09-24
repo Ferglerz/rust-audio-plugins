@@ -48,9 +48,9 @@ fn dyn_meter_inline_when_stem_tall_and_detaches_by_free_space() {
     let gw = GW;
     let tall = Band {
         freq: 1000.0,
-        gain: 6.0,
+        gain: 18.0,
         dynamic: true,
-        range: 12.0,
+        range: 24.0,
         threshold: -24.0,
         ..Band::default()
     };
@@ -79,8 +79,8 @@ fn dyn_meter_inline_when_stem_tall_and_detaches_by_free_space() {
     assert!(mid_stem < DYN_METER_MIN_INLINE);
     assert!(!mid_g.inline);
     assert!(
-        (tall_g.y60 - tall_g.range_y).abs() < 0.5,
-        "inline -60 end sits on the range-end cap"
+        (tall_g.range_y - tall_g.y60 - DYN_METER_PAD).abs() < 0.5,
+        "inline -60 end clears the range-end cap"
     );
     assert!(
         (tall_g.rule_half_w - (DYN_PILL_R + DYN_RANGE_W * DYN_THRESH_OVERHANG)).abs() < 0.01,
@@ -109,6 +109,20 @@ fn dyn_meter_inline_when_stem_tall_and_detaches_by_free_space() {
         gw,
         None
     ));
+
+    // At this gain/range the stem can fit a meter, but the open space below
+    // the range endpoint is longer and should win.
+    let outside = Band {
+        gain: 26.0,
+        range: 24.5,
+        ..tall.clone()
+    };
+    let outside_g = dyn_meter_geom(&outside, 36.0, gx, gw);
+    assert!((outside_g.range_y - outside_g.node_y).abs() >= DYN_METER_MIN_INLINE);
+    assert!(!outside_g.inline);
+    assert!(!outside_g.detached_above);
+    assert!((outside_g.y0 - outside_g.range_y - DYN_METER_PAD).abs() < 0.5);
+    assert!(outside_g.y60 > outside_g.y0);
 
     let low = Band {
         freq: 1000.0,
@@ -205,8 +219,7 @@ fn dyn_meter_inline_when_stem_tall_and_detaches_by_free_space() {
     );
     let edge_bot_same = GRAPH_BOTTOM - DYN_METER_PAD;
     assert!(
-        (same_below_g.y60 - edge_bot_same).abs() < 0.5
-            || same_below_g.y60 >= db_y(0.0, 24.0) - 0.5,
+        (same_below_g.y60 - edge_bot_same).abs() < 0.5 || same_below_g.y60 >= db_y(0.0, 24.0) - 0.5,
         "outer end still uses graph-edge / center span"
     );
 

@@ -1,6 +1,7 @@
 use memmap2::Mmap;
 use rkyv::{Archive, Deserialize, Serialize};
 use std::fs::File;
+use std::ops::Range;
 use std::path::Path;
 
 pub mod kit;
@@ -262,6 +263,8 @@ impl NoteIndex {
     }
 }
 
+// SAFETY: the pointer refers to immutable audio bytes in this pack's owned mmap.
+// open() checks its alignment, length, and every serialized sample range.
 unsafe impl Send for ScdPack {}
 unsafe impl Sync for ScdPack {}
 
@@ -274,16 +277,36 @@ impl ScdPack {
             return Err("invalid magic or corrupted scdpack".into());
         }
 
-        let index_len = u64::from_le_bytes(mmap[8..16].try_into().unwrap()) as usize;
-        let index_bytes = &mmap[16..16 + index_len];
+        let index_len = usize::try_from(u64::from_le_bytes(mmap[8..16].try_into().unwrap()))
+            .map_err(|_| "scdpack index length does not fit usize")?;
+        let audio_offset = 16usize
+            .checked_add(index_len)
+            .filter(|&end| end <= mmap.len())
+            .ok_or("scdpack index extends beyond file")?;
+        let index_bytes = &mmap[16..audio_offset];
 
-        let archived = unsafe { rkyv::archived_root::<PackIndex>(index_bytes) };
+        let archived = rkyv::check_archived_root::<PackIndex>(index_bytes)
+            .map_err(|_| "invalid scdpack index archive")?;
         let index: PackIndex = archived.deserialize(&mut rkyv::Infallible)?;
+        if index.strikes.len() > usize::from(u16::MAX) + 1 {
+            return Err("scdpack has too many strikes for note index".into());
+        }
 
-        let audio_offset = 16 + index_len;
         let audio_bytes = &mmap[audio_offset..];
+        if !audio_bytes.len().is_multiple_of(std::mem::size_of::<f32>())
+            || !(audio_bytes.as_ptr() as usize).is_multiple_of(std::mem::align_of::<f32>())
+        {
+            return Err("scdpack audio payload is not aligned f32 data".into());
+        }
         let audio_data_ptr = audio_bytes.as_ptr() as *const f32;
         let audio_data_len_samples = audio_bytes.len() / std::mem::size_of::<f32>();
+        for strike in &index.strikes {
+            for slice in strike.mic_slices.iter().flatten() {
+                if sample_range(slice, audio_data_len_samples).is_none() {
+                    return Err("scdpack sample slice is outside audio payload".into());
+                }
+            }
+        }
         let note_index = NoteIndex::build(&index.strikes);
 
         Ok(Self {
@@ -295,21 +318,31 @@ impl ScdPack {
         })
     }
 
-    /// Audio thread safe slice access (zero allocations, bounds checked)
+    /// Borrow the validated audio payload without allocating.
     #[inline(always)]
-    pub fn get_sample_slice(&self, slice: &SampleSlice) -> Option<&'static [f32]> {
-        let start = (slice.offset_bytes / 4) as usize;
-        let end = start + (slice.length_frames as usize * slice.channels as usize);
-        if end <= self.audio_data_len_samples {
-            unsafe {
-                Some(std::slice::from_raw_parts(
-                    self.audio_data_ptr.add(start),
-                    end - start,
-                ))
-            }
-        } else {
-            None
-        }
+    pub fn audio_samples(&self) -> &[f32] {
+        // open() proves the mapped payload is aligned and has a whole number of f32 samples.
+        unsafe { std::slice::from_raw_parts(self.audio_data_ptr, self.audio_data_len_samples) }
+    }
+
+    /// Audio thread safe slice access (zero allocations, bounds checked).
+    /// The slice cannot outlive the pack that owns its mapped audio.
+    ///
+    /// ```compile_fail
+    /// # use scd_core::{ScdPack, SampleSlice};
+    /// # fn cannot_leak(pack: ScdPack, slice: SampleSlice) {
+    /// let data: &'static [f32] = pack.get_sample_slice(&slice).unwrap();
+    /// # }
+    /// ```
+    #[inline(always)]
+    pub fn get_sample_slice(&self, slice: &SampleSlice) -> Option<&[f32]> {
+        self.audio_samples().get(self.sample_range(slice)?)
+    }
+
+    /// Validated sample offsets into `audio_samples()` for allocation-free playback state.
+    #[inline(always)]
+    pub fn sample_range(&self, slice: &SampleSlice) -> Option<Range<usize>> {
+        sample_range(slice, self.audio_data_len_samples)
     }
 
     /// Match a MIDI note + velocity + RR group to strike entry
@@ -355,4 +388,18 @@ impl ScdPack {
             .copied()
             .flatten()
     }
+}
+
+fn sample_range(slice: &SampleSlice, payload_len_samples: usize) -> Option<Range<usize>> {
+    if !slice
+        .offset_bytes
+        .is_multiple_of(std::mem::size_of::<f32>() as u64)
+        || slice.channels == 0
+    {
+        return None;
+    }
+    let start = usize::try_from(slice.offset_bytes / std::mem::size_of::<f32>() as u64).ok()?;
+    let len = (slice.length_frames as usize).checked_mul(slice.channels as usize)?;
+    let end = start.checked_add(len)?;
+    (end <= payload_len_samples).then_some(start..end)
 }

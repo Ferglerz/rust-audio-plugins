@@ -74,6 +74,7 @@ pub enum KnobId {
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum DragState {
+    Value { id: KnobId, start_x: f32, start_y: f32, start_norm: f32 },
     Slider {
         id: KnobId,
         start_x: f32,
@@ -94,6 +95,7 @@ pub struct TapeStopView {
     font: Cell<Option<FontId>>,
     drag: Option<DragState>,
     edit: Option<ValueEdit<KnobId>>,
+    value_press: Option<pleasant_ui::pointer::ValuePress<KnobId>>,
     hover_stop: Cell<bool>,
     stop_click: Cell<f32>,
     hover_thresh: Cell<bool>,
@@ -136,6 +138,7 @@ pub fn create(
                 font: Cell::new(None),
                 drag: None,
                 edit: None,
+                value_press: None,
                 hover_stop: Cell::new(false),
                 stop_click: Cell::new(0.0),
                 hover_thresh: Cell::new(false),
@@ -193,6 +196,8 @@ mod tests {
         assert!((midi.3 - ret.3).abs() < f32::EPSILON);
         assert!(midi.0 + midi.2 <= ret.0);
         assert!(midi.1 >= GRAPH_Y + GRAPH_H);
+        assert_eq!(midi.2, 96.0);
+        assert!(midi_value_rect().2 >= 50.0);
         assert!(midi_value_rect().0 >= midi_label_rect().0 + midi_label_rect().2 - 0.5);
     }
 

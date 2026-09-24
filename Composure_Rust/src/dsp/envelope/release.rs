@@ -1,15 +1,13 @@
 //! Release coefficient calculation ported from `Envelope/03_envelope_release.jsfx-inc`.
 
-use super::super::constants::{
-    EPS, INPUT_DEPENDENT_DRAMA, LINEAR_RELEASE_FIXED_DB,
-};
+use super::super::constants::{EPS, INPUT_DEPENDENT_DRAMA, LINEAR_RELEASE_FIXED_DB};
 use super::super::core_math::{db_per_sec_to_ms, ms_to_coeff};
 use super::utils::{
     apply_curve_amount_blending, blend_fast_slow_coeffs, calculate_distance_curve_shaped_coeff,
     clamp_coeff, curve_cached_coeffs, normalized_blend,
 };
 use super::EnvelopeParams;
-use crate::params::ProgramReleaseMode;
+use super::ReleaseMode;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ReleaseCoeffs {
@@ -159,7 +157,12 @@ impl ReleaseCoeffs {
         )
     }
 
-    pub fn release_rate_of_change(&self, p: &EnvelopeParams, det_delta: f64, is_inverse: bool) -> f64 {
+    pub fn release_rate_of_change(
+        &self,
+        p: &EnvelopeParams,
+        det_delta: f64,
+        is_inverse: bool,
+    ) -> f64 {
         let effective_sensitivity =
             p.rate_change_sensitivity_db / (p.rate_change_threshold_modifier * 10.0);
         let mut normalized_delta = det_delta / effective_sensitivity;
@@ -187,11 +190,7 @@ impl ReleaseCoeffs {
     }
 
     fn input_dependent_blend(&self, u: f64, inverse: bool) -> f64 {
-        let (blend_fast, blend_normal) = if inverse {
-            (u, 1.0 - u)
-        } else {
-            (1.0 - u, u)
-        };
+        let (blend_fast, blend_normal) = if inverse { (u, 1.0 - u) } else { (1.0 - u, u) };
         normalized_blend(
             blend_fast,
             blend_normal,
@@ -271,7 +270,8 @@ impl ReleaseCoeffs {
         let blended_coeff =
             self.blend_curve_with_base(curve_shape, self.release_coeff, release_curve > 0.0);
         let curve_amount = release_curve.abs();
-        let base_gr_release = self.release_gr_dependent_dual(p, current_gr_abs, is_negative_gr, false);
+        let base_gr_release =
+            self.release_gr_dependent_dual(p, current_gr_abs, is_negative_gr, false);
         apply_curve_amount_blending(base_gr_release, blended_coeff, curve_amount)
     }
 
@@ -288,20 +288,13 @@ impl ReleaseCoeffs {
         let is_inverse = p.prog_release_inverse;
 
         match mode {
-            ProgramReleaseMode::InputDependent => {
+            ReleaseMode::InputDependent => {
                 self.release_input_dependent(p, detector_level_db, is_inverse)
             }
-            ProgramReleaseMode::GrDependent => {
-                self.release_gr_dependent_dual(
-                    p,
-                    current_gr_abs,
-                    is_negative_gr,
-                    is_inverse,
-                )
+            ReleaseMode::GrDependent => {
+                self.release_gr_dependent_dual(p, current_gr_abs, is_negative_gr, is_inverse)
             }
-            ProgramReleaseMode::RateOfChange => {
-                self.release_rate_of_change(p, det_delta, is_inverse)
-            }
+            ReleaseMode::RateOfChange => self.release_rate_of_change(p, det_delta, is_inverse),
         }
     }
 
@@ -376,8 +369,8 @@ impl ReleaseCoeffs {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::defaults::{GR_BLEND_THRESHOLD_DB, GR_BLEND_THRESHOLD_KNEE_DB};
+    use super::*;
 
     fn coeffs() -> ReleaseCoeffs {
         let mut c = ReleaseCoeffs::default();
@@ -393,8 +386,7 @@ mod tests {
             gr_blend_threshold_reduction_knee_db: GR_BLEND_THRESHOLD_KNEE_DB,
             ..EnvelopeParams::default()
         };
-        let (fast, slow) =
-            ReleaseCoeffs::gr_dependent_blend_weights(6.0, 6.0, 2.0, false);
+        let (fast, slow) = ReleaseCoeffs::gr_dependent_blend_weights(6.0, 6.0, 2.0, false);
         assert!((fast - 0.0).abs() < 1e-9);
         assert!((slow - 1.0).abs() < 1e-9);
         let coef = c.release_gr_dependent_dual(&p, 6.0, true, false);
@@ -403,32 +395,28 @@ mod tests {
 
     #[test]
     fn knee_blend_below_knee_is_full_fast() {
-        let (fast, slow) =
-            ReleaseCoeffs::gr_dependent_blend_weights(3.0, 6.0, 2.0, false);
+        let (fast, slow) = ReleaseCoeffs::gr_dependent_blend_weights(3.0, 6.0, 2.0, false);
         assert!((fast - 1.0).abs() < 1e-9);
         assert!((slow - 0.0).abs() < 1e-9);
     }
 
     #[test]
     fn knee_blend_mid_knee_is_half() {
-        let (fast, slow) =
-            ReleaseCoeffs::gr_dependent_blend_weights(5.0, 6.0, 2.0, false);
+        let (fast, slow) = ReleaseCoeffs::gr_dependent_blend_weights(5.0, 6.0, 2.0, false);
         assert!((fast - 0.5).abs() < 1e-9);
         assert!((slow - 0.5).abs() < 1e-9);
     }
 
     #[test]
     fn zero_knee_falls_back_to_linear_ramp() {
-        let (fast, slow) =
-            ReleaseCoeffs::gr_dependent_blend_weights(3.0, 6.0, 0.0, false);
+        let (fast, slow) = ReleaseCoeffs::gr_dependent_blend_weights(3.0, 6.0, 0.0, false);
         assert!((fast - 0.5).abs() < 1e-9);
         assert!((slow - 0.5).abs() < 1e-9);
     }
 
     #[test]
     fn inverse_swaps_blend_weights() {
-        let (fast, slow) =
-            ReleaseCoeffs::gr_dependent_blend_weights(3.0, 6.0, 2.0, true);
+        let (fast, slow) = ReleaseCoeffs::gr_dependent_blend_weights(3.0, 6.0, 2.0, true);
         assert!((fast - 0.0).abs() < 1e-9);
         assert!((slow - 1.0).abs() < 1e-9);
     }

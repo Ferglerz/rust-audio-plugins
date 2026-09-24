@@ -91,10 +91,14 @@ impl GlContext {
         GlContext { context, phantom: PhantomData }
     }
 
+    /// # Safety
+    /// The caller must use a valid context on its owning thread.
     pub unsafe fn make_current(&self) {
         self.context.make_current();
     }
 
+    /// # Safety
+    /// The caller must use a valid context on its owning thread.
     pub unsafe fn make_not_current(&self) {
         self.context.make_not_current();
     }

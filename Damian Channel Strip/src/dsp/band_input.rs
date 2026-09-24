@@ -4,6 +4,10 @@ use pleasant_dsp::{
     units::linear_to_db_with_floor,
 };
 
+// Existing engine coverage includes 200 bands; reserve room for that case
+// before the audio callback can create meters or publish their levels.
+pub(crate) const DYNAMIC_BAND_METER_RESERVE: usize = 256;
+
 /// Steep-ish bandpass level meters on pre-EQ audio for dynamic bands.
 pub struct BandInputMeters {
     meters: Vec<BandInputMeter>,
@@ -24,7 +28,7 @@ struct BandInputMeter {
 impl BandInputMeters {
     pub fn new(sample_rate: f64) -> Self {
         Self {
-            meters: Vec::with_capacity(32),
+            meters: Vec::with_capacity(DYNAMIC_BAND_METER_RESERVE),
             sample_rate: sample_rate.max(1.0),
         }
     }
@@ -44,19 +48,27 @@ impl BandInputMeters {
     }
 
     /// Keep meters for dynamic gain bands and drop the rest.
-    pub fn sync<'a>(&mut self, bands: impl IntoIterator<Item = &'a Band>) {
-        let wanted: Vec<&Band> = bands
-            .into_iter()
-            .filter(|b| b.dynamic && b.shape.has_gain())
-            .collect();
-        self.meters
-            .retain(|m| wanted.iter().any(|b| b.id == m.id));
-        for band in wanted {
+    pub fn sync<'a, I>(&mut self, bands: I)
+    where
+        I: IntoIterator<Item = &'a Band>,
+        I::IntoIter: Clone,
+    {
+        let bands = bands.into_iter();
+        self.meters.retain(|m| {
+            bands
+                .clone()
+                .any(|b| b.dynamic && b.shape.has_gain() && b.id == m.id)
+        });
+        for band in bands.filter(|b| b.dynamic && b.shape.has_gain()) {
             if let Some(meter) = self.meters.iter_mut().find(|m| m.id == band.id) {
                 meter.update(band.freq, band.q, self.sample_rate);
             } else {
-                self.meters
-                    .push(BandInputMeter::new(band.id, band.freq, band.q, self.sample_rate));
+                self.meters.push(BandInputMeter::new(
+                    band.id,
+                    band.freq,
+                    band.q,
+                    self.sample_rate,
+                ));
             }
         }
     }
@@ -67,11 +79,9 @@ impl BandInputMeters {
         }
     }
 
-    pub fn levels_db(&self) -> Vec<(u64, f32)> {
-        self.meters
-            .iter()
-            .map(|m| (m.id, m.level_db() as f32))
-            .collect()
+    pub fn write_levels_db(&self, levels: &mut Vec<(u64, f32)>) {
+        levels.clear();
+        levels.extend(self.meters.iter().map(|m| (m.id, m.level_db() as f32)));
     }
 }
 
@@ -86,7 +96,7 @@ impl BandInputMeter {
             envelope: 0.0,
             attack: 0.0,
             release: 0.0,
-            };
+        };
         meter.rebuild(sample_rate);
         meter
     }
@@ -161,7 +171,9 @@ mod tests {
             let sample = (2.0 * PI * 1000.0 * t).sin() * 0.5;
             meters.tick([sample, sample]);
         }
-        let in_band = meters.levels_db()[0].1;
+        let mut levels = Vec::new();
+        meters.write_levels_db(&mut levels);
+        let in_band = levels[0].1;
         meters.sync([&Band {
             id: 1,
             shape: Shape::Bell,
@@ -176,7 +188,8 @@ mod tests {
             let sample = (2.0 * PI * 200.0 * t).sin() * 0.5;
             meters.tick([sample, sample]);
         }
-        let out_of_band = meters.levels_db()[0].1;
+        meters.write_levels_db(&mut levels);
+        let out_of_band = levels[0].1;
         assert!(
             in_band > out_of_band + 8.0,
             "in-band {in_band} should beat out-of-band {out_of_band}"

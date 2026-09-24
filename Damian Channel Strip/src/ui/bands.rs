@@ -22,8 +22,41 @@ impl StripView {
             self.set_band_dyn_page(false);
         }
     }
+    pub(super) fn node_hit_at(&self, x: f32, y: f32) -> Option<u64> {
+        if !inside(x, y, self.graph_area()) {
+            return None;
+        }
+        self.lift_hit_at(x, y).or_else(|| {
+            self.clone_page_bands()
+                .iter()
+                .rev()
+                .find(|b| node_handle_hit(b, x, y, self.graph_db, self.gx(), self.gw()))
+                .map(|b| b.id)
+        })
+    }
+    pub(super) fn expand_graph_after_drag(&mut self) {
+        let id = match self.drag {
+            Some(Target::Node(id) | Target::Range(id) | Target::SoloAudition { id, .. }) => id,
+            Some(Target::Value(ValueTarget::Band(1 | 7))) => match self.selected {
+                Some(id) => id,
+                None => return,
+            },
+            _ => return,
+        };
+        let Some(b) = self.find_band(id).filter(|b| b.shape.has_gain()) else {
+            return;
+        };
+        let extent = if b.dynamic {
+            b.gain.abs().max((b.gain - b.range).abs())
+        } else {
+            b.gain.abs()
+        };
+        if extent >= self.graph_db - 3.0 {
+            self.set_graph_range(self.graph_db + 12.0);
+        }
+    }
     pub(super) fn over_selected_hud(&self, x: f32, y: f32) -> bool {
-        if !self.hud_visible() {
+        if !self.hud_visible() || self.node_hit_at(x, y).is_some() {
             return false;
         }
         let gx = self.gx();
@@ -122,12 +155,19 @@ impl StripView {
         if self.active_eq.get() == EQ_PAGE_SC || self.active_eq.get() == EQ_PAGE_LIFT {
             return None;
         }
+        // A node wins even when another band's dynamics handle overlaps it.
+        if bands
+            .iter()
+            .any(|b| node_handle_hit(b, x, y, self.graph_db, self.gx(), self.gw()))
+        {
+            return None;
+        }
         bands
             .iter()
             .rev()
             .find(|b| {
                 threshold_handle_hit(
-                    b,
+                    &dynamics_control_band(b, self.command_down),
                     x,
                     y,
                     self.graph_db,
@@ -142,10 +182,24 @@ impl StripView {
         if self.active_eq.get() == EQ_PAGE_SC || self.active_eq.get() == EQ_PAGE_LIFT {
             return None;
         }
+        // A node wins even when another band's dynamics handle overlaps it.
+        if bands
+            .iter()
+            .any(|b| node_handle_hit(b, x, y, self.graph_db, self.gx(), self.gw()))
+        {
+            return None;
+        }
         bands
             .iter()
             .rev()
-            .find(|b| range_handle_hit(b, x, y, self.graph_db, self.gx(), self.gw(), self.selected))
+            .find(|b| {
+                range_handle_hit(b, x, y, self.graph_db, self.gx(), self.gw(), self.selected)
+                    || (Some(b.id) == self.selected && {
+                        let sr = self.shared.sample_rate.load(Ordering::Relaxed) as f64;
+                        let eq_sr = self.params.processing_config().mode.rate(sr);
+                        range_grip_hit(b, x, y, (self.gx(), self.gw(), self.graph_db), (sr, eq_sr))
+                    })
+            })
             .map(|b| b.id)
     }
     pub(super) fn begin_threshold_drag(&mut self, cx: &mut EventContext, id: u64, x: f32, y: f32) {
@@ -156,7 +210,11 @@ impl StripView {
             }
             if b.shape.has_gain() {
                 let geom = dyn_meter_geom(b, self.graph_db, self.gx(), self.gw());
-                b.threshold = geom.y_to_threshold(y);
+                if cx.modifiers().command() {
+                    b.ratio = 1.0 + 19.0 * (geom.y_to_threshold(y) + 60.0) / 60.0;
+                } else {
+                    b.threshold = geom.y_to_threshold(y);
+                }
             }
         });
         self.open_band_dyn_settings();
@@ -350,10 +408,15 @@ impl StripView {
         alt: bool,
     ) {
         let graph_db = self.graph_db;
-        let (_lx, ly) = self.last_drag;
+        let (lx, ly) = self.last_drag;
         let dy = (ly - y) as f64;
         self.last_drag = (x, y);
         match self.drag {
+            Some(Target::Value(target)) => {
+                let delta = pleasant_ui::pointer::readout_drag_delta(x - lx, y - ly, shift);
+                self.adjust_value(cx, target, delta);
+            }
+
             Some(Target::SoloAudition {
                 id,
                 grab_dx,
@@ -410,7 +473,7 @@ impl StripView {
                             b.dynamic = true;
                             b.range = default_dyn_range(graph_db);
                         }
-                        b.threshold = threshold_from_drag(b.threshold, dy);
+                        b.ratio = (b.ratio + dy * 0.05).clamp(1.0, 20.0);
                     });
                     self.open_band_dyn_settings();
                 } else {
@@ -487,7 +550,9 @@ impl StripView {
                     }
                     b.dynamic = true;
                     if shift {
-                        b.range = (b.range + dy * 0.1).clamp(-24.0, 24.0);
+                        b.range = (b.range + dy * 0.1)
+                            .clamp(b.gain - graph_db, b.gain + graph_db)
+                            .clamp(-MAX_RANGE_DB, MAX_RANGE_DB);
                     } else {
                         b.range = snap_dyn_range(b.gain, y, graph_db);
                     }
@@ -500,7 +565,11 @@ impl StripView {
                     }
                     b.dynamic = true;
                     let geom = dyn_meter_geom(b, graph_db, self.gx(), self.gw());
-                    b.threshold = geom.y_to_threshold(y);
+                    if cmd {
+                        b.ratio = 1.0 + 19.0 * (geom.y_to_threshold(y) + 60.0) / 60.0;
+                    } else {
+                        b.threshold = geom.y_to_threshold(y);
+                    }
                 });
             }
             Some(Target::Band(i)) => {
@@ -513,7 +582,7 @@ impl StripView {
                 let n = ((x - bar_x) / bar_w).clamp(0.0, 1.0) as f64;
                 self.change(|b| match i {
                     0 => b.threshold = -60.0 + 60.0 * n,
-                    1 => b.range = -24.0 + 48.0 * n,
+                    1 => b.range = -MAX_RANGE_DB + 2.0 * MAX_RANGE_DB * n,
                     2 => b.ratio = 1.0 + 19.0 * n,
                     3 => b.attack = 0.1 * 2000.0_f64.powf(n),
                     _ => b.release = 10.0 * 200.0_f64.powf(n),
@@ -676,7 +745,7 @@ impl StripView {
             return true;
         }
         if self.is_lift_selected() {
-            if let Some(i) = (0..5).find(|i| {
+            if let Some(i) = (1..5).find(|i| {
                 inside(x, y, self.band_bar_rect(*i)) && !inside(x, y, self.band_value_rect(*i))
             }) {
                 let defaults = LiftBand::default();

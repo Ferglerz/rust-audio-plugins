@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+pub use pleasant_eq::{MAX_GAIN_DB, MAX_RANGE_DB};
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Shape {
@@ -111,13 +112,13 @@ impl Band {
             };
         }
         safe(&mut self.freq, 20.0, 20000.0, 1000.0);
-        safe(&mut self.gain, -24.0, 24.0, 0.0);
+        safe(&mut self.gain, -MAX_GAIN_DB, MAX_GAIN_DB, 0.0);
         safe(&mut self.q, 0.15, 18.0, 1.0);
         safe(&mut self.threshold, -60.0, 0.0, -24.0);
         safe(&mut self.ratio, 1.0, 20.0, 3.0);
         safe(&mut self.attack, 0.1, 200.0, 15.0);
         safe(&mut self.release, 10.0, 2000.0, 140.0);
-        safe(&mut self.range, -24.0, 24.0, 6.0);
+        safe(&mut self.range, -MAX_RANGE_DB, MAX_RANGE_DB, 6.0);
     }
 }
 
@@ -229,12 +230,12 @@ mod tests {
         b.sanitize();
         assert_eq!(b.range, -12.5);
 
-        b.range = -30.0;
+        b.range = -200.0;
         b.sanitize();
-        assert_eq!(b.range, -24.0);
+        assert_eq!(b.range, -MAX_RANGE_DB);
 
-        b.range = 30.0;
+        b.range = 200.0;
         b.sanitize();
-        assert_eq!(b.range, 24.0);
+        assert_eq!(b.range, MAX_RANGE_DB);
     }
 }

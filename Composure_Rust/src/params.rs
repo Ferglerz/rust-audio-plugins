@@ -7,8 +7,52 @@ use std::sync::Arc;
 use nih_plug::prelude::*;
 use nih_plug_vizia::ViziaState;
 
-use crate::graph_store::GraphStore;
+pub use crate::detector_eq::DetectorShape;
+use crate::detector_eq::{DetectorBandParams, EQ_BANDS};
 use crate::dsp::envelope::defaults as env_defaults;
+use crate::graph_store::GraphStore;
+
+const ENVELOPE_TIME_NUMERATOR: f32 = 10_000.0;
+const ATTACK_MAX_DB_PER_SEC: f32 = 100_000.0; // 100 µs; roughly five samples at 48 kHz.
+
+fn format_envelope_time(rate_db_per_sec: f32) -> String {
+    let ms = ENVELOPE_TIME_NUMERATOR / rate_db_per_sec;
+    if ms < 1.0 {
+        format!("{:.0} µs", ms * 1000.0)
+    } else if ms < 10.0 {
+        format!("{ms:.2} ms")
+    } else if ms < 100.0 {
+        format!("{ms:.1} ms")
+    } else if ms < 1000.0 {
+        format!("{ms:.0} ms")
+    } else {
+        format!("{:.2} s", ms / 1000.0)
+    }
+}
+
+fn parse_envelope_time(text: &str) -> Option<f32> {
+    let text = text.trim().to_lowercase().replace('μ', "µ");
+    if let Some(rate) = text.strip_suffix("db/s") {
+        return rate
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .filter(|v| v.is_finite() && *v > 0.0);
+    }
+    let (number, scale) =
+        if let Some(value) = text.strip_suffix("µs").or_else(|| text.strip_suffix("us")) {
+            (value, 0.001)
+        } else if let Some(value) = text.strip_suffix("ms") {
+            (value, 1.0)
+        } else if let Some(value) = text.strip_suffix('s') {
+            (value, 1000.0)
+        } else {
+            (text.as_str(), 1.0)
+        };
+    let ms = number.trim().parse::<f32>().ok()? * scale;
+    let rate = ENVELOPE_TIME_NUMERATOR / ms;
+    (ms.is_finite() && ms > 0.0 && rate.is_finite()).then_some(rate)
+}
 
 /// Detection mode: feedforward uses the input signal, feedback uses the output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
@@ -76,7 +120,10 @@ fn gr_blend_knee_param(name: &str, default: f32) -> FloatParam {
     FloatParam::new(
         name,
         default,
-        FloatRange::Linear { min: 0.0, max: 12.0 },
+        FloatRange::Linear {
+            min: 0.0,
+            max: 12.0,
+        },
     )
     .with_unit(" dB")
     .with_step_size(0.1)
@@ -168,6 +215,10 @@ pub struct ComposureParams {
     #[id = "lp_freq"]
     pub lp_freq: FloatParam,
 
+    /// Additional static detector EQ bands. Legacy HP/LP parameters remain intact.
+    #[nested(array, group = "Detector EQ")]
+    pub detector_eq: [DetectorBandParams; EQ_BANDS],
+
     /// Input level offset in dB.
     #[id = "input_offset_db"]
     pub input_offset_db: FloatParam,
@@ -175,6 +226,9 @@ pub struct ComposureParams {
     // =========================================================================
     // GROUP 2: HARMONICS (JSFX sliders 16–21)
     // =========================================================================
+    #[id = "harmonics_on"]
+    pub harmonics_on: BoolParam,
+
     /// Harmonic saturation model: Tube or Transformer.
     #[id = "harmonic_type"]
     pub harmonic_type: EnumParam<HarmonicType>,
@@ -286,17 +340,21 @@ impl Default for ComposureParams {
                 1000.0,
                 FloatRange::Skewed {
                     min: 2.0,
-                    max: 1_000_000.0,
+                    max: ATTACK_MAX_DB_PER_SEC,
                     factor: FloatRange::skew_factor(-2.5),
                 },
             )
-            .with_unit(" dB/s")
-            .with_step_size(1.0),
+            .with_step_size(1.0)
+            .with_value_to_string(Arc::new(format_envelope_time))
+            .with_string_to_value(Arc::new(parse_envelope_time)),
 
             attack_curve: FloatParam::new(
                 "Attack Curve",
                 0.0,
-                FloatRange::Linear { min: -2.0, max: 2.0 },
+                FloatRange::Linear {
+                    min: -2.0,
+                    max: 2.0,
+                },
             )
             .with_step_size(0.25),
 
@@ -309,20 +367,27 @@ impl Default for ComposureParams {
                     factor: FloatRange::skew_factor(-1.0),
                 },
             )
-            .with_unit(" dB/s")
-            .with_step_size(1.0),
+            .with_step_size(1.0)
+            .with_value_to_string(Arc::new(format_envelope_time))
+            .with_string_to_value(Arc::new(parse_envelope_time)),
 
             release_curve: FloatParam::new(
                 "Release Curve",
                 0.0,
-                FloatRange::Linear { min: -2.0, max: 2.0 },
+                FloatRange::Linear {
+                    min: -2.0,
+                    max: 2.0,
+                },
             )
             .with_step_size(0.25),
 
             hold_ms: FloatParam::new(
                 "Hold",
                 0.0,
-                FloatRange::Linear { min: 0.0, max: 1000.0 },
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: 1000.0,
+                },
             )
             .with_unit(" ms")
             .with_step_size(1.0),
@@ -330,7 +395,10 @@ impl Default for ComposureParams {
             strength: FloatParam::new(
                 "Strength",
                 100.0,
-                FloatRange::Linear { min: 0.0, max: 400.0 },
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: 400.0,
+                },
             )
             .with_unit("%")
             .with_step_size(5.0),
@@ -339,7 +407,10 @@ impl Default for ComposureParams {
             rms_size_ms: FloatParam::new(
                 "RMS Window",
                 0.0,
-                FloatRange::Linear { min: 0.0, max: 1000.0 },
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: 1000.0,
+                },
             )
             .with_unit(" ms")
             .with_step_size(1.0),
@@ -351,7 +422,10 @@ impl Default for ComposureParams {
             lookahead_ms: FloatParam::new(
                 "Lookahead",
                 0.0,
-                FloatRange::Linear { min: 0.0, max: 2000.0 },
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: 2000.0,
+                },
             )
             .with_unit(" ms")
             .with_step_size(1.0),
@@ -387,24 +461,34 @@ impl Default for ComposureParams {
             input_offset_db: FloatParam::new(
                 "Input Offset",
                 0.0,
-                FloatRange::Linear { min: -30.0, max: 30.0 },
+                FloatRange::Linear {
+                    min: -30.0,
+                    max: 30.0,
+                },
             )
             .with_unit(" dB"),
 
             // === HARMONICS ===
+            harmonics_on: BoolParam::new("Harmonics", true),
             harmonic_type: EnumParam::new("Harmonic Type", HarmonicType::Tube),
 
             harmonic_drive: FloatParam::new(
                 "Drive",
                 0.0,
-                FloatRange::Linear { min: 0.0, max: 100.0 },
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: 100.0,
+                },
             )
             .with_step_size(1.0),
 
             harmonic_mix: FloatParam::new(
                 "Harmonic Mix",
                 0.0,
-                FloatRange::Linear { min: 0.0, max: 100.0 },
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: 100.0,
+                },
             )
             .with_unit("%")
             .with_step_size(1.0),
@@ -412,21 +496,30 @@ impl Default for ComposureParams {
             harmonic_even_boost: FloatParam::new(
                 "Even",
                 0.0,
-                FloatRange::Linear { min: 0.0, max: 200.0 },
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: 200.0,
+                },
             )
             .with_step_size(1.0),
 
             harmonic_odd_boost: FloatParam::new(
                 "Odd",
                 0.0,
-                FloatRange::Linear { min: 0.0, max: 200.0 },
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: 200.0,
+                },
             )
             .with_step_size(1.0),
 
             makeup_gain_db: FloatParam::new(
                 "Makeup Gain",
                 0.0,
-                FloatRange::Linear { min: -20.0, max: 20.0 },
+                FloatRange::Linear {
+                    min: -20.0,
+                    max: 20.0,
+                },
             )
             .with_unit(" dB")
             .with_step_size(0.1),
@@ -442,7 +535,10 @@ impl Default for ComposureParams {
             prog_release_blend: FloatParam::new(
                 "Program Release Blend",
                 0.0,
-                FloatRange::Linear { min: 0.0, max: 100.0 },
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: 100.0,
+                },
             )
             .with_step_size(1.0),
 
@@ -458,7 +554,10 @@ impl Default for ComposureParams {
             rate_change_sensitivity_db: FloatParam::new(
                 "Rate Change Sensitivity",
                 env_defaults::RATE_CHANGE_SENSITIVITY_DB as f32,
-                FloatRange::Linear { min: 0.5, max: 20.0 },
+                FloatRange::Linear {
+                    min: 0.5,
+                    max: 20.0,
+                },
             )
             .with_unit(" dB")
             .with_step_size(0.1),
@@ -467,7 +566,10 @@ impl Default for ComposureParams {
             input_level_threshold_db: FloatParam::new(
                 "Input Level Threshold",
                 env_defaults::INPUT_LEVEL_THRESHOLD_DB as f32,
-                FloatRange::Linear { min: -80.0, max: 0.0 },
+                FloatRange::Linear {
+                    min: -80.0,
+                    max: 0.0,
+                },
             )
             .with_unit(" dB")
             .with_step_size(0.1),
@@ -475,7 +577,10 @@ impl Default for ComposureParams {
             input_level_threshold_2_db: FloatParam::new(
                 "Input Dep. Knee Threshold",
                 env_defaults::INPUT_LEVEL_THRESHOLD_2_DB as f32,
-                FloatRange::Linear { min: -80.0, max: 0.0 },
+                FloatRange::Linear {
+                    min: -80.0,
+                    max: 0.0,
+                },
             )
             .with_unit(" dB")
             .with_step_size(0.1),
@@ -517,6 +622,7 @@ impl Default for ComposureParams {
 
             editor_state: ViziaState::new_screen_sized("Composure", || (1182, 504)),
             graph_store: GraphStore::default(),
+            detector_eq: std::array::from_fn(|_| DetectorBandParams::default()),
         }
     }
 }
@@ -524,6 +630,41 @@ impl Default for ComposureParams {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn envelope_rates_show_editable_time_without_changing_the_dsp_unit() {
+        let params = ComposureParams::default();
+        assert_eq!(params.attack.preview_plain(1.0), ATTACK_MAX_DB_PER_SEC);
+        assert_eq!(format_envelope_time(ATTACK_MAX_DB_PER_SEC), "100 µs");
+        assert_eq!(format_envelope_time(1000.0), "10.0 ms");
+        assert_eq!(format_envelope_time(100.0), "100 ms");
+        assert_eq!(parse_envelope_time("100 us"), Some(100_000.0));
+        assert_eq!(parse_envelope_time("100 µs"), Some(100_000.0));
+        assert_eq!(parse_envelope_time("10 ms"), Some(1000.0));
+        assert_eq!(parse_envelope_time("100 ms"), Some(100.0));
+        assert_eq!(parse_envelope_time("1 s"), Some(10.0));
+        assert_eq!(parse_envelope_time("1000 dB/s"), Some(1000.0));
+        assert_eq!(parse_envelope_time("0 ms"), None);
+    }
+
+    #[test]
+    fn detector_eq_host_ids_are_unique_and_keep_legacy_cuts() {
+        let params = ComposureParams::default();
+        let map = params.param_map();
+        let ids: std::collections::HashSet<_> = map.iter().map(|(id, _, _)| id).collect();
+        assert_eq!(ids.len(), map.len());
+        assert!(ids.contains(&"hp_freq".to_owned()));
+        assert!(ids.contains(&"lp_freq".to_owned()));
+        for slot in 1..=EQ_BANDS {
+            for field in ["active", "enabled", "shape", "freq", "gain", "q"] {
+                let id = format!("det_eq_{field}_{slot}");
+                let (_, _, group) = map.iter().find(|(key, _, _)| *key == id).unwrap();
+                assert_eq!(group, &format!("Detector EQ {slot}"));
+            }
+        }
+        assert!(params.detector_eq.iter().all(|band| !band.active.value()));
+        assert!(params.detector_eq.iter().all(|band| band.enabled.value()));
+    }
 
     #[test]
     fn harmonic_type_has_two_variants() {

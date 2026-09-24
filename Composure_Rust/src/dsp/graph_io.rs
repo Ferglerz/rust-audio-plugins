@@ -6,14 +6,14 @@ mod tests {
 
     use super::super::constants::{COMP_LUT_GRANULARITY, COMP_LUT_MIN_DB, COMP_LUT_SIZE};
     use super::super::core_math::db_to_linear;
+    use super::super::envelope::EnvelopeParams;
     use super::super::graph::CompressionGraph;
     use super::super::test_fixtures::{
-        boost_at_first_interior_graph, boost_at_middle_interior_graph, below_floor_unity_graph,
+        below_floor_unity_graph, boost_at_first_interior_graph, boost_at_middle_interior_graph,
         compression_at_first_interior, cut_then_boost_graph, gr_at, run_peak_sine_until_settled,
         setup_expansion_chain, uniform_offset_graph,
     };
     use super::super::{ChainParams, ProcessingChain};
-    use super::super::envelope::EnvelopeParams;
 
     use crate::graph_store::GraphSnapshot;
 
@@ -185,10 +185,7 @@ mod tests {
             boost_at_first_interior_graph(),
             compression_at_first_interior(6.0),
         );
-        let (boost_lut, cut_lut) = (
-            lut_from_graph(boost_g),
-            lut_from_graph(cut_g),
-        );
+        let (boost_lut, cut_lut) = (lut_from_graph(boost_g), lut_from_graph(cut_g));
 
         let boost_in = boost_g.get_point_x(1);
         let (boost_gr, boost_skip) = gr_at(&boost_lut, boost_in, 0.0, 1.0);
@@ -255,25 +252,15 @@ mod tests {
     }
 
     #[test]
-    fn pixel_db_roundtrip_on_graph_bounds() {
-        let g = CompressionGraph::new();
-        let w = 400.0_f32;
-        let h = 400.0_f32;
-        for &(in_db, out_db) in &[(-20.0, -20.0), (-16.0, -12.0), (-10.0, -10.0), (0.0, 0.0)] {
-            let (px, py) = crate::ui::graph_display::db_to_pixel_with_pad(in_db, out_db, w, h, g.min_db, g.range_db, 0.0);
-            let (rin, rout) = crate::ui::graph_display::pixel_to_db_with_pad(px, py, w, h, g.min_db, g.max_db, g.range_db, 0.0);
-            assert_abs_diff_eq!(rin, in_db, epsilon = 0.05);
-            assert_abs_diff_eq!(rout, out_db, epsilon = 0.05);
-        }
-    }
-
-    #[test]
     fn lut_covers_full_table_without_nan() {
         let lut = lut_from_graph(cut_then_boost_graph());
         for i in 0..COMP_LUT_SIZE {
             let inp = COMP_LUT_MIN_DB + (i as f64) * COMP_LUT_GRANULARITY;
             let out = lut.lookup(inp);
-            assert!(out.is_finite(), "LUT entry at {inp} dB is not finite: {out}");
+            assert!(
+                out.is_finite(),
+                "LUT entry at {inp} dB is not finite: {out}"
+            );
         }
     }
 

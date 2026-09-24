@@ -1,25 +1,41 @@
 //! Vizia UI — single production page (1182×504). No multi-page nav.
 
 mod appearance;
+#[path = "controls/controls.rs"]
 mod controls;
 mod debug_view;
+mod detector_eq_view;
 mod display;
 mod draw_helpers;
 mod gr_meter_view;
+#[path = "graph/graph_chrome.rs"]
 mod graph_chrome;
+#[path = "graph/graph_display.rs"]
 pub mod graph_display;
+#[path = "graph/graph_hit.rs"]
+mod graph_hit;
+mod graph_pages;
+#[path = "graph/graph_view.rs"]
 mod graph_view;
+#[path = "graph/graph_view_draw.rs"]
 mod graph_view_draw;
 mod image_draw;
+#[path = "controls/image_knob.rs"]
 mod image_knob;
+#[path = "controls/image_switch.rs"]
 mod image_switch;
 mod layout;
+#[path = "controls/parallax_slider.rs"]
 mod parallax_slider;
+#[path = "controls/param_widget_ext.rs"]
 mod param_widget_ext;
+#[path = "controls/readout_controls.rs"]
 mod readout_controls;
+#[path = "controls/step_points.rs"]
 mod step_points;
 mod texture_cache;
 mod theme;
+#[path = "graph/threshold_lines.rs"]
 mod threshold_lines;
 mod ui_assets;
 
@@ -29,6 +45,7 @@ use std::sync::Arc;
 use nih_plug::debug::nih_error;
 use nih_plug::prelude::*;
 use nih_plug_vizia::vizia::prelude::*;
+use nih_plug_vizia::widgets::ResizeHandle;
 use nih_plug_vizia::{create_vizia_editor, ViziaState, ViziaTheming};
 
 /// Scaled from `../Composure/Images/BG.png` at 32% (1182×504).
@@ -60,6 +77,7 @@ impl Model for EditorData {
 fn place_gr_meter<L, R, P, X>(
     cx: &mut Context,
     x: X,
+    second: bool,
     gr_db: L,
     range_db: R,
     params: P,
@@ -73,9 +91,22 @@ fn place_gr_meter<L, R, P, X>(
     gr_meter_view::GrMeterView::new(cx, gr_db, range_db, params, display)
         .position_type(PositionType::SelfDirected)
         .left(x)
-        .top(Pixels(theme::METER_Y))
-        .width(Pixels(theme::METER_W))
-        .height(Pixels(theme::METER_H));
+        .top(EditorData::appearance.map(|mode| Pixels(appearance::graph_y(*mode))))
+        .width(EditorData::appearance.map(move |mode| {
+            Pixels(if *mode == 2 || second {
+                theme::METER_W
+            } else {
+                theme::METER_W * 2.0 + theme::METER_GAP
+            })
+        }))
+        .height(EditorData::appearance.map(|mode| Pixels(appearance::graph_size(*mode))))
+        .display(EditorData::appearance.map(move |mode| {
+            if second && *mode != 2 {
+                Display::None
+            } else {
+                Display::Flex
+            }
+        }));
 }
 
 pub fn default_editor_state() -> Arc<ViziaState> {
@@ -85,102 +116,103 @@ pub fn default_editor_state() -> Arc<ViziaState> {
 pub fn create(params: Arc<ComposureParams>, display: Arc<UiDisplay>) -> Option<Box<dyn Editor>> {
     let editor_state = params.editor_state.clone();
     create_vizia_editor(editor_state, ViziaTheming::Custom, move |cx, _| {
-        nih_plug_vizia::assets::register_noto_sans_light(cx);
-        nih_plug_vizia::assets::register_noto_sans_thin(cx);
-        cx.add_font_mem(pleasant_ui::FONT_JETBRAINS_MONO);
+        build_editor_contents(cx, params.clone(), display.clone());
+    })
+}
 
-        if let Err(err) = cx.add_stylesheet(include_style!("src/ui/theme.css")) {
-            nih_error!("Failed to load stylesheet: {err:?}");
-        }
+fn build_editor_contents(cx: &mut Context, params: Arc<ComposureParams>, display: Arc<UiDisplay>) {
+    nih_plug_vizia::assets::register_noto_sans_light(cx);
+    nih_plug_vizia::assets::register_noto_sans_thin(cx);
+    cx.add_font_mem(pleasant_ui::FONT_JETBRAINS_MONO);
 
-        ui_assets::register_editor_images(cx);
-        texture_cache::clear_gpu_textures();
+    if let Err(err) = cx.add_stylesheet(include_style!("src/ui/theme.css")) {
+        nih_error!("Failed to load stylesheet: {err:?}");
+    }
 
-        EditorData {
-            params: params.clone(),
-            display: display.clone(),
-            appearance: appearance::encode(pleasant_ui::preferences::Appearance::read("Composure")),
-            font: Arc::new(std::sync::OnceLock::new()),
-        }
-        .build(cx);
+    ui_assets::register_editor_images(cx);
+    texture_cache::clear_gpu_textures();
 
-        ZStack::new(cx, |cx| {
-            Element::new(cx)
-                .class("editor-bg")
-                .display(EditorData::appearance.map(|m| {
-                    if *m == 2 {
-                        Display::Flex
-                    } else {
-                        Display::None
-                    }
-                }))
-                .position_type(PositionType::SelfDirected)
-                .left(Pixels(0.0))
-                .top(Pixels(0.0))
-                .width(Pixels(EDITOR_WIDTH as f32))
-                .height(Pixels(EDITOR_HEIGHT as f32));
+    EditorData {
+        params: params.clone(),
+        display: display.clone(),
+        appearance: appearance::encode(pleasant_ui::preferences::Appearance::read("Composure")),
+        font: Arc::new(std::sync::OnceLock::new()),
+    }
+    .build(cx);
+    graph_pages::build_model(cx);
 
-            appearance::Background::new(cx)
-                .position_type(PositionType::SelfDirected)
-                .width(Pixels(EDITOR_WIDTH as f32))
-                .height(Pixels(EDITOR_HEIGHT as f32));
-
-            ZStack::new(cx, |cx| {
-                controls::build_positioned_controls(cx, EditorData::params, display.clone());
-                debug_view::build(cx, EditorData::display);
-
-                let initial_points = params.graph_store.load().graph.num_points;
-                display.sync_graph_points(initial_points);
-
-                graph_chrome::build(cx, EditorData::params, EditorData::display);
-
-                let gr_lens = EditorData::display.map(|d| d.gr_db.load(Ordering::Relaxed));
-                let range_lens =
-                    EditorData::params.map(|p| p.graph_range_mode.value().range_db() as f32);
-
-                graph_view::GraphView::new(
-                    cx,
-                    params.graph_store.clone(),
-                    display.clone(),
-                    EditorData::display.map(|d| d.detector_db.load(Ordering::Relaxed)),
-                    gr_lens.clone(),
-                    EditorData::params,
-                )
-                .position_type(PositionType::SelfDirected)
-                .left(EditorData::appearance.map(|mode| Pixels(appearance::graph_x(*mode))))
-                .top(Pixels(theme::GRAPH_Y))
-                .width(Pixels(theme::GRAPH_SIZE_X))
-                .height(Pixels(theme::GRAPH_SIZE));
-
-                place_gr_meter(
-                    cx,
-                    EditorData::appearance.map(|mode| Pixels(appearance::meter_x(*mode).0)),
-                    gr_lens.clone(),
-                    range_lens.clone(),
-                    EditorData::params,
-                    display.clone(),
-                );
-                place_gr_meter(
-                    cx,
-                    EditorData::appearance.map(|mode| Pixels(appearance::meter_x(*mode).1)),
-                    gr_lens,
-                    range_lens,
-                    EditorData::params,
-                    display.clone(),
-                );
-            })
+    ZStack::new(cx, |cx| {
+        Element::new(cx)
+            .class("editor-bg")
+            .display(EditorData::appearance.map(|m| {
+                if *m == 2 {
+                    Display::Flex
+                } else {
+                    Display::None
+                }
+            }))
             .position_type(PositionType::SelfDirected)
-            .top(EditorData::appearance.map(|mode| Pixels(appearance::content_offset(*mode))))
+            .left(Pixels(0.0))
+            .top(Pixels(0.0))
             .width(Pixels(EDITOR_WIDTH as f32))
             .height(Pixels(EDITOR_HEIGHT as f32));
 
-            appearance::build_selector(cx);
+        appearance::Background::new(cx)
+            .position_type(PositionType::SelfDirected)
+            .width(Stretch(1.0))
+            .height(Stretch(1.0));
+
+        ZStack::new(cx, |cx| {
+            controls::build_positioned_controls(cx, EditorData::params, display.clone());
+            appearance::build_harmonics_bypass(cx);
+            debug_view::build(cx, EditorData::display);
+
+            let initial_points = params.graph_store.load().graph.num_points;
+            display.sync_graph_points(initial_points);
+
+            let gr_lens = EditorData::display.map(|d| d.gr_db.load(Ordering::Relaxed));
+            let range_lens =
+                EditorData::params.map(|p| p.graph_range_mode.value().range_db() as f32);
+            graph_pages::build(cx, params.clone(), display.clone());
+            graph_chrome::build_analog_readout(cx, EditorData::display);
+
+            place_gr_meter(
+                cx,
+                EditorData::appearance.map(|mode| Pixels(appearance::meter_x(*mode).0)),
+                false,
+                gr_lens.clone(),
+                range_lens.clone(),
+                EditorData::params,
+                display.clone(),
+            );
+            place_gr_meter(
+                cx,
+                EditorData::appearance.map(|mode| Pixels(appearance::meter_x(*mode).1)),
+                true,
+                gr_lens,
+                range_lens,
+                EditorData::params,
+                display.clone(),
+            );
         })
-        .id("root")
-        .class("composure")
-        .toggle_class("pleasant", EditorData::appearance.map(|m| *m != 2))
-        .toggle_class("light", EditorData::appearance.map(|m| *m == 1))
+        .position_type(PositionType::SelfDirected)
+        .top(EditorData::appearance.map(|mode| Pixels(appearance::content_offset(*mode))))
         .width(Pixels(EDITOR_WIDTH as f32))
         .height(Pixels(EDITOR_HEIGHT as f32));
+
+        appearance::build_selector(cx);
     })
+    .id("root")
+    .class("composure")
+    .toggle_class("pleasant", EditorData::appearance.map(|m| *m != 2))
+    .toggle_class("light", EditorData::appearance.map(|m| *m == 1))
+    .width(Stretch(1.0))
+    .height(Stretch(1.0));
+
+    ResizeHandle::new(cx)
+        .position_type(PositionType::SelfDirected)
+        .right(Pixels(0.0))
+        .bottom(Pixels(0.0))
+        .width(Pixels(16.0))
+        .height(Pixels(16.0));
 }

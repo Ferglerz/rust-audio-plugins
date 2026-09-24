@@ -121,6 +121,8 @@ pub struct BandProcessor {
     attack_coefficient: f64,
     release_coefficient: f64,
     coefficient_phase: usize,
+    coefficients_dirty: bool,
+    coefficient_sample_rate: f64,
 }
 
 impl BandProcessor {
@@ -146,6 +148,8 @@ impl BandProcessor {
             attack_coefficient: (-1.0 / (sample_rate * settings.attack_ms * 0.001)).exp(),
             release_coefficient: (-1.0 / (sample_rate * settings.release_ms * 0.001)).exp(),
             coefficient_phase: 0,
+            coefficients_dirty: false,
+            coefficient_sample_rate: sample_rate,
             settings,
         }
     }
@@ -183,6 +187,8 @@ impl BandProcessor {
             self.current_frequency_hz = previous.current_frequency_hz;
             self.current_q = previous.current_q;
             self.coefficients = previous.coefficients;
+            // A new processor may use a different sample rate or settings.
+            self.coefficients_dirty = true;
         }
     }
 
@@ -238,17 +244,43 @@ impl BandProcessor {
         }
 
         if self.coefficient_phase == 0 {
-            let smoothing = (-32.0 / (sample_rate * 0.015)).exp();
-            self.current_gain_db = smoothing * self.current_gain_db
-                + (1.0 - smoothing) * (self.settings.gain_db - self.reduction_db);
-            self.current_frequency_hz = smoothing * self.current_frequency_hz
-                + (1.0 - smoothing) * self.settings.frequency_hz;
-            self.current_q = smoothing * self.current_q + (1.0 - smoothing) * self.settings.q;
-            let mut smoothed = self.settings.clone();
-            smoothed.frequency_hz = self.current_frequency_hz;
-            smoothed.gain_db = self.current_gain_db;
-            smoothed.q = self.current_q;
-            self.coefficients = BandCoefficients::prepare(&smoothed, sample_rate);
+            #[cfg(feature = "dynamic")]
+            let time_varying = self.settings.dynamic && self.settings.shape.has_gain();
+            #[cfg(not(feature = "dynamic"))]
+            let time_varying = false;
+
+            let target_gain_db = self.settings.gain_db - self.reduction_db;
+            let settled = (self.current_gain_db - target_gain_db).abs() <= 1.0e-9
+                && (self.current_frequency_hz - self.settings.frequency_hz).abs() <= 1.0e-9
+                && (self.current_q - self.settings.q).abs() <= 1.0e-9;
+            if time_varying
+                || self.coefficients_dirty
+                || self.coefficient_sample_rate != sample_rate
+                || !settled
+            {
+                let smoothing = (-32.0 / (sample_rate * 0.015)).exp();
+                self.current_gain_db =
+                    smoothing * self.current_gain_db + (1.0 - smoothing) * target_gain_db;
+                self.current_frequency_hz = smoothing * self.current_frequency_hz
+                    + (1.0 - smoothing) * self.settings.frequency_hz;
+                self.current_q = smoothing * self.current_q + (1.0 - smoothing) * self.settings.q;
+                if !time_varying
+                    && (self.current_gain_db - target_gain_db).abs() <= 1.0e-9
+                    && (self.current_frequency_hz - self.settings.frequency_hz).abs() <= 1.0e-9
+                    && (self.current_q - self.settings.q).abs() <= 1.0e-9
+                {
+                    self.current_gain_db = target_gain_db;
+                    self.current_frequency_hz = self.settings.frequency_hz;
+                    self.current_q = self.settings.q;
+                }
+                let mut smoothed = self.settings.clone();
+                smoothed.frequency_hz = self.current_frequency_hz;
+                smoothed.gain_db = self.current_gain_db;
+                smoothed.q = self.current_q;
+                self.coefficients = BandCoefficients::prepare(&smoothed, sample_rate);
+                self.coefficients_dirty = false;
+                self.coefficient_sample_rate = sample_rate;
+            }
         }
         self.coefficient_phase = (self.coefficient_phase + 1) % 32;
         for (channel, sample) in input.iter_mut().enumerate() {
@@ -365,5 +397,68 @@ mod tests {
             processor.process([0.0; 2], sample_rate);
         }
         assert!(processor.reduction_db() < 0.01);
+    }
+
+    #[test]
+    fn inherited_static_band_uses_new_sample_rate_and_settles() {
+        let old_settings = BandSettings {
+            shape: EqShape::Bell,
+            frequency_hz: 800.0,
+            gain_db: 0.0,
+            ..BandSettings::default()
+        };
+        let new_settings = BandSettings {
+            frequency_hz: 1_200.0,
+            gain_db: 6.0,
+            ..old_settings.clone()
+        };
+        let old = BandProcessor::new(old_settings, 44_100.0);
+        let mut current = BandProcessor::new(new_settings.clone(), 96_000.0);
+        current.inherit_state_from(&old);
+        for _ in 0..96_000 {
+            current.process([0.0; 2], 96_000.0);
+        }
+        let expected = BandCoefficients::prepare(&new_settings, 96_000.0);
+        let actual = current.coefficients.response_db(1_200.0, 96_000.0);
+        assert!((actual - expected.response_db(1_200.0, 96_000.0)).abs() < 1.0e-9);
+        assert!(!current.coefficients_dirty);
+    }
+
+    #[test]
+    fn static_band_reprepares_when_process_sample_rate_changes() {
+        let settings = BandSettings {
+            shape: EqShape::Bell,
+            frequency_hz: 1_200.0,
+            gain_db: 6.0,
+            ..BandSettings::default()
+        };
+        let mut processor = BandProcessor::new(settings.clone(), 44_100.0);
+        processor.process([0.0; 2], 96_000.0);
+
+        let expected =
+            BandCoefficients::prepare(&settings, 96_000.0).response_db(1_200.0, 96_000.0);
+        let actual = processor.coefficients.response_db(1_200.0, 96_000.0);
+        assert!((actual - expected).abs() < 1.0e-9);
+    }
+}
+
+#[cfg(test)]
+mod extended_gain_tests {
+    use super::*;
+
+    #[test]
+    fn processor_preserves_extended_gain_and_range() {
+        for gain in [-72.0, -36.0, 36.0, 72.0] {
+            let settings = BandSettings { gain_db: gain, range_db: gain * 2.0, ..BandSettings::default() };
+            let mut processor = BandProcessor::new(settings, 48000.0);
+            assert_eq!(processor.settings().gain_db, gain);
+            assert_eq!(processor.settings().range_db, gain * 2.0);
+            let coefficients = BandCoefficients::prepare(processor.settings(), 48000.0);
+            assert!((coefficients.response_db(1000.0, 48000.0) - gain).abs() < 0.01);
+            for i in 0..4096 {
+                let out = processor.process([if i == 0 {0.01} else {0.0}; 2], 48000.0);
+                assert!(out.iter().all(|sample| sample.is_finite()));
+            }
+        }
     }
 }

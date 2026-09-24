@@ -20,7 +20,7 @@ From the repository root:
 
 ```sh
 cargo check -p composure
-./scripts/install.sh
+./Composure_Rust/scripts/install.sh
 ```
 
 `scripts/install.sh` builds the release VST3 and CLAP bundles, then copies and

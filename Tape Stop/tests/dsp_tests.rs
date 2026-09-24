@@ -112,6 +112,24 @@ fn test_14bit_midi_cc_override() {
 }
 
 #[test]
+fn test_high_midi_cc_override() {
+    let mut engine = TapeStopEngine::new();
+    engine.set_sample_rate(44100.0);
+    engine.note_on(60, 1.0);
+    engine.handle_midi_cc(74, 127, 74);
+    for _ in 0..1000 {
+        engine.process_sample(0.5, 0.5, 16.0, 10.0, 0.05, 1.0, 0.0, false, -18.0, true);
+    }
+    assert!(engine.speed_left() < 0.1);
+
+    engine.handle_midi_cc(74, 0, 74);
+    for _ in 0..1000 {
+        engine.process_sample(0.5, 0.5, 16.0, 10.0, 0.05, 1.0, 0.0, false, -18.0, true);
+    }
+    assert!(engine.speed_left() > 0.9);
+}
+
+#[test]
 fn test_auto_restart_transient_detection() {
     let mut engine = TapeStopEngine::new();
     engine.set_sample_rate(44100.0);

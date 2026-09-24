@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn graph_mapping_tracks_display_scale_without_expanding_gain_limits() {
+fn graph_mapping_and_band_limits_support_full_display_range() {
     for range in SCALES {
         assert_eq!(db_y(range, range), GY);
         assert_eq!(db_y(-range, range), GY + GH);
@@ -11,9 +11,19 @@ fn graph_mapping_tracks_display_scale_without_expanding_gain_limits() {
                 assert!((y_db(db_y(gain, range), range) - gain).abs() < 0.0001);
             }
         }
-        assert!(y_db(GY - GH, range) <= 24.0);
-        assert!(y_db(GY + GH * 2.0, range) >= -24.0);
+        assert!((y_db(GY - GH, range) - range).abs() < 0.0001);
+        assert!((y_db(GY + GH * 2.0, range) + range).abs() < 0.0001);
     }
+
+    let mut band = Band {
+        gain: 72.0,
+        ..Band::default()
+    };
+    band.sanitize();
+    assert_eq!(band.gain, 72.0);
+    band.gain = -72.0;
+    band.sanitize();
+    assert_eq!(band.gain, -72.0);
 }
 
 #[test]
@@ -341,14 +351,14 @@ fn dynamic_eq_range_drag_and_bipolar_normalization() {
     let y_near_zero = db_y(gain - 0.15, graph_db);
     assert_eq!(snap_dyn_range(gain, y_near_zero, graph_db), 0.0);
 
-    let norm_fn = |range: f64| (range + 24.0) / 48.0;
-    let denorm_fn = |n: f64| -24.0 + 48.0 * n;
-    assert_eq!(norm_fn(-24.0), 0.0);
+    let norm_fn = |range: f64| (range + MAX_RANGE_DB) / (2.0 * MAX_RANGE_DB);
+    let denorm_fn = |n: f64| -MAX_RANGE_DB + 2.0 * MAX_RANGE_DB * n;
+    assert_eq!(norm_fn(-MAX_RANGE_DB), 0.0);
     assert_eq!(norm_fn(0.0), 0.5);
-    assert_eq!(norm_fn(24.0), 1.0);
-    assert_eq!(denorm_fn(0.0), -24.0);
+    assert_eq!(norm_fn(MAX_RANGE_DB), 1.0);
+    assert_eq!(denorm_fn(0.0), -MAX_RANGE_DB);
     assert_eq!(denorm_fn(0.5), 0.0);
-    assert_eq!(denorm_fn(1.0), 24.0);
+    assert_eq!(denorm_fn(1.0), MAX_RANGE_DB);
 
     let mut b = Band {
         freq: 1000.0,
@@ -390,7 +400,7 @@ fn dynamic_eq_range_drag_and_bipolar_normalization() {
         Some(b.id)
     ));
     b.dynamic = false;
-    assert!(range_handle_hit(
+    assert!(!range_handle_hit(
         &b,
         x_node + 10.0,
         node_y,
@@ -421,7 +431,7 @@ fn dynamic_eq_range_drag_and_bipolar_normalization() {
         assert!(inside(value.0, value.1, hud));
         assert!(inside(value.0 + value.2, value.1 + value.3, hud));
     }
-    for i in 0..5 {
+    for i in 1..5 {
         let value = hud_dyn_value_rect_at(&b, graph_db, i, gx, gw);
         let field = hud_dyn_field_rect_at(&b, graph_db, i, gx, gw);
         assert!(inside(value.0, value.1, field));
@@ -509,4 +519,218 @@ fn eq_curve_samples_notch_zero_instead_of_skipping_it() {
         coarse_min > sampled_min + 10.0,
         "coarse grid stayed at {coarse_min}, sampled {sampled_min}"
     );
+}
+
+#[test]
+fn dynamic_range_curve_mirrors_boost_and_cut_at_the_endpoint() {
+    for (gain, range) in [(6.0, 12.0), (-6.0, -12.0)] {
+        let b = Band {
+            freq: 1000.0,
+            gain,
+            range,
+            dynamic: true,
+            ..Band::default()
+        };
+        let original = BandCoeffs::make(&b, 48000.0);
+        let endpoint = BandCoeffs::make(&range_band(&b), 48000.0);
+        for freq in [100.0, 500.0, 1000.0, 2000.0, 10000.0] {
+            assert!(
+                (original.response(freq, 48000.0) + endpoint.response(freq, 48000.0)).abs() < 1e-6
+            );
+        }
+        assert_eq!(b.gain, gain);
+    }
+}
+
+#[test]
+fn dynamic_range_curve_supports_zero_gain_and_both_range_directions() {
+    for (gain, range) in [
+        (0.0, 8.0),
+        (0.0, -8.0),
+        (6.0, 3.0),
+        (-6.0, -3.0),
+        (6.0, 0.0),
+    ] {
+        let b = Band {
+            freq: 1000.0,
+            gain,
+            range,
+            dynamic: true,
+            ..Band::default()
+        };
+        let endpoint = range_band(&b);
+        let coeff = BandCoeffs::make(&endpoint, 48000.0);
+        assert!((coeff.response(b.freq, 48000.0) - (gain - range)).abs() < 1e-6);
+        assert_eq!(endpoint.freq, b.freq);
+        assert_eq!(endpoint.q, b.q);
+    }
+}
+
+#[test]
+fn node_outer_circle_is_not_a_range_or_threshold_handle() {
+    for dynamic in [false, true] {
+        let b = Band {
+            id: 1,
+            freq: 1000.0,
+            gain: 6.0,
+            range: 12.0,
+            dynamic,
+            threshold: 0.0,
+            ..Band::default()
+        };
+        let x = freq_x_at(b.freq, GX, GW);
+        let y = db_y(b.gain, 24.0);
+        for (dx, dy) in [
+            (12.0, 0.0),
+            (-12.0, 0.0),
+            (0.0, 12.0),
+            (0.0, -12.0),
+            (15.5, 0.0),
+        ] {
+            assert!(node_handle_hit(&b, x + dx, y + dy, 24.0, GX, GW));
+            assert!(
+                !range_handle_hit(&b, x + dx, y + dy, 24.0, GX, GW, Some(b.id)),
+                "range must not steal the node's outer circle"
+            );
+            assert!(
+                !threshold_handle_hit(&b, x + dx, y + dy, 24.0, GX, GW, Some(b.id)),
+                "threshold must not steal the node's outer circle"
+            );
+        }
+    }
+}
+
+#[test]
+fn disabled_dynamics_has_no_range_drag_target() {
+    let b = Band {
+        id: 1,
+        freq: 1000.0,
+        gain: 6.0,
+        range: 12.0,
+        dynamic: false,
+        ..Band::default()
+    };
+    let x = freq_x_at(b.freq, GX, GW);
+    let node_y = db_y(b.gain, 24.0);
+    let range_y = db_y(b.gain - b.range, 24.0);
+    for selected in [None, Some(b.id)] {
+        for y in [node_y, (node_y + range_y) * 0.5, range_y] {
+            for dx in [0.0, 10.0, NODE_HIT_R] {
+                assert!(!range_handle_hit(&b, x + dx, y, 24.0, GX, GW, selected));
+                assert!(!range_end_hit(&b, x + dx, y, 24.0, GX, GW, selected));
+            }
+        }
+    }
+}
+
+#[test]
+fn range_drag_reaches_both_graph_edges() {
+    for scale in SCALES {
+        for gain in [-scale, 0.0, scale] {
+            for edge in [-scale, scale] {
+                let range = snap_dyn_range(gain, db_y(edge, scale), scale);
+                let mut band = Band {
+                    gain,
+                    range,
+                    ..Band::default()
+                };
+                band.sanitize();
+                assert!((band.gain - band.range - edge).abs() < 0.0001);
+            }
+        }
+    }
+}
+
+#[test]
+fn cmd_ratio_uses_threshold_meter_travel_without_changing_threshold() {
+    let b = Band {
+        id: 1,
+        dynamic: true,
+        gain: -18.0,
+        range: 1.0,
+        threshold: -42.0,
+        ratio: 10.5,
+        ..Band::default()
+    };
+    let control = dynamics_control_band(&b, true);
+    let geom = dyn_meter_geom(&control, 24.0, GX, GW);
+    assert!((control.threshold + 30.0).abs() < 1e-9);
+    assert_eq!(b.threshold, -42.0);
+    assert!(threshold_handle_hit(
+        &control,
+        geom.x,
+        geom.thresh_y,
+        24.0,
+        GX,
+        GW,
+        Some(b.id)
+    ));
+    assert!((1.0 + 19.0 * (geom.y_to_threshold(geom.y60) + 60.0) / 60.0 - 1.0).abs() < 1e-9);
+    assert!((1.0 + 19.0 * (geom.y_to_threshold(geom.y0) + 60.0) / 60.0 - 20.0).abs() < 1e-9);
+    assert_eq!(dynamics_control_band(&b, false), b);
+}
+
+#[test]
+fn curved_range_grips_are_grabbable_at_high_q() {
+    let b = Band {
+        id: 1,
+        dynamic: true,
+        gain: 18.0,
+        range: 36.0,
+        q: 18.0,
+        ..Band::default()
+    };
+    let graph = (GX, GW, 24.0);
+    let rates = (48000.0, 48000.0);
+    let dots = range_grip_points(&b, graph, rates);
+    for (i, &(x, y)) in dots.iter().enumerate() {
+        assert!(range_grip_hit(&b, x, y, graph, rates));
+        for &(other_x, other_y) in dots.iter().skip(i + 1) {
+            assert!((x - other_x).hypot(y - other_y) >= 4.0 - 0.001);
+        }
+    }
+    let off = Band {
+        dynamic: false,
+        ..b
+    };
+    for (x, y) in range_grip_points(&off, graph, rates) {
+        assert!(!range_grip_hit(&off, x, y, graph, rates));
+    }
+}
+
+#[test]
+fn crowded_range_grips_merge_at_their_midpoint() {
+    assert_eq!(
+        coalesce_range_grips(vec![(0.0, 0.0), (2.0, 0.0), (10.0, 0.0)]),
+        vec![(1.0, 0.0), (10.0, 0.0)]
+    );
+}
+
+#[test]
+fn range_grip_columns_keep_tangent_spacing_on_a_steep_curve() {
+    let curve = |x: f32| 3.0 * x;
+    let spacing = 7.5;
+    let anchors: [(f32, f32); 4] = std::array::from_fn(|col| {
+        let x = curve_x_at_arc_distance(&curve, 0.0, (col as f32 - 1.5) * spacing);
+        (x, curve(x))
+    });
+    for pair in anchors.windows(2) {
+        assert!(((pair[1].0 - pair[0].0).hypot(pair[1].1 - pair[0].1) - spacing).abs() < 0.01);
+        assert!((pair[1].0 - pair[0].0) < spacing * 0.5);
+    }
+
+    let bend = |x: f32| 0.4 * x * x;
+    let bent_xs: [f32; 4] = std::array::from_fn(|col| {
+        curve_x_at_arc_distance(&bend, 0.0, (col as f32 - 1.5) * spacing)
+    });
+    for pair in bent_xs.windows(2) {
+        let step = (pair[1] - pair[0]) / 128.0;
+        let length: f32 = (0..128)
+            .map(|i| {
+                let x = pair[0] + i as f32 * step;
+                step.hypot(bend(x + step) - bend(x))
+            })
+            .sum();
+        assert!((length - spacing).abs() < 0.05);
+    }
 }

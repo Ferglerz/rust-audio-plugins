@@ -8,6 +8,57 @@ impl TapeStopView {
             let mouse_x = (cx.mouse().cursorx - bounds.x) / scale;
             let mouse_y = (cx.mouse().cursory - bounds.y) / scale;
 
+            if let WindowEvent::MouseScroll(_, dy) = window_event {
+                if *dy != 0.0 {
+                    if let Some(id) = self.readout_at(mouse_x, mouse_y) {
+                        if self.edit.is_some() { self.commit_edit(cx); }
+                        let step = if matches!(id, KnobId::OverrideCc | KnobId::OverrideNote) { dy.signum() / 127.0 } else { *dy * if cx.modifiers().shift() {0.001} else {0.01} };
+                        self.emit_knob_norm(cx, id, (self.get_knob_norm(id) + step).clamp(0.0, 1.0));
+                        meta.consume();
+                        cx.needs_redraw();
+                        return;
+                    }
+                }
+            }
+
+            if let Some(mut press) = self.value_press {
+                match window_event {
+                    WindowEvent::MouseMove(_, _) => {
+                        if press.update(mouse_x, mouse_y) {
+                            self.value_press = None;
+                            self.drag = Some(DragState::Value {
+                                id: press.target,
+                                start_x: press.origin.0,
+                                start_y: press.origin.1,
+                                start_norm: self.get_knob_norm(press.target),
+                            });
+                        } else {
+                            self.value_press = Some(press);
+                            return;
+                        }
+                    }
+                    WindowEvent::MouseUp(MouseButton::Left) => {
+                        self.value_press = None;
+                        cx.release();
+                        if press.released_as_click(mouse_x, mouse_y) {
+                            let (_, value, _) = self.knob_info(press.target);
+                            self.start_edit(cx, press.target, press.rect, value);
+                        }
+                        meta.consume();
+                        cx.needs_redraw();
+                        return;
+                    }
+                    WindowEvent::FocusOut
+                    | WindowEvent::KeyDown(Code::Escape, _)
+                    | WindowEvent::MouseDown(MouseButton::Right) => {
+                        self.value_press = None;
+                        cx.release();
+                        cx.needs_redraw();
+                        return;
+                    }
+                    _ => return,
+                }
+            }
             if self.edit.is_some() {
                 match window_event {
                     WindowEvent::CharInput(c) => {
@@ -109,8 +160,12 @@ impl TapeStopView {
                     }
 
                     if Self::inside(mouse_x, mouse_y, DROP_TIME_READOUT) {
-                        let (_, val_str, _) = self.knob_info(KnobId::DropTime);
-                        self.start_edit(cx, KnobId::DropTime, DROP_TIME_READOUT, val_str);
+                        self.press_value(
+                            cx,
+                            KnobId::DropTime,
+                            DROP_TIME_READOUT,
+                            (mouse_x, mouse_y),
+                        );
                         cx.needs_redraw();
                         return;
                     }
@@ -142,8 +197,7 @@ impl TapeStopView {
                         }
                         if Self::inside(mouse_x, mouse_y, midi_value_rect()) {
                             let id = self.midi_number_id();
-                            let (_, val_str, _) = self.knob_info(id);
-                            self.start_edit(cx, id, midi_value_rect(), val_str);
+                            self.press_value(cx, id, midi_value_rect(), (mouse_x, mouse_y));
                             cx.needs_redraw();
                             return;
                         }
@@ -152,8 +206,7 @@ impl TapeStopView {
                             let val_r = axis_value_rect(r);
                             let bar_r = axis_bar_rect(r);
                             if Self::inside(mouse_x, mouse_y, val_r) {
-                                let (_, val_str, _) = self.knob_info(id);
-                                self.start_edit(cx, id, val_r, val_str);
+                                self.press_value(cx, id, val_r, (mouse_x, mouse_y));
                                 cx.needs_redraw();
                                 return;
                             }
@@ -176,8 +229,7 @@ impl TapeStopView {
                     if self.knob_enabled(KnobId::RestartThresh) {
                         let val_r = trigger_value_rect();
                         if Self::inside(mouse_x, mouse_y, val_r) {
-                            let (_, val_str, _) = self.knob_info(KnobId::RestartThresh);
-                            self.start_edit(cx, KnobId::RestartThresh, val_r, val_str);
+                            self.press_value(cx, KnobId::RestartThresh, val_r, (mouse_x, mouse_y));
                             cx.needs_redraw();
                             return;
                         }
@@ -249,8 +301,9 @@ impl TapeStopView {
                     }
                 }
 
-                WindowEvent::MouseUp(MouseButton::Left) => {
+                WindowEvent::MouseUp(MouseButton::Left) | WindowEvent::FocusOut => {
                     self.drag = None;
+                    cx.release();
                     cx.needs_redraw();
                 }
 
@@ -282,6 +335,11 @@ impl TapeStopView {
                     }
 
                     match self.drag {
+                        Some(DragState::Value { id, start_x, start_y, start_norm }) => {
+                            let delta = pleasant_ui::pointer::readout_drag_delta(mouse_x - start_x, mouse_y - start_y, cx.modifiers().shift());
+                            self.emit_knob_norm(cx, id, (start_norm + delta).clamp(0.0, 1.0));
+                            cx.needs_redraw();
+                        }
                         Some(DragState::Slider {
                             id,
                             start_x,

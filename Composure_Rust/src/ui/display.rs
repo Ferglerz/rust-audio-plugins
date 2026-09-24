@@ -129,6 +129,7 @@ struct ReadoutInner {
 pub struct HistogramBuffer {
     data: [f32; HISTOGRAM_LEN],
     pos: usize,
+    len: usize,
 }
 
 impl Default for HistogramBuffer {
@@ -136,6 +137,7 @@ impl Default for HistogramBuffer {
         Self {
             data: [0.0; HISTOGRAM_LEN],
             pos: 0,
+            len: 0,
         }
     }
 }
@@ -144,14 +146,29 @@ impl HistogramBuffer {
     pub fn push(&mut self, value: f32) {
         self.data[self.pos] = value;
         self.pos = (self.pos + 1) % HISTOGRAM_LEN;
+        self.len = (self.len + 1).min(HISTOGRAM_LEN);
     }
 
     pub fn sample_at_age(&self, age: usize) -> f32 {
-        if age >= HISTOGRAM_LEN {
-            return 0.0;
+        if age >= self.len {
+            return f32::NEG_INFINITY;
         }
         let idx = (self.pos + HISTOGRAM_LEN - 1 - age) % HISTOGRAM_LEN;
         self.data[idx]
+    }
+}
+
+#[cfg(test)]
+mod histogram_tests {
+    use super::HistogramBuffer;
+
+    #[test]
+    fn empty_history_is_not_drawable_audio() {
+        let mut history = HistogramBuffer::default();
+        assert_eq!(history.sample_at_age(0), f32::NEG_INFINITY);
+        history.push(-18.0);
+        assert_eq!(history.sample_at_age(0), -18.0);
+        assert_eq!(history.sample_at_age(1), f32::NEG_INFINITY);
     }
 }
 
@@ -165,6 +182,7 @@ struct BlockVisualInner {
 
 /// Shared between audio thread and editor.
 pub struct UiDisplay {
+    pub sample_rate: AtomicF32Crate,
     pub detector_db: AtomicF32Crate,
     pub gr_db: AtomicF32Crate,
     /// Interior graph point count for overlay label.
@@ -190,6 +208,7 @@ pub struct UiDisplay {
 impl Default for UiDisplay {
     fn default() -> Self {
         Self {
+            sample_rate: AtomicF32Crate::new(48000.0),
             detector_db: AtomicF32Crate::new(0.0),
             gr_db: AtomicF32Crate::new(0.0),
             graph_interior_points: std::sync::atomic::AtomicU32::new(4),
@@ -222,8 +241,7 @@ impl Default for UiDisplay {
 
 impl UiDisplay {
     pub fn set_graph_hint(&self, visible: bool) {
-        self.graph_hint_visible
-            .store(visible, Ordering::Relaxed);
+        self.graph_hint_visible.store(visible, Ordering::Relaxed);
     }
 
     pub fn toggle_debug(&self) {
@@ -251,8 +269,7 @@ impl UiDisplay {
         self.debug_target_gr.store(target_gr_db, Ordering::Relaxed);
         self.debug_lut_threshold
             .store(lut_threshold_db, Ordering::Relaxed);
-        self.debug_latency
-            .store(latency_samples, Ordering::Relaxed);
+        self.debug_latency.store(latency_samples, Ordering::Relaxed);
         self.debug_version.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -285,8 +302,7 @@ impl UiDisplay {
     pub fn sync_graph_points(&self, num_points: usize) {
         self.graph_interior_points
             .store(num_points.saturating_sub(2) as u32, Ordering::Relaxed);
-        self.graph_points_version
-            .fetch_add(1, Ordering::Relaxed);
+        self.graph_points_version.fetch_add(1, Ordering::Relaxed);
     }
 
     fn bump_readout(&self) {
@@ -362,8 +378,15 @@ impl UiDisplay {
     where
         F: FnOnce(&[DotTrail]) -> R,
     {
-        if let (Ok(mut scratch), Ok(visuals)) = (self.dot_scratch.write(), self.block_visuals.read()) {
-            visuals.dots.collect_active(&mut scratch, |val, age| DotTrail { input_db: val, age_secs: age });
+        if let (Ok(mut scratch), Ok(visuals)) =
+            (self.dot_scratch.write(), self.block_visuals.read())
+        {
+            visuals
+                .dots
+                .collect_active(&mut scratch, |val, age| DotTrail {
+                    input_db: val,
+                    age_secs: age,
+                });
             f(&scratch)
         } else {
             f(&[])
@@ -380,8 +403,15 @@ impl UiDisplay {
     where
         F: FnOnce(&[TrailLine]) -> R,
     {
-        if let (Ok(mut scratch), Ok(visuals)) = (self.trail_scratch.write(), self.block_visuals.read()) {
-            visuals.trails.collect_active(&mut scratch, |val, age| TrailLine { gr_db: val, age_secs: age });
+        if let (Ok(mut scratch), Ok(visuals)) =
+            (self.trail_scratch.write(), self.block_visuals.read())
+        {
+            visuals
+                .trails
+                .collect_active(&mut scratch, |val, age| TrailLine {
+                    gr_db: val,
+                    age_secs: age,
+                });
             f(&scratch)
         } else {
             f(&[])

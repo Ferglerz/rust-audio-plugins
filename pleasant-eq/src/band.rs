@@ -1,5 +1,10 @@
 use pleasant_dsp::filters::BiquadKind;
 
+/// Maximum static EQ gain supported by the editor and processor.
+pub const MAX_GAIN_DB: f64 = 72.0;
+/// A dynamic endpoint can span from one gain limit to the opposite limit.
+pub const MAX_RANGE_DB: f64 = MAX_GAIN_DB * 2.0;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EqShape {
     Bell,
@@ -72,13 +77,13 @@ impl BandSettings {
     pub fn sanitize(&mut self) {
         self.order = self.order.clamp(1, 8);
         sanitize(&mut self.frequency_hz, 20.0, 20_000.0, 1_000.0);
-        sanitize(&mut self.gain_db, -24.0, 24.0, 0.0);
+        sanitize(&mut self.gain_db, -MAX_GAIN_DB, MAX_GAIN_DB, 0.0);
         sanitize(&mut self.q, 0.15, 18.0, 1.0);
         sanitize(&mut self.threshold_db, -60.0, 0.0, -24.0);
         sanitize(&mut self.ratio, 1.0, 20.0, 3.0);
         sanitize(&mut self.attack_ms, 0.1, 200.0, 15.0);
         sanitize(&mut self.release_ms, 10.0, 2_000.0, 140.0);
-        sanitize(&mut self.range_db, -24.0, 24.0, 6.0);
+        sanitize(&mut self.range_db, -MAX_RANGE_DB, MAX_RANGE_DB, 6.0);
     }
 }
 

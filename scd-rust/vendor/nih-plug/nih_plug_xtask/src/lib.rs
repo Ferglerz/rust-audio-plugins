@@ -152,9 +152,8 @@ pub fn main_with_args(command_name: &str, args: impl IntoIterator<Item = String>
 
 /// Change the current directory into the Cargo workspace's root.
 ///
-/// This is using a heuristic to find the workspace root. It considers all ancestor directories of
-/// either `CARGO_MANIFEST_DIR` or the current directory, and finds the leftmost one containing a
-/// `Cargo.toml` file.
+/// Ask Cargo for the workspace root so a workspace nested in another repository
+/// does not accidentally select the outer manifest.
 pub fn chdir_workspace_root() -> Result<()> {
     // This is either the directory of the xtask binary when using `nih_plug_xtask` normally, or any
     // random project when using it through `cargo nih-plug`.
@@ -166,18 +165,12 @@ pub fn chdir_workspace_root() -> Result<()> {
              found",
         )?;
 
-    let workspace_root = project_dir
-        .ancestors()
-        .filter(|dir| dir.join("Cargo.toml").exists())
-        // The ancestors are ordered starting from `project_dir` going up to the filesystem root. So
-        // this is the leftmost matching ancestor.
-        .last()
-        .with_context(|| {
-            format!(
-                "Could not find a 'Cargo.toml' file in '{}' or any of its parent directories",
-                project_dir.display()
-            )
-        })?;
+    let workspace_root = cargo_metadata::MetadataCommand::new()
+        .manifest_path(project_dir.join("Cargo.toml"))
+        .no_deps()
+        .exec()
+        .context("Could not determine the Cargo workspace root")?
+        .workspace_root;
 
     std::env::set_current_dir(workspace_root)
         .context("Could not change to workspace root directory")

@@ -9,7 +9,12 @@ pub fn gr_vg_color(gr: f32, alpha: f32) -> VgColor {
     if gr < 0.0 {
         VgColor::rgbaf(theme::GR_CUT_R, theme::GR_CUT_G, theme::GR_CUT_B, alpha)
     } else {
-        VgColor::rgbaf(theme::GR_BOOST_R, theme::GR_BOOST_G, theme::GR_BOOST_B, alpha)
+        VgColor::rgbaf(
+            theme::GR_BOOST_R,
+            theme::GR_BOOST_G,
+            theme::GR_BOOST_B,
+            alpha,
+        )
     }
 }
 
@@ -47,12 +52,7 @@ pub fn gr_bar_rect(gr: f32, bounds: BoundingBox, px_per_db: f32) -> Option<(f32,
 }
 
 /// Horizontal GR trail segment Y, clamped toward `center_y` (0 dB).
-pub fn gr_trail_line_y(
-    gr: f32,
-    bounds: BoundingBox,
-    px_per_db: f32,
-    center_y: f32,
-) -> Option<f32> {
+pub fn gr_trail_line_y(gr: f32, bounds: BoundingBox, px_per_db: f32, center_y: f32) -> Option<f32> {
     let gr_height = (gr.abs() * px_per_db).min(bounds.h);
     if gr_height < 0.5 {
         return None;

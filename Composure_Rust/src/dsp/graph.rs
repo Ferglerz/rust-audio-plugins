@@ -2,7 +2,7 @@
 
 use super::constants::{
     BEZIER_STEPS, GRAPH_MAX_DB, GRAPH_MIN_DB, GRAPH_RANGE_DB, MAX_CURVE_SEGMENTS, MAX_POINTS,
-    MIN_POINTS, MOUSE_CLICK_RADIUS,
+    MIN_POINTS,
 };
 use serde::{Deserialize, Serialize};
 
@@ -92,10 +92,8 @@ impl CompressionGraph {
             let point_idx = i * 2;
             let norm_x = (self.points[point_idx] - old_min_db) / old_range_db;
             let norm_y = (self.points[point_idx + 1] - old_min_db) / old_range_db;
-            self.points[point_idx] =
-                self.min_db + norm_x.clamp(0.0, 1.0) * new_range_db;
-            self.points[point_idx + 1] =
-                self.min_db + norm_y.clamp(0.0, 1.0) * new_range_db;
+            self.points[point_idx] = self.min_db + norm_x.clamp(0.0, 1.0) * new_range_db;
+            self.points[point_idx + 1] = self.min_db + norm_y.clamp(0.0, 1.0) * new_range_db;
         }
 
         self.sort_points();
@@ -255,7 +253,13 @@ impl CompressionGraph {
         let invisible2_x = curr_x + (next_x - curr_x) * curve_factor;
         let invisible2_y = curr_y + (next_y - curr_y) * curve_factor;
         (
-            invisible1_x, invisible1_y, curr_x, curr_y, curr_x, curr_y, invisible2_x,
+            invisible1_x,
+            invisible1_y,
+            curr_x,
+            curr_y,
+            curr_x,
+            curr_y,
+            invisible2_x,
             invisible2_y,
         )
     }
@@ -305,13 +309,21 @@ impl CompressionGraph {
         let mut i = 0;
         while i < self.num_points - 1 {
             let next_idx = i + 1;
-            let next_point_has_curve = self.is_valid_curve_point(next_idx)
-                && self.get_curve_amount(next_idx) > 0.0;
+            let next_point_has_curve =
+                self.is_valid_curve_point(next_idx) && self.get_curve_amount(next_idx) > 0.0;
 
             if next_point_has_curve {
                 let curve_amt = self.get_curve_amount(next_idx);
-                let (mut p0_x_db, mut p0_y_db, p1_x_db, p1_y_db, p2_x_db, p2_y_db, mut p3_x_db, mut p3_y_db) =
-                    self.calculate_bezier_control_points(next_idx, curve_amt);
+                let (
+                    mut p0_x_db,
+                    mut p0_y_db,
+                    p1_x_db,
+                    p1_y_db,
+                    p2_x_db,
+                    p2_y_db,
+                    mut p3_x_db,
+                    mut p3_y_db,
+                ) = self.calculate_bezier_control_points(next_idx, curve_amt);
 
                 // Check overlap with previous curve
                 if i > 0 && self.is_valid_curve_point(i) && self.get_curve_amount(i) > 0.0 {
@@ -454,10 +466,7 @@ impl CompressionGraph {
     }
 
     pub fn delete_point(&mut self, point_index: usize) -> bool {
-        if point_index == 0
-            || point_index >= self.num_points - 1
-            || self.num_points <= MIN_POINTS
-        {
+        if point_index == 0 || point_index >= self.num_points - 1 || self.num_points <= MIN_POINTS {
             return false;
         }
         for i in point_index..self.num_points - 1 {
@@ -494,66 +503,6 @@ impl CompressionGraph {
         self.set_curve_amount(point_index, 0.0);
         self.update_corner_points();
         self.invalidate();
-    }
-
-    pub fn find_interior_point_at(&self, local_x: f32, local_y: f32, width: f32, height: f32) -> Option<usize> {
-        self.find_interior_point_at_with_pad(local_x, local_y, width, height, 0.0)
-    }
-
-    pub fn find_interior_point_at_with_pad(
-        &self,
-        local_x: f32,
-        local_y: f32,
-        width: f32,
-        height: f32,
-        pad_db: f64,
-    ) -> Option<usize> {
-        self.find_closest_interior_point_with_pad(local_x, local_y, width, height, pad_db)
-            .filter(|(_, dist_sq)| *dist_sq < (MOUSE_CLICK_RADIUS as f32).powi(2))
-            .map(|(i, _)| i)
-    }
-
-    pub fn is_too_close_to_points_with_pad(
-        &self,
-        local_x: f32,
-        local_y: f32,
-        width: f32,
-        height: f32,
-        pad_db: f64,
-    ) -> bool {
-        self.find_closest_interior_point_with_pad(local_x, local_y, width, height, pad_db)
-            .map_or(false, |(_, dist_sq)| dist_sq < ((MOUSE_CLICK_RADIUS as f32) * 2.0).powi(2))
-    }
-
-    pub fn find_closest_interior_point_with_pad(
-        &self,
-        local_x: f32,
-        local_y: f32,
-        width: f32,
-        height: f32,
-        pad_db: f64,
-    ) -> Option<(usize, f32)> {
-        let mut closest_dist_sq = f32::MAX;
-        let mut closest_idx = None;
-        for i in 1..self.num_points - 1 {
-            let (px, py) = crate::ui::graph_display::db_to_pixel_with_pad(
-                self.get_point_x(i),
-                self.get_point_y(i),
-                width,
-                height,
-                self.min_db,
-                self.range_db,
-                pad_db,
-            );
-            let dx = local_x - px;
-            let dy = local_y - py;
-            let dist_sq = dx * dx + dy * dy;
-            if dist_sq < closest_dist_sq {
-                closest_dist_sq = dist_sq;
-                closest_idx = Some(i);
-            }
-        }
-        closest_idx.map(|i| (i, closest_dist_sq))
     }
 
     /// Return cached Bezier segments, rebuilding when dirty.

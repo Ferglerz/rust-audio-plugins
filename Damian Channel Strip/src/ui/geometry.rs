@@ -56,6 +56,22 @@ impl StripView {
     pub(super) fn hud_value_rect_lift(&self, b: &LiftBand, i: usize) -> (f32, f32, f32, f32) {
         hud_value_rect_lift_at(b, self.graph_db, i, self.gx(), self.gw())
     }
+    pub(super) fn highlighted_dyn_field(&self, b: &Band) -> Option<usize> {
+        if !self.band_dyn_page.get() {
+            return None;
+        }
+        (2..5).find(|&i| {
+            let target = ValueTarget::Band(i + 2);
+            self.drag == Some(Target::Band(i))
+                || self.drag == Some(Target::Value(target))
+                || self.edit.as_ref().is_some_and(|edit| edit.target == target)
+                || self.value_press.is_some_and(|press| press.target == target)
+                || self
+                    .idle_hover()
+                    .is_some_and(|(x, y)| inside(x, y, self.hud_dyn_field_rect(b, i)))
+        })
+    }
+
     pub(super) fn hud_dyn_field_rect(&self, b: &Band, i: usize) -> (f32, f32, f32, f32) {
         hud_dyn_field_rect_at(b, self.graph_db, i, self.gx(), self.gw())
     }
@@ -133,7 +149,7 @@ impl StripView {
     pub(super) fn eq_power_rect(&self) -> (f32, f32, f32, f32) {
         let eq_x = self.eq_bounds().0;
         (
-            eq_x + 14.0,
+            eq_x + MODULE_HEADER_INSET,
             module_header_ctrl_y(),
             24.0,
             MODULE_HEADER_CTRL,
@@ -146,7 +162,7 @@ impl StripView {
     pub(super) fn eq_header_listen_sc_rect(&self) -> (f32, f32, f32, f32) {
         let eq_b = self.eq_bounds();
         (
-            eq_b.0 + eq_b.2 - 14.0 - 90.0,
+            eq_b.0 + eq_b.2 - MODULE_HEADER_INSET - 90.0,
             module_header_ctrl_y(),
             90.0,
             MODULE_HEADER_CTRL,
@@ -195,19 +211,34 @@ impl StripView {
     }
     pub(super) fn dyn_power_button_rect(&self) -> (f32, f32, f32, f32) {
         let dx = self.dyn_bounds().0;
-        (dx + 14.0, module_header_ctrl_y(), 24.0, MODULE_HEADER_CTRL)
+        (
+            dx + MODULE_HEADER_INSET,
+            module_header_ctrl_y(),
+            24.0,
+            MODULE_HEADER_CTRL,
+        )
     }
     pub(super) fn pse_power_button_rect(&self) -> (f32, f32, f32, f32) {
         let px = self.pse_bounds().0;
-        (px + 14.0, module_header_ctrl_y(), 24.0, MODULE_HEADER_CTRL)
+        (
+            px + MODULE_HEADER_INSET,
+            module_header_ctrl_y(),
+            24.0,
+            MODULE_HEADER_CTRL,
+        )
     }
     pub(super) fn wall_power_button_rect(&self) -> (f32, f32, f32, f32) {
         let wx = self.wall_bounds().0;
-        (wx + 14.0, module_header_ctrl_y(), 24.0, MODULE_HEADER_CTRL)
+        (
+            wx + MODULE_HEADER_INSET,
+            module_header_ctrl_y(),
+            24.0,
+            MODULE_HEADER_CTRL,
+        )
     }
     pub(super) fn pse_detect_mode_rect(&self) -> (f32, f32, f32, f32) {
-        let px = self.pse_bounds().0;
-        (px + 68.0, 316.0, 56.0, 24.0)
+        let r = self.pse_knob_rect(10);
+        (r.0, r.1 + r.3 + 2.0, r.2, 24.0)
     }
     pub(super) fn dyn_main_thresh_slider_rect(&self) -> (f32, f32, f32, f32) {
         let dx = self.dyn_bounds().0;
@@ -270,13 +301,16 @@ impl StripView {
         )
     }
     pub(super) fn pse_knob_rect(&self, i: usize) -> (f32, f32, f32, f32) {
-        let px = self.pse_bounds().0;
+        let slots = stacked_knob_slots(self.pse_bounds().0, PSE_W, 4);
         match i {
-            8 => (px + 6.0, 226.0, 56.0, 86.0),
-            2 => (px + 6.0, 356.0, 56.0, 86.0),
-            10 => (px + 68.0, 226.0, 56.0, 86.0),
-            _ => (px + 6.0, 226.0, 56.0, 86.0),
+            10 => slots[1],
+            2 => (slots[2].0, slots[2].1 + 30.0, slots[2].2, slots[2].3),
+            _ => slots[0],
         }
+    }
+    pub(super) fn pse_vad_meter_rect(&self) -> (f32, f32, f32, f32) {
+        let r = self.pse_knob_rect(2);
+        (r.0 + 8.0, r.1 + r.3 + 12.0, r.2 - 16.0, 10.0)
     }
     pub(super) fn wall_knob_rect(&self, i: usize) -> (f32, f32, f32, f32) {
         let wx = self.wall_bounds().0;
@@ -409,7 +443,7 @@ impl StripView {
             ValueTarget::Global(_) => GOLD,
             ValueTarget::Band(_) => self
                 .selected
-                .map(|id| COLORS[(band_display_num(id) as usize - 1) % COLORS.len()])
+                .map(|id| BAND_COLORS[(band_display_num(id) as usize - 1) % BAND_COLORS.len()])
                 .unwrap_or(TEAL),
             ValueTarget::Lift(_) => LIFT_COLOR,
         }

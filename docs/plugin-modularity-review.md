@@ -1,6 +1,8 @@
-# Plugin modularity review
+# Plugin modularity review — 21 September baseline and rollout
 
 Reviewed 21 September 2026. Scope: Damian Channel Strip, Flattery, Tape Stop, SoundChef Drums (SCD), pleasant-ui, and SCD's core/packer crates. Source inspection and targeted SCD verification; no audio benchmarking or live DAW validation was performed. Counts below describe the initial checkout, before the SCD UI split, and include comments, blank lines, and inline tests. Vendored code, assets, build output, and external test directories are excluded from the counts.
+
+This document records the original extraction plan and its rollout. The file counts and dependency findings below describe the pre-rollout checkout; they are not a current inventory. Composure was outside this review's scope. The current repository review is recorded separately in `repository-review-2026-09-23.md`.
 
 ## Recommendation
 
@@ -18,7 +20,7 @@ Damian consumes shared EQ path and dynamics processors while retaining routing, 
 
 Headless consumers and lifecycle documentation live under `examples/` and [pleasant-libraries.md](/Users/ferg/GitHub/audio-plugins/docs/pleasant-libraries.md). `scripts/verify-modularity.sh` checks both workspaces without selecting vendored crates. External repository publication remains deferred.
 
-## Current shape
+## Initial shape before the rollout
 
 - **Damian:** 11,930 lines across 10 Rust source files. The reusable DSP exists, but is embedded in a plugin-specific engine, parameter schema, and large editor. Its UI entry file is 6,776 lines. `engine.rs` is 1,439 lines and `dsp.rs` is 1,296; about half of each latter file is its inline test module, so size alone overstates the implementation problem.
 - **Flattery:** 5,182 lines across 15 files. DSP is already divided into analyzer, filter bank, biquad, leveling, delay, telemetry, and tilt. Its UI controller is 2,051 lines and `graph.rs` another 1,283. The most important boundary problem is `Engine::tick` accepting the complete host parameter object, plus DSP importing pleasant-ui.
@@ -29,7 +31,7 @@ Headless consumers and lifecycle documentation live under `examples/` and [pleas
 
 The four main UI entry files alone contain 13,928 lines. This is a useful prioritization signal, not an estimate of removable duplication. The editors have substantially different behavior.
 
-## Dependency findings
+## Initial dependency findings before the rollout
 
 **DSP currently depends on UI.** [Flattery's engine](/Users/ferg/GitHub/audio-plugins/Flattery/src/dsp/engine.rs:14) imports conversion and spectrum operations from pleasant-ui. Its [tilt module](/Users/ferg/GitHub/audio-plugins/Flattery/src/dsp/tilt.rs:1) imports the blended frequency mapping, and [Damian's engine](</Users/ferg/GitHub/audio-plugins/Damian Channel Strip/src/engine.rs:10>) imports spectrum fall behavior. pleasant-ui itself depends on NIH-plug and Vizia. Extract these numerical functions into a host-independent crate and keep temporary re-exports in pleasant-ui so UI callers can migrate separately.
 

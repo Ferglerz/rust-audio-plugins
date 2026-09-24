@@ -3,3 +3,9 @@ name = "Damian Channel Strip"
 
 [flattery]
 name = "Flattery"
+
+[tape_stop]
+name = "Tape Stop"
+
+[openwurli-ui]
+name = "OpenWurli UI"

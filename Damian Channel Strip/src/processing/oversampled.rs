@@ -13,7 +13,7 @@ impl Oversampled {
         self.0.reset();
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(super) fn tick(&mut self, x: [f64; 2], bands: &mut [BandRuntime], sr: f64) -> [f64; 2] {
         self.tick_dual(x, bands, &mut [], sr, 1.0, 1.0)
     }

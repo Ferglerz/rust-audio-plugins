@@ -164,25 +164,15 @@ filter-param-slider {
 
 /* Pleasant skins share the original widget events and parameter bindings. */
 .pleasant .prog-mode-label { display: none; }
+.pleasant .parallax-label { display: none; }
+.pleasant .jsfx-button-label { display: none; }
+resize-handle { background-color: #00000000; border-width: 0; color: #00000000; }
 .pleasant .parallax-label, .pleasant .readout-slider-label { color: #8f99a4; font-size: 13; }
 .pleasant .control-readout { color: #e1bb65; font-size: 14; }
 .pleasant .jsfx-button-label { color: #e5e9ed; font-size: 13; }
 .light .parallax-label, .light .readout-slider-label { color: #5f6972; }
 .light .control-readout { color: #9e701c; }
 .light .jsfx-button-label { color: #1e252c; }
-.appearance-button {
-  background-color: #1b1f25;
-  color: #e1bb65;
-  border-width: 1px;
-  border-color: #3a4048;
-  border-radius: 0px;
-  font-size: 13;
-  child-space: 1s;
-}
-.appearance-button:hover { background-color: #2d323a; }
-
 .pleasant { font-family: "JetBrains Mono"; }
 .pleasant .jsfx-button-label { child-space: 1s; font-weight: normal; }
 .light .graph-axis-label { color: #5f6972; }
-.light .appearance-button { background-color: #e9e6df; color: #9e701c; border-color: #c8c4bb; }
-.light .appearance-button:hover { background-color: #d4d2cb; }

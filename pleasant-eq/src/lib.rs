@@ -7,7 +7,7 @@ mod linear_phase;
 mod oversampled;
 mod processor;
 
-pub use band::{BandSettings, EqShape};
+pub use band::{BandSettings, EqShape, MAX_GAIN_DB, MAX_RANGE_DB};
 #[cfg(feature = "linear-phase")]
 pub use linear_phase::LinearPhaseEq;
 #[cfg(feature = "natural-phase")]

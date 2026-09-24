@@ -82,38 +82,49 @@ fn hud_axis_row_sits_on_freq_axis_and_keeps_values_in_strip() {
     assert_eq!(HUD_Q_W, 84.0);
     assert_eq!(HUD_SHAPE_W, 172.0);
     assert_eq!(HUD_FREQ_W, 160.0);
-    assert_eq!(HUD_DYN_FIELD_H, 40.0);
+    assert_eq!(HUD_DYN_FIELD_H, 34.0);
     assert_eq!(MODULE_TITLE_SIZE, 15.0);
     assert_eq!(HUD_LABEL_SIZE, MODULE_TITLE_SIZE);
     assert_eq!(HUD_VALUE_SIZE, HUD_LABEL_SIZE);
     assert_eq!(HUD_SHAPE_TEXT, HUD_LABEL_SIZE);
     assert_eq!(BandMenu::Shape.text_size(), HUD_SHAPE_TEXT);
     assert_eq!(BandMenu::Order.text_size(), HUD_LABEL_SIZE);
-    assert_eq!(
-        BandMenu::Shape.row_h(),
-        dropdown_row_h(HUD_SHAPE_TEXT)
-    );
+    assert_eq!(BandMenu::Shape.row_h(), dropdown_row_h(HUD_SHAPE_TEXT));
     assert_eq!(SCALE_BUTTON_TEXT, 13.0);
     assert_eq!(PROCESS_BUTTON_TEXT, 11.0);
     assert_eq!(HUD_DYN_TEXT, 15.0);
     assert!(HUD_BTN >= 32.0);
     assert_eq!(HUD_BYPASS, MODULE_HEADER_CTRL);
     assert_eq!(HUD_BYPASS, 24.0);
-    for i in 0..5 {
+    for i in 1..5 {
         let field = hud_dyn_field_rect_at(&wide, 24.0, i, GX, GW);
         assert!(inside(field.0, field.1, main));
         assert!(inside(field.0 + field.2, field.1 + field.3, main));
-        assert_eq!(field.3, AXIS_STRIP_H);
+        assert_eq!(
+            field.3,
+            if i == 1 {
+                AXIS_STRIP_H
+            } else {
+                HUD_DYN_FIELD_H
+            }
+        );
+        if i != 1 {
+            assert!((field.1 + 16.0 - meter_value_y()).abs() < 0.01);
+            assert!(field.1 + field.3 <= MODULE_Y + MODULE_H - 10.0);
+        }
         let value = hud_dyn_value_rect_at(&wide, 24.0, i, GX, GW);
         assert!(inside(value.0, value.1, field));
         assert!(inside(value.0 + value.2, value.1 + value.3, field));
         assert!(value.0 > field.0 + 8.0);
     }
+    let range = hud_dyn_field_rect_at(&wide, 24.0, 1, GX, GW);
     let attack = hud_dyn_field_rect_at(&wide, 24.0, 3, GX, GW);
+    assert!(range.2 <= 116.0);
+    assert!(range.2 < attack.2);
     for i in 0..3 {
         let value = hud_value_rect_at(&wide, 24.0, i, GX, GW);
-        assert_eq!(value.1, attack.1);
-        assert_eq!(value.3, attack.3);
+        assert_eq!(value.1, main.1);
+        assert_eq!(value.3, main.3);
     }
     let cog = hud_cog_rect_at(GX, GW, main.1, main.3);
     let dyn_r = hud_dyn_btn_rect_at(GX, GW, main.1, main.3);
@@ -282,8 +293,7 @@ fn dual_eq_animation_math_and_id_ranges() {
     assert!((eased_sc - 1.5).abs() < 1e-6);
 }
 
-#[test]
-fn dynamics_routing_and_layout_geometry() {
+fn test_view() -> StripView {
     let params = Arc::new(StripParams::default());
     let shared = Shared::new(
         params.bands.clone(),
@@ -291,7 +301,7 @@ fn dynamics_routing_and_layout_geometry() {
         params.sc_eq_bands.clone(),
         params.lift_bands.clone(),
     );
-    let mut view = StripView {
+    StripView {
         params: params.clone(),
         shared,
         selected: None,
@@ -301,12 +311,14 @@ fn dynamics_routing_and_layout_geometry() {
         band_dyn_page: Cell::new(false),
         drag: None,
         hover: None,
+        command_down: false,
         font: Cell::new(None),
         signature: Cell::new(None),
         graph_db: 24.0,
         scale_menu: false,
         processing_menu: None,
         edit: None,
+        value_press: None,
         down: (0.0, 0.0),
         last_drag: (0.0, 0.0),
         pending_create: None,
@@ -336,10 +348,14 @@ fn dynamics_routing_and_layout_geometry() {
         pse_bypass_anim: ButtonAnim::new(),
         dyn_bypass_anim: ButtonAnim::new(),
         wall_bypass_anim: ButtonAnim::new(),
-        lift_badge_anim: ButtonAnim::new(),
         dyn_band_anim: ButtonAnim::new(),
         band_bypass_anim: ButtonAnim::new(),
-    };
+    }
+}
+
+#[test]
+fn dynamics_routing_and_layout_geometry() {
+    let mut view = test_view();
 
     // Post mode (default): PSE on the left, EQ in the middle, Dynamics on the right
     assert!(!view.is_pre());
@@ -366,12 +382,26 @@ fn dynamics_routing_and_layout_geometry() {
     assert!(view.dyn_bounds().0 + view.dyn_bounds().2 <= view.wall_bounds().0);
     assert_eq!(view.gx(), MARGIN + PSE_W + GAP + EQ_GRAPH_PAD_LEFT);
     assert_eq!(view.global_controls(), &[0]);
-    assert_eq!(PSE_CONTROLS_KNOBS, [8, 2, 10]);
+    assert_eq!(PSE_CONTROLS_KNOBS, [8, 10, 2]);
 
     let tab2 = view.eq_tab_2_rect();
     let tab_lift = view.eq_tab_lift_rect();
     let tab_sc = view.eq_tab_sc_rect();
     let bypass = view.eq_power_rect();
+    assert_eq!(EQ_W, 866.0);
+    assert_eq!(bypass.0 - view.eq_bounds().0, MODULE_HEADER_INSET);
+    assert_eq!(
+        view.pse_power_button_rect().0 - view.pse_bounds().0,
+        MODULE_HEADER_INSET
+    );
+    assert_eq!(
+        view.dyn_power_button_rect().0 - view.dyn_bounds().0,
+        MODULE_HEADER_INSET
+    );
+    assert_eq!(
+        view.wall_power_button_rect().0 - view.wall_bounds().0,
+        MODULE_HEADER_INSET
+    );
     let header_listen_sc = view.eq_header_listen_sc_rect();
     assert!(tab2.0 + tab2.2 < tab_lift.0);
     assert!(tab_lift.0 + tab_lift.2 < tab_sc.0);
@@ -412,11 +442,17 @@ fn dynamics_routing_and_layout_geometry() {
     assert_eq!(cog.1, module_header_ctrl_y());
     assert_eq!(cog.1, bypass.1);
     assert_eq!(cog.3, MODULE_HEADER_CTRL);
-    assert_eq!(cog.0, view.dyn_bounds().0 + DYN_W - 14.0 - 24.0);
+    assert_eq!(
+        cog.0,
+        view.dyn_bounds().0 + DYN_W - MODULE_HEADER_INSET - 24.0
+    );
     assert!(cog.0 > view.dyn_power_button_rect().0 + view.dyn_power_button_rect().2);
     let pse_cog = view.pse_cog_button_rect();
     assert_eq!(pse_cog.1, cog.1);
-    assert_eq!(pse_cog.0, view.pse_bounds().0 + PSE_W - 14.0 - 24.0);
+    assert_eq!(
+        pse_cog.0,
+        view.pse_bounds().0 + PSE_W - MODULE_HEADER_INSET - 24.0
+    );
     let scale_btn = view.scale_button_rect();
     assert_eq!(
         scale_btn.0 + scale_btn.2 * 0.5,
@@ -507,10 +543,10 @@ fn dynamics_routing_and_layout_geometry() {
     );
 
     view.pse_page.set(PsePage::Controls);
-    assert_eq!(view.pse_controls(), &[8, 2, 10]);
+    assert_eq!(view.pse_controls(), &[8, 10, 2]);
     let time_r = view.pse_knob_rect(10);
     let det_r = view.pse_detect_mode_rect();
-    assert_eq!(det_r.0, time_r.0);
+    assert_eq!(det_r.0 + det_r.2, time_r.0 + time_r.2);
     assert!(time_r.1 + time_r.3 <= det_r.1);
     assert!(inside(
         view.pse_bounds().0 + 20.0,
@@ -553,7 +589,10 @@ fn dynamics_routing_and_layout_geometry() {
     assert!(inside(even_r.0 + 8.0, even_r.1 + 8.0, view.wall_bounds()));
     let wall_cog = view.wall_cog_button_rect();
     assert_eq!(wall_cog.1, cog.1);
-    assert_eq!(wall_cog.0, view.wall_bounds().0 + WALL_W - 14.0 - 24.0);
+    assert_eq!(
+        wall_cog.0,
+        view.wall_bounds().0 + WALL_W - MODULE_HEADER_INSET - 24.0
+    );
     assert!(wall_cog.0 > view.wall_power_button_rect().0 + view.wall_power_button_rect().2);
 
     let params_pre = Arc::new(StripParams {
@@ -587,4 +626,99 @@ fn dynamics_routing_and_layout_geometry() {
         view.dyn_main_gr_meter_rect().0,
         pre_slider.0 + pre_slider.2 + 16.0
     );
+}
+
+#[test]
+fn node_takes_priority_over_solo_close_gap() {
+    let mut view = test_view();
+    let b = Band {
+        id: 1,
+        freq: 1000.0,
+        gain: -18.0,
+        range: 1.0,
+        dynamic: true,
+        ..Band::default()
+    };
+    *view.params.bands.lock().unwrap() = vec![b.clone()];
+    view.select(Some(b.id));
+    let x = view.freq_x(b.freq);
+    let y = db_y(b.gain, view.graph_db);
+    let layout = band_chrome_layout(&b, view.graph_db, view.gx(), view.gw(), true);
+    assert_eq!(layout, NodeChromeLayout::Flank);
+    for (dx, dy) in [
+        (0.0, 0.0),
+        (-12.0, 0.0),
+        (12.0, 0.0),
+        (0.0, -12.0),
+        (0.0, 12.0),
+    ] {
+        assert!(
+            !view.over_selected_hud(x + dx, y + dy),
+            "chrome must not block the node"
+        );
+    }
+    // The narrow gap outside the grab circle still consumes background clicks.
+    assert!(view.over_selected_hud(x + 17.0, y));
+    let (solo, close) = node_chrome_rects(x, y, layout, view.gx(), view.gw());
+    for r in [solo, close] {
+        assert!(view.over_selected_hud(r.0 + r.2 * 0.5, r.1 + r.3 * 0.5));
+    }
+}
+
+#[test]
+fn graph_expands_on_release_near_either_endpoint() {
+    let mut view = test_view();
+    for (gain, range, dynamic, expand) in [
+        (20.9, 0.0, false, false),
+        (21.0, 0.0, false, true),
+        (-21.0, 0.0, false, true),
+        (6.0, 27.0, true, true),
+        (-6.0, -27.0, true, true),
+        (6.0, 27.0, false, false),
+    ] {
+        *view.params.bands.lock().unwrap() = vec![Band {
+            id: 1,
+            gain,
+            range,
+            dynamic,
+            ..Band::default()
+        }];
+        view.set_graph_range(24.0);
+        view.drag = Some(Target::Range(1));
+        view.expand_graph_after_drag();
+        assert_eq!(view.graph_db, if expand { 36.0 } else { 24.0 });
+        assert_eq!(*view.params.graph_range.lock().unwrap(), view.graph_db);
+    }
+    view.params.bands.lock().unwrap()[0].gain = 6.0;
+    view.set_graph_range(6.0);
+    view.drag = Some(Target::Node(1));
+    view.expand_graph_after_drag();
+    assert_eq!(view.graph_db, 18.0);
+    view.set_graph_range(72.0);
+    view.params.bands.lock().unwrap()[0].gain = 72.0;
+    view.expand_graph_after_drag();
+    assert_eq!(view.graph_db, 72.0);
+}
+
+#[test]
+fn lift_dock_is_above_the_graph_and_pse_controls_stack() {
+    let view = test_view();
+    for i in 0..5 {
+        let r = view.band_rect(i);
+        assert_eq!(r.1, GY);
+        assert!(r.0 >= view.gx() && r.0 + r.2 <= view.gx() + view.gw());
+        assert!(r.1 + r.3 <= GY + LIFT_DOCK_H);
+    }
+    let hysteresis = view.pse_knob_rect(8);
+    let time = view.pse_knob_rect(10);
+    let mode = view.pse_detect_mode_rect();
+    let voice = view.pse_knob_rect(2);
+    let meter = view.pse_vad_meter_rect();
+    assert_eq!(hysteresis.0, time.0);
+    assert_eq!(time.0, voice.0);
+    assert!(hysteresis.1 + hysteresis.3 <= time.1);
+    assert!(time.1 + time.3 <= mode.1);
+    assert!(mode.1 + mode.3 <= voice.1);
+    assert!(voice.1 + voice.3 <= meter.1);
+    assert!(meter.1 + meter.3 + 18.0 < MODULE_Y + MODULE_H);
 }

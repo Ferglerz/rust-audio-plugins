@@ -1,6 +1,6 @@
 use std::ffi::c_void;
 
-use cocoa::appkit::{NSEvent, NSFilenamesPboardType, NSView, NSWindow};
+use cocoa::appkit::{NSEvent, NSFilenamesPboardType, NSView};
 use cocoa::base::{id, nil, BOOL, NO, YES};
 use cocoa::foundation::{NSArray, NSPoint, NSRect, NSSize, NSUInteger};
 

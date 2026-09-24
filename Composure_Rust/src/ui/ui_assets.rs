@@ -4,14 +4,22 @@ use nih_plug_vizia::vizia::image;
 use nih_plug_vizia::vizia::prelude::*;
 
 pub const KNOB: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/ui/knob.png"));
-pub const SWITCH_DN: &[u8] =
-    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/ui/switch_dn.png"));
-pub const SWITCH_UP: &[u8] =
-    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/ui/switch_up.png"));
-pub const FEEDBACK_ON: &[u8] =
-    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/ui/Feed/feedback_on.png"));
-pub const FEEDFWRD_OFF: &[u8] =
-    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/ui/Feed/feedfwrd_off.png"));
+pub const SWITCH_DN: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/ui/switch_dn.png"
+));
+pub const SWITCH_UP: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/ui/switch_up.png"
+));
+pub const FEEDBACK_ON: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/ui/Feed/feedback_on.png"
+));
+pub const FEEDFWRD_OFF: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/ui/Feed/feedfwrd_off.png"
+));
 pub const FADER_TOP: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/assets/ui/Paralax_Fader/para_horz_fader_top.png"

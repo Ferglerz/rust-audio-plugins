@@ -61,12 +61,12 @@ impl GlContext {
             NSOpenGLPFAAccelerated as u32,
         ];
 
-        if config.samples.is_some() {
+        if let Some(samples) = config.samples {
             #[rustfmt::skip]
             attrs.extend_from_slice(&[
                 NSOpenGLPFAMultisample as u32,
                 NSOpenGLPFASampleBuffers as u32, 1,
-                NSOpenGLPFASamples as u32, config.samples.unwrap() as u32,
+                NSOpenGLPFASamples as u32, samples as u32,
             ]);
         }
 
@@ -124,10 +124,9 @@ impl GlContext {
         let framework_name = CFString::from_str("com.apple.opengl").unwrap();
         let framework =
             unsafe { CFBundleGetBundleWithIdentifier(framework_name.as_concrete_TypeRef()) };
-        let addr = unsafe {
+        unsafe {
             CFBundleGetFunctionPointerForName(framework, symbol_name.as_concrete_TypeRef())
-        };
-        addr as *const c_void
+        }
     }
 
     pub fn swap_buffers(&self) {

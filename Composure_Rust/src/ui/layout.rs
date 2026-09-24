@@ -99,8 +99,7 @@ impl ControlLayout {
         let input_group_y = theme::INPUT_GROUP_Y;
         let filter_w = input_settings_w - 20.0;
         let rel_x = input_group_x + center_in_group_x(input_settings_w, filter_w);
-        let mut current_y =
-            input_group_y + theme::GROUP_TITLE_H + theme::GROUP_PAD + 5.0;
+        let mut current_y = input_group_y + theme::GROUP_TITLE_H + theme::GROUP_PAD + 5.0;
 
         let hp_lp_w = (filter_w - (BTN_ADJ_PREVIEW_W + BTN_SC_W + FILTER_GAP * 3.0)) * 0.5;
         let hp_x = rel_x;
@@ -148,10 +147,8 @@ impl ControlLayout {
         let harmonics_group_x = theme::jsfx_x(theme::HARMONICS_GROUP_X);
         let harmonics_group_y = theme::HARMONICS_GROUP_Y;
         let harmonics_group_w = theme::jsfx_x(theme::HARMONICS_GROUP_W);
-        let rel_x_slider =
-            harmonics_group_x + center_in_group_x(harmonics_group_w, SLIDER_W_JSFX);
-        let rel_x_button =
-            harmonics_group_x + center_in_group_x(harmonics_group_w, TB_TOGGLE_W);
+        let rel_x_slider = harmonics_group_x + center_in_group_x(harmonics_group_w, SLIDER_W_JSFX);
+        let rel_x_button = harmonics_group_x + center_in_group_x(harmonics_group_w, TB_TOGGLE_W);
 
         let mut harm_y = 0.0;
         let harmonic_type_switch = (map_x(rel_x_button), harmonics_group_y + harm_y);
@@ -215,99 +212,63 @@ impl ControlLayout {
 
     /// Pleasant skin frames. Analog stays on [`Self::from_jsfx`].
     pub fn pleasant() -> Self {
-        let analog = Self::from_jsfx();
-        let src_left = analog.hp_slider.0;
-        let src_right = analog.lp_slider.0 + analog.lp_slider.2;
-        let dst_left = appearance::DET_X + 14.0;
-        let dst_right = appearance::DET_X + appearance::DET_W - 14.0;
-        let span = src_right - src_left;
-        let dst_span = dst_right - dst_left;
-        let fit_x = |x: f32| dst_left + (x - src_left) / span * dst_span;
-        let fit_w = |w: f32| w / span * dst_span;
-
-        let row_y = [78.0, 128.0, 178.0, 228.0];
+        let left = appearance::DET_X + 14.0;
+        let width = appearance::DET_W - 28.0;
+        let button_w = 100.0;
+        let slider_w = width - button_w - 12.0;
+        let button_x = left + slider_w + 12.0;
+        let row_y = [56.0, 56.0, 128.0, 192.0, 256.0, 320.0];
         let env_x = appearance::ENV_X + (appearance::ENV_W - theme::KNOB_SIZE) * 0.5;
         let env_y0 = appearance::ENV_Y + appearance::MODULE_HEADER_H + 8.0;
         let env_step = theme::KNOB_SIZE + 18.0;
 
         let harm_cx = appearance::HARM_X + appearance::HARM_W * 0.5;
-        let slider_x = harm_cx - theme::PARALLAX_SLIDER_W * 0.5;
         let switch_x = harm_cx - theme::SWITCH_SLOT_W * 0.5;
         let knob_x = harm_cx - theme::KNOB_SIZE * 0.5;
-        let mut hy = appearance::ENV_Y + appearance::MODULE_HEADER_H + 6.0;
-        let harmonic_type_switch = (switch_x, hy);
-        hy += 56.0 + 16.0;
-        let harmonic_drive = (slider_x, hy);
-        hy += theme::PARALLAX_SLOT_H + 16.0;
-        let harmonic_mix = (slider_x, hy);
-        hy += theme::PARALLAX_SLOT_H + 16.0;
-        let harmonic_even = (slider_x, hy);
-        hy += theme::PARALLAX_SLOT_H + 16.0;
-        let harmonic_odd = (slider_x, hy);
-        hy += theme::PARALLAX_SLOT_H + 14.0;
-        let makeup_knob = (knob_x, hy);
+        let harmonic_type_switch = (switch_x, 55.0);
+        let quad_left = appearance::HARM_X + 10.0;
+        let quad_right = appearance::HARM_X + appearance::HARM_W - 10.0 - 64.0;
+        let harmonic_drive = (quad_left, 110.0);
+        let harmonic_mix = (quad_right, 110.0);
+        let harmonic_even = (quad_left, 208.0);
+        let harmonic_odd = (quad_right, 208.0);
+        let makeup_knob = (
+            knob_x,
+            appearance::ENV_Y + appearance::SIDE_H - 8.0 - theme::KNOB_SIZE,
+        );
 
-        let bar_knob_y =
-            appearance::BAR_Y + (appearance::BAR_H - theme::KNOB_SIZE) * 0.5;
-        let bar_sw_y = appearance::BAR_Y + (appearance::BAR_H - 56.0) * 0.5;
-        let strength_x = appearance::BAR_X + 16.0;
-        let right = appearance::BAR_X + appearance::BAR_W - 16.0;
-        let offset_x = right - theme::KNOB_SIZE;
-        let rms_x = offset_x - 8.0 - theme::KNOB_SIZE;
-        let norm_x = rms_x - 12.0 - theme::SWITCH_SLOT_W;
-        let ms_x = norm_x - 12.0 - theme::SWITCH_SLOT_W;
+        let bar_knob_x =
+            appearance::BAR_X + (appearance::BAR_W - appearance::TOOLBAR_KNOB_SIZE) * 0.5;
+        let bar_switch_x = appearance::BAR_X + (appearance::BAR_W - theme::SWITCH_SLOT_W) * 0.5;
+        let bar_top = appearance::BAR_Y + 12.0;
 
         Self {
             attack_knob: (env_x, env_y0),
             release_knob: (env_x, env_y0 + env_step),
             hold_knob: (env_x, env_y0 + env_step * 2.0),
-            hp_slider: (fit_x(analog.hp_slider.0), row_y[0], fit_w(analog.hp_slider.2)),
-            listen_btn: (fit_x(analog.listen_btn.0), row_y[0], fit_w(analog.listen_btn.2)),
-            sc_btn: (fit_x(analog.sc_btn.0), row_y[0], fit_w(analog.sc_btn.2)),
-            lp_slider: (fit_x(analog.lp_slider.0), row_y[0], fit_w(analog.lp_slider.2)),
-            lookahead_slider: (
-                fit_x(analog.lookahead_slider.0),
-                row_y[1],
-                fit_w(analog.lookahead_slider.2),
-            ),
-            brickwall_btn: (
-                fit_x(analog.brickwall_btn.0),
-                row_y[1],
-                fit_w(analog.brickwall_btn.2),
-            ),
-            prog_blend_slider: (
-                fit_x(analog.prog_blend_slider.0),
-                row_y[2],
-                fit_w(analog.prog_blend_slider.2),
-            ),
-            inverse_btn: (
-                fit_x(analog.inverse_btn.0),
-                row_y[2],
-                fit_w(analog.inverse_btn.2),
-            ),
-            attack_curve_slider: (
-                fit_x(analog.attack_curve_slider.0),
-                row_y[3],
-                fit_w(analog.attack_curve_slider.2),
-            ),
-            release_curve_slider: (
-                fit_x(analog.release_curve_slider.0),
-                270.0,
-                fit_w(analog.release_curve_slider.2),
-            ),
-            detection_btn: (fit_x(analog.detection_btn.0), row_y[3]),
+            hp_slider: (left, row_y[0] + 4.0, slider_w),
+            listen_btn: (button_x, row_y[0] + 4.0, 44.0),
+            sc_btn: (button_x + 56.0, row_y[0] + 4.0, 44.0),
+            lp_slider: (left, row_y[1], width),
+            lookahead_slider: (left, row_y[2], slider_w),
+            brickwall_btn: (button_x, row_y[2] + 4.0, button_w),
+            prog_blend_slider: (left, row_y[3], slider_w),
+            inverse_btn: (button_x, row_y[3] + 4.0, button_w),
+            attack_curve_slider: (left, row_y[4], width),
+            release_curve_slider: (left, row_y[5], slider_w),
+            detection_btn: (button_x, row_y[5] + 4.0),
             harmonic_type_switch,
             harmonic_drive,
             harmonic_mix,
             harmonic_even,
             harmonic_odd,
             makeup_knob,
-            strength_knob: (strength_x, bar_knob_y),
-            prog_mode_switch: (strength_x + theme::KNOB_SIZE + 12.0, bar_sw_y),
-            ms_switch: (ms_x, bar_sw_y),
-            norm_switch: (norm_x, bar_sw_y),
-            rms_knob: (rms_x, bar_knob_y),
-            offset_knob: (offset_x, bar_knob_y),
+            strength_knob: (bar_knob_x, bar_top),
+            prog_mode_switch: (bar_switch_x, bar_top + 92.0),
+            ms_switch: (bar_switch_x, bar_top + 156.0),
+            norm_switch: (bar_switch_x, bar_top + 278.0),
+            rms_knob: (bar_knob_x, bar_top + 192.0),
+            offset_knob: (bar_knob_x, bar_top + 316.0),
         }
     }
 }
@@ -364,23 +325,47 @@ mod tests {
     }
 
     #[test]
-    fn pleasant_transfer_takes_width_from_timing_and_bar_aligns() {
+    fn pleasant_modules_and_controls_fit_the_vertical_layout() {
         assert!(appearance::TRANS_W > appearance::DET_W);
-        assert!((appearance::TRANS_W - 456.0).abs() < 0.1);
-        let bar_right = appearance::BAR_X + appearance::BAR_W;
-        let transfer_right = appearance::TRANS_X + appearance::TRANS_W;
-        assert!((appearance::BAR_X - appearance::DET_X).abs() < 0.1);
-        assert!((bar_right - transfer_right).abs() < 0.1);
+        assert!(appearance::BAR_X + appearance::BAR_W < appearance::ENV_X);
+        assert!(appearance::ENV_X + appearance::ENV_W < appearance::DET_X);
         let l = ControlLayout::pleasant();
         let det_right = appearance::DET_X + appearance::DET_W;
         assert!(l.lp_slider.0 + l.lp_slider.2 <= det_right - 10.0);
-        assert!(l.strength_knob.0 >= appearance::BAR_X);
-        assert!(l.offset_knob.0 + theme::KNOB_SIZE <= bar_right);
+        let bar_right = appearance::BAR_X + appearance::BAR_W;
+        let bar_bottom = appearance::BAR_Y + appearance::BAR_H;
+        let controls = [
+            (
+                l.strength_knob,
+                appearance::TOOLBAR_KNOB_SIZE,
+                appearance::TOOLBAR_KNOB_SIZE,
+            ),
+            (l.prog_mode_switch, theme::SWITCH_SLOT_W, 56.0),
+            (l.ms_switch, theme::SWITCH_SLOT_W, 28.0),
+            (
+                l.rms_knob,
+                appearance::TOOLBAR_KNOB_SIZE,
+                appearance::TOOLBAR_KNOB_SIZE,
+            ),
+            (l.norm_switch, theme::SWITCH_SLOT_W, 28.0),
+            (
+                l.offset_knob,
+                appearance::TOOLBAR_KNOB_SIZE,
+                appearance::TOOLBAR_KNOB_SIZE,
+            ),
+        ];
+        let mut previous_bottom = appearance::BAR_Y;
+        for ((x, y), width, height) in controls {
+            assert!(x >= appearance::BAR_X && x + width <= bar_right);
+            assert!(y > previous_bottom && y + height <= bar_bottom);
+            previous_bottom = y + height;
+        }
+        assert!((l.norm_switch.1 - l.rms_knob.1 - appearance::TOOLBAR_KNOB_SIZE - 2.0).abs() < 0.1);
         let label_x = appearance::PLEASANT_GRAPH_X - theme::sx(30.0);
         assert!(label_x > appearance::TRANS_X + 8.0);
         let (meter_l, meter_r) = appearance::meter_x(0);
         assert!(meter_r + theme::METER_W < appearance::TRANS_X + appearance::TRANS_W);
-        assert!(meter_l > appearance::PLEASANT_GRAPH_X + theme::GRAPH_SIZE);
+        assert!(meter_l > appearance::PLEASANT_GRAPH_X + appearance::PLEASANT_GRAPH_SIZE);
         let env_bottom = l.hold_knob.1 + theme::KNOB_SIZE;
         assert!(env_bottom <= appearance::ENV_Y + appearance::SIDE_H - 8.0);
         let harm_bottom = l.makeup_knob.1 + theme::KNOB_SIZE;

@@ -2066,7 +2066,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                             && has_main_output
                         {
                             let audio_output = &*process.audio_outputs;
-                            let ptrs = NonNull::new(audio_output.data32 as *mut *mut f32).unwrap();
+                            let ptrs = NonNull::new(audio_output.data32).unwrap();
                             let num_channels = audio_output.channel_count as usize;
 
                             *buffer_source.main_output_channel_pointers =
@@ -2079,7 +2079,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                             && has_main_input
                         {
                             let audio_input = &*process.audio_inputs;
-                            let ptrs = NonNull::new(audio_input.data32 as *mut *mut f32).unwrap();
+                            let ptrs = NonNull::new(audio_input.data32).unwrap();
                             let num_channels = audio_input.channel_count as usize;
 
                             *buffer_source.main_input_channel_pointers =
@@ -2098,7 +2098,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                                 }
 
                                 let audio_input = &*process.audio_inputs.add(aux_input_idx);
-                                match NonNull::new(audio_input.data32 as *mut *mut f32) {
+                                match NonNull::new(audio_input.data32) {
                                     Some(ptrs) => {
                                         let num_channels = audio_input.channel_count as usize;
 
@@ -2122,7 +2122,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                                 }
 
                                 let audio_output = &*process.audio_outputs.add(aux_output_idx);
-                                match NonNull::new(audio_output.data32 as *mut *mut f32) {
+                                match NonNull::new(audio_output.data32) {
                                     Some(ptrs) => {
                                         let num_channels = audio_output.channel_count as usize;
 

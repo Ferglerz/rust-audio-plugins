@@ -16,6 +16,8 @@ members = [
     "Flattery/xtask",
     "Tape Stop",
     "Tape Stop/xtask",
+    "openwurli-ui",
+    "openwurli-ui/xtask",
 ]
 exclude = ["scd-rust"]
 resolver = "2"
@@ -29,3 +31,11 @@ nih_plug_vizia = { path = "Damian Channel Strip/vendor/nih-plug/nih_plug_vizia" 
 
 [patch."https://github.com/robbert-vdh/vizia.git"]
 vizia_baseview = { path = "Damian Channel Strip/vendor/vizia_baseview" }
+
+[patch.crates-io]
+block = { path = "vendor/block-0.1.6" }
+
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false

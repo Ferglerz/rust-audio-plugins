@@ -4,7 +4,7 @@
 //! remembers the most recent resize so the next new instance opens at that size.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 const DEFAULT_SCALE: f64 = 1.0 / 1.2;
 const MIN_SCALE: f64 = 0.2;

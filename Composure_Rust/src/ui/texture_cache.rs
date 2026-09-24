@@ -31,9 +31,7 @@ pub fn draw_tex(
     alpha: f32,
 ) {
     if let Ok(mut cache) = texture_cache().lock() {
-        let tex = cache
-            .entry(key)
-            .or_insert_with(|| CachedTexture::new(png));
+        let tex = cache.entry(key).or_insert_with(|| CachedTexture::new(png));
         tex.draw(canvas, x, y, w, h, alpha);
     }
 }

@@ -1,7 +1,5 @@
 //! Harmonic processing ported from `08_harmonic_models.jsfx-inc`.
 
-use crate::params::{ComposureParams, HarmonicType};
-
 use super::dsp_utils::{flush_denormal, linear_oversample_avg};
 
 const HARMONIC_OVERSAMPLE: usize = 2;
@@ -155,23 +153,6 @@ pub struct HarmonicParams {
     pub harmonic_amount: f64,
 }
 
-impl HarmonicParams {
-    pub fn from_plugin(plugin_params: &ComposureParams) -> Self {
-        let harmonic_type = match plugin_params.harmonic_type.value() {
-            HarmonicType::Tube => 0,
-            HarmonicType::Transformer => 1,
-        };
-        Self {
-            harmonic_type,
-            drive: plugin_params.harmonic_drive.value() as f64,
-            mix: plugin_params.harmonic_mix.value() as f64 / 100.0,
-            even_boost: plugin_params.harmonic_even_boost.value() as f64,
-            odd_boost: plugin_params.harmonic_odd_boost.value() as f64,
-            harmonic_amount: plugin_params.harmonic_amount.value() as f64,
-        }
-    }
-}
-
 fn saturate_sample(
     x: f64,
     harmonic_type: u8,
@@ -317,7 +298,10 @@ pub fn apply_harmonic_processing(
     out
 }
 
-pub fn compute_harmonic_modulation(target_gr_db: f64, global_smoothed_gr_db: f64) -> (f64, f64, f64) {
+pub fn compute_harmonic_modulation(
+    target_gr_db: f64,
+    global_smoothed_gr_db: f64,
+) -> (f64, f64, f64) {
     let harmonic_envelope_amount = global_smoothed_gr_db.abs() / 30.0;
     let harmonic_abs_gr = target_gr_db.abs();
     let harmonic_envelope_factor = 1.0 + harmonic_envelope_amount * 0.2;

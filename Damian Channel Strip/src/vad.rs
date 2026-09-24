@@ -150,7 +150,6 @@ pub struct SpeechVad {
     frac: f64,
     prev: f32,
     speech_env: f32,
-    inject: Option<f32>,
     shared: Option<Arc<VadShared>>,
     worker: Option<JoinHandle<()>>,
 }
@@ -166,7 +165,6 @@ impl SpeechVad {
             frac: 0.0,
             prev: 0.0,
             speech_env: 0.0,
-            inject: None,
             shared: None,
             worker: None,
         }
@@ -204,14 +202,6 @@ impl SpeechVad {
         }
     }
 
-    /// Test hook: skip worker and force speech_env.
-    pub fn inject_speech_env(&mut self, env: Option<f32>) {
-        self.inject = env.map(|v| v.clamp(0.0, 1.0));
-        if let Some(v) = self.inject {
-            self.speech_env = v;
-        }
-    }
-
     #[inline(always)]
     pub fn speech_env(&self) -> f32 {
         self.speech_env
@@ -221,9 +211,7 @@ impl SpeechVad {
         self.lpf.reset();
         self.frac = 0.0;
         self.prev = 0.0;
-        if self.inject.is_none() {
-            self.speech_env = 0.0;
-        }
+        self.speech_env = 0.0;
         if let Some(shared) = &self.shared {
             shared.reset.store(true, Ordering::Release);
             shared.raw_prob.store(0.0, Ordering::Relaxed);
@@ -232,9 +220,6 @@ impl SpeechVad {
 
     #[inline]
     pub fn push_sample(&mut self, x: f32) {
-        if self.inject.is_some() {
-            return;
-        }
         let Some(shared) = &self.shared else {
             return;
         };
@@ -262,10 +247,6 @@ impl SpeechVad {
     }
 
     pub fn end_block(&mut self, block_secs: f32) {
-        if let Some(v) = self.inject {
-            self.speech_env = v;
-            return;
-        }
         if let Some(shared) = &self.shared {
             let raw = shared.raw_prob.load(Ordering::Relaxed).clamp(0.0, 1.0);
             self.speech_env = smooth_env(self.speech_env, raw, block_secs);

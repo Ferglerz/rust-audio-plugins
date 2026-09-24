@@ -34,7 +34,7 @@ impl StripView {
             {
                 if self.band_dyn_page.get() {
                     if band_allows_dyn(&b) {
-                        for i in 0..5 {
+                        for i in 1..5 {
                             let r = self.hud_dyn_value_rect(&b, i);
                             if inside(x, y, r) {
                                 let target = match i {
@@ -67,6 +67,85 @@ impl StripView {
             .into_iter()
             .find(|(_, r)| inside(x, y, *r))
     }
+    pub(super) fn adjust_value(&self, cx: &mut EventContext, target: ValueTarget, delta: f32) {
+        let d = delta as f64;
+        match target {
+            ValueTarget::Global(i) => {
+                let p = self.param(i);
+                let sign = if i == 0 || i == 18 { -1.0 } else { 1.0 };
+                let norm = (p.unmodulated_normalized_value() + delta * sign).clamp(0.0, 1.0);
+                cx.emit(RawParamEvent::BeginSetParameter(p.as_ptr()));
+                cx.emit(RawParamEvent::SetParameterNormalized(p.as_ptr(), norm));
+                cx.emit(RawParamEvent::EndSetParameter(p.as_ptr()));
+            }
+            ValueTarget::Band(i) => self.change(|b| adjust_band_value(b, i, d)),
+            ValueTarget::Lift(i) => self.change_lift(|b| match i {
+                0 => b.freq *= 1000.0_f64.powf(d),
+                1 => b.gain += 100.0 * d,
+                2 => b.q *= 120.0_f64.powf(d),
+                3 => b.threshold += 60.0 * d,
+                4 => b.ratio += 19.0 * d,
+                5 => b.attack *= 2000.0_f64.powf(d),
+                6 => b.release *= 200.0_f64.powf(d),
+                _ => b.range += 24.0 * d,
+            }),
+        }
+    }
+
+    pub(super) fn press_value(
+        &mut self,
+        cx: &mut EventContext,
+        target: ValueTarget,
+        rect: (f32, f32, f32, f32),
+        origin: (f32, f32),
+    ) {
+        self.value_press = Some(pleasant_ui::pointer::ValuePress::new(target, rect, origin));
+        cx.focus();
+        cx.capture();
+    }
+
+    pub(super) fn handle_value_press(
+        &mut self,
+        cx: &mut EventContext,
+        event: &WindowEvent,
+        x: f32,
+        y: f32,
+    ) -> bool {
+        let Some(mut press) = self.value_press else {
+            return false;
+        };
+        match event {
+            WindowEvent::MouseMove(_, _) => {
+                if press.update(x, y) {
+                    self.value_press = None;
+                    self.drag = Some(Target::Value(press.target));
+                    self.down = press.origin;
+                    self.last_drag = press.origin;
+                    // Continue through relative readout dragging.
+                    return false;
+                }
+                self.value_press = Some(press);
+            }
+            WindowEvent::MouseUp(MouseButton::Left) => {
+                self.value_press = None;
+                cx.release();
+                if press.released_as_click(x, y) {
+                    self.start_edit(cx, press.target, press.rect);
+                }
+                cx.needs_redraw();
+            }
+            WindowEvent::FocusOut
+            | WindowEvent::KeyDown(Code::Escape, _)
+            | WindowEvent::MouseDown(MouseButton::Right) => {
+                self.value_press = None;
+                cx.release();
+                cx.needs_redraw();
+            }
+            _ => {}
+        }
+        true
+    }
+
     pub(super) fn start_edit(
         &mut self,
         cx: &mut EventContext,
@@ -200,7 +279,7 @@ impl StripView {
                 if let Some(b) = self.selected.and_then(|id| self.find_band(id)) {
                     if self.band_dyn_page.get() {
                         if band_allows_dyn(&b) {
-                            for i in 0..5 {
+                            for i in 1..5 {
                                 let target = match i {
                                     0 => 3,
                                     1 => 7,
@@ -304,6 +383,47 @@ impl StripView {
             17 => &self.params.wall_odd,
             18 => &self.params.wall_threshold,
             _ => &self.params.compression,
+        }
+    }
+}
+
+fn adjust_band_value(b: &mut Band, i: usize, delta: f64) {
+    match i {
+        0 => b.freq *= 1000.0_f64.powf(delta),
+        1 => b.gain += 2.0 * crate::band::MAX_GAIN_DB * delta,
+        2 => b.q *= 120.0_f64.powf(delta),
+        3 => b.threshold += 60.0 * delta,
+        4 => b.ratio += 19.0 * delta,
+        5 => b.attack *= 2000.0_f64.powf(delta),
+        6 => b.release *= 200.0_f64.powf(delta),
+        _ => b.range += 2.0 * MAX_RANGE_DB * delta,
+    }
+}
+
+#[cfg(test)]
+mod value_drag_tests {
+    use super::*;
+
+    #[test]
+    fn readout_adjustments_change_only_the_addressed_parameter() {
+        for index in 0..8 {
+            let original = Band::default();
+            let mut band = original.clone();
+            adjust_band_value(&mut band, index, 0.01);
+            assert_ne!(band, original);
+            if index != 4 {
+                assert_eq!(band.ratio, original.ratio);
+            }
+            if index != 7 {
+                assert_eq!(band.range, original.range);
+            }
+            if index != 1 {
+                assert_eq!(band.gain, original.gain);
+            }
+            adjust_band_value(&mut band, index, -0.01);
+            assert!((band.gain - original.gain).abs() < 1e-8);
+            assert!((band.freq - original.freq).abs() < 1e-8);
+            assert!((band.attack - original.attack).abs() < 1e-8);
         }
     }
 }

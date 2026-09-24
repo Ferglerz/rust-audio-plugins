@@ -108,3 +108,89 @@ fn note_index_isolates_notes_and_rr() -> Result<(), Box<dyn std::error::Error>> 
 
     Ok(())
 }
+
+#[test]
+fn rejects_truncated_and_corrupt_indices() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("invalid-index.scdpack");
+
+    std::fs::write(
+        &path,
+        [SCD_MAGIC.as_slice(), &u64::MAX.to_le_bytes()].concat(),
+    )?;
+    assert!(ScdPack::open(&path).is_err(), "oversized index length");
+
+    std::fs::write(
+        &path,
+        [SCD_MAGIC.as_slice(), &32u64.to_le_bytes(), &[0xff; 32]].concat(),
+    )?;
+    assert!(ScdPack::open(&path).is_err(), "invalid archive contents");
+
+    Ok(())
+}
+
+#[test]
+fn rejects_invalid_audio_payload_and_sample_ranges() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("invalid-audio.scdpack");
+
+    write_pack(&path, vec![], &[0.25])?;
+    let mut bytes = std::fs::read(&path)?;
+    bytes.push(0);
+    std::fs::write(&path, bytes)?;
+    assert!(ScdPack::open(&path).is_err(), "partial f32 payload");
+
+    for bad_slice in [
+        slice(2),
+        slice(4),
+        SampleSlice {
+            channels: 0,
+            ..slice(0)
+        },
+        SampleSlice {
+            offset_bytes: u64::MAX - 3,
+            ..slice(0)
+        },
+    ] {
+        let strike = StrikeEntry::new(
+            38,
+            1,
+            127,
+            1,
+            0,
+            KitPieceId::Snare,
+            [Some(bad_slice), None, None, None, None, None],
+        );
+        write_pack(&path, vec![strike], &[0.0; 4])?;
+        assert!(ScdPack::open(&path).is_err(), "bad slice {bad_slice:?}");
+    }
+
+    write_pack(&path, vec![], &[0.0; 4])?;
+    let pack = ScdPack::open(&path)?;
+    assert!(pack.get_sample_slice(&slice(2)).is_none());
+    assert!(pack.get_sample_slice(&slice(4)).is_none());
+
+    Ok(())
+}
+
+#[test]
+fn rejects_index_that_exceeds_note_index_capacity() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("too-many-strikes.scdpack");
+    let strike = StrikeEntry::new(
+        36,
+        1,
+        127,
+        1,
+        0,
+        KitPieceId::Kick,
+        [None; MicChannel::COUNT],
+    );
+    write_pack(&path, vec![strike; usize::from(u16::MAX) + 2], &[])?;
+
+    let error = ScdPack::open(&path)
+        .err()
+        .expect("oversized note index must fail");
+    assert!(error.to_string().contains("too many strikes"));
+    Ok(())
+}

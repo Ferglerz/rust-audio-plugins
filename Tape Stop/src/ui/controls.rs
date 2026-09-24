@@ -44,7 +44,7 @@ pub(super) const STOP_BUTTON: (f32, f32, f32, f32) = (
     STOP_SIZE,
 );
 
-const MIDI_SLOT_W: f32 = 112.0;
+const MIDI_SLOT_W: f32 = 96.0;
 
 /// Horizontal gap between DROP slider and AUTO TRIGGER.
 pub(super) const TRIGGER_GAP: f32 = 10.0;
@@ -116,7 +116,7 @@ pub(super) fn midi_slot() -> (f32, f32, f32, f32) {
 
 pub(super) fn midi_label_rect() -> (f32, f32, f32, f32) {
     let slot = midi_slot();
-    (slot.0, slot.1, 52.0, slot.3)
+    (slot.0, slot.1, 46.0, slot.3)
 }
 
 pub(super) fn midi_value_rect() -> (f32, f32, f32, f32) {
@@ -175,6 +175,26 @@ impl TapeStopView {
             MidiAssign::Cc => KnobId::OverrideCc,
             MidiAssign::Note => KnobId::OverrideNote,
         }
+    }
+
+    pub(super) fn readout_at(&self, x: f32, y: f32) -> Option<KnobId> {
+        if Self::inside(x, y, DROP_TIME_READOUT) { return Some(KnobId::DropTime); }
+        if self.knob_enabled(KnobId::RestartThresh) && Self::inside(x, y, trigger_value_rect()) { return Some(KnobId::RestartThresh); }
+        if self.show_axis_controls {
+            if Self::inside(x, y, midi_value_rect()) { return Some(self.midi_number_id()); }
+            return [KnobId::Return, KnobId::Xfade, KnobId::StereoDiv].into_iter()
+                .find(|id| Self::inside(x, y, axis_value_rect(Self::slider_rect(*id))));
+        }
+        None
+    }
+
+    pub(super) fn press_value(
+        &mut self, cx: &mut EventContext, target: KnobId,
+        rect: (f32, f32, f32, f32), origin: (f32, f32),
+    ) {
+        self.value_press = Some(pleasant_ui::pointer::ValuePress::new(target, rect, origin));
+        cx.focus();
+        cx.capture();
     }
 
     pub(super) fn start_edit(

@@ -8,6 +8,7 @@ All plugins and the shared UI are Git subtrees with their full histories:
 - `pleasant-ui/`: https://github.com/Ferglerz/pleasant-ui.git
 - `scd-rust/`: https://github.com/Ferglerz/scd-rust.git
 - `Composure_Rust/`: https://github.com/Ferglerz/Composure_Rust.git
+- `openwurli-ui/`: https://github.com/Ferglerz/openwurli-ui.git
 
 A normal clone includes their tracked files; no submodule initialization is
 needed. Commit edits normally in audio-plugins, including coordinated changes
@@ -24,6 +25,7 @@ git remote add tape-stop https://github.com/Ferglerz/Tape-Stop.git
 git remote add pleasant-ui https://github.com/Ferglerz/pleasant-ui.git
 git remote add scd-rust https://github.com/Ferglerz/scd-rust.git
 git remote add composure https://github.com/Ferglerz/Composure_Rust.git
+git remote add openwurli-ui https://github.com/Ferglerz/openwurli-ui.git
 ```
 
 ## Two-way sync
@@ -38,6 +40,7 @@ git subtree pull --prefix="Tape Stop" tape-stop main
 git subtree pull --prefix=pleasant-ui pleasant-ui main
 git subtree pull --prefix=scd-rust scd-rust main
 git subtree pull --prefix=Composure_Rust composure main
+git subtree pull --prefix=openwurli-ui openwurli-ui main
 ```
 
 Export committed changes to an individual repository:
@@ -49,6 +52,7 @@ git subtree push --prefix="Tape Stop" tape-stop main
 git subtree push --prefix=pleasant-ui pleasant-ui main
 git subtree push --prefix=scd-rust scd-rust main
 git subtree push --prefix=Composure_Rust composure main
+git subtree push --prefix=openwurli-ui openwurli-ui main
 ```
 
 Run only the commands for repositories you intend to sync. Replace the final
@@ -61,6 +65,9 @@ A normal `git push origin main` publishes audio-plugins only. Subtree pushes
 export only the selected folder and do not include changes to sibling folders.
 Publishing coordinated changes to separate repositories takes separate pushes.
 
+`openwurli-ui` is the independent plugin wrapper. Its pinned OpenWurli DSP
+dependency remains in `Ferglerz/openwurli` and is not a subtree of this repo.
+
 ## Cargo workspaces and shared code
 
 The original plugins and `pleasant-ui` use the root Cargo workspace.
@@ -71,3 +78,11 @@ All plugins use the shared `pleasant-ui/` directory. Standalone plugin checkouts
 currently require a sibling `pleasant-ui/` checkout. Root Cargo dependency
 patches also remain part of the integrated build configuration; subtree export
 does not automatically include them in standalone plugin repositories.
+
+The patched NIH-plug, baseview, and Vizia runtime sources currently live under
+`Damian Channel Strip/vendor/`. Keeping those sources inside Damian's subtree
+lets its standalone export include the exact host patches it uses. The root
+workspace and `scd-rust/Cargo.toml` point to that copy, so a standalone SCD
+checkout also needs a sibling Damian checkout for those path patches. Moving
+the forks to a neutral root directory requires a replacement dependency source
+for standalone exports and verification of both Cargo workspaces and lockfiles.

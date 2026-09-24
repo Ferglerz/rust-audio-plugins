@@ -266,6 +266,7 @@ impl<'a> Window<'a> {
             keyboard_state: KeyboardState::new(),
             frame_timer: Cell::new(None),
             window_info: Cell::new(window_info),
+            pending_resize: Cell::new(None),
         });
 
         let window_state_ptr = Rc::into_raw(Rc::clone(&window_state));
@@ -335,6 +336,7 @@ pub(super) struct WindowState {
     frame_timer: Cell<Option<CFRunLoopTimer>>,
     /// The last known window info for this window.
     pub window_info: Cell<WindowInfo>,
+    pending_resize: Cell<Option<WindowInfo>>,
 }
 
 impl WindowState {
@@ -363,7 +365,23 @@ impl WindowState {
 
     pub(super) fn trigger_event(&self, event: Event) -> EventStatus {
         let mut window = crate::Window::new(Window { inner: &self.window_inner });
-        self.window_handler.borrow_mut().on_event(&mut window, event)
+        let status = self.window_handler.borrow_mut().on_event(&mut window, event);
+        self.flush_pending_resize();
+        status
+    }
+
+    fn flush_pending_resize(&self) {
+        while self.window_inner.open.get() {
+            let Some(info) = self.pending_resize.take() else {
+                break;
+            };
+            let Ok(mut handler) = self.window_handler.try_borrow_mut() else {
+                self.pending_resize.set(Some(info));
+                break;
+            };
+            let mut window = crate::Window::new(Window { inner: &self.window_inner });
+            handler.on_event(&mut window, Event::Window(crate::WindowEvent::Resized(info)));
+        }
     }
 
     /// Keep OpenGL and vizia in sync with the NSView frame. Skip 0×0
@@ -412,7 +430,10 @@ impl WindowState {
         }
         if new_window_info.physical_size() != self.window_info.get().physical_size() {
             self.window_info.set(new_window_info);
-            self.trigger_event(Event::Window(crate::WindowEvent::Resized(new_window_info)));
+            // AppKit may call setFrameSize: synchronously from inside on_frame or
+            // on_event. Deliver the resize once that mutable handler borrow ends.
+            self.pending_resize.set(Some(new_window_info));
+            self.flush_pending_resize();
         }
     }
 
@@ -436,6 +457,7 @@ impl WindowState {
         }
         let mut window = crate::Window::new(Window { inner: &self.window_inner });
         self.window_handler.borrow_mut().on_frame(&mut window);
+        self.flush_pending_resize();
     }
 
     pub(super) fn keyboard_state(&self) -> &KeyboardState {

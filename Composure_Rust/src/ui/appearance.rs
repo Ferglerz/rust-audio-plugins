@@ -1,5 +1,5 @@
 //! Rendering-only skins: every appearance uses the same parameter widgets and graph.
-use super::{theme, EditorData};
+use super::{layout::ControlLayout, theme, EditorData};
 use nih_plug_vizia::vizia::prelude::*;
 use nih_plug_vizia::vizia::vg::Color;
 use nih_plug_vizia::widgets::param_base::ParamWidgetBase;
@@ -17,24 +17,35 @@ pub const MODULE_GAP: f32 = 12.0;
 pub const MODULE_MARGIN: f32 = 16.0;
 
 /// Widget-space frames. Screen y is `widget_y + HEADER_H`.
-pub const ENV_X: f32 = MODULE_MARGIN;
+pub const BAR_X: f32 = MODULE_MARGIN;
+pub const BAR_W: f32 = 120.0;
+pub const ENV_X: f32 = BAR_X + BAR_W + MODULE_GAP;
 pub const ENV_Y: f32 = 12.0;
-pub const ENV_W: f32 = 160.0;
+pub const ENV_W: f32 = 128.0;
 pub const SIDE_H: f32 = 420.0;
 pub const HARM_W: f32 = 168.0;
 pub const HARM_X: f32 = theme::EDITOR_WIDTH as f32 - MODULE_MARGIN - HARM_W;
 pub const DET_X: f32 = ENV_X + ENV_W + MODULE_GAP;
-pub const DET_W: f32 = 330.0;
+pub const DET_W: f32 = 270.0;
 pub const TRANS_X: f32 = DET_X + DET_W + MODULE_GAP;
 pub const TRANS_W: f32 = HARM_X - MODULE_GAP - TRANS_X;
-pub const MID_H: f32 = 308.0;
-pub const BAR_X: f32 = DET_X;
-pub const BAR_Y: f32 = ENV_Y + MID_H + MODULE_GAP;
-pub const BAR_W: f32 = TRANS_X + TRANS_W - DET_X;
-pub const BAR_H: f32 = ENV_Y + SIDE_H - BAR_Y;
+pub const MID_H: f32 = SIDE_H;
+pub const BAR_Y: f32 = ENV_Y;
+pub const BAR_H: f32 = SIDE_H;
+pub const TOOLBAR_KNOB_SIZE: f32 = 84.0;
+
+pub fn pleasant_knob_size(x: f32) -> f32 {
+    if x >= BAR_X && x < BAR_X + BAR_W {
+        TOOLBAR_KNOB_SIZE
+    } else {
+        theme::KNOB_SIZE
+    }
+}
 
 /// Square graph shifted left so axis labels sit inside the wider transfer module.
-pub const PLEASANT_GRAPH_X: f32 = 614.0;
+pub const PLEASANT_GRAPH_X: f32 = TRANS_X + 46.0;
+pub const PLEASANT_GRAPH_Y: f32 = ENV_Y + (MID_H - PLEASANT_GRAPH_SIZE) * 0.5;
+pub const PLEASANT_GRAPH_SIZE: f32 = 290.0;
 
 pub fn graph_x(mode: u8) -> f32 {
     if mode == 2 {
@@ -44,11 +55,27 @@ pub fn graph_x(mode: u8) -> f32 {
     }
 }
 
+pub fn graph_y(mode: u8) -> f32 {
+    if mode == 2 {
+        theme::GRAPH_Y
+    } else {
+        PLEASANT_GRAPH_Y
+    }
+}
+
+pub fn graph_size(mode: u8) -> f32 {
+    if mode == 2 {
+        theme::GRAPH_SIZE
+    } else {
+        PLEASANT_GRAPH_SIZE
+    }
+}
+
 pub fn meter_x(mode: u8) -> (f32, f32) {
     if mode == 2 {
         (theme::METER_X, theme::METER_X_RIGHT)
     } else {
-        let x = PLEASANT_GRAPH_X + theme::GRAPH_SIZE + 10.0;
+        let x = PLEASANT_GRAPH_X + PLEASANT_GRAPH_SIZE + 10.0;
         (x, x + theme::METER_W + theme::METER_GAP)
     }
 }
@@ -78,7 +105,7 @@ pub fn decode(mode: u8) -> Appearance {
     }
 }
 
-fn painter<'a>(cx: &DrawContext, canvas: &'a mut Canvas, width: f32) -> Draw<'a> {
+pub(super) fn painter<'a>(cx: &DrawContext, canvas: &'a mut Canvas, width: f32) -> Draw<'a> {
     let b = cx.bounds();
     let cache = EditorData::font.get(cx);
     let font = cache.get().copied().or_else(|| {
@@ -98,6 +125,7 @@ fn painter<'a>(cx: &DrawContext, canvas: &'a mut Canvas, width: f32) -> Draw<'a>
     d
 }
 
+#[derive(Clone, Copy)]
 pub enum Control {
     Knob,
     Slider(super::readout_controls::SliderFill),
@@ -127,21 +155,44 @@ pub fn draw_control(
             // Square slots pin the arc 8px above the readout. Damian's taller
             // slots leave ~15px. Keep the readout on the widget bottom.
             let arc_h = (h - 3.0).max(64.0);
-            d.knob((0.0, 0.0, w, arc_h), param.name(), "", norm, GOLD, false);
-            d.text_centered(w * 0.5, h - 8.0, &value, 13.0, GOLD);
+            if w <= 64.0 {
+                d.knob(
+                    (0.0, 0.0, w, h),
+                    short_name(param.name()),
+                    &value,
+                    norm,
+                    GOLD,
+                    false,
+                );
+            } else {
+                d.knob(
+                    (0.0, 0.0, w, arc_h),
+                    short_name(param.name()),
+                    "",
+                    norm,
+                    GOLD,
+                    false,
+                );
+                d.text_centered(w * 0.5, h - 8.0, &value, 13.0, GOLD);
+            }
         }
         Control::Slider(fill) => {
             use super::readout_controls::SliderFill;
-            let n = norm.clamp(0.0, 1.0);
+            d.text(0.0, 14.0, short_name(param.name()), 9.5, MUTED);
+            d.text_right(w, 14.0, &value, 11.0, GOLD);
+            let (x, y, width, height) = slider_track(w);
+            d.rect(x, y, width, height, LINE);
+            let pos = x + width * norm.clamp(0.0, 1.0);
             let (start, end) = match fill {
-                SliderFill::LeftToRight => (0.0, n),
-                SliderFill::RightToLeft => (n, 1.0),
-                SliderFill::CenterOut => (n.min(0.5), n.max(0.5)),
+                SliderFill::LeftToRight => (x, pos),
+                SliderFill::RightToLeft => (pos, x + width),
+                SliderFill::CenterOut => (x + width * 0.5, pos),
             };
-            d.rect(0.0, 0.0, w, h, PANEL);
-            d.outline((0.0, 0.0, w, h), LINE);
-            d.rect(w * start, h - 3.0, w * (end - start), 3.0, TEAL);
-            d.text_centered(w * 0.5, h * 0.5 + 4.0, &value, 13.0, TEXT);
+            d.rect(start.min(end), y, (end - start).abs(), height, GOLD);
+            if matches!(fill, SliderFill::CenterOut) {
+                d.rect(x + width * 0.5 - 0.5, y, 1.0, height, MUTED);
+            }
+            d.rect(pos - 2.0, y - 2.0, 4.0, height + 4.0, GOLD);
         }
         Control::Switch => {
             let value = match value.as_str() {
@@ -151,28 +202,77 @@ pub fn draw_control(
                 "Transformer" => "Xformer",
                 other => other,
             };
-            d.text_centered(w * 0.5, 14.0, short_name(param.name()), 11.0, MUTED);
+            if param.name() == "Harmonic Type" {
+                let accent = if norm < 0.5 { GOLD } else { TEAL };
+                d.button((0.0, 0.0, w, h), &value.to_uppercase(), true, accent);
+            } else if matches!(param.name(), "Mid/Side" | "Normalize") {
+                d.button(
+                    (0.0, 0.0, w, h),
+                    &param.name().to_uppercase(),
+                    norm > 0.0,
+                    TEAL,
+                );
+            } else if param.name() == "Detection Mode" {
+                d.button((0.0, 0.0, w, h), &value.to_uppercase(), true, TEAL);
+            } else {
+                d.text_centered(w * 0.5, 14.0, short_name(param.name()), 11.0, MUTED);
+                d.button(
+                    (0.0, 24.0, w, (h - 30.0).max(24.0)),
+                    &value.to_uppercase(),
+                    norm > 0.0,
+                    TEAL,
+                );
+            }
+        }
+        Control::Button => {
+            let label = match param.name() {
+                "L" => "L",
+                "SC" => "SC",
+                "Brickwall Limiter" => "Brickwall",
+                "Program Release Inverse" => "Inverse",
+                _ => param.name(),
+            };
             d.button(
-                (0.0, 24.0, w, (h - 30.0).max(24.0)),
-                value,
+                (0.0, 0.0, w, h),
+                &label.to_uppercase(),
                 norm > 0.0,
-                TEAL,
+                if matches!(label, "Brickwall" | "Inverse") {
+                    GOLD
+                } else {
+                    TEAL
+                },
             );
         }
-        // The existing child label supplies the compact button's text.
-        Control::Button => d.button((0.0, 0.0, w, h), "", norm > 0.0, TEAL),
     }
     true
 }
 
 fn short_name(name: &str) -> &str {
     match name {
+        "Harmonic Mix" => "Mix",
+        "Input Offset" => "Offset",
+        "Makeup Gain" => "Gain",
+        "Program Release Blend" => "Program Blend",
         "Program Release Mode" => "PROGRAM",
         "RMS Normalization" => "NORMALIZE",
         "Mid/Side Mode" => "MID / SIDE",
         "Harmonic Type" => "HARMONICS",
         "Detection Mode" => "DETECTION",
         _ => name,
+    }
+}
+
+pub const SLIDER_H: f32 = 36.0;
+
+pub fn slider_track(w: f32) -> (f32, f32, f32, f32) {
+    (2.0, 24.0, w - 4.0, 6.0)
+}
+
+pub fn value_rect(control: Control, w: f32, h: f32) -> (f32, f32, f32, f32) {
+    match control {
+        Control::Knob if w <= 64.0 => (0.0, 60.0, w, 22.0),
+        Control::Knob => (0.0, h - 26.0, w, 24.0),
+        _ => (w - 72.0, 0.0, 72.0, 20.0),
     }
 }
 
@@ -187,10 +287,12 @@ impl View for Background {
         if EditorData::appearance.get(cx) == 2 {
             return;
         }
-        let mut d = painter(cx, canvas, theme::EDITOR_WIDTH as f32);
-        d.rect(0.0, 0.0, 1182.0, 504.0, BG);
-        d.rect(0.0, 0.0, 1182.0, HEADER_H, PANEL);
-        d.line(24.0, HEADER_H, 1158.0, HEADER_H, LINE, 1.0);
+        let width = cx.bounds().w / cx.scale_factor();
+        let height = cx.bounds().h / cx.scale_factor();
+        let mut d = painter(cx, canvas, width);
+        d.rect(0.0, 0.0, width, height, BG);
+        d.rect(0.0, 0.0, width, HEADER_H, PANEL);
+        d.line(24.0, HEADER_H, width - 24.0, HEADER_H, LINE, 1.0);
         d.text(30.0, 40.0, "COMPOSURE", 24.0, GOLD);
         d.text(220.0, 39.0, "CURVE DYNAMICS", 13.0, MUTED);
 
@@ -198,7 +300,7 @@ impl View for Background {
         let modules = [
             (ENV_X, y, ENV_W, SIDE_H, "ENVELOPE", TEAL),
             (DET_X, y, DET_W, MID_H, "DETECTOR & TIMING", GOLD),
-            (TRANS_X, y, TRANS_W, MID_H, "TRANSFER CURVE", TEAL),
+            (TRANS_X, y, TRANS_W, MID_H, "", TEAL),
             (HARM_X, y, HARM_W, SIDE_H, "HARMONICS", GOLD),
         ];
         for (x, y, w, h, title, accent) in modules {
@@ -207,62 +309,118 @@ impl View for Background {
         let toolbar = (BAR_X, BAR_Y + HEADER_H, BAR_W, BAR_H);
         d.rect(toolbar.0, toolbar.1, toolbar.2, toolbar.3, PANEL);
         d.outline(toolbar, LINE);
-
-        // The shared curve remains a dark instrument screen in either Pleasant theme.
-        d.light = false;
-        let gy = theme::GRAPH_Y + HEADER_H;
-        d.rect(
-            PLEASANT_GRAPH_X - 4.0,
-            gy - 4.0,
-            theme::GRAPH_SIZE + 8.0,
-            theme::GRAPH_SIZE + 8.0,
-            BG,
+        let controls = ControlLayout::pleasant();
+        d.outline(
+            (
+                controls.rms_knob.0 - 2.0,
+                controls.rms_knob.1 + HEADER_H - 2.0,
+                TOOLBAR_KNOB_SIZE + 4.0,
+                controls.norm_switch.1 + HEADER_H + 28.0 - controls.rms_knob.1 + 4.0,
+            ),
+            LINE,
         );
     }
 }
 
-fn draw_module(d: &mut Draw, x: f32, y: f32, w: f32, h: f32, title: &str, accent: Color) {
+fn draw_module(d: &mut Draw, x: f32, y: f32, w: f32, h: f32, title: &str, _accent: Color) {
     const INSET: f32 = 10.0;
     d.rect(x, y, w, h, PANEL);
     d.outline((x, y, w, h), LINE);
-    let btn = MODULE_HEADER_CTRL;
-    d.bypass_button_static(
-        (
-            x + INSET,
-            y + (MODULE_HEADER_H - btn) * 0.5,
-            btn,
-            btn,
-        ),
-        false,
-        accent,
-    );
+    if title.is_empty() {
+        return;
+    }
     let size = MODULE_TITLE_SIZE;
     let mid = y + MODULE_HEADER_H * 0.5;
-    d.text(x + INSET + btn + 8.0, mid + size * 0.35, title, size, TEXT);
+    let title_x = if title == "HARMONICS" {
+        x + INSET + MODULE_HEADER_CTRL + 8.0
+    } else {
+        x + INSET
+    };
+    d.text(title_x, mid + size * 0.35, title, size, TEXT);
+}
+
+pub struct HarmonicsBypass {
+    param: ParamWidgetBase,
+}
+
+pub fn build_harmonics_bypass(cx: &mut Context) {
+    HarmonicsBypass {
+        param: ParamWidgetBase::new(cx, EditorData::params, |p| &p.harmonics_on),
+    }
+    .build(cx, |_| {})
+    .display(EditorData::appearance.map(|mode| {
+        if *mode == 2 {
+            Display::None
+        } else {
+            Display::Flex
+        }
+    }))
+    .position_type(PositionType::SelfDirected)
+    .left(Pixels(HARM_X + 10.0))
+    .top(Pixels(ENV_Y + (MODULE_HEADER_H - MODULE_HEADER_CTRL) * 0.5))
+    .width(Pixels(MODULE_HEADER_CTRL))
+    .height(Pixels(MODULE_HEADER_CTRL));
+}
+
+impl View for HarmonicsBypass {
+    fn draw(&self, cx: &mut DrawContext, canvas: &mut Canvas) {
+        let mut d = painter(cx, canvas, MODULE_HEADER_CTRL);
+        d.bypass_button_static(
+            (0.0, 0.0, MODULE_HEADER_CTRL, MODULE_HEADER_CTRL),
+            self.param.modulated_normalized_value() < 0.5,
+            GOLD,
+        );
+    }
+
+    fn event(&mut self, cx: &mut EventContext, event: &mut Event) {
+        event.map(|window_event, meta| {
+            if matches!(window_event, WindowEvent::MouseDown(MouseButton::Left)) {
+                super::param_widget_ext::toggle_bool_param(cx, &self.param);
+                cx.needs_redraw();
+                meta.consume();
+            }
+        });
+    }
+}
+
+struct AppearanceSelector;
+
+impl View for AppearanceSelector {
+    fn draw(&self, cx: &mut DrawContext, canvas: &mut Canvas) {
+        let label = match EditorData::appearance.get(cx) {
+            1 => "LIGHT",
+            2 => "ANALOG",
+            _ => "DARK",
+        };
+        let mut d = painter(cx, canvas, 84.0);
+        d.button((0.0, 0.0, 84.0, 28.0), label, false, MUTED);
+    }
+
+    fn event(&mut self, cx: &mut EventContext, event: &mut Event) {
+        event.map(|window_event, meta| {
+            if matches!(window_event, WindowEvent::MouseDown(MouseButton::Left)) {
+                let next = decode(EditorData::appearance.get(cx)).next();
+                cx.emit(SetAppearance(encode(next)));
+                meta.consume();
+            }
+        });
+    }
 }
 
 pub fn build_selector(cx: &mut Context) {
-    Button::new(
-        cx,
-        |cx| {
-            let next = decode(EditorData::appearance.get(cx)).next();
-            cx.emit(SetAppearance(encode(next)));
-        },
-        |cx| {
-            Label::new(cx, EditorData::appearance.map(|mode| match *mode {
-                1 => "LIGHT",
-                2 => "ANALOG",
-                _ => "DARK",
-            }))
-        },
-    )
-    .class("appearance-button")
-    .z_index(10)
-    .position_type(PositionType::SelfDirected)
-    .left(Pixels(1074.0))
-    .top(EditorData::appearance.map(|mode| {
-        Pixels(if *mode == 2 { 462.0 } else { (HEADER_H - 28.0) * 0.5 })
-    }))
-    .width(Pixels(84.0))
-    .height(Pixels(28.0));
+    AppearanceSelector
+        .build(cx, |_| {})
+        .z_index(10)
+        .position_type(PositionType::SelfDirected)
+        .left(Stretch(1.0))
+        .right(Pixels(24.0))
+        .top(EditorData::appearance.map(|mode| {
+            Pixels(if *mode == 2 {
+                462.0
+            } else {
+                (HEADER_H - 28.0) * 0.5
+            })
+        }))
+        .width(Pixels(84.0))
+        .height(Pixels(28.0));
 }

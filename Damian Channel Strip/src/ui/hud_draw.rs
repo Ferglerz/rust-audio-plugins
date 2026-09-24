@@ -90,20 +90,21 @@ fn draw_main_row(
     }
 }
 
-fn draw_dyn_row(d: &mut Draw, b: &Band, color: C, range: f64, gx: f32, gw: f32) {
+fn draw_dyn_row(
+    d: &mut Draw,
+    b: &Band,
+    color: C,
+    range: f64,
+    gx: f32,
+    gw: f32,
+    highlighted: Option<usize>,
+) {
     for (i, label, value, n, bipolar) in [
-        (
-            0,
-            "THRESH",
-            format!("{:.1}", b.threshold),
-            ((b.threshold + 60.0) / 60.0) as f32,
-            false,
-        ),
         (
             1,
             "RANGE",
             format!("{:.1}", b.range),
-            ((b.range + 24.0) / 48.0) as f32,
+            ((b.range + MAX_RANGE_DB) / (2.0 * MAX_RANGE_DB)) as f32,
             true,
         ),
         (
@@ -130,7 +131,10 @@ fn draw_dyn_row(d: &mut Draw, b: &Band, color: C, range: f64, gx: f32, gw: f32) 
     ] {
         let r = hud_dyn_field_rect_at(b, range, i, gx, gw);
         let val_r = hud_dyn_value_rect_at(b, range, i, gx, gw);
-        let text_y = if i == 1 { r.1 + r.3 * 0.62 } else { r.1 + 16.0 };
+        let text_y = hud_control_text_y();
+        if i != 1 {
+            d.outline(r, if highlighted == Some(i) { color } else { LINE });
+        }
         d.text(r.0 + 8.0, text_y, label, 15.0, MUTED);
         d.text_centered(
             val_r.0 + val_r.2 * 0.5,
@@ -244,6 +248,7 @@ pub(super) fn band_hud(
     eq_clip: (f32, f32, f32, f32),
     bypass_hovered: bool,
     bypass_click: f32,
+    highlighted_dyn_field: Option<usize>,
 ) {
     let g = hud_geom_for_at(b, range, gx, gw);
     draw_right_cluster(
@@ -294,7 +299,7 @@ pub(super) fn band_hud(
             bypass_click,
         );
         d.offset_x = saved + (1.0 - eased) * g.bw;
-        draw_dyn_row(d, b, color, range, gx, gw);
+        draw_dyn_row(d, b, color, range, gx, gw, highlighted_dyn_field);
         d.offset_x = saved;
         d.scissor(eq_clip.0, eq_clip.1, eq_clip.2, eq_clip.3);
     }

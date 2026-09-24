@@ -7,8 +7,10 @@ use std::sync::Arc;
 
 use nih_plug::prelude::*;
 
+pub(crate) mod detector_eq;
 pub mod dsp;
 pub mod graph_store;
+mod parameter_adapter;
 pub mod params;
 pub mod ui;
 
@@ -74,8 +76,13 @@ impl Plugin for Composure {
         context: &mut impl InitContext<Self>,
     ) -> bool {
         self.chain = ProcessingChain::new(buffer_config.sample_rate as f64);
-        self.chain.force_sync_graph_from_params(&self.params);
-        self.chain.force_update_params_from_plugin(&self.params);
+        self.ui_display.sample_rate.store(buffer_config.sample_rate, std::sync::atomic::Ordering::Relaxed);
+        let graph_range_mode = self.params.graph_range_mode.value();
+        self.params.graph_store.select_range(graph_range_mode);
+        self.chain.force_update_settings(
+            parameter_adapter::capture_block_state(&self.params),
+            self.params.graph_store.load_for_range(graph_range_mode),
+        );
         self.chain.snap_runtime_params();
         context.set_latency_samples(self.chain.latency_samples());
         true
@@ -96,7 +103,12 @@ impl Plugin for Composure {
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
         let editor_open = self.params.editor_state.is_open();
-        self.chain.update_params_from_plugin(&self.params, editor_open);
+        let graph_range_mode = self.params.graph_range_mode.value();
+        self.params.graph_store.select_range(graph_range_mode);
+        self.chain.update_settings(
+            parameter_adapter::capture_block_state(&self.params),
+            self.params.graph_store.load_for_range(graph_range_mode),
+        );
         self.chain
             .set_filter_preview_drag(self.ui_display.filter_preview_active());
         if let Some(latency) = self.chain.latency_changed() {
@@ -104,17 +116,16 @@ impl Plugin for Composure {
         }
 
         let use_sc = self.params.use_sidechain.value();
-        let (sc_l, sc_r): (Option<&[f32]>, Option<&[f32]>) =
-            if use_sc && !aux.inputs.is_empty() {
-                let slices = aux.inputs[0].as_slice_immutable();
-                match slices.len() {
-                    n if n >= 2 => (Some(slices[0]), Some(slices[1])),
-                    1 => (Some(slices[0]), Some(slices[0])),
-                    _ => (None, None),
-                }
-            } else {
-                (None, None)
-            };
+        let (sc_l, sc_r): (Option<&[f32]>, Option<&[f32]>) = if use_sc && !aux.inputs.is_empty() {
+            let slices = aux.inputs[0].as_slice_immutable();
+            match slices.len() {
+                n if n >= 2 => (Some(slices[0]), Some(slices[1])),
+                1 => (Some(slices[0]), Some(slices[0])),
+                _ => (None, None),
+            }
+        } else {
+            (None, None)
+        };
 
         self.chain.begin_process_block();
 
@@ -127,7 +138,8 @@ impl Plugin for Composure {
         if editor_open {
             let block_detector_max = self.chain.block_meter_detector_db() as f32;
             let block_gr_max = self.chain.block_meter_gr_db() as f32;
-            self.ui_display.update_block(block_detector_max, block_gr_max);
+            self.ui_display
+                .update_block(block_detector_max, block_gr_max);
             self.ui_display.update_debug_telemetry(
                 block_detector_max,
                 block_gr_max,
@@ -146,8 +158,11 @@ impl ClapPlugin for Composure {
     const CLAP_DESCRIPTION: Option<&'static str> = Some("Curve-based dynamic processor");
     const CLAP_MANUAL_URL: Option<&'static str> = None;
     const CLAP_SUPPORT_URL: Option<&'static str> = None;
-    const CLAP_FEATURES: &'static [ClapFeature] =
-        &[ClapFeature::AudioEffect, ClapFeature::Stereo, ClapFeature::Compressor];
+    const CLAP_FEATURES: &'static [ClapFeature] = &[
+        ClapFeature::AudioEffect,
+        ClapFeature::Stereo,
+        ClapFeature::Compressor,
+    ];
 }
 
 impl Vst3Plugin for Composure {

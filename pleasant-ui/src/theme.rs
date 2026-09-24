@@ -26,6 +26,20 @@ pub const COLORS: [Color; 6] = [
     rgb(193, 214, 118),
 ];
 
+// Reserve graph-line yellow for the CMD ratio control.
+pub const EQ_COLORS: [Color; 10] = [
+    rgb(111, 210, 188),
+    rgb(171, 151, 238),
+    rgb(150, 204, 239),
+    rgb(108, 176, 242),
+    rgb(228, 150, 184),
+    rgb(148, 212, 176),
+    rgb(172, 183, 242),
+    rgb(218, 168, 224),
+    rgb(135, 216, 220),
+    rgb(191, 173, 222),
+];
+
 /// Transform a dark-mode palette color to light-mode if `light` is true.
 pub fn transform_color(c: Color, light: bool) -> Color {
     if !light {

@@ -1,4 +1,5 @@
 pub mod draw;
+pub mod page_slide;
 pub mod graph;
 pub mod handles;
 pub mod math;

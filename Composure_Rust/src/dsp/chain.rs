@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use crate::dsp::constants::{clamp_gr_db, MIN_DETECTOR_LEVEL};
+use crate::dsp::constants::{clamp_gr_db, MIN_DETECTOR_DB};
 use crate::dsp::core_math::db_to_linear;
 use crate::dsp::envelope::{EnvelopeEngine, EnvelopeParams};
 use crate::dsp::filters::DetectionFilters;
 use crate::dsp::gain_reduction::calculate_gain_reduction_from_db;
-use crate::graph_store::GraphSnapshot;
+use crate::dsp::graph_snapshot::GraphSnapshot;
 use crate::dsp::harmonics::{
     apply_harmonic_stereo, compute_harmonic_modulation, HarmonicParams, HarmonicProcessor,
 };
@@ -16,7 +16,6 @@ use crate::dsp::param_smooth::{
 };
 use crate::dsp::param_sync::BlockParamState;
 use crate::dsp::rms::RmsDetector;
-use crate::params::ComposureParams;
 
 fn denormal_flush_hold_samples(srate: f64) -> usize {
     256.max((srate * 0.05).floor() as usize)
@@ -37,6 +36,7 @@ pub struct ChainParams {
     pub sc_adjust_preview: bool,
     pub use_sidechain: bool,
     pub harmonic_params: HarmonicParams,
+    pub harmonics_on: bool,
     pub hold_ms: f64,
 }
 
@@ -62,6 +62,7 @@ impl Default for ChainParams {
                 odd_boost: 0.0,
                 harmonic_amount: 1.0,
             },
+            harmonics_on: true,
             hold_ms: 0.0,
         }
     }
@@ -70,6 +71,7 @@ impl Default for ChainParams {
 pub struct ProcessingChain {
     srate: f64,
     filters: DetectionFilters,
+    detector_eq: super::detector_eq::DetectorEq,
     rms: RmsDetector,
     snapshot: Arc<GraphSnapshot>,
     envelope: EnvelopeEngine,
@@ -101,7 +103,7 @@ pub struct ProcessingChain {
     target_input_offset_db: f64,
     target_lookahead_ms: f64,
     smooth_lookahead_ms: f64,
-    cached_block_params: BlockParamState,
+    cached_block_params: Option<BlockParamState>,
     reported_latency_samples: u32,
     param_smooth_counter: usize,
 }
@@ -112,6 +114,7 @@ impl ProcessingChain {
         let chain = Self {
             srate,
             filters: DetectionFilters::new(),
+            detector_eq: super::detector_eq::DetectorEq::new(srate),
             rms: RmsDetector::new(srate),
             snapshot,
             envelope: EnvelopeEngine::new(),
@@ -121,7 +124,7 @@ impl ProcessingChain {
             params: ChainParams::default(),
             final_prev_l: 0.0,
             final_prev_r: 0.0,
-            block_detector_max_db: MIN_DETECTOR_LEVEL,
+            block_detector_max_db: MIN_DETECTOR_DB,
             block_gr_max_db: 0.0,
             curve_input_db: -20.0,
             listen_crossfade: 0.0,
@@ -143,7 +146,7 @@ impl ProcessingChain {
             target_input_offset_db: 0.0,
             target_lookahead_ms: 0.0,
             smooth_lookahead_ms: 0.0,
-            cached_block_params: BlockParamState::capture(&ComposureParams::default()),
+            cached_block_params: None,
             reported_latency_samples: 0,
             param_smooth_counter: 0,
         };
@@ -237,9 +240,8 @@ impl ProcessingChain {
         self.lookahead.update_delay_ms(self.smooth_lookahead_ms);
     }
 
-    /// Load published graph snapshot when UI/preset publishes a new `Arc`.
-    pub fn sync_graph_from_params(&mut self, plugin_params: &ComposureParams) {
-        let published = plugin_params.graph_store.load();
+    /// Load a prepared graph snapshot supplied by the plugin adapter.
+    pub fn sync_graph(&mut self, published: Arc<GraphSnapshot>) {
         if Arc::ptr_eq(&self.snapshot, &published) {
             return;
         }
@@ -247,11 +249,12 @@ impl ProcessingChain {
     }
 
     /// Unconditional graph sync (init / preset load).
-    pub fn force_sync_graph_from_params(&mut self, plugin_params: &ComposureParams) {
-        self.snapshot = plugin_params.graph_store.load();
+    pub fn force_sync_graph(&mut self, published: Arc<GraphSnapshot>) {
+        self.snapshot = published;
     }
 
     fn apply_block_params(&mut self, block: &BlockParamState) {
+        self.detector_eq.update(&block.detector_eq);
         self.filters.set_target_coefficients(
             block.hp_freq as f64,
             block.lp_freq as f64,
@@ -274,43 +277,29 @@ impl ProcessingChain {
         self.params.sc_adjust_preview = block.sc_adjust_preview;
         self.params.use_sidechain = block.use_sidechain;
         self.params.harmonic_params = block.harmonic_params;
+        self.params.harmonics_on = block.harmonics_on;
         self.rms.update_rms_targets(self.params.rms_size_ms);
         self.param_smooth_counter = (PARAM_SMOOTH_MS * self.srate / 1000.0).ceil() as usize;
     }
 
-    pub fn update_params_from_plugin(
-        &mut self,
-        plugin_params: &ComposureParams,
-        editor_open: bool,
-    ) {
-        let block = BlockParamState::capture(plugin_params);
-        if !editor_open {
-            plugin_params
-                .graph_store
-                .sync_range_if_needed(block.graph_range_db);
-        }
-        self.sync_graph_from_params(plugin_params);
-
-        if block == self.cached_block_params {
+    pub fn update_settings(&mut self, block: BlockParamState, snapshot: Arc<GraphSnapshot>) {
+        self.sync_graph(snapshot);
+        if self.cached_block_params.as_ref() == Some(&block) {
             return;
         }
         self.apply_block_params(&block);
-        self.cached_block_params = block;
+        self.cached_block_params = Some(block);
     }
 
     /// Force block param refresh (init / preset load).
-    pub fn force_update_params_from_plugin(&mut self, plugin_params: &ComposureParams) {
-        self.force_sync_graph_from_params(plugin_params);
-        let block = BlockParamState::capture(plugin_params);
-        plugin_params
-            .graph_store
-            .sync_range_if_needed(block.graph_range_db);
+    pub fn force_update_settings(&mut self, block: BlockParamState, snapshot: Arc<GraphSnapshot>) {
+        self.force_sync_graph(snapshot);
         self.apply_block_params(&block);
-        self.cached_block_params = block;
+        self.cached_block_params = Some(block);
     }
 
     pub fn begin_process_block(&mut self) {
-        self.block_detector_max_db = MIN_DETECTOR_LEVEL;
+        self.block_detector_max_db = MIN_DETECTOR_DB;
         self.block_gr_max_db = 0.0;
     }
 
@@ -354,6 +343,7 @@ impl ProcessingChain {
 
     pub fn reset(&mut self) {
         self.filters.reset();
+        self.detector_eq.reset();
         self.rms.reset();
         self.envelope.reset();
         self.lookahead.reset();
@@ -361,7 +351,7 @@ impl ProcessingChain {
         self.harmonics.reset();
         self.final_prev_l = 0.0;
         self.final_prev_r = 0.0;
-        self.block_detector_max_db = MIN_DETECTOR_LEVEL;
+        self.block_detector_max_db = MIN_DETECTOR_DB;
         self.block_gr_max_db = 0.0;
         self.denormal_quiet_i = 0;
         self.denormal_flush_done = false;
@@ -381,8 +371,7 @@ impl ProcessingChain {
         } else {
             0.0
         };
-        self.listen_crossfade +=
-            (target - self.listen_crossfade) * self.listen_fade_coeff;
+        self.listen_crossfade += (target - self.listen_crossfade) * self.listen_fade_coeff;
     }
 
     fn prepare_detection_inputs(
@@ -436,6 +425,7 @@ impl ProcessingChain {
         let p = &self.params;
 
         (detect_l, detect_r) = self.filters.apply(detect_l, detect_r);
+        [detect_l, detect_r] = self.detector_eq.process([detect_l, detect_r]);
         self.preview_detect_l = detect_l;
         self.preview_detect_r = detect_r;
         if !self.rms.coefficients_converged() {
@@ -443,7 +433,8 @@ impl ProcessingChain {
         }
 
         let (_detector_level, detector_level_db) =
-            self.rms.detect_level(detect_l, detect_r, p.rms_normalization);
+            self.rms
+                .detect_level(detect_l, detect_r, p.rms_normalization);
 
         let gr_result = calculate_gain_reduction_from_db(
             &self.snapshot.lut,
@@ -502,18 +493,13 @@ impl ProcessingChain {
                 self.cached_gr_lin = db_to_linear(current_gr_db);
                 self.cached_gr_db = current_gr_db;
             }
-            (
-                audio_l * self.cached_gr_lin,
-                audio_r * self.cached_gr_lin,
-            )
+            (audio_l * self.cached_gr_lin, audio_r * self.cached_gr_lin)
         };
 
         let hp = &p.harmonic_params;
-        if hp.mix > 0.0001 && target_gr_db.abs() > 0.0001 {
-            let (combined_factor, intensity, _envelope_amount) = compute_harmonic_modulation(
-                target_gr_db,
-                self.envelope.global_smoothed_gain_db,
-            );
+        if p.harmonics_on && hp.mix > 0.0001 && target_gr_db.abs() > 0.0001 {
+            let (combined_factor, intensity, _envelope_amount) =
+                compute_harmonic_modulation(target_gr_db, self.envelope.global_smoothed_gain_db);
             (processed_l, processed_r) = apply_harmonic_stereo(
                 &mut self.harmonics,
                 processed_l,
@@ -599,21 +585,13 @@ impl ProcessingChain {
                     r_slice[i] = or as f32;
                 }
                 for i in sc_len..n {
-                    let (ol, or) = self.process_sample(
-                        l_slice[i] as f64,
-                        r_slice[i] as f64,
-                        None,
-                    );
+                    let (ol, or) = self.process_sample(l_slice[i] as f64, r_slice[i] as f64, None);
                     l_slice[i] = ol as f32;
                     r_slice[i] = or as f32;
                 }
             } else {
                 for i in 0..n {
-                    let (ol, or) = self.process_sample(
-                        l_slice[i] as f64,
-                        r_slice[i] as f64,
-                        None,
-                    );
+                    let (ol, or) = self.process_sample(l_slice[i] as f64, r_slice[i] as f64, None);
                     l_slice[i] = ol as f32;
                     r_slice[i] = or as f32;
                 }
@@ -625,7 +603,8 @@ impl ProcessingChain {
                 let sc_r = sc_r.unwrap();
                 for i in 0..sc_len {
                     let sc = (sc_l[i] as f64 + sc_r[i] as f64) * 0.5;
-                    let (out, _) = self.process_sample(mono[i] as f64, mono[i] as f64, Some((sc, sc)));
+                    let (out, _) =
+                        self.process_sample(mono[i] as f64, mono[i] as f64, Some((sc, sc)));
                     mono[i] = out as f32;
                 }
                 for i in sc_len..n {
@@ -655,8 +634,8 @@ impl ProcessingChain {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dsp::graph::CompressionGraph;
     use crate::dsp::envelope::EnvelopeParams;
+    use crate::dsp::graph::CompressionGraph;
 
     fn bent_chain(srate: f64) -> ProcessingChain {
         let mut chain = ProcessingChain::new(srate);
@@ -697,6 +676,22 @@ mod tests {
         let rms_in = rms_in.sqrt();
         let rms_out = rms_out.sqrt();
         assert!(rms_out < rms_in * 0.98, "rms_in={rms_in} rms_out={rms_out}");
+    }
+
+    #[test]
+    fn harmonics_bypass_keeps_the_clean_output() {
+        let mut chain = ProcessingChain::new(48_000.0);
+        chain.params.brickwall_limiter = false;
+        chain.params.harmonic_params.mix = 1.0;
+        chain.params.harmonic_params.drive = 100.0;
+        chain.envelope.global_smoothed_gain_db = -6.0;
+        chain.params.harmonics_on = false;
+        let dry = chain.apply_gain_and_output(0.25, 0.25, 0.0, -6.0);
+        assert_eq!(dry, (0.25, 0.25));
+
+        chain.params.harmonics_on = true;
+        let wet = chain.apply_gain_and_output(0.25, 0.25, 0.0, -6.0);
+        assert!((wet.0 - dry.0).abs() > 1e-6);
     }
 
     #[test]
@@ -754,11 +749,12 @@ mod tests {
     fn silence_block_meter_stays_finite() {
         let mut chain = ProcessingChain::new(48000.0);
         chain.begin_process_block();
+        assert_eq!(chain.block_meter_detector_db(), MIN_DETECTOR_DB);
         let (out_l, out_r) = chain.process_sample(0.0, 0.0, None);
         assert!(out_l.abs() < 1e-6);
         assert!(out_r.abs() < 1e-6);
         let det = chain.block_meter_detector_db();
         assert!(det.is_finite());
-        assert!(det > -300.0);
+        assert!(det <= -100.0, "silent input must not paint a full-scale graph histogram: {det}");
     }
 }

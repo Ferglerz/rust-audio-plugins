@@ -14,7 +14,6 @@ use scd_core::{KitPieceId, MicChannel, ScdPack};
 
 pub struct ScdPlugin {
     params: Arc<ScdParams>,
-    pack: Option<ScdPack>,
     voice_pool: VoicePool,
     hihat_tracker: HiHatTracker,
     kick_sine: KickSine,
@@ -26,7 +25,6 @@ impl Default for ScdPlugin {
     fn default() -> Self {
         Self {
             params: Arc::new(ScdParams::default()),
-            pack: None,
             voice_pool: VoicePool::new(),
             hihat_tracker: HiHatTracker::new(),
             kick_sine: KickSine::default(),
@@ -88,7 +86,7 @@ impl Plugin for ScdPlugin {
         self.voice_pool.reset();
 
         // Attempt to load .scdpack from standard location or next to plugin
-        if self.pack.is_none() {
+        if self.voice_pool.pack().is_none() {
             let possible_paths = [
                 "/Volumes/Storage/SoundChefDrums.scdpack",
                 "SoundChefDrums.scdpack",
@@ -96,7 +94,7 @@ impl Plugin for ScdPlugin {
             ];
             for p in &possible_paths {
                 if let Ok(pack) = ScdPack::open(p) {
-                    self.pack = Some(pack);
+                    self.voice_pool.set_pack(pack);
                     break;
                 }
             }
@@ -210,16 +208,20 @@ impl ScdPlugin {
                 };
 
                 if let Some(piece) = resolved.kit_piece.or_else(|| {
-                    self.pack.as_ref().and_then(|pack| pack.kit_piece_for_note(pack_note))
+                    self.voice_pool
+                        .pack()
+                        .and_then(|pack| pack.kit_piece_for_note(pack_note))
                 }) {
-                    if let Some(slot) = self.params.midi_velocities[piece as usize].get(resolved.art) {
+                    if let Some(slot) =
+                        self.params.midi_velocities[piece as usize].get(resolved.art)
+                    {
                         slot.store(vel_u8, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
 
                 if self
-                    .pack
-                    .as_ref()
+                    .voice_pool
+                    .pack()
                     .map(|pack| pack.is_kick_note(pack_note))
                     .unwrap_or(pack_note == 35 || pack_note == 36)
                 {
@@ -236,29 +238,26 @@ impl ScdPlugin {
                 }
 
                 let depth = self
-                    .pack
-                    .as_ref()
+                    .voice_pool
+                    .pack()
                     .map(|pack| pack.max_rr(pack_note))
                     .unwrap_or(3)
                     .max(1);
                 let rr = (self.rr_counter[pack_note as usize] % depth) + 1;
                 self.rr_counter[pack_note as usize] = rr;
 
-                if let Some(ref pack) = self.pack {
+                if let Some(pack) = self.voice_pool.pack() {
                     let lookup = resolved
                         .kit_piece
                         .or_else(|| pack.kit_piece_for_note(pack_note))
                         .map(|kit_piece| {
-                            self.params
-                                .vel_maps
-                                .lookup(kit_piece, resolved.art, vel_u8)
+                            self.params.vel_maps.lookup(kit_piece, resolved.art, vel_u8)
                         })
                         .unwrap_or(vel_u8);
-                    if let Some(strike) = pack.find_strike(pack_note, lookup, rr) {
+                    if let Some(strike) = pack.find_strike(pack_note, lookup, rr).cloned() {
                         let strip = self.params.get_strip(strike.kit_piece);
                         self.voice_pool.trigger_strike(
-                            strike,
-                            pack,
+                            &strike,
                             velocity,
                             strip.pitch.value(),
                             strip.punch.value(),

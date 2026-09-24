@@ -1,13 +1,13 @@
 mod bands;
 mod dynamics;
 mod edit;
-mod eq_graph;
+mod eq;
 mod events;
 mod geometry;
 mod hud;
 mod hud_draw;
 mod layout;
-mod lift_graph;
+mod lift;
 mod preferences;
 mod render;
 #[cfg(test)]
@@ -15,15 +15,15 @@ mod tests;
 mod value_input;
 
 use dynamics::*;
-use eq_graph::*;
+use eq::*;
 use hud::*;
 use hud_draw::*;
 use layout::*;
-use lift_graph::*;
+use lift::*;
 use value_input::{parse_value, typed_char, ValueTarget};
 
 use crate::{
-    band::{infer_shape, Band, Shape},
+    band::{infer_shape, Band, Shape, MAX_RANGE_DB},
     dsp::BandCoeffs,
     engine::Shared,
     lift::{filter_influence, LiftBand, LIFT_ID_BASE},
@@ -43,7 +43,7 @@ use nih_plug_vizia::{
 };
 use pleasant_ui::{
     spectrum::smooth_bins,
-    theme::{rgb, BG, COLORS, GOLD, LINE, MUTED, PANEL, TEAL, TEXT},
+    theme::{rgb, BG, EQ_COLORS as BAND_COLORS, GOLD, LINE, MUTED, PANEL, TEAL, TEXT},
     ButtonAnim, Draw, ValueEdit, FONT_JETBRAINS_MONO,
 };
 use std::{
@@ -76,6 +76,7 @@ enum WallPage {
 
 #[derive(Clone, Copy, PartialEq)]
 enum Target {
+    Value(ValueTarget),
     Global(usize),
     Band(usize),
     LiftBand(usize),
@@ -157,12 +158,14 @@ pub fn create(params: Arc<StripParams>, shared: Arc<Shared>) -> Option<Box<dyn E
                 band_dyn_page: Cell::new(false),
                 drag: None,
                 hover: None,
+                command_down: false,
                 font: Cell::new(None),
                 signature: Cell::new(None),
                 graph_db: display_range(*params.graph_range.lock().unwrap()),
                 scale_menu: false,
                 processing_menu: None,
                 edit: None,
+                value_press: None,
                 down: (0.0, 0.0),
                 last_drag: (0.0, 0.0),
                 pending_create: None,
@@ -192,7 +195,6 @@ pub fn create(params: Arc<StripParams>, shared: Arc<Shared>) -> Option<Box<dyn E
                 pse_bypass_anim: ButtonAnim::new(),
                 dyn_bypass_anim: ButtonAnim::new(),
                 wall_bypass_anim: ButtonAnim::new(),
-                lift_badge_anim: ButtonAnim::new(),
                 dyn_band_anim: ButtonAnim::new(),
                 band_bypass_anim: ButtonAnim::new(),
             }
@@ -220,12 +222,14 @@ struct StripView {
     selected: Option<u64>,
     drag: Option<Target>,
     hover: Option<(f32, f32)>,
+    command_down: bool,
     font: Cell<Option<FontId>>,
     signature: Cell<Option<FontId>>,
     graph_db: f64,
     scale_menu: bool,
     processing_menu: Option<bool>,
     edit: Option<ValueEdit<ValueTarget>>,
+    value_press: Option<pleasant_ui::pointer::ValuePress<ValueTarget>>,
     down: (f32, f32),
     last_drag: (f32, f32),
     pending_create: Option<PendingCreate>,
@@ -255,7 +259,6 @@ struct StripView {
     pse_bypass_anim: ButtonAnim,
     dyn_bypass_anim: ButtonAnim,
     wall_bypass_anim: ButtonAnim,
-    lift_badge_anim: ButtonAnim,
     dyn_band_anim: ButtonAnim,
     band_bypass_anim: ButtonAnim,
 }
@@ -300,7 +303,6 @@ fn format_pse_time(time_val: f64, peak: bool) -> String {
         format!("{:.0} ms", release * 1000.0)
     }
 }
-
 
 impl View for StripView {
     fn event(&mut self, cx: &mut EventContext, event: &mut Event) {

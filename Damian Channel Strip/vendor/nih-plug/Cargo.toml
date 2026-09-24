@@ -10,6 +10,9 @@ keywords = ["audio", "plugin", "vst", "vst3"]
 description = "A simple but modern API-agnostic audio plugin framework"
 repository = "https://github.com/robbert-vdh/nih-plug"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
+
 [features]
 default = ["vst3"]
 

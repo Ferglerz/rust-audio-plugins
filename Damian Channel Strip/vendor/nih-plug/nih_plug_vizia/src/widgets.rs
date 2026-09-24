@@ -172,16 +172,33 @@ impl Model for WindowModel {
                 .is_some_and(|at| at.elapsed() >= Duration::from_millis(120))
             {
                 self.host_resize_at = None;
-                if let Some((width, _)) = self.host_logical.take() {
-                    let (artwork_w, _) = self.vizia_state.inner_logical_size();
-                    if let Some(scale) = crate::editor_scale::scale_from_host_resize(
+                if let Some((width, height)) = self.host_logical.take() {
+                    let (artwork_w, artwork_h) = self.vizia_state.inner_logical_size();
+                    let current_scale = cx.user_scale_factor();
+                    let new_scale = crate::editor_scale::scale_from_host_resize(
                         artwork_w,
                         width,
-                        cx.user_scale_factor(),
-                    ) {
-                        // Host already resized the window. Keep the reported size
-                        // in agreement without asking the host to resize again.
+                        current_scale,
+                    )
+                    .or_else(|| {
+                        crate::editor_scale::scale_from_host_resize(
+                            artwork_h,
+                            height,
+                            current_scale,
+                        )
+                    });
+                    if let Some(scale) = new_scale {
+                        // Keep the host's physical size while restoring the artwork's
+                        // logical dimensions. Vizia then scales drawing and pointer
+                        // coordinates together, including controls and graph edits.
                         self.vizia_state.scale_factor.store(scale);
+                        self.last_inner_window_size.store((artwork_w, artwork_h));
+                        self.accepted_scale = scale;
+                        cx.set_window_size(WindowSize {
+                            width: artwork_w,
+                            height: artwork_h,
+                        });
+                        cx.set_user_scale_factor(scale);
                         self.vizia_state.remember_scale(scale);
                         self.vizia_state.flush_remembered_scale();
                     }
