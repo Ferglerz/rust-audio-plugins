@@ -1,0 +1,16 @@
+[package]
+name = "openwurli-ui"
+version = "0.1.0"
+edition = "2021"
+authors = ["Fergler"]
+license = "GPL-3.0-or-later"
+description = "Pleasant UI wrapper for the OpenWurli electric piano"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+nih_plug_vizia = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+pleasant-ui = { path = "../pleasant-ui" }
+openwurli-dsp = { git = "https://github.com/Ferglerz/openwurli.git", rev = "6614ab9519471e956ecb0c82edc4fcf295f724dc" }
