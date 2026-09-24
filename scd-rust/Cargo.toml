@@ -27,3 +27,6 @@ baseview = { path = "../Damian Channel Strip/vendor/baseview" }
 
 [patch."https://github.com/robbert-vdh/vizia.git"]
 vizia_baseview = { path = "../Damian Channel Strip/vendor/vizia_baseview" }
+
+[patch.crates-io]
+block = { path = "../vendor/block-0.1.6" }
