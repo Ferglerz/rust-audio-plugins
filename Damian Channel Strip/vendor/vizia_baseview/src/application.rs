@@ -201,6 +201,9 @@ impl ApplicationRunner {
             cx.send_event(event);
         }
 
+        // Timer callbacks enqueue events (including plugin page animations).
+        cx.process_timers();
+
         // Events
         cx.process_events();
 

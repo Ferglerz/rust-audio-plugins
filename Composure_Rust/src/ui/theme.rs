@@ -91,7 +91,7 @@ pub const READOUT_SLIDER_LABEL_H: f32 = 11.0;
 pub const GROUP_TITLE_H: f32 = 22.0;
 pub const GROUP_PAD: f32 = 10.0;
 
-/// Generic JSFX buttons (L, SC, Brickwall, Inverse) — `BUTTON_H` in FerglerUI layout.
+/// Generic JSFX buttons (L, SC, Inverse) — `BUTTON_H` in FerglerUI layout.
 pub const BUTTON_H: f32 = 27.0;
 
 /// Offset to center a larger visual control inside its JSFX layout slot.

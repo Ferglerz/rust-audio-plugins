@@ -24,7 +24,6 @@ pub struct CurveSegment {
 pub struct CompressionGraph {
     points: [f64; MAX_POINTS * 2],
     pub num_points: usize,
-    curve_amounts: [f64; MAX_POINTS],
     #[serde(skip, default = "default_segments")]
     segments: [CurveSegment; MAX_CURVE_SEGMENTS],
     #[serde(skip, default = "default_num_segments")]
@@ -53,7 +52,6 @@ impl Default for CompressionGraph {
         let mut g = Self {
             points: [0.0; MAX_POINTS * 2],
             num_points: 6,
-            curve_amounts: [0.0; MAX_POINTS],
             segments: [CurveSegment::default(); MAX_CURVE_SEGMENTS],
             num_segments: 0,
             segments_dirty: true,
@@ -118,21 +116,6 @@ impl CompressionGraph {
         self.points[point_idx * 2 + 1]
     }
 
-    pub fn get_curve_amount(&self, point_index: usize) -> f64 {
-        if point_index < MAX_POINTS {
-            self.curve_amounts[point_index]
-        } else {
-            0.0
-        }
-    }
-
-    pub fn set_curve_amount(&mut self, point_index: usize, amount: f64) {
-        if point_index < MAX_POINTS {
-            self.curve_amounts[point_index] = amount;
-            self.invalidate();
-        }
-    }
-
     pub fn is_valid_curve_point(&self, point_idx: usize) -> bool {
         point_idx > 0 && point_idx < self.num_points - 1
     }
@@ -168,7 +151,6 @@ impl CompressionGraph {
             && self.min_db == other.min_db
             && self.max_db == other.max_db
             && self.points == other.points
-            && self.curve_amounts == other.curve_amounts
     }
 
     pub fn update_corner_points(&mut self) {
@@ -239,7 +221,6 @@ impl CompressionGraph {
     fn calculate_bezier_control_points(
         &self,
         point_index: usize,
-        curve_amount: f64,
     ) -> (f64, f64, f64, f64, f64, f64, f64, f64) {
         let prev_x = self.get_point_x(point_index - 1);
         let prev_y = self.get_point_y(point_index - 1);
@@ -247,7 +228,8 @@ impl CompressionGraph {
         let curr_y = self.get_point_y(point_index);
         let next_x = self.get_point_x(point_index + 1);
         let next_y = self.get_point_y(point_index + 1);
-        let curve_factor = curve_amount / 100.0;
+        // Every node uses the former maximum (100%) curve setting.
+        let curve_factor = 1.0;
         let invisible1_x = curr_x + (prev_x - curr_x) * curve_factor;
         let invisible1_y = curr_y + (prev_y - curr_y) * curve_factor;
         let invisible2_x = curr_x + (next_x - curr_x) * curve_factor;
@@ -309,11 +291,9 @@ impl CompressionGraph {
         let mut i = 0;
         while i < self.num_points - 1 {
             let next_idx = i + 1;
-            let next_point_has_curve =
-                self.is_valid_curve_point(next_idx) && self.get_curve_amount(next_idx) > 0.0;
+            let next_point_has_curve = self.is_valid_curve_point(next_idx);
 
             if next_point_has_curve {
-                let curve_amt = self.get_curve_amount(next_idx);
                 let (
                     mut p0_x_db,
                     mut p0_y_db,
@@ -323,13 +303,12 @@ impl CompressionGraph {
                     p2_y_db,
                     mut p3_x_db,
                     mut p3_y_db,
-                ) = self.calculate_bezier_control_points(next_idx, curve_amt);
+                ) = self.calculate_bezier_control_points(next_idx);
 
                 // Check overlap with previous curve
-                if i > 0 && self.is_valid_curve_point(i) && self.get_curve_amount(i) > 0.0 {
-                    let prev_curve_amt = self.get_curve_amount(i);
+                if i > 0 && self.is_valid_curve_point(i) {
                     let (_, _, _, _, _, _, prev_p3_x, prev_p3_y) =
-                        self.calculate_bezier_control_points(i, prev_curve_amt);
+                        self.calculate_bezier_control_points(i);
                     if prev_p3_x > p0_x_db {
                         p0_x_db = (prev_p3_x + p0_x_db) / 2.0;
                         p0_y_db = (prev_p3_y + p0_y_db) / 2.0;
@@ -337,12 +316,10 @@ impl CompressionGraph {
                 }
 
                 let next_next_idx = i + 2;
-                let next_next_point_has_curve = self.is_valid_curve_point(next_next_idx)
-                    && self.get_curve_amount(next_next_idx) > 0.0;
+                let next_next_point_has_curve = self.is_valid_curve_point(next_next_idx);
                 if next_next_point_has_curve {
-                    let next_curve_amount = self.get_curve_amount(next_next_idx);
                     let (n0_x, n0_y, _, _, _, _, _, _) =
-                        self.calculate_bezier_control_points(next_next_idx, next_curve_amount);
+                        self.calculate_bezier_control_points(next_next_idx);
                     if p3_x_db > n0_x {
                         p3_x_db = (p3_x_db + n0_x) / 2.0;
                         p3_y_db = (p3_y_db + n0_y) / 2.0;
@@ -431,7 +408,6 @@ impl CompressionGraph {
                 if self.points[i * 2] > self.points[j * 2] {
                     self.points.swap(i * 2, j * 2);
                     self.points.swap(i * 2 + 1, j * 2 + 1);
-                    self.curve_amounts.swap(i, j);
                 }
                 j += 1;
             }
@@ -454,11 +430,9 @@ impl CompressionGraph {
         for i in (insert_pos + 1..=self.num_points).rev() {
             self.points[i * 2] = self.points[(i - 1) * 2];
             self.points[i * 2 + 1] = self.points[(i - 1) * 2 + 1];
-            self.curve_amounts[i] = self.curve_amounts[i - 1];
         }
         self.points[insert_pos * 2] = input_db;
         self.points[insert_pos * 2 + 1] = output_db;
-        self.curve_amounts[insert_pos] = 0.0;
         self.num_points += 1;
         self.update_corner_points();
         self.invalidate();
@@ -472,9 +446,7 @@ impl CompressionGraph {
         for i in point_index..self.num_points - 1 {
             self.points[i * 2] = self.points[(i + 1) * 2];
             self.points[i * 2 + 1] = self.points[(i + 1) * 2 + 1];
-            self.curve_amounts[i] = self.curve_amounts[i + 1];
         }
-        self.curve_amounts[self.num_points - 1] = 0.0;
         self.num_points -= 1;
         self.update_corner_points();
         self.invalidate();
@@ -500,7 +472,6 @@ impl CompressionGraph {
         }
         let input_db = self.points[point_index * 2];
         self.points[point_index * 2 + 1] = input_db;
-        self.set_curve_amount(point_index, 0.0);
         self.update_corner_points();
         self.invalidate();
     }
@@ -554,10 +525,15 @@ pub fn sample_curve_with_segments(input_db: f64, segments: &[CurveSegment], min_
     let last_x = segments[last_idx].x2;
     if input_db >= last_x {
         let last = &segments[last_idx];
-        let last_seg_width = last.x2 - last.x1;
-        if last_seg_width.abs() > 0.0001 {
-            let last_slope = (last.y2 - last.y1) / last_seg_width;
-            return last.y2 + last_slope * (input_db - last.x2);
+        // A knot on the right edge coincides with the hidden corner. Skip
+        // zero-width trailing segments so the extension keeps the incoming tangent.
+        if let Some(tangent) = segments
+            .iter()
+            .rev()
+            .find(|seg| (seg.x2 - seg.x1).abs() > 0.0001)
+        {
+            let slope = (tangent.y2 - tangent.y1) / (tangent.x2 - tangent.x1);
+            return last.y2 + slope * (input_db - last.x2);
         }
         return last.y2;
     }
@@ -608,12 +584,63 @@ mod tests {
     use super::*;
 
     #[test]
+    fn legacy_curve_settings_cannot_restore_linear_elbows() {
+        let mut graph = CompressionGraph::new();
+        graph.move_interior_point(2, -12.0, -16.0);
+        let expected = graph.segments().to_vec();
+        assert!(expected.len() > graph.num_points);
+        for amount in [0.0, 35.0, 100.0] {
+            let mut saved = serde_json::to_value(graph).unwrap();
+            saved["curve_amounts"] = serde_json::json!(vec![amount; MAX_POINTS]);
+            let mut restored: CompressionGraph = serde_json::from_value(saved).unwrap();
+            assert_eq!(restored.segments(), expected.as_slice());
+            assert!(serde_json::to_value(restored)
+                .unwrap()
+                .get("curve_amounts")
+                .is_none());
+        }
+    }
+
+    #[test]
+    fn new_and_reset_nodes_keep_maximum_curvature() {
+        let mut graph = CompressionGraph::new();
+        let idx = graph.add_point(-10.0, -14.0).unwrap();
+        for reset in [false, true] {
+            if reset {
+                graph.reset_point_to_unity(idx);
+            }
+            let controls = graph.calculate_bezier_control_points(idx);
+            assert_eq!(
+                (controls.0, controls.1),
+                (graph.get_point_x(idx - 1), graph.get_point_y(idx - 1))
+            );
+            assert_eq!(
+                (controls.6, controls.7),
+                (graph.get_point_x(idx + 1), graph.get_point_y(idx + 1))
+            );
+        }
+    }
+
+    #[test]
     fn default_graph_is_unity_line() {
         let mut g = CompressionGraph::new();
         for inp in [-15.0, -10.0, -5.0, -1.0] {
             let out = g.sample_curve_at_db(inp);
             assert!((out - inp).abs() < 0.01, "inp={inp} out={out}");
         }
+    }
+
+    #[test]
+    fn right_edge_knot_keeps_its_tangent_in_sampler_and_lut() {
+        let mut graph = CompressionGraph::new();
+        graph.num_points = 4;
+        graph.points[2..6].copy_from_slice(&[-8.0, -8.0, 0.0, -4.0]);
+        graph.finalize_after_edit_no_sort();
+        assert!((graph.sample_curve_at_db(0.0) + 4.0).abs() < 1e-9);
+        assert!((graph.sample_curve_at_db(2.0) + 3.0).abs() < 1e-9);
+        let mut lut = super::super::compression_lut::CompressionLUT::new();
+        lut.build_lut(&graph);
+        assert!((lut.lookup(2.0) + 3.0).abs() < 1e-9);
     }
 
     #[test]
@@ -642,7 +669,6 @@ mod tests {
         let mut g = CompressionGraph::new();
         g.adjust_interior_output_y(1, 8.0);
         g.adjust_interior_output_y(2, 4.0);
-        g.set_curve_amount(2, 50.0);
         g.finalize_after_edit();
         let segments = g.segments().to_vec();
 

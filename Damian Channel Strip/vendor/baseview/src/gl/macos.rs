@@ -83,7 +83,7 @@ impl GlContext {
         }
 
         let view =
-            NSOpenGLView::alloc(nil).initWithFrame_pixelFormat_(parent_view.frame(), pixel_format);
+            NSOpenGLView::alloc(nil).initWithFrame_pixelFormat_(parent_view.bounds(), pixel_format);
 
         if view == nil {
             return Err(GlError::CreationFailed(()));
@@ -93,7 +93,7 @@ impl GlContext {
 
         // Do not autoresize this GL view with the parent. A 0×0
         // NSOpenGLView during live resize aborts native GL even when
-        // vizia is not drawing. Size is applied only from sync_from_view.
+        // vizia is not drawing. Size is applied only at a render-frame boundary.
         let () = msg_send![view, retain];
         NSOpenGLView::display_(view);
         parent_view.addSubview_(view);
@@ -124,9 +124,7 @@ impl GlContext {
         let framework_name = CFString::from_str("com.apple.opengl").unwrap();
         let framework =
             unsafe { CFBundleGetBundleWithIdentifier(framework_name.as_concrete_TypeRef()) };
-        unsafe {
-            CFBundleGetFunctionPointerForName(framework, symbol_name.as_concrete_TypeRef())
-        }
+        unsafe { CFBundleGetFunctionPointerForName(framework, symbol_name.as_concrete_TypeRef()) }
     }
 
     pub fn swap_buffers(&self) {

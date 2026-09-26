@@ -11,7 +11,7 @@ mod tests {
         boost_at_first_interior_graph, cut_then_boost_with_lut, gr_at, run_peak_sine_until_settled,
         setup_expansion_chain,
     };
-    use super::super::{ProcessingChain};
+    use super::super::ProcessingChain;
 
     #[test]
     fn left_corner_y_stays_on_graph_floor() {
@@ -25,24 +25,20 @@ mod tests {
     }
 
     #[test]
-    fn curve_passes_through_interior_knots() {
+    fn maximum_curve_rounds_interior_knots() {
         let (mut graph, _) = cut_then_boost_with_lut();
-        for idx in 1..graph.num_points - 1 {
-            let x = graph.get_point_x(idx);
-            let y = graph.get_point_y(idx);
-            let sampled = graph.sample_curve_at_db(x);
-            assert!(
-                (sampled - y).abs() < 0.15,
-                "knot {idx} ({x},{y}) sampled={sampled}"
-            );
+        // Reference samples of the former 100% setting. Nodes are Bezier
+        // control points, so the smoothed curve rounds past their elbows.
+        for (input, expected) in [(-15.0, -18.709669741148467), (-12.0, -8.800147601476013)] {
+            assert!((graph.sample_curve_at_db(input) - expected).abs() < 1e-9);
         }
     }
 
     #[test]
     fn gr_matches_curve_at_knot_abscissa() {
-        let (_graph, lut) = cut_then_boost_with_lut();
+        let (mut graph, lut) = cut_then_boost_with_lut();
         let knot_in = -12.0;
-        let knot_out = -8.0;
+        let knot_out = graph.sample_curve_at_db(knot_in);
         let expected_gr = knot_out - knot_in;
         let (gr, skipped) = gr_at(&lut, knot_in, 0.0, 1.0);
         assert!(!skipped, "GR should engage at boost knot input level");
@@ -52,7 +48,7 @@ mod tests {
         );
 
         let cut_in = -15.0;
-        let cut_out = -20.0;
+        let cut_out = graph.sample_curve_at_db(cut_in);
         let (gr_cut, skipped_cut) = gr_at(&lut, cut_in, 0.0, 1.0);
         assert!(!skipped_cut);
         assert!(
@@ -63,7 +59,7 @@ mod tests {
     }
 
     #[test]
-    fn expansion_drag_on_unity_line_aligns_with_point() {
+    fn expansion_drag_on_unity_line_aligns_with_smoothed_curve() {
         let mut graph = boost_at_first_interior_graph();
         let snapshot = crate::graph_store::GraphSnapshot::from_graph(graph);
         graph = snapshot.graph;
@@ -80,7 +76,7 @@ mod tests {
             "expansion drag should unity-snap left corner, got y={corner_y}"
         );
 
-        let expected_gr = point_out - point_in;
+        let expected_gr = graph.sample_curve_at_db(point_in) - point_in;
         let (gr, skipped) = gr_at(&lut, point_in, 0.0, 1.0);
         assert!(!skipped, "GR should engage at expansion point");
         assert!(
@@ -121,7 +117,10 @@ mod tests {
     fn threshold_precedes_first_knot_deviation() {
         let (_graph, lut) = cut_then_boost_with_lut();
         let thr = lut.threshold();
-        assert!(thr < 500.0, "bent curve should have finite LUT threshold, got {thr}");
+        assert!(
+            thr < 500.0,
+            "bent curve should have finite LUT threshold, got {thr}"
+        );
         assert!(
             thr <= -15.0 + COMP_LUT_GRANULARITY,
             "threshold {thr} should not sit above first bent knot (-15 dB)"

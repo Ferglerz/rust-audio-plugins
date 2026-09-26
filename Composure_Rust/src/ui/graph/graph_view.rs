@@ -64,9 +64,6 @@ pub struct GraphView<L1, L2, P> {
     dragging_threshold: bool,
     hovered_threshold: Option<ThresholdLine>,
     hovered_point: i32,
-    curve_drag: bool,
-    curve_drag_start_x: f32,
-    curve_drag_start_amount: f64,
     last_click_point: i32,
     last_click_time: Option<Instant>,
     draw_cache: RefCell<GraphDrawCache>,
@@ -99,9 +96,6 @@ impl GraphView<(), (), ()> {
             dragging_threshold: false,
             hovered_threshold: None,
             hovered_point: -1,
-            curve_drag: false,
-            curve_drag_start_x: 0.0,
-            curve_drag_start_amount: 0.0,
             last_click_point: -1,
             last_click_time: None,
             draw_cache: RefCell::new(GraphDrawCache::default()),
@@ -151,12 +145,7 @@ where
         let g = &self.graph.load().graph;
         let in_db = g.get_point_x(idx);
         let out_db = g.get_point_y(idx);
-        let curve = g.get_curve_amount(idx);
-        let text = if self.curve_drag {
-            format!("Curve: {curve:.0}%")
-        } else {
-            format!("{:.1} dB | {:.1} dB", out_db - in_db, out_db)
-        };
+        let text = format!("{:.1} dB | {:.1} dB", out_db - in_db, out_db);
         self.display.set_graph_readout(text);
     }
 
@@ -210,7 +199,9 @@ where
                     b.h,
                 );
 
-                if threshold_lines::find_graph_threshold(&plugin_params, my, line_y).is_some() {
+                if super::EditorData::appearance.get(cx) == 2
+                    && threshold_lines::find_graph_threshold(&plugin_params, my, line_y).is_some()
+                {
                     self.dragging_threshold = true;
                     self.mouse_down = true;
                     self.input_thresh_base.begin_set_parameter(cx);
@@ -241,14 +232,7 @@ where
                     self.last_click_point = idx as i32;
                     self.last_click_time = Some(now);
 
-                    if cx.modifiers().command() {
-                        self.curve_drag = true;
-                        self.curve_drag_start_x = mx;
-                        self.curve_drag_start_amount = graph.get_curve_amount(idx);
-                        self.dragging_point = idx as i32;
-                    } else {
-                        self.dragging_point = idx as i32;
-                    }
+                    self.dragging_point = idx as i32;
                 } else if mx >= 0.0
                     && my >= 0.0
                     && mx <= b.w
@@ -306,7 +290,6 @@ where
                 if self.mouse_down {
                     self.mouse_down = false;
                     self.dragging_point = -1;
-                    self.curve_drag = false;
                     self.display.clear_graph_readout();
                     cx.release();
                     meta.consume();
@@ -334,29 +317,20 @@ where
                     let b = cx.bounds();
                     let idx = self.dragging_point as usize;
 
-                    if self.curve_drag {
-                        let dx = mx - self.curve_drag_start_x;
-                        let new_amount = (self.curve_drag_start_amount
-                            + (dx as f64 / 100.0) * 100.0)
-                            .clamp(0.0, 100.0);
-                        self.mutate_graph(cx, |g| g.set_curve_amount(idx, new_amount));
-                        self.update_point_readout(idx);
-                    } else {
-                        self.mutate_graph(cx, |g| {
-                            let (in_db, out_db) = graph_display::pixel_to_db_with_pad(
-                                mx,
-                                my,
-                                b.w,
-                                b.h,
-                                g.min_db,
-                                g.max_db,
-                                g.range_db,
-                                DISPLAY_PAD_DB,
-                            );
-                            g.move_interior_point(idx, in_db, out_db);
-                        });
-                        self.update_point_readout(idx);
-                    }
+                    self.mutate_graph(cx, |g| {
+                        let (in_db, out_db) = graph_display::pixel_to_db_with_pad(
+                            mx,
+                            my,
+                            b.w,
+                            b.h,
+                            g.min_db,
+                            g.max_db,
+                            g.range_db,
+                            DISPLAY_PAD_DB,
+                        );
+                        g.move_interior_point(idx, in_db, out_db);
+                    });
+                    self.update_point_readout(idx);
                     cx.needs_redraw();
                     meta.consume();
                 } else {
@@ -376,8 +350,11 @@ where
                         range_db,
                         b.h,
                     );
-                    self.hovered_threshold =
-                        threshold_lines::find_graph_threshold(&plugin_params, my, line_y);
+                    self.hovered_threshold = if super::EditorData::appearance.get(cx) == 2 {
+                        threshold_lines::find_graph_threshold(&plugin_params, my, line_y)
+                    } else {
+                        None
+                    };
                     self.hovered_point = hovered_point;
                     self.update_graph_hint();
                     let _ = mx;
@@ -523,15 +500,17 @@ where
             draw_out_of_scope_fade(canvas, bounds, min_db, max_db, range_db, opacity);
         }
 
-        let active = self.active_threshold();
-        threshold_lines::draw_input_level_threshold(
-            canvas,
-            bounds,
-            &plugin_params,
-            db_to_y,
-            opacity,
-            active,
-        );
+        if analog {
+            let active = self.active_threshold();
+            threshold_lines::draw_input_level_threshold(
+                canvas,
+                bounds,
+                &plugin_params,
+                db_to_y,
+                opacity,
+                active,
+            );
+        }
 
         let unity_paint = {
             let mut p = Paint::color(vg_color(theme::GRAPH_UNITY, opacity));
@@ -569,7 +548,7 @@ where
         }
 
         draw_bl_margin_extension(
-            canvas, &db_to_x, &db_to_y, segments, corner_x, corner_y, min_db, opacity,
+            canvas, &db_to_x, &db_to_y, corner_x, corner_y, min_db, opacity,
         );
 
         for (i, (px, py)) in point_coords.iter().enumerate() {

@@ -17,7 +17,6 @@ pub(crate) fn capture_block_state(params: &ComposureParams) -> BlockParamState {
         detection_feedback: params.detection_mode.value() == DetectionMode::Feedback,
         rms_normalization: params.rms_normalization.value(),
         rms_size_ms: params.rms_size_ms.value() as f64,
-        brickwall_limiter: params.brickwall_limiter.value(),
         mid_side_mode: params.mid_side_mode.value(),
         sc_adjust_preview: params.sc_adjust_preview.value(),
         use_sidechain: params.use_sidechain.value(),

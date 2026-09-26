@@ -5,7 +5,15 @@ use nih_plug_vizia::vizia::prelude::BoundingBox;
 /// Extra dB shown around the operational graph square.
 pub const DISPLAY_PAD_DB: f64 = 1.5;
 /// Grid and axis label spacing in the graph editor.
-pub const GRID_STEP_DB: f64 = 5.0;
+pub fn grid_step_db(range_db: f64) -> f64 {
+    if range_db == 20.0 || range_db == 40.0 {
+        5.0
+    } else if range_db <= 24.0 {
+        6.0
+    } else {
+        12.0
+    }
+}
 
 pub fn display_min_db(operational_min_db: f64) -> f64 {
     operational_min_db - DISPLAY_PAD_DB
@@ -91,15 +99,20 @@ pub fn norm_to_db(norm: f64, operational_min_db: f64, operational_range_db: f64)
 }
 
 pub fn grid_line_count(operational_range_db: f64) -> usize {
-    (operational_range_db / GRID_STEP_DB).round() as usize
+    (operational_range_db / grid_step_db(operational_range_db)).floor() as usize
 }
 
 /// Axis labels at -5, -10, … down to the operational floor (e.g. -20 / -40 / -60).
 pub fn axis_label_db_values(operational_range_db: f64) -> Vec<i32> {
     let n = grid_line_count(operational_range_db);
-    (1..=n)
-        .map(|i| -(i as f64 * GRID_STEP_DB).round() as i32)
-        .collect()
+    let mut labels: Vec<i32> = (1..=n)
+        .map(|i| -(i as f64 * grid_step_db(operational_range_db)).round() as i32)
+        .collect();
+    let floor = -operational_range_db.round() as i32;
+    if labels.last() != Some(&floor) {
+        labels.push(floor);
+    }
+    labels
 }
 
 pub fn axis_label_y(
@@ -136,6 +149,17 @@ mod tests {
                 assert!((back_input - input).abs() < 0.05);
                 assert!((back_output - output).abs() < 0.05);
             }
+        }
+    }
+
+    #[test]
+    fn damian_axis_labels_end_at_the_selected_negative_floor() {
+        for mode in crate::params::GraphRangeMode::PLEASANT {
+            let labels = axis_label_db_values(mode.range_db());
+            assert_eq!(labels.last(), Some(&-(mode.range_db() as i32)));
+            assert!(labels
+                .iter()
+                .all(|db| *db < 0 && *db >= -(mode.range_db() as i32)));
         }
     }
 

@@ -2,7 +2,7 @@
 //!
 //! Maps all JSFX sliders from Composure.jsfx to nih-plug parameter types.
 
-use std::sync::Arc;
+use std::sync::{atomic::AtomicU32, Arc};
 
 use nih_plug::prelude::*;
 use nih_plug_vizia::ViziaState;
@@ -11,6 +11,23 @@ pub use crate::detector_eq::DetectorShape;
 use crate::detector_eq::{DetectorBandParams, EQ_BANDS};
 use crate::dsp::envelope::defaults as env_defaults;
 use crate::graph_store::GraphStore;
+
+fn format_envelope_curve(value: f32) -> String {
+    format!("{:.1}", value * 50.0)
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string()
+}
+
+fn parse_envelope_curve(text: &str) -> Option<f32> {
+    text.trim()
+        .trim_end_matches('%')
+        .trim()
+        .parse::<f32>()
+        .ok()
+        .filter(|value| value.is_finite())
+        .map(|value| value / 50.0)
+}
 
 const ENVELOPE_TIME_NUMERATOR: f32 = 10_000.0;
 const ATTACK_MAX_DB_PER_SEC: f32 = 100_000.0; // 100 µs; roughly five samples at 48 kHz.
@@ -138,14 +155,79 @@ pub enum GraphRangeMode {
     Range40,
     #[name = "60 dB"]
     Range60,
+    #[name = "6 dB"]
+    Range6,
+    #[name = "12 dB"]
+    Range12,
+    #[name = "18 dB"]
+    Range18,
+    #[name = "24 dB"]
+    Range24,
+    #[name = "30 dB"]
+    Range30,
+    #[name = "36 dB"]
+    Range36,
+    #[name = "42 dB"]
+    Range42,
+    #[name = "48 dB"]
+    Range48,
+    #[name = "54 dB"]
+    Range54,
+    #[name = "66 dB"]
+    Range66,
+    #[name = "72 dB"]
+    Range72,
 }
 
 impl GraphRangeMode {
+    /// Damian ranges; legacy 20/40 dB variants retain their saved indices.
+    pub const PLEASANT: [Self; 12] = [
+        Self::Range6,
+        Self::Range12,
+        Self::Range18,
+        Self::Range24,
+        Self::Range30,
+        Self::Range36,
+        Self::Range42,
+        Self::Range48,
+        Self::Range54,
+        Self::Range60,
+        Self::Range66,
+        Self::Range72,
+    ];
+
+    pub const ALL: [Self; 14] = [
+        Self::Range20,
+        Self::Range40,
+        Self::Range60,
+        Self::Range6,
+        Self::Range12,
+        Self::Range18,
+        Self::Range24,
+        Self::Range30,
+        Self::Range36,
+        Self::Range42,
+        Self::Range48,
+        Self::Range54,
+        Self::Range66,
+        Self::Range72,
+    ];
     pub fn range_db(self) -> f64 {
         match self {
             Self::Range20 => 20.0,
             Self::Range40 => 40.0,
             Self::Range60 => 60.0,
+            Self::Range6 => 6.0,
+            Self::Range12 => 12.0,
+            Self::Range18 => 18.0,
+            Self::Range24 => 24.0,
+            Self::Range30 => 30.0,
+            Self::Range36 => 36.0,
+            Self::Range42 => 42.0,
+            Self::Range48 => 48.0,
+            Self::Range54 => 54.0,
+            Self::Range66 => 66.0,
+            Self::Range72 => 72.0,
         }
     }
 }
@@ -268,10 +350,6 @@ pub struct ComposureParams {
     #[id = "prog_release_blend"]
     pub prog_release_blend: FloatParam,
 
-    /// Brickwall limiter on/off.
-    #[id = "brickwall_limiter"]
-    pub brickwall_limiter: BoolParam,
-
     /// Harmonic modulation amount (0.0–1.0).
     #[id = "harmonic_amount"]
     pub harmonic_amount: FloatParam,
@@ -326,6 +404,9 @@ pub struct ComposureParams {
     #[persist = "editor-state"]
     pub editor_state: Arc<ViziaState>,
 
+    /// Per-instance artwork width, shared with the editor sizing callback.
+    pub editor_width: Arc<AtomicU32>,
+
     /// Published compression curve (RCU snapshot; persisted as graph points JSON).
     #[persist = "graph_points"]
     pub graph_store: GraphStore,
@@ -333,6 +414,9 @@ pub struct ComposureParams {
 
 impl Default for ComposureParams {
     fn default() -> Self {
+        let editor_width = Arc::new(AtomicU32::new(crate::ui::preferred_editor_width()));
+        let graph_store = GraphStore::default();
+        graph_store.select_range(GraphRangeMode::Range48);
         Self {
             // === ENVELOPE ===
             attack: FloatParam::new(
@@ -356,7 +440,10 @@ impl Default for ComposureParams {
                     max: 2.0,
                 },
             )
-            .with_step_size(0.25),
+            .with_step_size(0.25)
+            .with_unit("%")
+            .with_value_to_string(Arc::new(format_envelope_curve))
+            .with_string_to_value(Arc::new(parse_envelope_curve)),
 
             release: FloatParam::new(
                 "Release",
@@ -379,7 +466,10 @@ impl Default for ComposureParams {
                     max: 2.0,
                 },
             )
-            .with_step_size(0.25),
+            .with_step_size(0.25)
+            .with_unit("%")
+            .with_value_to_string(Arc::new(format_envelope_curve))
+            .with_string_to_value(Arc::new(parse_envelope_curve)),
 
             hold_ms: FloatParam::new(
                 "Hold",
@@ -466,7 +556,8 @@ impl Default for ComposureParams {
                     max: 30.0,
                 },
             )
-            .with_unit(" dB"),
+            .with_unit(" dB")
+            .with_value_to_string(formatters::v2s_f32_rounded(1)),
 
             // === HARMONICS ===
             harmonics_on: BoolParam::new("Harmonics", true),
@@ -542,8 +633,6 @@ impl Default for ComposureParams {
             )
             .with_step_size(1.0),
 
-            brickwall_limiter: BoolParam::new("Brickwall Limiter", true),
-
             harmonic_amount: FloatParam::new(
                 "Harmonic Amount",
                 1.0,
@@ -616,12 +705,13 @@ impl Default for ComposureParams {
             )
             .with_step_size(0.1),
 
-            graph_range_mode: EnumParam::new("Graph dB Range", GraphRangeMode::Range20),
+            graph_range_mode: EnumParam::new("Graph dB Range", GraphRangeMode::Range48),
 
             mid_side_mode: BoolParam::new("Mid/Side", false),
 
-            editor_state: ViziaState::new_screen_sized("Composure", || (1182, 504)),
-            graph_store: GraphStore::default(),
+            editor_state: crate::ui::default_editor_state(editor_width.clone()),
+            editor_width,
+            graph_store,
             detector_eq: std::array::from_fn(|_| DetectorBandParams::default()),
         }
     }
@@ -630,6 +720,54 @@ impl Default for ComposureParams {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn envelope_curve_percentages_round_trip_without_changing_dsp_values() {
+        let params = ComposureParams::default();
+        for param in [&params.attack_curve, &params.release_curve] {
+            for (plain, text) in [
+                (-2.0, "-100%"),
+                (-0.25, "-12.5%"),
+                (0.0, "0%"),
+                (0.25, "12.5%"),
+                (2.0, "100%"),
+            ] {
+                let norm = param.preview_normalized(plain);
+                assert_eq!(param.normalized_value_to_string(norm, true), text);
+                assert_eq!(param.string_to_normalized_value(text), Some(norm));
+            }
+            assert_eq!(
+                param.string_to_normalized_value("50"),
+                Some(param.preview_normalized(1.0))
+            );
+        }
+    }
+
+    #[test]
+    fn offset_readout_limits_decimals_without_quantizing_the_parameter() {
+        let params = ComposureParams::default();
+        let offset = &params.input_offset_db;
+        for (value, expected) in [(1.234567, "1.2 dB"), (-4.56789, "-4.6 dB"), (0.0, "0.0 dB")] {
+            let norm = offset.preview_normalized(value);
+            assert_eq!(offset.normalized_value_to_string(norm, true), expected);
+            assert!((offset.preview_plain(norm) - value).abs() < 0.00001);
+        }
+    }
+
+    #[test]
+    fn new_instances_start_at_48_db_with_evenly_distributed_unity_points() {
+        let params = ComposureParams::default();
+        assert_eq!(params.graph_range_mode.value(), GraphRangeMode::Range48);
+        let snapshot = params.graph_store.load();
+        let graph = &snapshot.graph;
+        assert_eq!(graph.min_db, -48.0);
+        assert_eq!(graph.max_db, 0.0);
+        for i in 1..graph.num_points - 1 {
+            let expected = -48.0 + 48.0 * i as f64 / (graph.num_points - 1) as f64;
+            assert!((graph.get_point_x(i) - expected).abs() < 0.001);
+            assert_eq!(graph.get_point_x(i), graph.get_point_y(i));
+        }
+    }
 
     #[test]
     fn envelope_rates_show_editable_time_without_changing_the_dsp_unit() {

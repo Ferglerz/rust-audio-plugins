@@ -12,8 +12,6 @@ const SLIDER_H: f32 = 27.0;
 const FILTER_GAP: f32 = 6.0;
 const BTN_ADJ_PREVIEW_W: f32 = 44.0;
 const BTN_SC_W: f32 = 30.0;
-const LOOKAHEAD_GAP: f32 = 10.0;
-const BRICKWALL_BTN_W: f32 = 80.0;
 const PROG_GAP: f32 = 10.0;
 const CURVE_ROW_GAP: f32 = 15.0;
 const TOOLBAR_PAD: f32 = 10.0;
@@ -56,7 +54,6 @@ pub struct ControlLayout {
     pub sc_btn: (f32, f32, f32),
     pub lp_slider: (f32, f32, f32),
     pub lookahead_slider: (f32, f32, f32),
-    pub brickwall_btn: (f32, f32, f32),
     pub prog_blend_slider: (f32, f32, f32),
     pub inverse_btn: (f32, f32, f32),
     pub attack_curve_slider: (f32, f32, f32),
@@ -112,13 +109,7 @@ impl ControlLayout {
         let lp_slider = (map_x(lp_x), current_y, map_w(hp_lp_w));
         current_y += SLIDER_H + 20.0;
 
-        let lookahead_w = filter_w - BRICKWALL_BTN_W - LOOKAHEAD_GAP;
-        let lookahead_slider = (map_x(rel_x), current_y, map_w(lookahead_w));
-        let brickwall_btn = (
-            map_x(rel_x + lookahead_w + LOOKAHEAD_GAP),
-            current_y,
-            map_w(BRICKWALL_BTN_W),
-        );
+        let lookahead_slider = (map_x(rel_x), current_y, map_w(filter_w));
         current_y += SLIDER_H + 20.0;
 
         let third_w = (filter_w - PROG_GAP * 2.0) / 3.0;
@@ -189,7 +180,6 @@ impl ControlLayout {
             sc_btn,
             lp_slider,
             lookahead_slider,
-            brickwall_btn,
             prog_blend_slider,
             inverse_btn,
             attack_curve_slider,
@@ -212,15 +202,18 @@ impl ControlLayout {
 
     /// Pleasant skin frames. Analog stays on [`Self::from_jsfx`].
     pub fn pleasant() -> Self {
-        let left = appearance::DET_X + 14.0;
-        let width = appearance::DET_W - 28.0;
-        let button_w = 100.0;
-        let slider_w = width - button_w - 12.0;
-        let button_x = left + slider_w + 12.0;
-        let row_y = [56.0, 56.0, 128.0, 192.0, 256.0, 320.0];
-        let env_x = appearance::ENV_X + (appearance::ENV_W - theme::KNOB_SIZE) * 0.5;
+        let left = appearance::ENV_X + 14.0;
+        let width = appearance::ENV_W - 28.0;
+        let env_x = appearance::ENV_X + 6.0;
         let env_y0 = appearance::ENV_Y + appearance::MODULE_HEADER_H + 8.0;
-        let env_step = theme::KNOB_SIZE + 18.0;
+        let env_col_step = theme::KNOB_SIZE - 9.0;
+        let env_step = (appearance::ENV_Y + appearance::SIDE_H
+            - appearance::ENVELOPE_FOOTER_H
+            - 12.0
+            - theme::KNOB_SIZE
+            - env_y0)
+            * 0.5;
+        let rms_y = env_y0 + env_step + (env_step - 48.0) * 0.5;
 
         let harm_cx = appearance::HARM_X + appearance::HARM_W * 0.5;
         let switch_x = harm_cx - theme::SWITCH_SLOT_W * 0.5;
@@ -230,45 +223,51 @@ impl ControlLayout {
         let quad_right = appearance::HARM_X + appearance::HARM_W - 10.0 - 64.0;
         let harmonic_drive = (quad_left, 110.0);
         let harmonic_mix = (quad_right, 110.0);
-        let harmonic_even = (quad_left, 208.0);
-        let harmonic_odd = (quad_right, 208.0);
+        let harmonic_even = (quad_left, 240.0);
+        let harmonic_odd = (quad_right, 240.0);
         let makeup_knob = (
             knob_x,
             appearance::ENV_Y + appearance::SIDE_H - 8.0 - theme::KNOB_SIZE,
         );
 
-        let bar_knob_x =
-            appearance::BAR_X + (appearance::BAR_W - appearance::TOOLBAR_KNOB_SIZE) * 0.5;
-        let bar_switch_x = appearance::BAR_X + (appearance::BAR_W - theme::SWITCH_SLOT_W) * 0.5;
-        let bar_top = appearance::BAR_Y + 12.0;
+        let footer_y = appearance::ENV_Y + appearance::SIDE_H - 40.0;
 
         Self {
             attack_knob: (env_x, env_y0),
-            release_knob: (env_x, env_y0 + env_step),
-            hold_knob: (env_x, env_y0 + env_step * 2.0),
-            hp_slider: (left, row_y[0] + 4.0, slider_w),
-            listen_btn: (button_x, row_y[0] + 4.0, 44.0),
-            sc_btn: (button_x + 56.0, row_y[0] + 4.0, 44.0),
-            lp_slider: (left, row_y[1], width),
-            lookahead_slider: (left, row_y[2], slider_w),
-            brickwall_btn: (button_x, row_y[2] + 4.0, button_w),
-            prog_blend_slider: (left, row_y[3], slider_w),
-            inverse_btn: (button_x, row_y[3] + 4.0, button_w),
-            attack_curve_slider: (left, row_y[4], width),
-            release_curve_slider: (left, row_y[5], slider_w),
-            detection_btn: (button_x, row_y[5] + 4.0),
+            release_knob: (env_x + 2.0 * env_col_step, env_y0),
+            hold_knob: (env_x + env_col_step, env_y0 + env_step * 0.5),
+            hp_slider: (left, 56.0, width),
+            listen_btn: (left, 96.0, (width - 12.0) * 0.5),
+            sc_btn: (left + (width + 12.0) * 0.5, 96.0, (width - 12.0) * 0.5),
+            lp_slider: (left, 56.0, width),
+            lookahead_slider: (env_x, env_y0 + 2.0 * env_step, theme::KNOB_SIZE),
+            prog_blend_slider: (left, footer_y - 54.0, width),
+            inverse_btn: (left + 126.0, footer_y, 72.0),
+            attack_curve_slider: (env_x, env_y0 + env_step, theme::KNOB_SIZE),
+            release_curve_slider: (
+                env_x + 2.0 * env_col_step,
+                env_y0 + env_step,
+                theme::KNOB_SIZE,
+            ),
+            detection_btn: (left, footer_y),
             harmonic_type_switch,
             harmonic_drive,
             harmonic_mix,
             harmonic_even,
             harmonic_odd,
             makeup_knob,
-            strength_knob: (bar_knob_x, bar_top),
-            prog_mode_switch: (bar_switch_x, bar_top + 92.0),
-            ms_switch: (bar_switch_x, bar_top + 156.0),
-            norm_switch: (bar_switch_x, bar_top + 278.0),
-            rms_knob: (bar_knob_x, bar_top + 192.0),
-            offset_knob: (bar_knob_x, bar_top + 316.0),
+            strength_knob: (env_x + 2.0 * env_col_step, env_y0 + 2.0 * env_step),
+            prog_mode_switch: (appearance::meter_x(0).0, appearance::PLEASANT_FOOTER_Y),
+            ms_switch: (left + 204.0, footer_y),
+            norm_switch: (
+                env_x + env_col_step + (theme::KNOB_SIZE - theme::SWITCH_SLOT_W) * 0.5,
+                rms_y + theme::KNOB_SIZE + 20.0,
+            ),
+            rms_knob: (env_x + env_col_step, rms_y),
+            offset_knob: (
+                appearance::PLEASANT_GRAPH_X + 12.0,
+                appearance::PLEASANT_GRAPH_Y + 12.0,
+            ),
         }
     }
 }
@@ -326,46 +325,92 @@ mod tests {
 
     #[test]
     fn pleasant_modules_and_controls_fit_the_vertical_layout() {
-        assert!(appearance::TRANS_W > appearance::DET_W);
-        assert!(appearance::BAR_X + appearance::BAR_W < appearance::ENV_X);
-        assert!(appearance::ENV_X + appearance::ENV_W < appearance::DET_X);
+        assert_eq!(appearance::ENV_X, appearance::MODULE_MARGIN);
+        assert!(appearance::ENV_X + appearance::ENV_W < appearance::TRANS_X);
         let l = ControlLayout::pleasant();
-        let det_right = appearance::DET_X + appearance::DET_W;
-        assert!(l.lp_slider.0 + l.lp_slider.2 <= det_right - 10.0);
-        let bar_right = appearance::BAR_X + appearance::BAR_W;
-        let bar_bottom = appearance::BAR_Y + appearance::BAR_H;
+        assert_eq!(l.prog_mode_switch.1, appearance::PLEASANT_FOOTER_Y);
+        assert!(
+            appearance::PLEASANT_GRAPH_Y + appearance::PLEASANT_METER_HEIGHT + 8.0
+                <= l.prog_mode_switch.1
+        );
+        let bar_right = appearance::ENV_X + appearance::ENV_W;
+        let bar_bottom = appearance::ENV_Y + appearance::SIDE_H;
+        assert!(l.prog_blend_slider.1 >= l.lookahead_slider.1 + theme::KNOB_SIZE + 8.0);
+        assert_eq!(
+            l.offset_knob,
+            (
+                appearance::PLEASANT_GRAPH_X + 12.0,
+                appearance::PLEASANT_GRAPH_Y + 12.0
+            )
+        );
         let controls = [
             (
-                l.strength_knob,
-                appearance::TOOLBAR_KNOB_SIZE,
-                appearance::TOOLBAR_KNOB_SIZE,
+                (l.prog_blend_slider.0, l.prog_blend_slider.1),
+                l.prog_blend_slider.2,
+                appearance::SLIDER_H,
             ),
-            (l.prog_mode_switch, theme::SWITCH_SLOT_W, 56.0),
+            ((l.inverse_btn.0, l.inverse_btn.1), l.inverse_btn.2, 28.0),
             (l.ms_switch, theme::SWITCH_SLOT_W, 28.0),
-            (
-                l.rms_knob,
-                appearance::TOOLBAR_KNOB_SIZE,
-                appearance::TOOLBAR_KNOB_SIZE,
-            ),
-            (l.norm_switch, theme::SWITCH_SLOT_W, 28.0),
-            (
-                l.offset_knob,
-                appearance::TOOLBAR_KNOB_SIZE,
-                appearance::TOOLBAR_KNOB_SIZE,
-            ),
+            (l.detection_btn, appearance::DETECTION_BUTTON_W, 28.0),
         ];
-        let mut previous_bottom = appearance::BAR_Y;
-        for ((x, y), width, height) in controls {
-            assert!(x >= appearance::BAR_X && x + width <= bar_right);
-            assert!(y > previous_bottom && y + height <= bar_bottom);
-            previous_bottom = y + height;
+        for (i, &((x, y), width, height)) in controls.iter().enumerate() {
+            assert!(x >= appearance::ENV_X && x + width <= bar_right);
+            assert!(
+                y >= appearance::ENV_Y + appearance::MODULE_HEADER_H && y + height <= bar_bottom
+            );
+            for &((other_x, other_y), other_w, other_h) in &controls[i + 1..] {
+                assert!(
+                    x + width <= other_x
+                        || other_x + other_w <= x
+                        || y + height <= other_y
+                        || other_y + other_h <= y,
+                    "detector controls overlap"
+                );
+            }
         }
-        assert!((l.norm_switch.1 - l.rms_knob.1 - appearance::TOOLBAR_KNOB_SIZE - 2.0).abs() < 0.1);
+        assert!(appearance::PLEASANT_GRAPH_Y >= appearance::ENV_Y);
+        assert!(
+            appearance::PLEASANT_GRAPH_Y + appearance::PLEASANT_GRAPH_SIZE + 28.0 <= bar_bottom
+        );
+        assert!(appearance::HEADER_H + bar_bottom < appearance::PLEASANT_EDITOR_HEIGHT as f32);
+        assert_eq!(
+            l.hold_knob.1,
+            (l.attack_knob.1 + l.attack_curve_slider.1) * 0.5
+        );
+        assert_eq!(l.attack_knob.1, l.release_knob.1);
+        assert_eq!(l.attack_knob.0, l.attack_curve_slider.0);
+        assert_eq!(l.release_knob.0, l.release_curve_slider.0);
+        assert_eq!(l.lookahead_slider.0, l.attack_knob.0);
+        assert_eq!(l.strength_knob.0, l.release_knob.0);
+        assert_eq!(l.lookahead_slider.1, l.strength_knob.1);
+        assert_eq!(l.rms_knob.0, l.hold_knob.0);
+        assert!(l.rms_knob.1 > l.hold_knob.1 + theme::KNOB_SIZE);
+        assert!(l.norm_switch.1 > l.rms_knob.1 + theme::KNOB_SIZE);
+        for (x, y) in [
+            l.attack_knob,
+            l.hold_knob,
+            l.release_knob,
+            (l.attack_curve_slider.0, l.attack_curve_slider.1),
+            (l.release_curve_slider.0, l.release_curve_slider.1),
+            (l.lookahead_slider.0, l.lookahead_slider.1),
+            l.strength_knob,
+            l.rms_knob,
+        ] {
+            assert!(
+                x > appearance::ENV_X
+                    && x + theme::KNOB_SIZE < appearance::ENV_X + appearance::ENV_W
+            );
+            assert!(y + theme::KNOB_SIZE < appearance::ENV_Y + appearance::SIDE_H);
+        }
         let label_x = appearance::PLEASANT_GRAPH_X - theme::sx(30.0);
         assert!(label_x > appearance::TRANS_X + 8.0);
         let (meter_l, meter_r) = appearance::meter_x(0);
         assert!(meter_r + theme::METER_W < appearance::TRANS_X + appearance::TRANS_W);
         assert!(meter_l > appearance::PLEASANT_GRAPH_X + appearance::PLEASANT_GRAPH_SIZE);
+        assert!(
+            meter_l + appearance::PLEASANT_METERS_W
+                <= appearance::TRANS_X + appearance::TRANS_W - 10.0
+        );
         let env_bottom = l.hold_knob.1 + theme::KNOB_SIZE;
         assert!(env_bottom <= appearance::ENV_Y + appearance::SIDE_H - 8.0);
         let harm_bottom = l.makeup_knob.1 + theme::KNOB_SIZE;

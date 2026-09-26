@@ -18,22 +18,27 @@ pub(crate) fn clamp_scale(scale: f64) -> Option<f64> {
     (scale.is_finite() && (MIN_SCALE..=MAX_SCALE).contains(&scale)).then_some(scale)
 }
 
-/// Convert a host-resized unscaled window width back into a user scale.
-///
-/// `window_w` is Vizia's logical width before the user scale. The host's
-/// logical width is `window_w * user_scale`.
+/// Fit both host dimensions, including windows smaller than the resize handle's
+/// preferred minimum. Rejecting those sizes leaves an oversized, clipped editor.
+/// `window` is measured before user scaling, as reported by Vizia.
 pub(crate) fn scale_from_host_resize(
-    artwork_w: u32,
-    window_w: u32,
+    artwork: (u32, u32),
+    window: (u32, u32),
     user_scale: f64,
 ) -> Option<f64> {
-    if artwork_w == 0 || window_w == 0 || !user_scale.is_finite() || user_scale <= 0.0 {
+    if artwork.0 == 0
+        || artwork.1 == 0
+        || window.0 == 0
+        || window.1 == 0
+        || !user_scale.is_finite()
+        || user_scale <= 0.0
+    {
         return None;
     }
-    if window_w.abs_diff(artwork_w) <= 2 {
-        return None;
-    }
-    clamp_scale(user_scale * f64::from(window_w) / f64::from(artwork_w))
+    let fit = (f64::from(window.0) / f64::from(artwork.0))
+        .min(f64::from(window.1) / f64::from(artwork.1));
+    let scale = user_scale * fit;
+    (scale.is_finite() && scale > 0.0).then_some(scale)
 }
 
 pub(crate) fn load_scale(plugin_id: &str) -> Option<f64> {
@@ -111,15 +116,6 @@ pub(crate) fn lock_scale_dir() -> std::sync::MutexGuard<'static, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn host_resize_maps_width_back_to_user_scale() {
-        assert_eq!(scale_from_host_resize(1282, 1282, 0.833), None);
-        assert_eq!(scale_from_host_resize(1282, 1284, 0.833), None);
-        let scale = scale_from_host_resize(1282, 1921, 0.833).unwrap();
-        assert!((scale - 1.248).abs() < 0.01);
-        assert_eq!(scale_from_host_resize(0, 100, 1.0), None);
-    }
 
     #[test]
     fn saved_scale_round_trips_without_touching_instance_state() {

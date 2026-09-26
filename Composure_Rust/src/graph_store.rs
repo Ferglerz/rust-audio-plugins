@@ -10,26 +10,21 @@ use crate::dsp::graph::CompressionGraph;
 pub use crate::dsp::graph_snapshot::GraphSnapshot;
 use crate::params::GraphRangeMode;
 
-const RANGES_DB: [f64; 3] = [20.0, 40.0, 60.0];
-const ORIGINAL_RANGE: u8 = 3;
+const ORIGINAL_RANGE: u8 = GraphRangeMode::ALL.len() as u8;
 
 fn range_index(range_db: f64) -> Option<u8> {
-    RANGES_DB
+    GraphRangeMode::ALL
         .iter()
-        .position(|range| (range_db - range).abs() <= 0.01)
+        .position(|mode| (range_db - mode.range_db()).abs() <= 0.01)
         .map(|index| index as u8)
 }
 
 fn mode_index(mode: GraphRangeMode) -> u8 {
-    match mode {
-        GraphRangeMode::Range20 => 0,
-        GraphRangeMode::Range40 => 1,
-        GraphRangeMode::Range60 => 2,
-    }
+    mode as u8
 }
 
 struct GraphVersions {
-    prepared: [Arc<GraphSnapshot>; 3],
+    prepared: [Arc<GraphSnapshot>; GraphRangeMode::ALL.len()],
     // A saved graph may use an older arbitrary range. Preserve it until the
     // host's discrete range parameter selects a supported variant.
     original: Option<Arc<GraphSnapshot>>,
@@ -44,7 +39,7 @@ impl GraphVersions {
         let prepared = std::array::from_fn(|index| {
             let mut variant = graph;
             if Some(index as u8) != source_index {
-                variant.remap_points_for_range(RANGES_DB[index]);
+                variant.remap_points_for_range(GraphRangeMode::ALL[index].range_db());
             }
             Arc::new(GraphSnapshot::from_graph(variant))
         });
@@ -126,9 +121,7 @@ impl GraphStore {
     /// This method must not be called from the audio callback.
     pub fn sync_range_if_needed(&self, range_db: f64) {
         match range_index(range_db) {
-            Some(0) => self.select_range(GraphRangeMode::Range20),
-            Some(1) => self.select_range(GraphRangeMode::Range40),
-            Some(2) => self.select_range(GraphRangeMode::Range60),
+            Some(index) => self.select_range(GraphRangeMode::ALL[index as usize]),
             _ => {
                 let mut graph = self.load().graph;
                 if (graph.range_db - range_db).abs() > 0.01 {
@@ -173,7 +166,7 @@ impl GraphStore {
         let selected = range_index(graph.range_db).unwrap_or(ORIGINAL_RANGE);
         // Prepare and publish first. Otherwise an old generation without an
         // arbitrary-range snapshot could be read under ORIGINAL_RANGE while
-        // the three new LUTs are still being built.
+        // the new LUTs are still being built.
         self.publish_graph(graph);
         self.selected_range.store(selected, Ordering::Release);
     }
@@ -238,10 +231,24 @@ mod tests {
     #[test]
     fn legacy_range_is_preserved_until_host_selects_a_prepared_mode() {
         let store = GraphStore::default();
-        store.sync_range_if_needed(30.0);
-        assert_eq!(store.load().graph.range_db, 30.0);
+        store.sync_range_if_needed(31.0);
+        assert_eq!(store.load().graph.range_db, 31.0);
         store.select_range(GraphRangeMode::Range40);
         assert_eq!(store.load().graph.range_db, 40.0);
+    }
+
+    #[test]
+    fn damian_ranges_are_negative_only_and_use_prepared_snapshots() {
+        let store = GraphStore::default();
+        for mode in GraphRangeMode::PLEASANT {
+            let prepared = store.load_for_range(mode);
+            store.sync_range_if_needed(mode.range_db());
+            let selected = store.load();
+            assert!(Arc::ptr_eq(&prepared, &selected));
+            assert_eq!(selected.graph.min_db, -mode.range_db());
+            assert_eq!(selected.graph.max_db, 0.0);
+            assert!(selected.lut.threshold().is_finite());
+        }
     }
 
     #[test]

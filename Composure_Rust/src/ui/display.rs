@@ -7,8 +7,8 @@ use std::time::Instant;
 use atomic_float::AtomicF32 as AtomicF32Crate;
 use crossbeam_queue::ArrayQueue;
 
-/// Ring buffer size: `HISTOGRAM_WINDOW_SECONDS * 60` from JSFX.
-pub const HISTOGRAM_LEN: usize = 180;
+/// Four times the original 180-block history at the same capture cadence.
+pub const HISTOGRAM_LEN: usize = 180 * 4;
 
 /// ~2.5s of meter trail lines.
 pub const TRAIL_MAX_AGE_SECS: f32 = 2.5;
@@ -163,6 +163,19 @@ mod histogram_tests {
     use super::HistogramBuffer;
 
     #[test]
+    fn expanded_history_preserves_four_original_windows_before_wrapping() {
+        let mut history = HistogramBuffer::default();
+        for block in 0..720 {
+            history.push(block as f32);
+        }
+        assert_eq!(history.sample_at_age(719), 0.0);
+        history.push(720.0);
+        assert_eq!(history.sample_at_age(0), 720.0);
+        assert_eq!(history.sample_at_age(719), 1.0);
+        assert_eq!(history.sample_at_age(720), f32::NEG_INFINITY);
+    }
+
+    #[test]
     fn empty_history_is_not_drawable_audio() {
         let mut history = HistogramBuffer::default();
         assert_eq!(history.sample_at_age(0), f32::NEG_INFINITY);
@@ -209,7 +222,7 @@ impl Default for UiDisplay {
     fn default() -> Self {
         Self {
             sample_rate: AtomicF32Crate::new(48000.0),
-            detector_db: AtomicF32Crate::new(0.0),
+            detector_db: AtomicF32Crate::new(crate::dsp::constants::MIN_DETECTOR_DB as f32),
             gr_db: AtomicF32Crate::new(0.0),
             graph_interior_points: std::sync::atomic::AtomicU32::new(4),
             graph_points_version: std::sync::atomic::AtomicU32::new(0),

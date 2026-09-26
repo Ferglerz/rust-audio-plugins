@@ -71,22 +71,28 @@ where
             );
         }
     });
-    placed_jsfx_button(
-        cx,
-        params.clone(),
-        |p| &p.sc_adjust_preview,
-        JsfxButtonLabel::Listen,
-        analog.listen_btn,
-        pleasant.listen_btn,
-    );
-    placed_jsfx_button(
-        cx,
-        params.clone(),
-        |p| &p.use_sidechain,
-        JsfxButtonLabel::Sidechain,
-        analog.sc_btn,
-        pleasant.sc_btn,
-    );
+    let listen_params = params.clone();
+    Binding::new(cx, super::EditorData::appearance, move |cx, mode| {
+        if mode.get(cx) == 2 {
+            let params = listen_params.clone();
+            placed_jsfx_button(
+                cx,
+                params.clone(),
+                |p| &p.sc_adjust_preview,
+                JsfxButtonLabel::Listen,
+                analog.listen_btn,
+                pleasant.listen_btn,
+            );
+            placed_jsfx_button(
+                cx,
+                params.clone(),
+                |p| &p.use_sidechain,
+                JsfxButtonLabel::Sidechain,
+                analog.sc_btn,
+                pleasant.sc_btn,
+            );
+        }
+    });
     let filter_params = params.clone();
     let filter_display = display.clone();
     Binding::new(cx, super::EditorData::appearance, move |cx, mode| {
@@ -108,27 +114,23 @@ where
         }
     });
 
-    super::graph_pages::build_toggle(cx, pleasant.hp_slider);
+    super::graph_pages::build_toggle(
+        cx,
+        (
+            super::appearance::meter_x(0).0,
+            super::appearance::ENV_Y + 8.0,
+            super::appearance::PLEASANT_METERS_W,
+        ),
+    );
 
-    placed_slider(
+    placed_envelope_control(
         cx,
         params.clone(),
         |p| &p.lookahead_ms,
         display.clone(),
         analog.lookahead_slider,
         pleasant.lookahead_slider,
-        SliderFill::LeftToRight,
-        false,
-        StepSet::LookaheadMs,
-        "Lookahead",
-    );
-    placed_jsfx_button(
-        cx,
-        params.clone(),
-        |p| &p.brickwall_limiter,
-        JsfxButtonLabel::Brickwall,
-        analog.brickwall_btn,
-        pleasant.brickwall_btn,
+        (SliderFill::LeftToRight, StepSet::LookaheadMs, "Lookahead"),
     );
     placed_slider(
         cx,
@@ -150,29 +152,23 @@ where
         analog.inverse_btn,
         pleasant.inverse_btn,
     );
-    placed_slider(
+    placed_envelope_control(
         cx,
         params.clone(),
         |p| &p.attack_curve,
         display.clone(),
         analog.attack_curve_slider,
         pleasant.attack_curve_slider,
-        SliderFill::CenterOut,
-        false,
-        StepSet::None,
-        "Attack Curve",
+        (SliderFill::CenterOut, StepSet::None, "Attack Curve"),
     );
-    placed_slider(
+    placed_envelope_control(
         cx,
         params.clone(),
         |p| &p.release_curve,
         display.clone(),
         analog.release_curve_slider,
         pleasant.release_curve_slider,
-        SliderFill::CenterOut,
-        false,
-        StepSet::None,
-        "Release Curve",
+        (SliderFill::CenterOut, StepSet::None, "Release Curve"),
     );
     placed_detection(
         cx,
@@ -278,15 +274,19 @@ where
         pleasant.rms_knob,
         StepSet::None,
     );
-    placed_knob(
-        cx,
-        params,
-        |p| &p.input_offset_db,
-        display,
-        analog.offset_knob,
-        pleasant.offset_knob,
-        StepSet::None,
-    );
+    Binding::new(cx, super::EditorData::appearance, move |cx, mode| {
+        if mode.get(cx) == 2 {
+            placed_knob(
+                cx,
+                params.clone(),
+                |p| &p.input_offset_db,
+                display.clone(),
+                analog.offset_knob,
+                pleasant.offset_knob,
+                StepSet::None,
+            );
+        }
+    });
 }
 
 fn xy(analog: f32, pleasant: f32) -> impl Lens<Target = Units> {
@@ -382,6 +382,47 @@ fn placed_parallax<L, P, F>(
         .top(Pixels(pleasant.1))
         .width(Pixels(64.0))
         .height(Pixels(96.0));
+}
+
+/// Keep the Analog slider while Pleasant uses the envelope grid's knob.
+fn placed_envelope_control<L, P, F>(
+    cx: &mut Context,
+    params: L,
+    map: F,
+    display: Arc<UiDisplay>,
+    analog: (f32, f32, f32),
+    pleasant: (f32, f32, f32),
+    presentation: (SliderFill, StepSet, &'static str),
+) where
+    L: Lens<Target = Arc<ComposureParams>> + Clone + 'static,
+    P: Param + 'static,
+    F: Fn(&Arc<ComposureParams>) -> &P + Copy + 'static,
+{
+    let (fill, step_set, label) = presentation;
+    Binding::new(cx, super::EditorData::appearance, move |cx, mode| {
+        if mode.get(cx) == 2 {
+            placed_slider(
+                cx,
+                params,
+                map,
+                display.clone(),
+                analog,
+                pleasant,
+                fill,
+                false,
+                step_set,
+                label,
+            );
+        } else {
+            ImageKnob::new(cx, params, map, display.clone(), step_set)
+                .class("production-knob")
+                .position_type(PositionType::SelfDirected)
+                .left(Pixels(pleasant.0))
+                .top(Pixels(pleasant.1))
+                .width(Pixels(theme::KNOB_SIZE))
+                .height(Pixels(theme::KNOB_SIZE));
+        }
+    });
 }
 
 fn placed_slider<L, P, F>(
@@ -529,7 +570,12 @@ fn placed_prog_mode<L, P, F>(
     P: Param + 'static,
     F: Fn(&Arc<ComposureParams>) -> &P + Copy + 'static,
 {
-    placed_image_switch(ProgModeSwitch::new(cx, params, map), analog, pleasant);
+    placed_image_switch(ProgModeSwitch::new(cx, params, map), analog, pleasant)
+        .width(xy(
+            theme::SWITCH_SLOT_W,
+            super::appearance::PLEASANT_METERS_W,
+        ))
+        .height(xy(theme::SWITCH_H, 28.0));
 }
 
 fn placed_detection<L, P, F>(
@@ -548,6 +594,6 @@ fn placed_detection<L, P, F>(
         .position_type(PositionType::SelfDirected)
         .left(xy(analog.0, pleasant.0))
         .top(xy(analog.1, pleasant.1))
-        .width(Pixels(100.0))
+        .width(xy(100.0, super::appearance::DETECTION_BUTTON_W))
         .height(xy(75.0, 28.0));
 }

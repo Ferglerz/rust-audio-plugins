@@ -69,6 +69,10 @@ impl Model for EditorData {
         event.map(|mode: &appearance::SetAppearance, _| {
             self.appearance = mode.0;
             appearance::decode(mode.0).write("Composure");
+            self.params
+                .editor_width
+                .store(appearance::editor_width(mode.0), Ordering::Relaxed);
+            cx.emit(nih_plug_vizia::widgets::GuiContextEvent::Resize);
             cx.needs_redraw();
         });
     }
@@ -96,10 +100,16 @@ fn place_gr_meter<L, R, P, X>(
             Pixels(if *mode == 2 || second {
                 theme::METER_W
             } else {
-                theme::METER_W * 2.0 + theme::METER_GAP
+                appearance::PLEASANT_METERS_W
             })
         }))
-        .height(EditorData::appearance.map(|mode| Pixels(appearance::graph_size(*mode))))
+        .height(EditorData::appearance.map(|mode| {
+            Pixels(if *mode == 2 {
+                appearance::graph_size(*mode)
+            } else {
+                appearance::PLEASANT_METER_HEIGHT
+            })
+        }))
         .display(EditorData::appearance.map(move |mode| {
             if second && *mode != 2 {
                 Display::None
@@ -109,11 +119,23 @@ fn place_gr_meter<L, R, P, X>(
         }));
 }
 
-pub fn default_editor_state() -> Arc<ViziaState> {
-    ViziaState::new_screen_sized("Composure", || (EDITOR_WIDTH, EDITOR_HEIGHT))
+pub fn preferred_editor_width() -> u32 {
+    let mode = appearance::encode(pleasant_ui::preferences::Appearance::read("Composure"));
+    appearance::editor_width(mode)
+}
+
+pub fn default_editor_state(width: Arc<std::sync::atomic::AtomicU32>) -> Arc<ViziaState> {
+    ViziaState::new_screen_sized("Composure", move || {
+        let width = width.load(Ordering::Relaxed);
+        let mode = if width == EDITOR_WIDTH { 2 } else { 0 };
+        (width, appearance::editor_height(mode))
+    })
 }
 
 pub fn create(params: Arc<ComposureParams>, display: Arc<UiDisplay>) -> Option<Box<dyn Editor>> {
+    params
+        .editor_width
+        .store(preferred_editor_width(), Ordering::Relaxed);
     let editor_state = params.editor_state.clone();
     create_vizia_editor(editor_state, ViziaTheming::Custom, move |cx, _| {
         build_editor_contents(cx, params.clone(), display.clone());
@@ -197,8 +219,8 @@ fn build_editor_contents(cx: &mut Context, params: Arc<ComposureParams>, display
         })
         .position_type(PositionType::SelfDirected)
         .top(EditorData::appearance.map(|mode| Pixels(appearance::content_offset(*mode))))
-        .width(Pixels(EDITOR_WIDTH as f32))
-        .height(Pixels(EDITOR_HEIGHT as f32));
+        .width(EditorData::appearance.map(|mode| Pixels(appearance::editor_width(*mode) as f32)))
+        .height(EditorData::appearance.map(|mode| Pixels(appearance::editor_height(*mode) as f32)));
 
         appearance::build_selector(cx);
     })

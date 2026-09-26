@@ -2,6 +2,67 @@ use super::Draw;
 use crate::theme::{rgb, LINE, MUTED, PANEL, TEXT};
 use nih_plug_vizia::vizia::vg::{Color, Paint};
 
+/// Shared geometry for knob drawing, captions, and editable readouts.
+pub struct KnobLayout {
+    pub cx: f32,
+    pub cy: f32,
+    pub radius: f32,
+    pub label_y: f32,
+    pub value_y: f32,
+    pub label_size: f32,
+    pub value_size: f32,
+    bottom: f32,
+}
+
+impl KnobLayout {
+    pub fn new(r: (f32, f32, f32, f32)) -> Self {
+        // Widget bounds can pick up subpixel rounding at fractional editor scales.
+        let compact = r.2 <= 64.5 && r.3 <= 96.5;
+        let (cy, radius, label_y, value_y, label_size, value_size) = if compact {
+            (r.1 + 45.0, 17.0, r.1 + 22.0, r.1 + 75.0, 9.2, 11.0)
+        } else {
+            let label_y = r.1 + 16.0;
+            let value_y = r.1 + r.3 - 12.0;
+            let cy = (label_y + value_y) * 0.5;
+            let radius = ((cy - label_y - 8.0).min(r.2 * 0.38)).clamp(18.0, 42.0);
+            (cy, radius, label_y, value_y, 11.0, 13.0)
+        };
+        Self {
+            cx: r.0 + r.2 * 0.5,
+            cy,
+            radius,
+            // Match the breathing room of Damian's taller knob slots.
+            label_y: label_y.min(cy - radius - 14.0),
+            value_y,
+            label_size,
+            value_size,
+            bottom: r.1 + r.3,
+        }
+        .with_text_sizes(label_size, value_size)
+    }
+
+    pub fn with_text_sizes(mut self, label_size: f32, value_size: f32) -> Self {
+        self.label_size = label_size;
+        self.value_size = value_size;
+        // Baselines must leave room for the full readout above them.
+        self.value_y = self
+            .value_y
+            .max(self.cy + self.radius + value_size + 4.0)
+            .min(self.bottom - 6.0);
+        self.radius = self.radius.min(self.value_y - self.cy - value_size - 4.0);
+        self
+    }
+
+    pub fn value_rect(&self, x: f32, width: f32) -> (f32, f32, f32, f32) {
+        (
+            x,
+            self.value_y - self.value_size - 3.0,
+            width,
+            self.value_size + 9.0,
+        )
+    }
+}
+
 impl Draw<'_> {
     pub fn button(&mut self, r: (f32, f32, f32, f32), label: &str, on: bool, color: Color) {
         self.button_aligned(r, label, on, color, true);
@@ -168,17 +229,29 @@ impl Draw<'_> {
         color: Color,
         bypassed: bool,
     ) {
-        let compact = r.2 <= 64.0 && r.3 <= 96.0;
-        let cx = r.0 + r.2 * 0.5;
-        let (cy, rad, label_y, value_y, label_size, value_size) = if compact {
-            (r.1 + 45.0, 17.0, r.1 + 22.0, r.1 + 75.0, 9.2, 11.0)
-        } else {
-            let label_y = r.1 + 16.0;
-            let value_y = r.1 + r.3 - 12.0;
-            let cy = (label_y + value_y) * 0.5;
-            let rad = ((cy - label_y - 8.0).min(r.2 * 0.38)).clamp(18.0, 42.0);
-            (cy, rad, label_y, value_y, 11.0, 13.0)
-        };
+        let layout = KnobLayout::new(r);
+        self.knob_with_layout(&layout, label, value, n, color, bypassed);
+    }
+
+    pub fn knob_with_layout(
+        &mut self,
+        layout: &KnobLayout,
+        label: &str,
+        value: &str,
+        n: f32,
+        color: Color,
+        bypassed: bool,
+    ) {
+        let KnobLayout {
+            cx,
+            cy,
+            radius: rad,
+            label_y,
+            value_y,
+            label_size,
+            value_size,
+            ..
+        } = *layout;
         let scale = rad / 17.0;
 
         self.text_centered(
@@ -253,16 +326,15 @@ impl Draw<'_> {
         color: Color,
         bypassed: bool,
     ) {
-        let cx = r.0 + r.2 * 0.5;
-        let cy = r.1 + r.3 * 0.5;
-        let rad = (r.2.min(r.3) * 0.27).clamp(17.0, 32.0);
+        let layout = KnobLayout::new(r);
+        let (cx, cy, rad) = (layout.cx, layout.cy, layout.radius);
         let scale = rad / 17.0;
 
         self.text_centered(
             cx,
-            cy - rad - 8.0 * scale,
+            layout.label_y,
             label,
-            9.2 * scale.min(1.25),
+            layout.label_size,
             if bypassed { MUTED } else { TEXT },
         );
 
@@ -320,9 +392,9 @@ impl Draw<'_> {
 
         self.text_centered(
             cx,
-            cy + rad + 14.0 * scale,
+            layout.value_y,
             value,
-            11.0 * scale.min(1.25),
+            layout.value_size,
             if bypassed { MUTED } else { color },
         );
     }
@@ -447,5 +519,31 @@ impl Draw<'_> {
         );
         let caret_x = r.0 + 4.0 + (edit.cursor - start) as f32 * 6.6;
         self.line(caret_x, r.1 + 3.0, caret_x, r.1 + r.3 - 3.0, accent, 1.0);
+    }
+}
+
+#[cfg(test)]
+mod knob_layout_tests {
+    use super::KnobLayout;
+
+    #[test]
+    fn knob_captions_clear_arcs_and_stay_inside_slots() {
+        for (w, h) in [
+            (64.0, 96.0),
+            (64.00001, 96.00001),
+            (108.0, 108.0),
+            (109.0, 109.0),
+            (120.0, 180.0),
+        ] {
+            for (label_size, value_size) in [(9.2, 11.0), (13.0, 15.0)] {
+                let layout =
+                    KnobLayout::new((0.0, 0.0, w, h)).with_text_sizes(label_size, value_size);
+                assert!(layout.label_y <= layout.cy - layout.radius - 14.0);
+                assert!(layout.value_y - value_size >= layout.cy + layout.radius + 4.0);
+                let rect = layout.value_rect(0.0, w);
+                assert!(rect.1 + rect.3 <= h);
+            }
+        }
+        assert_eq!(KnobLayout::new((0.0, 0.0, 64.00001, 96.00001)).cy, 45.0);
     }
 }

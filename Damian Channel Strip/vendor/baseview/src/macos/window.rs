@@ -7,10 +7,10 @@ use cocoa::appkit::{
     NSApp, NSApplication, NSApplicationActivationPolicyRegular, NSBackingStoreBuffered,
     NSPasteboard, NSView, NSWindow, NSWindowStyleMask,
 };
-use cocoa::base::{id, nil, BOOL, NO, YES};
+use cocoa::base::{id, nil, NO, YES};
 use cocoa::foundation::{NSAutoreleasePool, NSPoint, NSRect, NSSize, NSString};
 use core_foundation::runloop::{
-    __CFRunLoopTimer, kCFRunLoopDefaultMode, CFRunLoop, CFRunLoopTimer, CFRunLoopTimerContext,
+    __CFRunLoopTimer, kCFRunLoopCommonModes, CFRunLoop, CFRunLoopTimer, CFRunLoopTimerContext,
 };
 use keyboard_types::KeyboardEvent;
 
@@ -83,7 +83,7 @@ impl WindowInner {
 
                 // Cancel the frame timer
                 if let Some(frame_timer) = window_state.frame_timer.take() {
-                    CFRunLoop::get_current().remove_timer(&frame_timer, kCFRunLoopDefaultMode);
+                    CFRunLoop::get_current().remove_timer(&frame_timer, kCFRunLoopCommonModes);
                 }
 
                 drop(window_state);
@@ -267,6 +267,7 @@ impl<'a> Window<'a> {
             frame_timer: Cell::new(None),
             window_info: Cell::new(window_info),
             pending_resize: Cell::new(None),
+            host_bounds: Cell::new(None),
         });
 
         let window_state_ptr = Rc::into_raw(Rc::clone(&window_state));
@@ -297,6 +298,25 @@ impl<'a> Window<'a> {
 
             // `setFrameSize:` is overridden to sync OpenGL and emit Resized.
             unsafe { NSView::setFrameSize(self.inner.ns_view, size) };
+            // Embedded hosts commonly use unflipped coordinates. Origin zero is
+            // their bottom edge, so a fitted editor must move up to remain at top.
+            if self.inner.ns_window.get().is_none() {
+                unsafe {
+                    let parent: id = msg_send![self.inner.ns_view, superview];
+                    if parent != nil {
+                        let bounds = NSView::bounds(parent);
+                        let flipped: cocoa::base::BOOL = msg_send![parent, isFlipped];
+                        let y = if flipped == YES {
+                            bounds.origin.y
+                        } else {
+                            bounds.origin.y + bounds.size.height - height
+                        };
+                        let _: () = msg_send![self.inner.ns_view,
+                            setFrameOrigin: NSPoint::new(bounds.origin.x, y)];
+                    }
+                }
+            }
+
             unsafe {
                 let _: () = msg_send![self.inner.ns_view, setNeedsDisplay: YES];
             }
@@ -337,6 +357,8 @@ pub(super) struct WindowState {
     /// The last known window info for this window.
     pub window_info: Cell<WindowInfo>,
     pending_resize: Cell<Option<WindowInfo>>,
+    /// Host space is independent of the smaller, aspect-fitted child view.
+    host_bounds: Cell<Option<(f64, f64)>>,
 }
 
 impl WindowState {
@@ -365,23 +387,28 @@ impl WindowState {
 
     pub(super) fn trigger_event(&self, event: Event) -> EventStatus {
         let mut window = crate::Window::new(Window { inner: &self.window_inner });
-        let status = self.window_handler.borrow_mut().on_event(&mut window, event);
-        self.flush_pending_resize();
-        status
+        self.window_handler.borrow_mut().on_event(&mut window, event)
     }
 
     fn flush_pending_resize(&self) {
-        while self.window_inner.open.get() {
-            let Some(info) = self.pending_resize.take() else {
-                break;
-            };
-            let Ok(mut handler) = self.window_handler.try_borrow_mut() else {
-                self.pending_resize.set(Some(info));
-                break;
-            };
-            let mut window = crate::Window::new(Window { inner: &self.window_inner });
-            handler.on_event(&mut window, Event::Window(crate::WindowEvent::Resized(info)));
+        let Some(info) = self.pending_resize.take() else {
+            return;
+        };
+        let Ok(mut handler) = self.window_handler.try_borrow_mut() else {
+            self.pending_resize.set(Some(info));
+            return;
+        };
+        // Change the native drawable and renderer dimensions together, before
+        // drawing. Resizing GL inside an AppKit callback used to leave Vizia
+        // drawing an old-height viewport at the bottom of the new surface.
+        #[cfg(feature = "opengl")]
+        if let Some(gl_context) = &self.window_inner.gl_context {
+            let size = info.logical_size();
+            gl_context.resize(NSSize::new(size.width.round(), size.height.round()));
         }
+        self.window_info.set(info);
+        let mut window = crate::Window::new(Window { inner: &self.window_inner });
+        handler.on_event(&mut window, Event::Window(crate::WindowEvent::Resized(info)));
     }
 
     /// Keep OpenGL and vizia in sync with the NSView frame. Skip 0×0
@@ -391,20 +418,13 @@ impl WindowState {
             return;
         }
 
-        let (bounds, scale_factor, live) = unsafe {
+        let (bounds, scale_factor) = unsafe {
             let ns_window: *mut Object = msg_send![self.window_inner.ns_view, window];
             let scale_factor: f64 =
                 if ns_window.is_null() { 1.0 } else { NSWindow::backingScaleFactor(ns_window) };
             let bounds: NSRect = msg_send![self.window_inner.ns_view, bounds];
-            let live: BOOL = msg_send![self.window_inner.ns_view, inLiveResize];
-            (bounds, scale_factor, live)
+            (bounds, scale_factor)
         };
-
-        // Recreating the FemtoVG framebuffer on every live-resize tick
-        // is what aborted the host. Keep the last frame until the drag ends.
-        if live != NO {
-            return;
-        }
 
         if !bounds.size.width.is_finite()
             || !bounds.size.height.is_finite()
@@ -412,12 +432,6 @@ impl WindowState {
             || bounds.size.height < 1.0
         {
             return;
-        }
-
-        let size = NSSize::new(bounds.size.width.round(), bounds.size.height.round());
-        #[cfg(feature = "opengl")]
-        if let Some(gl_context) = &self.window_inner.gl_context {
-            gl_context.resize(size);
         }
 
         let new_window_info = WindowInfo::from_logical_size(
@@ -428,12 +442,42 @@ impl WindowState {
         {
             return;
         }
-        if new_window_info.physical_size() != self.window_info.get().physical_size() {
-            self.window_info.set(new_window_info);
-            // AppKit may call setFrameSize: synchronously from inside on_frame or
-            // on_event. Deliver the resize once that mutable handler borrow ends.
-            self.pending_resize.set(Some(new_window_info));
-            self.flush_pending_resize();
+        let current = self.window_info.get();
+        let changed = new_window_info.physical_size() != current.physical_size()
+            || new_window_info.scale() != current.scale();
+        // Coalesce all native callbacks to the newest valid size. Never touch
+        // the drawable while the handler may be rendering or processing events.
+        self.pending_resize.set(changed.then_some(new_window_info));
+    }
+
+    /// Autoresizing an aspect-fitted child only adds the parent's size delta.
+    /// Its unused margins therefore become permanent, preventing growth on the
+    /// other axis. Observe the actual host area instead, once per frame, and
+    /// deliver its full dimensions whenever that area changes. Plugin-driven
+    /// fitting never changes this cached host size.
+    fn sync_host_bounds(&self) {
+        if self.window_inner.ns_window.get().is_some() {
+            return;
+        }
+        unsafe {
+            let parent: id = msg_send![self.window_inner.ns_view, superview];
+            if parent == nil {
+                return;
+            }
+            let bounds = NSView::bounds(parent);
+            let size = (bounds.size.width, bounds.size.height);
+            if !size.0.is_finite() || !size.1.is_finite() || size.0 < 1.0 || size.1 < 1.0 {
+                return;
+            }
+            if self.host_bounds.get() == Some(size) {
+                return;
+            }
+            self.host_bounds.set(Some(size));
+            // This only queues the resize. GL and Vizia still update together
+            // through flush_pending_resize(), outside native view callbacks.
+            NSView::setFrameSize(self.window_inner.ns_view, bounds.size);
+            let _: () = msg_send![self.window_inner.ns_view, setFrameOrigin: bounds.origin];
+            self.sync_from_view();
         }
     }
 
@@ -441,6 +485,7 @@ impl WindowState {
         if !self.window_inner.open.get() {
             return;
         }
+        self.sync_host_bounds();
         unsafe {
             let bounds: NSRect = msg_send![self.window_inner.ns_view, bounds];
             if !bounds.size.width.is_finite()
@@ -450,14 +495,13 @@ impl WindowState {
             {
                 return;
             }
-            let live: BOOL = msg_send![self.window_inner.ns_view, inLiveResize];
-            if live != NO {
-                return;
-            }
         }
-        let mut window = crate::Window::new(Window { inner: &self.window_inner });
-        self.window_handler.borrow_mut().on_frame(&mut window);
         self.flush_pending_resize();
+        let Ok(mut handler) = self.window_handler.try_borrow_mut() else {
+            return;
+        };
+        let mut window = crate::Window::new(Window { inner: &self.window_inner });
+        handler.on_frame(&mut window);
     }
 
     pub(super) fn keyboard_state(&self) -> &KeyboardState {
@@ -487,7 +531,7 @@ impl WindowState {
 
         let timer = CFRunLoopTimer::new(0.0, 0.015, 0, 0, timer_callback, &mut timer_context);
 
-        CFRunLoop::get_current().add_timer(&timer, kCFRunLoopDefaultMode);
+        CFRunLoop::get_current().add_timer(&timer, kCFRunLoopCommonModes);
 
         (*window_state_ptr).frame_timer.set(Some(timer));
     }

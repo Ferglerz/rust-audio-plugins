@@ -80,7 +80,7 @@ mod tests {
     }
 
     #[test]
-    fn interior_knots_sample_to_their_output_db() {
+    fn rounded_knots_stay_within_neighboring_control_outputs() {
         for (name, mut g) in [
             ("boost first", boost_at_first_interior_graph()),
             ("boost middle", boost_at_middle_interior_graph()),
@@ -88,11 +88,17 @@ mod tests {
         ] {
             for idx in 1..g.num_points - 1 {
                 let in_db = g.get_point_x(idx);
-                let out_db = g.get_point_y(idx);
+                let outputs = [
+                    g.get_point_y(idx - 1),
+                    g.get_point_y(idx),
+                    g.get_point_y(idx + 1),
+                ];
+                let low = outputs.into_iter().fold(f64::INFINITY, f64::min);
+                let high = outputs.into_iter().fold(f64::NEG_INFINITY, f64::max);
                 let sampled = g.sample_curve_at_db(in_db);
                 assert!(
-                    (sampled - out_db).abs() < SAMPLE_TOL,
-                    "graph={name} knot {idx} in={in_db} expected out={out_db} sampled={sampled}"
+                    sampled >= low - SAMPLE_TOL && sampled <= high + SAMPLE_TOL,
+                    "graph={name} knot {idx} sampled={sampled} outside [{low}, {high}]"
                 );
             }
         }

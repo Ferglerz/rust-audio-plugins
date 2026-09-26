@@ -18,7 +18,6 @@ pub struct BlockParamState {
     pub detection_feedback: bool,
     pub rms_normalization: bool,
     pub rms_size_ms: f64,
-    pub brickwall_limiter: bool,
     pub mid_side_mode: bool,
     pub sc_adjust_preview: bool,
     pub use_sidechain: bool,

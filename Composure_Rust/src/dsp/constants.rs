@@ -10,8 +10,6 @@ pub const MAX_DETECTOR_DB: f64 = 60.0;
 pub const MIN_DETECTOR_DB_FLOOR: f64 = -240.0;
 pub const MAX_CURVE_INPUT_DB: f64 = 100.0;
 
-pub const LIMITER_SCALE: f64 = 0.95;
-
 pub const MAX_GR_DB: f64 = 50.0;
 
 #[inline]

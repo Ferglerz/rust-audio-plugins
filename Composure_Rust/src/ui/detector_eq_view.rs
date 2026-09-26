@@ -6,15 +6,42 @@ use nih_plug_vizia::vizia::prelude::*;
 use nih_plug_vizia::widgets::{util::ModifiersExt, RawParamEvent};
 use pleasant_eq::{BandCoefficients, BandSettings, EqShape};
 use pleasant_ui::theme::EQ_COLORS as COLORS;
-use pleasant_ui::{pointer::ValuePress, Draw, ValueEdit, GOLD, LINE, MUTED};
+use pleasant_ui::{
+    pointer::ValuePress, ButtonAnim, Draw, ValueEdit, GOLD, LINE, MUTED, PANEL, TEXT,
+};
 
 use super::display::UiDisplay;
 use crate::{detector_eq::DetectorShape, params::ComposureParams};
 
-const SIZE: f32 = 290.0;
-const GRAPH: (f32, f32, f32, f32) = (10.0, 20.0, 270.0, 194.0);
+// Use artwork coordinates directly: enlarging the graph must not enlarge its UI chrome.
+const WIDTH: f32 = super::graph_pages::PAGE_W;
+const HEIGHT: f32 = super::appearance::PLEASANT_GRAPH_SIZE + super::graph_pages::CURVE_HEADER_H;
+const GRAPH: (f32, f32, f32, f32) = (36.0, 76.0, WIDTH - 52.0, HEIGHT - 148.0);
+const CENTER_X: f32 = WIDTH * 0.5;
+const ACTIONS_Y: f32 = HEIGHT - 36.0;
+const FOOTER_X: f32 = (WIDTH - 434.0) * 0.5;
+const BYPASS_RECT: (f32, f32, f32, f32) = (FOOTER_X, ACTIONS_Y, 26.0, 28.0);
+const SHAPE_RECT: (f32, f32, f32, f32) = (FOOTER_X + 32.0, ACTIONS_Y, 100.0, 28.0);
+const REMOVE_RECT: (f32, f32, f32, f32) = (FOOTER_X + 416.0, ACTIONS_Y, 18.0, 28.0);
+const LISTEN_RECT: (f32, f32, f32, f32) = (36.0, 38.0, 28.0, 26.0);
+const SIDECHAIN_RECT: (f32, f32, f32, f32) = (76.0, 38.0, 210.0, 26.0);
+const MENU_ROW_H: f32 = 26.0;
+const SHAPE_MENU: (f32, f32, f32, f32) = (
+    SHAPE_RECT.0,
+    ACTIONS_Y - MENU_ROW_H * DetectorShape::ALL.len() as f32 - 4.0,
+    SHAPE_RECT.2,
+    MENU_ROW_H * DetectorShape::ALL.len() as f32,
+);
+fn menu_shape(point: (f32, f32)) -> Option<DetectorShape> {
+    if !contains(SHAPE_MENU, point) {
+        return None;
+    }
+    DetectorShape::ALL
+        .get(((point.1 - SHAPE_MENU.1) / MENU_ROW_H) as usize)
+        .copied()
+}
 const GAIN_DB: f32 = 24.0;
-const FIELDS_Y: f32 = 252.0;
+const FIELDS_Y: f32 = ACTIONS_Y;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Node {
@@ -56,6 +83,8 @@ pub struct DetectorEqView {
     press: Option<ReadoutPress>,
     edit: Option<ValueEdit<Target>>,
     hover: Option<(f32, f32)>,
+    shape_menu: bool,
+    bypass_anim: ButtonAnim,
 }
 
 fn contains(r: (f32, f32, f32, f32), p: (f32, f32)) -> bool {
@@ -73,14 +102,15 @@ fn gain_y(gain: f32) -> f32 {
 fn y_gain(y: f32) -> f32 {
     ((0.5 - (y - GRAPH.1) / GRAPH.3) * GAIN_DB * 2.0).clamp(-GAIN_DB, GAIN_DB)
 }
-fn field_rect(field: Field) -> (f32, f32, f32, f32) {
-    let index = match field {
-        Field::Frequency => 0,
-        Field::Gain => 1,
-        Field::Q => 2,
+fn field_rect(field: Field, _fields: &[Field]) -> (f32, f32, f32, f32) {
+    let (offset, width) = match field {
+        Field::Frequency => (138.0, 96.0),
+        Field::Gain => (240.0, 100.0),
+        Field::Q => (346.0, 64.0),
     };
-    (10.0 + index as f32 * 92.0, FIELDS_Y, 86.0, 30.0)
+    (FOOTER_X + offset, FIELDS_Y, width, 28.0)
 }
+
 fn node_fields(node: Node, shape: EqShape) -> Vec<Field> {
     if matches!(node, Node::Band(_)) {
         if shape.has_gain() {
@@ -127,12 +157,29 @@ impl DetectorEqView {
             press: None,
             edit: None,
             hover: None,
+            shape_menu: false,
+            bypass_anim: ButtonAnim::new(),
         }
-        .build(cx, |_| {})
+        .build(cx, |cx| {
+            let timer = cx.add_timer(std::time::Duration::from_millis(16), None, |cx, action| {
+                if matches!(action, TimerAction::Tick(_)) {
+                    cx.needs_redraw();
+                }
+            });
+            cx.start_timer(timer);
+        })
+        .focusable(true)
+    }
+    fn close_menu(&mut self, cx: &mut EventContext) {
+        if self.shape_menu {
+            self.shape_menu = false;
+            cx.release();
+            cx.needs_redraw();
+        }
     }
     fn point(cx: &EventContext) -> (f32, f32) {
         let b = cx.bounds();
-        pleasant_ui::local_xy(b.x, b.y, b.w, SIZE, cx.mouse().cursorx, cx.mouse().cursory)
+        pleasant_ui::local_xy(b.x, b.y, b.w, WIDTH, cx.mouse().cursorx, cx.mouse().cursory)
             .unwrap_or((-1.0, -1.0))
     }
     fn settings(&self, node: Node) -> BandSettings {
@@ -207,12 +254,20 @@ impl DetectorEqView {
         let node = self.selected?;
         self.fields(node)
             .into_iter()
-            .find(|field| contains(field_rect(*field), p))
+            .find(|field| contains(field_rect(*field, &self.fields(node)), p))
             .map(|field| Target { node, field })
     }
     fn begin_node(&mut self, cx: &mut EventContext, node: Node, p: (f32, f32)) {
-        let b = self.settings(node);
-        let fields = self.fields(node);
+        self.begin_node_with_settings(cx, node, p, self.settings(node));
+    }
+    fn begin_node_with_settings(
+        &mut self,
+        cx: &mut EventContext,
+        node: Node,
+        p: (f32, f32),
+        b: BandSettings,
+    ) {
+        let fields = node_fields(node, b.shape);
         for &field in &fields {
             cx.emit(RawParamEvent::BeginSetParameter(
                 self.param(Target { node, field }).as_ptr(),
@@ -288,6 +343,20 @@ impl DetectorEqView {
             set_once(cx, &b.enabled, 1.0);
             set_once(cx, &b.active, 1.0);
             self.selected = Some(Node::Band(i));
+            // Parameter events are queued. Seed the drag from the values just
+            // submitted, not the inactive band's previous parameter values.
+            self.begin_node_with_settings(
+                cx,
+                Node::Band(i),
+                p,
+                BandSettings {
+                    shape: EqShape::Bell,
+                    frequency_hz: x_frequency(p.0) as f64,
+                    gain_db: y_gain(p.1) as f64,
+                    q: 1.0,
+                    ..BandSettings::default()
+                },
+            );
         }
     }
     fn commit_edit(&mut self, cx: &mut EventContext) -> bool {
@@ -328,8 +397,8 @@ impl DetectorEqView {
         color: nih_plug_vizia::vizia::vg::Color,
         width: f32,
     ) {
-        let points: [(f32, f32); 271] = std::array::from_fn(|i| {
-            let x = GRAPH.0 + i as f32;
+        let points: [(f32, f32); 513] = std::array::from_fn(|i| {
+            let x = GRAPH.0 + GRAPH.2 * i as f32 / 512.0;
             let frequency = response_frequency(x, rate);
             let value: f64 = coeffs.iter().map(|c| c.response_db(frequency, rate)).sum();
             let y = GRAPH.1 + GRAPH.3 * (0.5 - value as f32 / (GAIN_DB * 2.0));
@@ -344,15 +413,47 @@ impl View for DetectorEqView {
         Some("detector-eq")
     }
     fn draw(&self, cx: &mut DrawContext, canvas: &mut Canvas) {
-        let mut d = super::appearance::painter(cx, canvas, SIZE);
-        d.text(10.0, 12.0, "DETECTOR EQ", 11.0, MUTED);
-        for (frequency, label) in [(100.0, "100"), (1000.0, "1k"), (10000.0, "10k")] {
+        let mut d = super::appearance::painter(cx, canvas, WIDTH);
+        d.text(
+            16.0,
+            22.0,
+            "DETECTOR EQ",
+            super::appearance::MODULE_TITLE_SIZE,
+            pleasant_ui::TEXT,
+        );
+        let listening = self.params.sc_adjust_preview.value();
+        super::appearance::button(&mut d, LISTEN_RECT, "", listening, GOLD);
+        d.headphones(
+            LISTEN_RECT.0 + LISTEN_RECT.2 * 0.5,
+            LISTEN_RECT.1 + LISTEN_RECT.3 * 0.5,
+            if listening { GOLD } else { MUTED },
+        );
+        super::appearance::button(
+            &mut d,
+            SIDECHAIN_RECT,
+            "SIDECHAIN TO DETECTOR",
+            self.params.use_sidechain.value(),
+            pleasant_ui::TEAL,
+        );
+        for (frequency, label) in [
+            (20.0, "20"),
+            (50.0, "50"),
+            (100.0, "100"),
+            (200.0, "200"),
+            (500.0, "500"),
+            (1000.0, "1k"),
+            (2000.0, "2k"),
+            (5000.0, "5k"),
+            (10000.0, "10k"),
+            (20000.0, "20k"),
+        ] {
             let x = frequency_x(frequency);
             d.line(x, GRAPH.1, x, GRAPH.1 + GRAPH.3, LINE, 0.7);
-            d.text_centered(x, GRAPH.1 + GRAPH.3 + 12.0, label, 9.0, MUTED);
+            d.text_centered(x, GRAPH.1 + GRAPH.3 + 18.0, label, 13.0, MUTED);
         }
         for gain in [-24.0, -12.0, 0.0, 12.0, 24.0] {
             let y = gain_y(gain);
+            d.text_right(GRAPH.0 - 8.0, y + 4.0, &format!("{gain:.0}"), 13.0, MUTED);
             d.line(
                 GRAPH.0,
                 y,
@@ -404,38 +505,46 @@ impl View for DetectorEqView {
             match node {
                 Node::Band(i) => {
                     let b = &self.params.detector_eq[i];
-                    d.button(
-                        (10.0, 230.0, 106.0, 20.0),
-                        &b.shape.value().label().to_uppercase(),
+                    super::appearance::button(
+                        &mut d,
+                        SHAPE_RECT,
+                        &format!("{} ▾", b.shape.value().label().to_uppercase()),
                         true,
                         color,
                     );
-                    d.button(
-                        (122.0, 230.0, 106.0, 20.0),
-                        "BYPASS",
+                    d.bypass_button(
+                        BYPASS_RECT,
                         !b.enabled.value(),
                         color,
+                        self.hover.is_some_and(|p| contains(BYPASS_RECT, p)),
+                        self.bypass_anim.step(),
                     );
                 }
-                Node::HighPass => d.text(10.0, 244.0, "LOW CUT", 11.0, color),
-                Node::LowPass => d.text(10.0, 244.0, "HIGH CUT", 11.0, color),
+                Node::HighPass => {
+                    super::appearance::button(&mut d, SHAPE_RECT, "LOW CUT", true, color)
+                }
+                Node::LowPass => {
+                    super::appearance::button(&mut d, SHAPE_RECT, "HIGH CUT", true, color)
+                }
             }
-            d.button((244.0, 230.0, 36.0, 20.0), "×", false, MUTED);
+            super::appearance::button(&mut d, REMOVE_RECT, "×", false, MUTED);
             for field in self.fields(node) {
                 let target = Target { node, field };
-                let r = field_rect(field);
+                let r = field_rect(field, &self.fields(node));
                 let highlighted = self.hover.is_some_and(|p| contains(r, p))
                     || self.press.as_ref().is_some_and(|p| p.press.rect == r);
-                d.outline(r, if highlighted { color } else { LINE });
+                if highlighted {
+                    d.outline(r, color);
+                }
                 d.text(
                     r.0 + 4.0,
-                    r.1 + 11.0,
+                    r.1 + 18.0,
                     match field {
                         Field::Frequency => "FREQ",
                         Field::Gain => "GAIN",
                         Field::Q => "Q",
                     },
-                    8.0,
+                    11.0,
                     MUTED,
                 );
                 let p = self.param(target);
@@ -447,17 +556,50 @@ impl View for DetectorEqView {
                     Field::Gain => format!("{:+.1} dB", p.value()),
                     Field::Q => format!("{:.2}", p.value()),
                 };
-                d.text_right(r.0 + r.2 - 4.0, r.1 + 26.0, &value, 11.0, color);
+                d.text_right(r.0 + r.2 - 4.0, r.1 + 18.0, &value, 13.0, color);
             }
         } else {
-            d.text_centered(SIZE * 0.5, 250.0, "CLICK TO ADD A BAND", 10.0, MUTED);
+            d.text_centered(
+                CENTER_X,
+                ACTIONS_Y + 20.0,
+                "CLICK TO ADD A BAND",
+                11.0,
+                MUTED,
+            );
         }
         if let Some(edit) = &self.edit {
             d.value_edit(edit, node_color(edit.target.node));
         }
+        if self.shape_menu {
+            if let Some(Node::Band(i)) = self.selected {
+                d.rect(
+                    SHAPE_MENU.0,
+                    SHAPE_MENU.1,
+                    SHAPE_MENU.2,
+                    SHAPE_MENU.3,
+                    PANEL,
+                );
+                for (row, shape) in DetectorShape::ALL.iter().enumerate() {
+                    let y = SHAPE_MENU.1 + row as f32 * MENU_ROW_H;
+                    let selected = self.params.detector_eq[i].shape.value() == *shape;
+                    if selected || self.hover.is_some_and(|p| menu_shape(p) == Some(*shape)) {
+                        d.rect(SHAPE_MENU.0, y, SHAPE_MENU.2, MENU_ROW_H, LINE);
+                    }
+                    d.text(
+                        SHAPE_MENU.0 + 10.0,
+                        y + MENU_ROW_H * 0.5 + 13.0 * 0.32,
+                        shape.label(),
+                        13.0,
+                        if selected { GOLD } else { TEXT },
+                    );
+                }
+                d.outline(SHAPE_MENU, LINE);
+            }
+        }
     }
     fn event(&mut self, cx: &mut EventContext, event: &mut Event) {
         if !super::graph_pages::detector_active(cx) {
+            self.close_menu(cx);
             self.finish_gesture(cx);
             self.edit = None;
             return;
@@ -466,6 +608,17 @@ impl View for DetectorEqView {
             let point = Self::point(cx);
             match e {
                 WindowEvent::MouseDown(MouseButton::Left) => {
+                    if self.shape_menu {
+                        if let (Some(Node::Band(i)), Some(shape)) =
+                            (self.selected, menu_shape(point))
+                        {
+                            let param = &self.params.detector_eq[i].shape;
+                            set_once(cx, param, param.preview_normalized(shape));
+                        }
+                        self.close_menu(cx);
+                        meta.consume();
+                        return;
+                    }
                     if let Some(edit) = self.edit.as_mut() {
                         if contains(edit.rect, point) {
                             edit.handle_mouse_down(point.0);
@@ -478,9 +631,24 @@ impl View for DetectorEqView {
                             return;
                         }
                     }
+                    if contains(LISTEN_RECT, point) || contains(SIDECHAIN_RECT, point) {
+                        let param = if contains(LISTEN_RECT, point) {
+                            &self.params.sc_adjust_preview
+                        } else {
+                            &self.params.use_sidechain
+                        };
+                        set_once(cx, param, if param.value() { 0.0 } else { 1.0 });
+                        cx.needs_redraw();
+                        meta.consume();
+                        return;
+                    }
                     if let Some(target) = self.value_hit(point) {
                         self.press = Some(ReadoutPress {
-                            press: ValuePress::new(target, field_rect(target.field), point),
+                            press: ValuePress::new(
+                                target,
+                                field_rect(target.field, &self.fields(target.node)),
+                                point,
+                            ),
                             start: self.param(target).unmodulated_normalized_value(),
                             active: false,
                         });
@@ -491,20 +659,18 @@ impl View for DetectorEqView {
                         self.begin_node(cx, node, point);
                     } else if let Some(node) = self
                         .selected
-                        .filter(|_| point.1 >= 230.0 && point.1 <= 250.0)
+                        .filter(|_| point.1 >= ACTIONS_Y && point.1 <= ACTIONS_Y + 28.0)
                     {
-                        if contains((244.0, 230.0, 36.0, 20.0), point) {
+                        if contains(REMOVE_RECT, point) {
                             self.remove(cx, node);
                         } else if let Node::Band(i) = node {
                             let b = &self.params.detector_eq[i];
-                            if contains((10.0, 230.0, 106.0, 20.0), point) {
-                                let at = DetectorShape::ALL
-                                    .iter()
-                                    .position(|s| *s == b.shape.value())
-                                    .unwrap_or(0);
-                                let next = DetectorShape::ALL[(at + 1) % DetectorShape::ALL.len()];
-                                set_once(cx, &b.shape, b.shape.preview_normalized(next));
-                            } else if contains((122.0, 230.0, 106.0, 20.0), point) {
+                            if contains(SHAPE_RECT, point) {
+                                self.shape_menu = true;
+                                cx.focus();
+                                cx.capture();
+                            } else if contains(BYPASS_RECT, point) {
+                                self.bypass_anim.trigger_click();
                                 set_once(cx, &b.enabled, if b.enabled.value() { 0.0 } else { 1.0 });
                             }
                         }
@@ -542,6 +708,18 @@ impl View for DetectorEqView {
                                 p.as_ptr(),
                                 p.preview_normalized(frequency),
                             ));
+                            if drag.fields.contains(&Field::Q) && self.settings(node).shape.is_cut()
+                            {
+                                let param = self.param(Target {
+                                    node,
+                                    field: Field::Q,
+                                });
+                                let q = drag.q * 2.0_f32.powf((point.1 - drag.origin.1) / 60.0);
+                                cx.emit(RawParamEvent::SetParameterNormalized(
+                                    param.as_ptr(),
+                                    param.preview_normalized(q),
+                                ));
+                            }
                             if drag.fields.contains(&Field::Gain)
                                 && self.settings(node).shape.has_gain()
                             {
@@ -593,12 +771,20 @@ impl View for DetectorEqView {
                             self.param(target).unmodulated_normalized_value(),
                             false,
                         );
-                        self.edit = Some(ValueEdit::new(target, field_rect(target.field), value));
+                        self.edit = Some(ValueEdit::new(
+                            target,
+                            field_rect(target.field, &self.fields(target.node)),
+                            value,
+                        ));
                     }
                     cx.needs_redraw();
                     meta.consume();
                 }
                 WindowEvent::MouseScroll(_, dy) => {
+                    if self.shape_menu {
+                        meta.consume();
+                        return;
+                    }
                     if self.drag.is_none() && self.press.is_none() {
                         let target = self.value_hit(point).or_else(|| {
                             self.hit(point).map(|node| Target {
@@ -618,6 +804,11 @@ impl View for DetectorEqView {
                     }
                 }
                 WindowEvent::MouseDown(MouseButton::Right) => {
+                    if self.shape_menu {
+                        self.close_menu(cx);
+                        meta.consume();
+                        return;
+                    }
                     if let Some(node) = self.hit(point) {
                         self.remove(cx, node);
                         cx.needs_redraw();
@@ -625,6 +816,13 @@ impl View for DetectorEqView {
                     }
                 }
                 WindowEvent::KeyDown(code, key) => {
+                    if self.shape_menu {
+                        if *code == Code::Escape {
+                            self.close_menu(cx);
+                        }
+                        meta.consume();
+                        return;
+                    }
                     if self.edit.is_some() {
                         match code {
                             Code::Enter | Code::NumpadEnter => {
@@ -669,6 +867,7 @@ impl View for DetectorEqView {
                     cx.needs_redraw();
                 }
                 WindowEvent::FocusOut => {
+                    self.close_menu(cx);
                     self.finish_gesture(cx);
                     self.commit_edit(cx);
                     cx.needs_redraw();
@@ -682,6 +881,22 @@ impl View for DetectorEqView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dropdown_selects_every_shape_and_rejects_outside_clicks() {
+        for (row, shape) in DetectorShape::ALL.iter().enumerate() {
+            assert_eq!(
+                menu_shape((
+                    SHAPE_MENU.0 + 12.0,
+                    SHAPE_MENU.1 + (row as f32 + 0.5) * MENU_ROW_H
+                )),
+                Some(*shape)
+            );
+        }
+        assert_eq!(menu_shape((SHAPE_RECT.0, ACTIONS_Y + 10.0)), None);
+        assert_eq!(menu_shape((SHAPE_MENU.0 - 1.0, SHAPE_MENU.1)), None);
+        assert!(SHAPE_MENU.1 >= GRAPH.1);
+    }
 
     #[test]
     fn graph_axes_round_trip_and_clamp_at_edges() {
@@ -736,11 +951,29 @@ mod tests {
     }
 
     #[test]
-    fn footer_readouts_fit_the_square_and_clear_the_graph() {
-        for field in [Field::Frequency, Field::Gain, Field::Q] {
-            let (x, y, w, h) = field_rect(field);
-            assert!(x >= 0.0 && x + w <= SIZE);
-            assert!(y > GRAPH.1 + GRAPH.3 && y + h <= SIZE);
+    fn footer_readouts_fit_the_view_and_clear_the_graph() {
+        for fields in [
+            vec![Field::Frequency],
+            vec![Field::Frequency, Field::Q],
+            vec![Field::Frequency, Field::Gain, Field::Q],
+        ] {
+            for &field in &fields {
+                let (x, y, w, h) = field_rect(field, &fields);
+                assert!(x >= 0.0 && x + w <= WIDTH);
+                assert_eq!(y, ACTIONS_Y);
+                assert!(y + h <= HEIGHT);
+                assert!(x >= SHAPE_RECT.0 + SHAPE_RECT.2 + 6.0);
+                assert!(x + w <= REMOVE_RECT.0 - 6.0);
+                assert!(GRAPH.1 + GRAPH.3 + 18.0 < y);
+            }
+            assert_eq!(
+                ACTIONS_Y + super::super::appearance::PLEASANT_GRAPH_Y
+                    - 12.0
+                    - super::super::graph_pages::CURVE_HEADER_H,
+                super::super::appearance::PLEASANT_FOOTER_Y
+            );
+            assert!(LISTEN_RECT.1 > 22.0 && LISTEN_RECT.1 + LISTEN_RECT.3 < GRAPH.1);
+            assert!(SIDECHAIN_RECT.0 + SIDECHAIN_RECT.2 <= WIDTH);
         }
     }
 }

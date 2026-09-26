@@ -215,7 +215,6 @@ impl View for ReadoutSlider {
 pub enum JsfxButtonLabel {
     Listen,
     Sidechain,
-    Brickwall,
     Inverse,
 }
 
@@ -224,13 +223,12 @@ impl JsfxButtonLabel {
         match self {
             Self::Listen => "L",
             Self::Sidechain => "SC",
-            Self::Brickwall => "Brickwall",
             Self::Inverse => "Inverse",
         }
     }
 }
 
-/// Yellow JSFX generic button (L, SC, Brickwall, Inverse).
+/// Yellow JSFX generic button (L, SC, Inverse).
 pub struct JsfxParamButton {
     param_base: ParamWidgetBase,
 }

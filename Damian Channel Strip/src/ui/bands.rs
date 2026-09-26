@@ -455,7 +455,13 @@ impl StripView {
                     } else {
                         self.change_lift(|b| {
                             b.freq = self.x_freq(x).clamp(20.0, 20000.0);
-                            b.gain = lift_y_gain(y);
+                            if b.shape.is_cut() {
+                                if b.order > 1 {
+                                    b.q = q_from_shift_drag(b.q, dy);
+                                }
+                            } else {
+                                b.gain = lift_y_gain(y);
+                            }
                         });
                     }
                 } else if shift {
@@ -481,6 +487,8 @@ impl StripView {
                         b.freq = self.x_freq(x);
                         if b.shape.has_gain() {
                             b.gain = y_db(y, graph_db);
+                        } else if b.shape.is_cut() && b.order > 1 {
+                            b.q = q_from_shift_drag(b.q, dy);
                         }
                     });
                 }

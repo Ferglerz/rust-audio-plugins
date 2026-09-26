@@ -4,6 +4,7 @@ mod icons;
 mod primitives;
 mod text;
 
+pub use controls::KnobLayout;
 pub use primitives::TRACE_REST_PX;
 
 use crate::theme;

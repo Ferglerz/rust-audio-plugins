@@ -13,7 +13,6 @@ pub mod graph;
 mod graph_io;
 pub mod graph_snapshot;
 pub mod harmonics;
-pub mod limiter;
 pub mod lookahead;
 pub mod param_smooth;
 pub mod param_sync;

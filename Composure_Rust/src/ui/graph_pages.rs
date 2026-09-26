@@ -2,7 +2,16 @@
 use super::*;
 use std::time::{Duration, Instant};
 
-const PAGE_W: f32 = appearance::PLEASANT_GRAPH_SIZE + 32.0;
+pub(super) const CURVE_HEADER_H: f32 = 32.0;
+fn header_height(mode: u8) -> f32 {
+    if mode == 2 {
+        0.0
+    } else {
+        CURVE_HEADER_H
+    }
+}
+pub(super) const AXIS_W: f32 = 44.0;
+pub(super) const PAGE_W: f32 = appearance::PLEASANT_GRAPH_SIZE + AXIS_W;
 
 #[derive(Lens, Clone)]
 pub(super) struct GraphPages {
@@ -77,39 +86,90 @@ pub(super) fn transfer_active(cx: &EventContext) -> bool {
 pub(super) fn build(cx: &mut Context, params: Arc<ComposureParams>, display: Arc<UiDisplay>) {
     ZStack::new(cx, |cx| {
         ZStack::new(cx, |cx| {
-            graph_chrome::build(cx, EditorData::params, EditorData::display);
-            graph_view::GraphView::new(
-                cx,
-                params.graph_store.clone(),
-                display.clone(),
-                EditorData::display.map(|d| d.detector_db.load(Ordering::Relaxed)),
-                EditorData::display.map(|d| d.gr_db.load(Ordering::Relaxed)),
-                EditorData::params,
-            )
+            CurveTitle
+                .build(cx, |_| {})
+                .position_type(PositionType::SelfDirected)
+                .left(Pixels(0.0))
+                .top(Pixels(0.0))
+                .width(Pixels(PAGE_W))
+                .height(Pixels(CURVE_HEADER_H))
+                .display(EditorData::appearance.map(|mode| {
+                    if *mode == 2 {
+                        Display::None
+                    } else {
+                        Display::Flex
+                    }
+                }));
+            ZStack::new(cx, |cx| {
+                graph_chrome::build(cx, EditorData::params, EditorData::display);
+                graph_view::GraphView::new(
+                    cx,
+                    params.graph_store.clone(),
+                    display.clone(),
+                    EditorData::display.map(|d| d.detector_db.load(Ordering::Relaxed)),
+                    EditorData::display.map(|d| d.gr_db.load(Ordering::Relaxed)),
+                    EditorData::params,
+                )
+                .position_type(PositionType::SelfDirected)
+                .left(Pixels(AXIS_W))
+                .top(Pixels(12.0))
+                .width(EditorData::appearance.map(|mode| Pixels(appearance::graph_size(*mode))))
+                .height(EditorData::appearance.map(|mode| Pixels(appearance::graph_size(*mode))));
+                image_knob::ImageKnob::new(
+                    cx,
+                    EditorData::params,
+                    |p| &p.input_offset_db,
+                    display.clone(),
+                    step_points::StepSet::None,
+                )
+                .class("production-knob")
+                .position_type(PositionType::SelfDirected)
+                .left(Pixels(AXIS_W + 12.0))
+                .top(Pixels(24.0))
+                .width(Pixels(96.0))
+                .height(Pixels(96.0))
+                .display(EditorData::appearance.map(|mode| {
+                    if *mode == 2 {
+                        Display::None
+                    } else {
+                        Display::Flex
+                    }
+                }));
+            })
             .position_type(PositionType::SelfDirected)
-            .left(Pixels(32.0))
-            .top(Pixels(12.0))
-            .width(EditorData::appearance.map(|mode| Pixels(appearance::graph_size(*mode))))
-            .height(EditorData::appearance.map(|mode| Pixels(appearance::graph_size(*mode))));
+            .left(Pixels(0.0))
+            .top(EditorData::appearance.map(|mode| Pixels(header_height(*mode))))
+            .width(Pixels(PAGE_W))
+            .height(
+                EditorData::appearance.map(|mode| {
+                    Pixels(appearance::graph_size(*mode) + 40.0 + header_height(*mode))
+                }),
+            );
         })
         .position_type(PositionType::SelfDirected)
         .left(GraphPages::progress.map(|p| Pixels(-p * PAGE_W)))
         .top(Pixels(0.0))
         .width(Pixels(PAGE_W))
-        .height(EditorData::appearance.map(|mode| Pixels(appearance::graph_size(*mode) + 40.0)));
+        .height(
+            EditorData::appearance
+                .map(|mode| Pixels(appearance::graph_size(*mode) + 40.0 + header_height(*mode))),
+        );
         ZStack::new(cx, |cx| {
             detector_eq_view::DetectorEqView::new(cx, params.clone(), display.clone())
                 .position_type(PositionType::SelfDirected)
-                .left(Pixels(32.0))
-                .top(Pixels(12.0))
-                .width(Pixels(appearance::PLEASANT_GRAPH_SIZE))
-                .height(Pixels(appearance::PLEASANT_GRAPH_SIZE));
+                .left(Pixels(0.0))
+                .top(Pixels(0.0))
+                .width(Pixels(PAGE_W))
+                .height(Pixels(appearance::PLEASANT_GRAPH_SIZE + CURVE_HEADER_H));
         })
         .position_type(PositionType::SelfDirected)
         .left(GraphPages::progress.map(|p| Pixels((1.0 - p) * PAGE_W)))
         .top(Pixels(0.0))
         .width(Pixels(PAGE_W))
-        .height(EditorData::appearance.map(|mode| Pixels(appearance::graph_size(*mode) + 40.0)))
+        .height(
+            EditorData::appearance
+                .map(|mode| Pixels(appearance::graph_size(*mode) + 40.0 + header_height(*mode))),
+        )
         .display(EditorData::appearance.map(|mode| {
             if *mode == 2 {
                 Display::None
@@ -119,11 +179,31 @@ pub(super) fn build(cx: &mut Context, params: Arc<ComposureParams>, display: Arc
         }));
     })
     .position_type(PositionType::SelfDirected)
-    .left(EditorData::appearance.map(|mode| Pixels(appearance::graph_x(*mode) - 32.0)))
-    .top(EditorData::appearance.map(|mode| Pixels(appearance::graph_y(*mode) - 12.0)))
-    .width(EditorData::appearance.map(|mode| Pixels(appearance::graph_size(*mode) + 32.0)))
-    .height(EditorData::appearance.map(|mode| Pixels(appearance::graph_size(*mode) + 40.0)))
+    .left(EditorData::appearance.map(|mode| Pixels(appearance::graph_x(*mode) - AXIS_W)))
+    .top(
+        EditorData::appearance
+            .map(|mode| Pixels(appearance::graph_y(*mode) - 12.0 - header_height(*mode))),
+    )
+    .width(EditorData::appearance.map(|mode| Pixels(appearance::graph_size(*mode) + AXIS_W)))
+    .height(
+        EditorData::appearance
+            .map(|mode| Pixels(appearance::graph_size(*mode) + 40.0 + header_height(*mode))),
+    )
     .overflow(Overflow::Hidden);
+}
+
+struct CurveTitle;
+impl View for CurveTitle {
+    fn draw(&self, cx: &mut DrawContext, canvas: &mut Canvas) {
+        let mut d = appearance::painter(cx, canvas, PAGE_W);
+        d.text(
+            16.0,
+            22.0,
+            "CURVE",
+            appearance::MODULE_TITLE_SIZE,
+            pleasant_ui::TEXT,
+        );
+    }
 }
 
 struct EqToggle;
@@ -138,9 +218,11 @@ impl View for EqToggle {
     }
     fn draw(&self, cx: &mut DrawContext, canvas: &mut Canvas) {
         let selected = GraphPages::target.get(cx) > 0.5;
-        let mut d = appearance::painter(cx, canvas, 130.0);
-        d.button(
-            (0.0, 0.0, 130.0, 28.0),
+        let width = cx.bounds().w / cx.scale_factor();
+        let mut d = appearance::painter(cx, canvas, width);
+        appearance::button(
+            &mut d,
+            (0.0, 0.0, width, 28.0),
             if selected { "DETECTOR EQ" } else { "TRANSFER" },
             selected,
             pleasant_ui::GOLD,
@@ -162,4 +244,33 @@ pub(super) fn build_toggle(cx: &mut Context, rect: (f32, f32, f32)) {
                 Display::Flex
             }
         }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nih_plug_vizia::vizia::backend::BackendContext;
+
+    #[test]
+    fn timer_advances_and_settles_both_graph_pages() {
+        let mut cx = Context::default();
+        build_model(&mut cx);
+        for target in [1.0, 0.0] {
+            cx.emit(PageEvent::Toggle);
+            BackendContext::new_with_event_manager(&mut cx).process_events();
+            assert_eq!(GraphPages::target.get(&cx), target);
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while GraphPages::progress.get(&cx) != target && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(17));
+                let mut backend = BackendContext::new_with_event_manager(&mut cx);
+                backend.process_timers();
+                backend.process_events();
+            }
+            assert_eq!(
+                GraphPages::progress.get(&cx),
+                target,
+                "page timer must reach its target"
+            );
+        }
+    }
 }

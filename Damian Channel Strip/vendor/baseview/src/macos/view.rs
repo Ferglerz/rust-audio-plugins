@@ -147,8 +147,8 @@ unsafe fn create_view_class() -> &'static Class {
         property_yes as extern "C" fn(&Object, Sel) -> BOOL,
     );
     class.add_method(sel!(isFlipped), property_yes as extern "C" fn(&Object, Sel) -> BOOL);
-    // Keep the last frame during live resize. Drawing into a 0×0 or
-    // mid-resize OpenGL surface is what crashed the host to desktop.
+    // Preserve the last frame between coalesced resize ticks. The drawable
+    // is updated only at frame boundaries, and zero-sized surfaces are skipped.
     class.add_method(
         sel!(preservesContentInLiveResize),
         property_yes as extern "C" fn(&Object, Sel) -> BOOL,

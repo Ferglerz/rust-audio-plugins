@@ -116,7 +116,7 @@ pub fn draw_grid(
         p
     };
     for i in 0..=divisions {
-        let db = -(i as f64 * graph_display::GRID_STEP_DB);
+        let db = -(i as f64 * graph_display::grid_step_db(range_db));
         let norm = graph_display::db_to_norm(db, min_db, range_db);
         let x = bounds.x + norm as f32 * bounds.w;
         let y = graph_display::db_to_local_y(db, bounds, min_db, range_db);
@@ -197,7 +197,6 @@ pub fn draw_bl_margin_extension(
     canvas: &mut Canvas,
     db_to_x: &dyn Fn(f64) -> f32,
     db_to_y: &dyn Fn(f64) -> f32,
-    segments: &[crate::dsp::graph::CurveSegment],
     corner_x: f64,
     corner_y: f64,
     min_db: f64,
@@ -208,17 +207,9 @@ pub fn draw_bl_margin_extension(
         return;
     }
 
-    let end_y = if segments.is_empty() {
-        d_min
-    } else {
-        let first = &segments[0];
-        let dx = first.x2 - first.x1;
-        if dx.abs() > 0.0001 {
-            first.y1 + (first.y2 - first.y1) / dx * (d_min - first.x1)
-        } else {
-            corner_y + (d_min - corner_x)
-        }
-    };
+    // Below the operational floor the processor is unity, regardless of
+    // the first editable segment's slope.
+    let end_y = corner_y + (d_min - corner_x);
 
     let mut paint = Paint::color(vg_color(theme::GRAPH_CURVE, opacity * 0.45));
     paint.set_line_width(2.0);

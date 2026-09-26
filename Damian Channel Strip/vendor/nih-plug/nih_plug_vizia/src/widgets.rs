@@ -126,9 +126,6 @@ pub(crate) struct WindowModel {
     pub last_inner_window_size: AtomicCell<(u32, u32)>,
     pub accepted_scale: f64,
     pub pending_resize: Option<Instant>,
-    /// Unscaled logical size after a host drag, applied once it settles.
-    pub host_logical: Option<(u32, u32)>,
-    pub host_resize_at: Option<Instant>,
 }
 
 impl Model for ParamModel {
@@ -168,44 +165,6 @@ impl Model for WindowModel {
 
         event.map(|_: &ResizeTick, _| {
             if self
-                .host_resize_at
-                .is_some_and(|at| at.elapsed() >= Duration::from_millis(120))
-            {
-                self.host_resize_at = None;
-                if let Some((width, height)) = self.host_logical.take() {
-                    let (artwork_w, artwork_h) = self.vizia_state.inner_logical_size();
-                    let current_scale = cx.user_scale_factor();
-                    let new_scale = crate::editor_scale::scale_from_host_resize(
-                        artwork_w,
-                        width,
-                        current_scale,
-                    )
-                    .or_else(|| {
-                        crate::editor_scale::scale_from_host_resize(
-                            artwork_h,
-                            height,
-                            current_scale,
-                        )
-                    });
-                    if let Some(scale) = new_scale {
-                        // Keep the host's physical size while restoring the artwork's
-                        // logical dimensions. Vizia then scales drawing and pointer
-                        // coordinates together, including controls and graph edits.
-                        self.vizia_state.scale_factor.store(scale);
-                        self.last_inner_window_size.store((artwork_w, artwork_h));
-                        self.accepted_scale = scale;
-                        cx.set_window_size(WindowSize {
-                            width: artwork_w,
-                            height: artwork_h,
-                        });
-                        cx.set_user_scale_factor(scale);
-                        self.vizia_state.remember_scale(scale);
-                        self.vizia_state.flush_remembered_scale();
-                    }
-                }
-            }
-
-            if self
                 .pending_resize
                 .is_some_and(|at| at.elapsed() >= Duration::from_millis(120))
             {
@@ -213,6 +172,7 @@ impl Model for WindowModel {
                 let size = (cx.window_size().width, cx.window_size().height);
                 let scale = cx.user_scale_factor();
                 if size == self.last_inner_window_size.load() && scale == self.accepted_scale {
+                    self.vizia_state.flush_remembered_scale();
                     return;
                 }
                 // The host queries Editor::size() synchronously during this request.
@@ -248,11 +208,23 @@ impl Model for WindowModel {
                 // resize handle and still need a debounced request_resize.
                 let expected = self.vizia_state.inner_logical_size();
                 if logical_size != last && logical_size != expected {
-                    self.last_inner_window_size.store(logical_size);
-                    self.accepted_scale = scale;
-                    self.host_logical = Some(logical_size);
-                    self.host_resize_at = Some(Instant::now());
-                    self.pending_resize = None;
+                    if let Some(fit) =
+                        crate::editor_scale::scale_from_host_resize(expected, logical_size, scale)
+                    {
+                        // Fit on this frame, not after the user stops dragging. Both
+                        // drawing and pointer coordinates use the same Vizia scale.
+                        self.last_inner_window_size.store(expected);
+                        self.accepted_scale = fit;
+                        self.vizia_state.scale_factor.store(fit);
+                        cx.set_window_size(WindowSize {
+                            width: expected.0,
+                            height: expected.1,
+                        });
+                        cx.set_user_scale_factor(fit);
+                        self.vizia_state.remember_scale(fit);
+                        // Disk persistence alone is debounced, avoiding writes per frame.
+                        self.pending_resize = Some(Instant::now());
+                    }
                     return;
                 }
 

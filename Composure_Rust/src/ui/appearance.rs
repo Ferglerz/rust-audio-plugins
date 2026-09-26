@@ -1,5 +1,5 @@
 //! Rendering-only skins: every appearance uses the same parameter widgets and graph.
-use super::{layout::ControlLayout, theme, EditorData};
+use super::{theme, EditorData};
 use nih_plug_vizia::vizia::prelude::*;
 use nih_plug_vizia::vizia::vg::Color;
 use nih_plug_vizia::widgets::param_base::ParamWidgetBase;
@@ -9,43 +9,45 @@ use pleasant_ui::{Draw, BG, GOLD, LINE, MUTED, PANEL, TEAL, TEXT};
 /// Pleasant title band. Analog keeps the metal plate, so this offset is zero there.
 pub const HEADER_H: f32 = 56.0;
 
-/// Module header matches Damian: 24px bypass, 15px title, no hairline.
+/// Shared module chrome with 24px bypass and a readable 17px title.
 pub const MODULE_HEADER_H: f32 = 36.0;
 pub const MODULE_HEADER_CTRL: f32 = 24.0;
-pub const MODULE_TITLE_SIZE: f32 = 15.0;
+pub const MODULE_TITLE_SIZE: f32 = 17.0;
 pub const MODULE_GAP: f32 = 12.0;
 pub const MODULE_MARGIN: f32 = 16.0;
 
 /// Widget-space frames. Screen y is `widget_y + HEADER_H`.
-pub const BAR_X: f32 = MODULE_MARGIN;
-pub const BAR_W: f32 = 120.0;
-pub const ENV_X: f32 = BAR_X + BAR_W + MODULE_GAP;
+pub const ENV_X: f32 = MODULE_MARGIN;
 pub const ENV_Y: f32 = 12.0;
-pub const ENV_W: f32 = 128.0;
-pub const SIDE_H: f32 = 420.0;
+pub const ENV_W: f32 = 321.0;
+pub const PLEASANT_EDITOR_WIDTH: u32 = theme::EDITOR_WIDTH + 167;
+pub const SIDE_H: f32 = 637.0; // Includes the transfer graph header.
+pub const PLEASANT_EDITOR_HEIGHT: u32 = theme::EDITOR_HEIGHT + 217;
 pub const HARM_W: f32 = 168.0;
-pub const HARM_X: f32 = theme::EDITOR_WIDTH as f32 - MODULE_MARGIN - HARM_W;
-pub const DET_X: f32 = ENV_X + ENV_W + MODULE_GAP;
-pub const DET_W: f32 = 270.0;
-pub const TRANS_X: f32 = DET_X + DET_W + MODULE_GAP;
+pub const HARM_X: f32 = PLEASANT_EDITOR_WIDTH as f32 - MODULE_MARGIN - HARM_W;
+pub const TRANS_X: f32 = ENV_X + ENV_W + MODULE_GAP;
 pub const TRANS_W: f32 = HARM_X - MODULE_GAP - TRANS_X;
 pub const MID_H: f32 = SIDE_H;
-pub const BAR_Y: f32 = ENV_Y;
-pub const BAR_H: f32 = SIDE_H;
-pub const TOOLBAR_KNOB_SIZE: f32 = 84.0;
+pub const ENVELOPE_FOOTER_H: f32 = 96.0;
+pub const DETECTION_BUTTON_W: f32 = 120.0;
 
-pub fn pleasant_knob_size(x: f32) -> f32 {
-    if x >= BAR_X && x < BAR_X + BAR_W {
-        TOOLBAR_KNOB_SIZE
-    } else {
-        theme::KNOB_SIZE
-    }
+pub fn pleasant_knob_size(_x: f32) -> f32 {
+    theme::KNOB_SIZE
 }
 
 /// Square graph shifted left so axis labels sit inside the wider transfer module.
 pub const PLEASANT_GRAPH_X: f32 = TRANS_X + 46.0;
-pub const PLEASANT_GRAPH_Y: f32 = ENV_Y + (MID_H - PLEASANT_GRAPH_SIZE) * 0.5;
-pub const PLEASANT_GRAPH_SIZE: f32 = 290.0;
+// Reserve the axis gutter, meter handles, and readouts; use the rest for the graph.
+pub const PLEASANT_GRAPH_SIZE: f32 = TRANS_W - 46.0 - 12.0 - PLEASANT_METERS_W - 12.0;
+pub const PLEASANT_GRAPH_Y: f32 = ENV_Y + 44.0;
+/// Shared bottom row for EQ band controls and program detection.
+pub const PLEASANT_FOOTER_Y: f32 = PLEASANT_GRAPH_Y + PLEASANT_GRAPH_SIZE - 48.0;
+pub const PLEASANT_METER_HEIGHT: f32 = PLEASANT_FOOTER_Y - PLEASANT_GRAPH_Y - 8.0;
+pub const PLEASANT_METER_W: f32 = 44.0;
+pub const PLEASANT_METER_GAP: f32 = 16.0;
+pub const PLEASANT_METER_INSET: f32 = 7.0;
+pub const PLEASANT_METERS_W: f32 =
+    3.0 * PLEASANT_METER_W + 2.0 * (PLEASANT_METER_INSET + PLEASANT_METER_GAP);
 
 pub fn graph_x(mode: u8) -> f32 {
     if mode == 2 {
@@ -75,8 +77,24 @@ pub fn meter_x(mode: u8) -> (f32, f32) {
     if mode == 2 {
         (theme::METER_X, theme::METER_X_RIGHT)
     } else {
-        let x = PLEASANT_GRAPH_X + PLEASANT_GRAPH_SIZE + 10.0;
-        (x, x + theme::METER_W + theme::METER_GAP)
+        let x = PLEASANT_GRAPH_X + PLEASANT_GRAPH_SIZE + 12.0;
+        (x, x + PLEASANT_METER_W + PLEASANT_METER_GAP)
+    }
+}
+
+pub fn editor_width(mode: u8) -> u32 {
+    if mode == 2 {
+        theme::EDITOR_WIDTH
+    } else {
+        PLEASANT_EDITOR_WIDTH
+    }
+}
+
+pub fn editor_height(mode: u8) -> u32 {
+    if mode == 2 {
+        theme::EDITOR_HEIGHT
+    } else {
+        PLEASANT_EDITOR_HEIGHT
     }
 }
 
@@ -152,34 +170,14 @@ pub fn draw_control(
     let value = param.normalized_value_to_string(param.modulated_normalized_value(), true);
     match control {
         Control::Knob => {
-            // Square slots pin the arc 8px above the readout. Damian's taller
-            // slots leave ~15px. Keep the readout on the widget bottom.
-            let arc_h = (h - 3.0).max(64.0);
-            if w <= 64.0 {
-                d.knob(
-                    (0.0, 0.0, w, h),
-                    short_name(param.name()),
-                    &value,
-                    norm,
-                    GOLD,
-                    false,
-                );
-            } else {
-                d.knob(
-                    (0.0, 0.0, w, arc_h),
-                    short_name(param.name()),
-                    "",
-                    norm,
-                    GOLD,
-                    false,
-                );
-                d.text_centered(w * 0.5, h - 8.0, &value, 13.0, GOLD);
-            }
+            let layout =
+                pleasant_ui::draw::KnobLayout::new((0.0, 0.0, w, h)).with_text_sizes(13.0, 15.0);
+            d.knob_with_layout(&layout, short_name(param.name()), &value, norm, GOLD, false);
         }
         Control::Slider(fill) => {
             use super::readout_controls::SliderFill;
-            d.text(0.0, 14.0, short_name(param.name()), 9.5, MUTED);
-            d.text_right(w, 14.0, &value, 11.0, GOLD);
+            d.text(0.0, 14.0, short_name(param.name()), 13.0, MUTED);
+            d.text_right(w, 14.0, &value, 14.0, GOLD);
             let (x, y, width, height) = slider_track(w);
             d.rect(x, y, width, height, LINE);
             let pos = x + width * norm.clamp(0.0, 1.0);
@@ -204,19 +202,40 @@ pub fn draw_control(
             };
             if param.name() == "Harmonic Type" {
                 let accent = if norm < 0.5 { GOLD } else { TEAL };
-                d.button((0.0, 0.0, w, h), &value.to_uppercase(), true, accent);
+                button(
+                    &mut d,
+                    (0.0, 0.0, w, h),
+                    &value.to_uppercase(),
+                    true,
+                    accent,
+                );
             } else if matches!(param.name(), "Mid/Side" | "Normalize") {
-                d.button(
+                button(
+                    &mut d,
                     (0.0, 0.0, w, h),
                     &param.name().to_uppercase(),
                     norm > 0.0,
                     TEAL,
                 );
+            } else if param.name() == "Program Release Mode" {
+                let mode = match value {
+                    "Input" => "INPUT",
+                    "GR" => "GR",
+                    _ => "GR RATE",
+                };
+                button(
+                    &mut d,
+                    (0.0, 0.0, w, h),
+                    &format!("PGM DET: {mode}"),
+                    true,
+                    TEAL,
+                );
             } else if param.name() == "Detection Mode" {
-                d.button((0.0, 0.0, w, h), &value.to_uppercase(), true, TEAL);
+                button(&mut d, (0.0, 0.0, w, h), &value.to_uppercase(), true, TEAL);
             } else {
-                d.text_centered(w * 0.5, 14.0, short_name(param.name()), 11.0, MUTED);
-                d.button(
+                d.text_centered(w * 0.5, 14.0, short_name(param.name()), 13.0, MUTED);
+                button(
+                    &mut d,
                     (0.0, 24.0, w, (h - 30.0).max(24.0)),
                     &value.to_uppercase(),
                     norm > 0.0,
@@ -228,19 +247,15 @@ pub fn draw_control(
             let label = match param.name() {
                 "L" => "L",
                 "SC" => "SC",
-                "Brickwall Limiter" => "Brickwall",
                 "Program Release Inverse" => "Inverse",
                 _ => param.name(),
             };
-            d.button(
+            button(
+                &mut d,
                 (0.0, 0.0, w, h),
                 &label.to_uppercase(),
                 norm > 0.0,
-                if matches!(label, "Brickwall" | "Inverse") {
-                    GOLD
-                } else {
-                    TEAL
-                },
+                if label == "Inverse" { GOLD } else { TEAL },
             );
         }
     }
@@ -270,10 +285,22 @@ pub fn slider_track(w: f32) -> (f32, f32, f32, f32) {
 
 pub fn value_rect(control: Control, w: f32, h: f32) -> (f32, f32, f32, f32) {
     match control {
-        Control::Knob if w <= 64.0 => (0.0, 60.0, w, 22.0),
-        Control::Knob => (0.0, h - 26.0, w, 24.0),
+        Control::Knob => pleasant_ui::draw::KnobLayout::new((0.0, 0.0, w, h))
+            .with_text_sizes(13.0, 15.0)
+            .value_rect(0.0, w),
         _ => (w - 72.0, 0.0, 72.0, 20.0),
     }
+}
+
+pub fn button(d: &mut Draw, rect: (f32, f32, f32, f32), label: &str, on: bool, color: Color) {
+    d.button(rect, "", on, color);
+    d.text_centered(
+        rect.0 + rect.2 * 0.5,
+        rect.1 + rect.3 * 0.5 + 4.5,
+        label,
+        13.0,
+        if on { color } else { MUTED },
+    );
 }
 
 pub struct Background;
@@ -299,26 +326,12 @@ impl View for Background {
         let y = ENV_Y + HEADER_H;
         let modules = [
             (ENV_X, y, ENV_W, SIDE_H, "ENVELOPE", TEAL),
-            (DET_X, y, DET_W, MID_H, "DETECTOR & TIMING", GOLD),
             (TRANS_X, y, TRANS_W, MID_H, "", TEAL),
             (HARM_X, y, HARM_W, SIDE_H, "HARMONICS", GOLD),
         ];
         for (x, y, w, h, title, accent) in modules {
             draw_module(&mut d, x, y, w, h, title, accent);
         }
-        let toolbar = (BAR_X, BAR_Y + HEADER_H, BAR_W, BAR_H);
-        d.rect(toolbar.0, toolbar.1, toolbar.2, toolbar.3, PANEL);
-        d.outline(toolbar, LINE);
-        let controls = ControlLayout::pleasant();
-        d.outline(
-            (
-                controls.rms_knob.0 - 2.0,
-                controls.rms_knob.1 + HEADER_H - 2.0,
-                TOOLBAR_KNOB_SIZE + 4.0,
-                controls.norm_switch.1 + HEADER_H + 28.0 - controls.rms_knob.1 + 4.0,
-            ),
-            LINE,
-        );
     }
 }
 
@@ -393,7 +406,7 @@ impl View for AppearanceSelector {
             _ => "DARK",
         };
         let mut d = painter(cx, canvas, 84.0);
-        d.button((0.0, 0.0, 84.0, 28.0), label, false, MUTED);
+        button(&mut d, (0.0, 0.0, 84.0, 28.0), label, false, MUTED);
     }
 
     fn event(&mut self, cx: &mut EventContext, event: &mut Event) {

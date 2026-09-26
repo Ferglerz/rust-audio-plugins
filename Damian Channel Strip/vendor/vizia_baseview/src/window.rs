@@ -164,6 +164,9 @@ impl ViziaWindow {
 
 impl WindowHandler for ViziaWindow {
     fn on_frame(&mut self, window: &mut Window) {
+        // Flush trailing resize requests and host parameter updates even when
+        // no mouse/keyboard events arrive after a native window resize.
+        self.application.handle_idle(&self.on_idle);
         self.application.on_frame_update(window);
 
         let context = window.gl_context().expect("Window was created without OpenGL support");

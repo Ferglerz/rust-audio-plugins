@@ -9,7 +9,6 @@ use crate::dsp::graph_snapshot::GraphSnapshot;
 use crate::dsp::harmonics::{
     apply_harmonic_stereo, compute_harmonic_modulation, HarmonicParams, HarmonicProcessor,
 };
-use crate::dsp::limiter::SoftClipLimiter;
 use crate::dsp::lookahead::LookaheadBuffer;
 use crate::dsp::param_smooth::{
     smooth_envelope_params, smooth_one_minus, smooth_step, PARAM_SMOOTH_MS,
@@ -31,7 +30,6 @@ pub struct ChainParams {
     pub rms_normalization: bool,
     pub rms_size_ms: f64,
     pub lookahead_ms: f64,
-    pub brickwall_limiter: bool,
     pub mid_side_mode: bool,
     pub sc_adjust_preview: bool,
     pub use_sidechain: bool,
@@ -50,7 +48,6 @@ impl Default for ChainParams {
             rms_normalization: false,
             rms_size_ms: 0.0,
             lookahead_ms: 0.0,
-            brickwall_limiter: true,
             mid_side_mode: false,
             sc_adjust_preview: false,
             use_sidechain: false,
@@ -76,7 +73,6 @@ pub struct ProcessingChain {
     snapshot: Arc<GraphSnapshot>,
     envelope: EnvelopeEngine,
     lookahead: LookaheadBuffer,
-    limiter: SoftClipLimiter,
     harmonics: HarmonicProcessor,
     params: ChainParams,
     final_prev_l: f64,
@@ -119,7 +115,6 @@ impl ProcessingChain {
             snapshot,
             envelope: EnvelopeEngine::new(),
             lookahead: LookaheadBuffer::new(srate),
-            limiter: SoftClipLimiter::new(),
             harmonics: HarmonicProcessor::new(srate),
             params: ChainParams::default(),
             final_prev_l: 0.0,
@@ -272,7 +267,6 @@ impl ProcessingChain {
         self.params.detection_feedback = block.detection_feedback;
         self.params.rms_normalization = block.rms_normalization;
         self.params.rms_size_ms = block.rms_size_ms;
-        self.params.brickwall_limiter = block.brickwall_limiter;
         self.params.mid_side_mode = block.mid_side_mode;
         self.params.sc_adjust_preview = block.sc_adjust_preview;
         self.params.use_sidechain = block.use_sidechain;
@@ -347,7 +341,6 @@ impl ProcessingChain {
         self.rms.reset();
         self.envelope.reset();
         self.lookahead.reset();
-        self.limiter.reset();
         self.harmonics.reset();
         self.final_prev_l = 0.0;
         self.final_prev_r = 0.0;
@@ -396,7 +389,6 @@ impl ProcessingChain {
                 self.filters.flush_denormals();
                 self.rms.flush_line_state();
                 self.envelope.flush_denormals();
-                self.limiter.flush_denormals();
                 self.harmonics.flush_denormals();
                 self.denormal_flush_done = true;
             }
@@ -510,12 +502,8 @@ impl ProcessingChain {
             );
         }
 
-        let mut final_l = processed_l * p.makeup_gain_linear;
-        let mut final_r = processed_r * p.makeup_gain_linear;
-
-        if p.brickwall_limiter {
-            (final_l, final_r) = self.limiter.process_stereo(final_l, final_r);
-        }
+        let final_l = processed_l * p.makeup_gain_linear;
+        let final_r = processed_r * p.makeup_gain_linear;
 
         let (mut out_l, mut out_r) = if p.mid_side_mode {
             (final_l + final_r, final_l - final_r)
@@ -679,9 +667,24 @@ mod tests {
     }
 
     #[test]
+    fn clean_output_and_makeup_are_not_limited_or_soft_clipped() {
+        let mut chain = ProcessingChain::new(48_000.0);
+        for (left, right) in [(0.25, -0.5), (1.25, -1.5), (2.0, -3.0)] {
+            assert_eq!(
+                chain.apply_gain_and_output(left, right, 0.0, 0.0),
+                (left, right)
+            );
+        }
+        chain.params.makeup_gain_linear = 2.0;
+        assert_eq!(
+            chain.apply_gain_and_output(0.75, -0.8, 0.0, 0.0),
+            (1.5, -1.6)
+        );
+    }
+
+    #[test]
     fn harmonics_bypass_keeps_the_clean_output() {
         let mut chain = ProcessingChain::new(48_000.0);
-        chain.params.brickwall_limiter = false;
         chain.params.harmonic_params.mix = 1.0;
         chain.params.harmonic_params.drive = 100.0;
         chain.envelope.global_smoothed_gain_db = -6.0;
@@ -755,6 +758,9 @@ mod tests {
         assert!(out_r.abs() < 1e-6);
         let det = chain.block_meter_detector_db();
         assert!(det.is_finite());
-        assert!(det <= -100.0, "silent input must not paint a full-scale graph histogram: {det}");
+        assert!(
+            det <= -100.0,
+            "silent input must not paint a full-scale graph histogram: {det}"
+        );
     }
 }
