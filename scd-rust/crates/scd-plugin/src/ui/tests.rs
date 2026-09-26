@@ -66,6 +66,57 @@ fn five_stage_covers_hise_filmstrip() {
 }
 
 #[test]
+fn reset_hit_targets_follow_visible_controls() {
+    let piece = KitPieceId::Kick;
+    let x = ScdEditorView::strip_x(piece) + STRIP_W * 0.5;
+    assert_eq!(
+        ScdEditorView::reset_target_at(x, PITCH_Y + 5.0, false),
+        Some(DragTarget::Pitch(piece))
+    );
+    assert_eq!(
+        ScdEditorView::reset_target_at(x, PAN_Y + 5.0, false),
+        Some(DragTarget::Pan(piece))
+    );
+    assert_eq!(
+        ScdEditorView::reset_target_at(x, FADER_Y + 5.0, false),
+        Some(DragTarget::Fader(piece))
+    );
+    assert_eq!(
+        ScdEditorView::reset_target_at(x, PUNCH_Y + 5.0, false),
+        Some(DragTarget::Punch(piece))
+    );
+
+    let (mx, my, _, _) = ScdEditorView::sub_kick_modal();
+    for (i, target) in [
+        DragTarget::SubKickVol,
+        DragTarget::SubKickLength,
+        DragTarget::SubKickDive,
+        DragTarget::SubKickSpeed,
+        DragTarget::SubKickOffset,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let knob_x = ScdEditorView::sub_kick_knob_x(mx, i);
+        assert_eq!(
+            ScdEditorView::reset_target_at(knob_x, my + 55.0, true),
+            Some(target)
+        );
+    }
+    assert_eq!(ScdEditorView::reset_target_at(x, PITCH_Y + 5.0, true), None);
+}
+
+#[test]
+fn mapping_helper_sits_inside_menu_below_last_note() {
+    let (_, last_y, _, last_h) = ScdEditorView::samples_item_rect(KitPieceId::COUNT - 1);
+    let (hx, hy, hw, hh) = ScdEditorView::mapping_helper_rect();
+    let (mx, my, mw, mh) = ScdEditorView::mapping_menu_rect();
+    assert_eq!(hy, last_y + last_h);
+    assert!(hx >= mx && hx + hw <= mx + mw);
+    assert!(hy >= my && hy + hh <= my + mh);
+}
+
+#[test]
 fn hihat_mapping_groups_route_to_all_underlying_articulations() {
     let options = ScdEditorView::vel_art_options(KitPieceId::Hihat);
     assert_eq!(

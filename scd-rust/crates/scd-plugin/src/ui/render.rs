@@ -18,13 +18,6 @@ impl ScdEditorView {
                     .ok(),
             );
         }
-        if self.icon_font.get().is_none() {
-            self.icon_font.set(
-                canvas
-                    .add_font_mem(nih_plug_vizia::vizia_assets::fonts::TABLER_ICONS)
-                    .ok(),
-            );
-        }
         ensure_img(&self.bg_img, canvas, BG_PNG);
         ensure_img(&self.logo_img, canvas, LOGO_PNG);
         ensure_img(&self.stone_img, canvas, STONE_PNG);

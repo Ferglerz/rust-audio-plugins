@@ -16,20 +16,10 @@ impl ChordboardView {
             bounds.y,
             self.font.get(),
         );
-        d.rect(0.0, 0.0, W, H, BG);
-        d.rect(0.0, 0.0, W, 76.0, PANEL);
+        d.rounded_rect(0.0, 0.0, W, H, 0.0, BG);
+        d.rounded_rect(0.0, 0.0, W, 76.0, 0.0, PANEL);
         d.line(0.0, 75.0, W, 75.0, LINE, 1.0);
         d.text(32.0, 44.0, "CHORDBOARD", 23.0, GOLD);
-        d.text(34.0, 62.0, "HARMONY IN YOUR HANDS", 8.0, MUTED);
-        d.button(
-            (280.0, 24.0, 194.0, 30.0),
-            PRESETS[self.preset],
-            false,
-            TEAL,
-        );
-        d.button((482.0, 24.0, 62.0, 30.0), "LOAD", false, TEAL);
-        d.button((552.0, 24.0, 62.0, 30.0), "SAVE", false, TEAL);
-        d.text(648.0, 44.0, "PLEASANT UI", 10.0, MUTED);
         d.button(
             (814.0, 24.0, 112.0, 30.0),
             "QWERTY",
@@ -42,11 +32,6 @@ impl ChordboardView {
             false,
             TEAL,
         );
-        d.button((1016.0, 24.0, 72.0, 30.0), "PANIC", false, COLORS[4]);
-        let pulse = self.pulse.step();
-        if pulse > 0.0 {
-            d.outline((1016.0, 24.0, 72.0, 30.0), alpha(COLORS[4], pulse));
-        }
         for (i, label) in ["CHORD", "AUTO STRUM", "MANUAL STRUM", "ARPEGGIATOR"]
             .iter()
             .enumerate()
@@ -253,7 +238,7 @@ impl ChordboardView {
         d.button(
             (32.0, 441.0, 158.0, 28.0),
             &format!(
-                "KEY {}",
+                "KEY {} ▾",
                 harmony::NOTE_NAMES[self.params.key.value() as usize]
             ),
             true,
@@ -261,7 +246,10 @@ impl ChordboardView {
         );
         d.button(
             (198.0, 441.0, 228.0, 28.0),
-            harmony::SCALE_NAMES[self.params.scale.value() as usize],
+            &format!(
+                "{} ▾",
+                harmony::SCALE_NAMES[self.params.scale.value() as usize]
+            ),
             true,
             TEAL,
         );
@@ -396,13 +384,7 @@ impl ChordboardView {
                 GOLD,
             );
         }
-        let pages = self
-            .params
-            .controls()
-            .iter()
-            .filter(|c| c.group == self.group)
-            .count()
-            .div_ceil(8);
+        let pages = self.group_controls().len().div_ceil(8);
         d.button(
             (982.0, 585.0, 106.0, 28.0),
             &format!("{}/{}  >", self.page + 1, pages),
@@ -410,19 +392,25 @@ impl ChordboardView {
             TEAL,
         );
         for (i, c) in self.shown_controls().iter().enumerate() {
-            d.control(
-                control_rect(i),
-                &c.name,
-                &c.value,
-                c.norm,
-                if self.group == 2 { TEAL } else { GOLD },
-            );
+            let rect = control_rect(i);
+            let color = if self.group == 2 { TEAL } else { GOLD };
+            if c.toggle {
+                d.button(
+                    rect,
+                    &format!("{}: {}", c.name, c.value),
+                    c.norm >= 0.5,
+                    color,
+                );
+                d.outline(rect, LINE);
+            } else {
+                d.control(rect, &c.name, &c.value, c.norm, color);
+            }
         }
         if let Some(edit) = &self.edit {
             d.value_edit(edit, GOLD);
         }
         let footer = if self.status.is_empty() {
-            "Click the keyboard to focus • ↑ / ↓ inversions • CC1 strums in Manual mode • Double-click values to type"
+            "Click the keyboard to focus • ↑ / ↓ inversions • CC1 strums in Manual mode • Double-click slider values to type"
         } else {
             &self.status
         };
@@ -433,6 +421,27 @@ impl ChordboardView {
             8.0,
             MUTED,
         );
+        if let Some(menu) = self.menu {
+            let first = menu.option_rect(0);
+            let mut right = first.0 + first.2;
+            let mut bottom = first.1 + first.3;
+            for i in 1..menu.items().len() {
+                let rect = menu.option_rect(i);
+                right = right.max(rect.0 + rect.2);
+                bottom = bottom.max(rect.1 + rect.3);
+            }
+            let bounds = (
+                first.0 - 3.0,
+                first.1 - 3.0,
+                right - first.0 + 6.0,
+                bottom - first.1 + 6.0,
+            );
+            d.rect(bounds.0, bounds.1, bounds.2, bounds.3, BG);
+            d.outline(bounds, TEAL);
+            for (i, label) in menu.items().iter().enumerate() {
+                d.button(menu.option_rect(i), label, i == self.menu_cursor, TEAL);
+            }
+        }
     }
     fn draw_pad(&self, d: &mut Draw) {
         d.rounded_rect(PAD.0, PAD.1, PAD.2, PAD.3, 9.0, PANEL);
@@ -513,18 +522,23 @@ impl ChordboardView {
             TEAL,
             false,
         );
-        // Engine-owned voices, with positions animated independently from MIDI timing.
-        for i in 0..128 {
-            if self.note_alpha[i] > 0.01 {
-                let px = (600.0 + (self.note_positions[i] - 36.0) * 5.0).clamp(600.0, 930.0);
-                d.circle(px, 171.0, 3.0, alpha(GOLD, self.note_alpha[i]), true);
+        for (i, label) in ["PRESSURE", "TIMBRE", "BEND"].iter().enumerate() {
+            let x = 600.0 + i as f32 * 164.0;
+            d.text(x, 177.0, label, 9.0, MUTED);
+            d.rect(x + 72.0, 168.0, 80.0, 8.0, LINE);
+            if i == 2 {
+                let end = x + 72.0 + 80.0 * self.meters[i];
+                d.rect(
+                    (x + 112.0).min(end),
+                    168.0,
+                    (end - (x + 112.0)).abs(),
+                    8.0,
+                    TEAL,
+                );
+                d.line(x + 112.0, 166.0, x + 112.0, 178.0, TEXT, 1.0);
+            } else {
+                d.rect(x + 72.0, 168.0, 80.0 * self.meters[i], 8.0, TEAL);
             }
-        }
-        for (i, label) in ["P", "T", "B"].iter().enumerate() {
-            let x = 950.0 + i as f32 * 46.0;
-            d.text(x, 178.0, label, 8.0, MUTED);
-            d.rect(x + 12.0, 169.0, 25.0, 6.0, LINE);
-            d.rect(x + 12.0, 169.0, 25.0 * self.meters[i], 6.0, TEAL);
         }
     }
 }

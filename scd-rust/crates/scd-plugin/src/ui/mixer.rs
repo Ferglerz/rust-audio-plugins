@@ -2,6 +2,88 @@
 use super::*;
 
 impl ScdEditorView {
+    pub(super) fn reset_target_at(x: f32, y: f32, sub_kick_open: bool) -> Option<DragTarget> {
+        if sub_kick_open {
+            let (mx, my, mw, mh) = Self::sub_kick_modal();
+            if !Self::hit(x, y, mx, my, mw, mh) {
+                return None;
+            }
+            let knob_y = my + 55.0;
+            return (0..5).find_map(|i| {
+                let knob_x = Self::sub_kick_knob_x(mx, i);
+                ((x - knob_x).powi(2) + (y - knob_y).powi(2) <= 30.0_f32.powi(2)).then_some(match i
+                {
+                    0 => DragTarget::SubKickVol,
+                    1 => DragTarget::SubKickLength,
+                    2 => DragTarget::SubKickDive,
+                    3 => DragTarget::SubKickSpeed,
+                    _ => DragTarget::SubKickOffset,
+                })
+            });
+        }
+        for &piece in &KitPieceId::ALL {
+            let sx = Self::strip_x(piece);
+            if !(sx..=sx + STRIP_W).contains(&x) {
+                continue;
+            }
+            if (PITCH_Y..=PITCH_Y + SLIDER_H).contains(&y) {
+                return Some(DragTarget::Pitch(piece));
+            }
+            if (PAN_Y..=PAN_Y + SLIDER_H).contains(&y) {
+                return Some(DragTarget::Pan(piece));
+            }
+            if (FADER_Y..=FADER_Y + FADER_H).contains(&y) {
+                return Some(DragTarget::Fader(piece));
+            }
+            if (PUNCH_Y..=PUNCH_Y + PUNCH_SIZE).contains(&y) {
+                return Some(DragTarget::Punch(piece));
+            }
+        }
+        None
+    }
+
+    pub(super) fn reset_control_at(&mut self, cx: &mut EventContext, x: f32, y: f32) -> bool {
+        if self.add_preset_open || self.vel_map_open.is_some() {
+            return false;
+        }
+        if self.samples_open {
+            let (mx, my, mw, mh) = Self::mapping_menu_rect();
+            if Self::hit(x, y, mx, my, mw, mh) {
+                return false;
+            }
+        }
+        if self.preset_open {
+            let (mx, my, mw, mh) = self.preset_menu_rect();
+            if Self::hit(x, y, mx, my, mw, mh) {
+                return false;
+            }
+        }
+        let Some(target) = Self::reset_target_at(x, y, self.sub_kick_open) else {
+            return false;
+        };
+        if matches!(target, DragTarget::Fader(piece) if self.omitted(piece)) {
+            return false;
+        }
+        if self.drag.take().is_some() {
+            self.end_gesture(cx);
+            cx.release();
+        }
+        let param = match target {
+            DragTarget::Pitch(piece) => &self.params.get_strip(piece).pitch,
+            DragTarget::Pan(piece) => &self.params.get_strip(piece).pan,
+            DragTarget::Fader(piece) => self.params.get_strip(piece).fader_param(self.active_sof),
+            DragTarget::Punch(piece) => &self.params.get_strip(piece).punch,
+            DragTarget::SubKickVol => &self.params.sub_kick.vol,
+            DragTarget::SubKickLength => &self.params.sub_kick.length,
+            DragTarget::SubKickDive => &self.params.sub_kick.dive,
+            DragTarget::SubKickSpeed => &self.params.sub_kick.speed,
+            DragTarget::SubKickOffset => &self.params.sub_kick.offset,
+            _ => return false,
+        };
+        self.emit_default(cx, param);
+        true
+    }
+
     pub(super) fn omitted(&self, kit_piece: KitPieceId) -> bool {
         self.active_sof
             .map(|mic| kit_piece.omits_mic(mic))
@@ -74,7 +156,6 @@ impl ScdEditorView {
         let lock = Self::lock_rect();
         draw_lock(
             draw,
-            self.icon_font.get(),
             lock.0,
             lock.1,
             lock.2,

@@ -598,10 +598,12 @@ impl View for DetectorEqView {
         }
     }
     fn event(&mut self, cx: &mut EventContext, event: &mut Event) {
+        let was_editing = self.edit.is_some();
         if !super::graph_pages::detector_active(cx) {
             self.close_menu(cx);
             self.finish_gesture(cx);
             self.edit = None;
+            pleasant_ui::value_edit::sync_text_input(cx, was_editing, false);
             return;
         }
         event.map(|e: &WindowEvent, meta| {
@@ -875,6 +877,7 @@ impl View for DetectorEqView {
                 _ => {}
             }
         });
+        pleasant_ui::value_edit::sync_text_input(cx, was_editing, self.edit.is_some());
     }
 }
 

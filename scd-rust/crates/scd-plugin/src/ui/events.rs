@@ -248,9 +248,8 @@ impl ScdEditorView {
                                 return;
                             }
                         }
-                        let menu_y = SAMPLES_Y + SAMPLES_H + 4.0;
-                        let menu_h = (KitPieceId::COUNT + 1) as f32 * PRESET_ITEM_H + 8.0;
-                        if Self::hit(x, y, SAMPLES_X, menu_y, SAMPLES_MENU_W, menu_h) {
+                        let (mx, my, mw, mh) = Self::mapping_menu_rect();
+                        if Self::hit(x, y, mx, my, mw, mh) {
                             meta.consume();
                             return;
                         }
@@ -320,6 +319,12 @@ impl ScdEditorView {
                             self.vel_map_open = None;
                             self.blur_dirty.set(true);
                         }
+                        cx.needs_redraw();
+                        meta.consume();
+                        return;
+                    }
+
+                    if cx.modifiers().alt() && self.reset_control_at(cx, x, y) {
                         cx.needs_redraw();
                         meta.consume();
                         return;
@@ -558,6 +563,11 @@ impl ScdEditorView {
                     }
                 }
                 WindowEvent::MouseDoubleClick(MouseButton::Left) => {
+                    if self.reset_control_at(cx, mouse_x, mouse_y) {
+                        cx.needs_redraw();
+                        meta.consume();
+                        return;
+                    }
                     if self.vel_map_open.is_some() {
                         let (modal_x, modal_y, modal_w, modal_h) = Self::vel_map_modal();
                         let (gx, gy, gw, gh) = Self::vel_map_graph();

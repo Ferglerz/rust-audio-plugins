@@ -157,6 +157,20 @@ impl ScdEditorView {
         (x + left, y, w - left, h)
     }
 
+    pub(super) fn mapping_helper_rect() -> (f32, f32, f32, f32) {
+        let (x, y, w, h) = Self::samples_item_rect(KitPieceId::COUNT - 1);
+        (x, y + h, w, PRESET_ITEM_H)
+    }
+
+    pub(super) fn mapping_menu_rect() -> (f32, f32, f32, f32) {
+        (
+            SAMPLES_X,
+            SAMPLES_Y + SAMPLES_H + 4.0,
+            SAMPLES_MENU_W,
+            (KitPieceId::COUNT + 2) as f32 * PRESET_ITEM_H + 8.0,
+        )
+    }
+
     pub(super) fn reset_flyout_item(i: usize) -> (f32, f32, f32, f32) {
         let menu_y = PRESET_Y + PRESET_H + 8.0;
         (

@@ -787,17 +787,16 @@ pub(in crate::ui) fn draw_dyn_range_curve(
         },
         1.2,
     );
-    for (x, y) in range_grip_points(b, graph, rates) {
-        // Pixel-aligned squares remain legible at the small grip size.
-        d.rect(x.round() - 1.0, y.round() - 1.0, 2.0, 2.0, color);
+    for line in range_grip_lines(b, graph, rates) {
+        d.poly(&line, color, 1.2);
     }
 }
 
-pub(in crate::ui) fn range_grip_points(
+pub(in crate::ui) fn range_grip_lines(
     b: &Band,
     graph: (f32, f32, f64),
     rates: (f64, f64),
-) -> Vec<(f32, f32)> {
+) -> [Vec<(f32, f32)>; 2] {
     let (gx, gw, graph_db) = graph;
     let (sr, eq_sr) = rates;
     let coeff = BandCoeffs::make(&range_band(b), eq_sr);
@@ -809,28 +808,26 @@ pub(in crate::ui) fn range_grip_points(
         let response = coeff.response(x_freq_at(sample_x, gx, gw).min(sr * 0.49), eq_sr);
         endpoint_y + db_y(response, graph_db) - db_y(center_response, graph_db)
     };
-    let tangent_spacing = (width - 2.0) / 3.0;
-    let anchor_xs: [f32; 4] = std::array::from_fn(|col| {
-        let arc_distance = (col as f32 - 1.5) * tangent_spacing;
-        curve_x_at_arc_distance(&curve_y_at, node_x, arc_distance)
-    });
-    let dots: Vec<(f32, f32)> = (0..16)
-        .map(|i| {
-            let col = i / 4;
-            let side = if i % 4 < 2 { -1.0 } else { 1.0 };
-            let row = i % 2;
-            let x = anchor_xs[col];
-            let curve_y = curve_y_at(x);
-            let slope = (curve_y_at(x + 0.25) - curve_y_at(x - 0.25)) * 2.0;
-            let normal_scale = (1.0 + slope * slope).sqrt().recip();
-            let offset = side * RANGE_GRIP_SPACING * (row + 1) as f32;
-            (
-                x - slope * normal_scale * offset,
-                curve_y + normal_scale * offset,
-            )
-        })
-        .collect();
-    coalesce_range_grips(dots)
+    std::array::from_fn(|side| {
+        (0..=32)
+            .map(|i| {
+                let arc_distance = (i as f32 / 32.0 - 0.5) * width;
+                let x = curve_x_at_arc_distance(&curve_y_at, node_x, arc_distance);
+                let curve_y = curve_y_at(x);
+                let slope = (curve_y_at(x + 0.25) - curve_y_at(x - 0.25)) * 2.0;
+                let normal_scale = (1.0 + slope * slope).sqrt().recip();
+                let offset = if side == 0 {
+                    -RANGE_GRIP_SPACING
+                } else {
+                    RANGE_GRIP_SPACING
+                };
+                (
+                    x - slope * normal_scale * offset,
+                    curve_y + normal_scale * offset,
+                )
+            })
+            .collect()
+    })
 }
 
 /// Find an X position by distance travelled along the mirrored curve, so a
@@ -862,27 +859,6 @@ pub(in crate::ui) fn curve_x_at_arc_distance(
     x
 }
 
-/// Crowded normal offsets on steep bends become one square at their midpoint.
-pub(in crate::ui) fn coalesce_range_grips(mut dots: Vec<(f32, f32)>) -> Vec<(f32, f32)> {
-    loop {
-        let mut closest = None;
-        let mut closest_distance = RANGE_GRIP_SPACING;
-        for i in 0..dots.len() {
-            for j in i + 1..dots.len() {
-                let distance = (dots[i].0 - dots[j].0).hypot(dots[i].1 - dots[j].1);
-                if distance < closest_distance {
-                    closest = Some((i, j));
-                    closest_distance = distance;
-                }
-            }
-        }
-        let Some((i, j)) = closest else { break };
-        dots[i] = ((dots[i].0 + dots[j].0) * 0.5, (dots[i].1 + dots[j].1) * 0.5);
-        dots.remove(j);
-    }
-    dots
-}
-
 pub(in crate::ui) fn range_grip_hit(
     b: &Band,
     x: f32,
@@ -893,8 +869,9 @@ pub(in crate::ui) fn range_grip_hit(
     b.dynamic
         && b.shape.has_gain()
         && !node_handle_hit(b, x, y, graph.2, graph.0, graph.1)
-        && range_grip_points(b, graph, rates)
+        && range_grip_lines(b, graph, rates)
             .iter()
+            .flat_map(|line| line.iter())
             .any(|&(px, py)| (x - px).hypot(y - py) <= 4.0)
 }
 

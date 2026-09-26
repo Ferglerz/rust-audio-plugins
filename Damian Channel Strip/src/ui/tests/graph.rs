@@ -682,28 +682,18 @@ fn curved_range_grips_are_grabbable_at_high_q() {
     };
     let graph = (GX, GW, 24.0);
     let rates = (48000.0, 48000.0);
-    let dots = range_grip_points(&b, graph, rates);
-    for (i, &(x, y)) in dots.iter().enumerate() {
-        assert!(range_grip_hit(&b, x, y, graph, rates));
-        for &(other_x, other_y) in dots.iter().skip(i + 1) {
-            assert!((x - other_x).hypot(y - other_y) >= 4.0 - 0.001);
+    let lines = range_grip_lines(&b, graph, rates);
+    for line in &lines {
+        assert_eq!(line.len(), 33);
+        for &(x, y) in line {
+            assert!(range_grip_hit(&b, x, y, graph, rates));
         }
     }
     let off = Band {
         dynamic: false,
         ..b
     };
-    for (x, y) in range_grip_points(&off, graph, rates) {
-        assert!(!range_grip_hit(&off, x, y, graph, rates));
-    }
-}
-
-#[test]
-fn crowded_range_grips_merge_at_their_midpoint() {
-    assert_eq!(
-        coalesce_range_grips(vec![(0.0, 0.0), (2.0, 0.0), (10.0, 0.0)]),
-        vec![(1.0, 0.0), (10.0, 0.0)]
-    );
+    assert!(!range_grip_hit(&off, lines[0][16].0, lines[0][16].1, graph, rates));
 }
 
 #[test]

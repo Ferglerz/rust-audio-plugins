@@ -504,7 +504,6 @@ pub(super) fn draw_five_stage(
 
 pub(super) fn draw_lock(
     draw: &mut Draw<'_>,
-    icon_font: Option<FontId>,
     x: f32,
     y: f32,
     size: f32,
@@ -519,17 +518,27 @@ pub(super) fn draw_lock(
     } else {
         0.35
     };
-    if let Some(icon_font) = icon_font {
-        // Lock and lock-open glyphs from Vizia's bundled Tabler icon font.
-        let glyph = if locked { "\u{eb0e}" } else { "\u{eb0f}" };
-        let old_font = draw.font.replace(icon_font);
-        draw.text_centered(
-            x + size * 0.5,
-            y + size * 0.5 + size * 0.34,
-            glyph,
-            size,
-            color,
-        );
-        draw.font = old_font;
-    }
+    // Draw the lock directly so its shape does not depend on icon font code points.
+    let body_x = x + size * 0.19;
+    let body_y = y + size * 0.44;
+    let body_w = size * 0.62;
+    let body_h = size * 0.43;
+    draw.outline_rounded(body_x, body_y, body_w, body_h, size * 0.07, color, 2.0);
+    let shackle_x = if locked {
+        x + size * 0.32
+    } else {
+        x + size * 0.51
+    };
+    let shackle = [
+        (shackle_x, body_y),
+        (shackle_x, y + size * 0.25),
+        (shackle_x + size * 0.06, y + size * 0.17),
+        (shackle_x + size * 0.26, y + size * 0.17),
+        (shackle_x + size * 0.32, y + size * 0.25),
+        (
+            shackle_x + size * 0.32,
+            if locked { body_y } else { body_y - size * 0.12 },
+        ),
+    ];
+    draw.poly(&shackle, color, 2.0);
 }

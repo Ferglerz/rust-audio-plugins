@@ -259,19 +259,9 @@ impl ScdEditorView {
         if !self.samples_open {
             return;
         }
-        let (_, menu_y, _, _) = Self::mapping_header_rect();
-        let menu_y = menu_y - 4.0;
-        let menu_h = (KitPieceId::COUNT + 1) as f32 * PRESET_ITEM_H + 8.0;
-        draw.rounded_rect(SAMPLES_X, menu_y, SAMPLES_MENU_W, menu_h, 4.0, HEADER);
-        draw.outline_rounded(
-            SAMPLES_X,
-            menu_y,
-            SAMPLES_MENU_W,
-            menu_h,
-            4.0,
-            THEME_DIM,
-            1.0,
-        );
+        let (menu_x, menu_y, menu_w, menu_h) = Self::mapping_menu_rect();
+        draw.rounded_rect(menu_x, menu_y, menu_w, menu_h, 4.0, HEADER);
+        draw.outline_rounded(menu_x, menu_y, menu_w, menu_h, 4.0, THEME_DIM, 1.0);
         let (hx, hy, _, _) = Self::mapping_header_rect();
         draw.text(hx + 8.0, hy + 15.0, "N1", 10.0, THEME);
         draw.text(hx + 8.0 + MAP_NOTE_W, hy + 15.0, "N2", 10.0, THEME);
@@ -311,6 +301,14 @@ impl ScdEditorView {
                 THEME,
             );
         }
+        let (hx, hy, hw, _) = Self::mapping_helper_rect();
+        draw.text_centered(
+            hx + hw * 0.5,
+            hy + 15.0,
+            "Alt click to reset notes",
+            10.0,
+            THEME_DIM,
+        );
     }
 
     pub(super) fn draw_cc_menu(&self, draw: &mut Draw<'_>) {

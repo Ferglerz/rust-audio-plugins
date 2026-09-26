@@ -256,7 +256,6 @@ pub struct ScdEditorView {
     gesture: [Option<ParamPtr>; KitPieceId::COUNT],
     mouse: (f32, f32),
     font: Cell<Option<FontId>>,
-    icon_font: Cell<Option<FontId>>,
     bg_img: Cell<Option<ImageId>>,
     logo_img: Cell<Option<ImageId>>,
     stone_img: Cell<Option<ImageId>>,
@@ -304,7 +303,6 @@ impl ScdEditorView {
             gesture: std::array::from_fn(|_| None),
             mouse: (0.0, 0.0),
             font: Cell::new(None),
-            icon_font: Cell::new(None),
             bg_img: Cell::new(None),
             logo_img: Cell::new(None),
             stone_img: Cell::new(None),
@@ -428,7 +426,9 @@ impl View for ScdEditorView {
     }
 
     fn event(&mut self, cx: &mut EventContext, event: &mut Event) {
+        let was_editing = self.note_edit.is_some();
         self.handle_event(cx, event);
+        pleasant_ui::value_edit::sync_text_input(cx, was_editing, self.note_edit.is_some());
     }
 
     fn draw(&self, cx: &mut DrawContext, canvas: &mut Canvas) {

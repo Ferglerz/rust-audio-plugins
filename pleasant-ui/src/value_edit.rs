@@ -2,6 +2,23 @@ use nih_plug_vizia::vizia::prelude::*;
 use nih_plug_vizia::widgets::util::ModifiersExt;
 use std::ops::Range;
 
+/// Keep the native keyboard owner in sync with a custom canvas value editor.
+/// The Vizia backend uses StartEdit/EndEdit and the focused view's checked state
+/// to capture text keys before macOS forwards them to its default responder.
+pub fn sync_text_input(cx: &mut EventContext, was_editing: bool, is_editing: bool) {
+    if was_editing != is_editing {
+        cx.set_checked(is_editing);
+        cx.emit_to(
+            cx.current(),
+            if is_editing {
+                TextEvent::StartEdit
+            } else {
+                TextEvent::EndEdit
+            },
+        );
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ValueEdit<T> {
     pub target: T,
@@ -192,4 +209,41 @@ pub fn parse_number_with_units(text: &str, suffixes: &[(&str, f64)]) -> Option<f
         }
     }
     text.parse::<f64>().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nih_plug_vizia::vizia::backend::BackendContext;
+    use std::{cell::RefCell, rc::Rc};
+
+    #[test]
+    fn canvas_editing_announces_and_releases_native_keyboard_ownership() {
+        let mut cx = Context::default();
+        let transitions = Rc::new(RefCell::new(Vec::new()));
+        let observed = transitions.clone();
+        cx.add_global_listener(move |_, event| {
+            event.map(|event: &TextEvent, meta| match event {
+                TextEvent::StartEdit => observed.borrow_mut().push((meta.target, true)),
+                TextEvent::EndEdit => observed.borrow_mut().push((meta.target, false)),
+                _ => {}
+            });
+        });
+        let target = Element::new(&mut cx).entity();
+        {
+            let mut event_cx = EventContext::new_with_current(&mut cx, target);
+            sync_text_input(&mut event_cx, false, true);
+            assert!(event_cx.is_checked());
+            sync_text_input(&mut event_cx, true, true);
+        }
+        BackendContext::new_with_event_manager(&mut cx).process_events();
+        assert_eq!(&*transitions.borrow(), &[(target, true)]);
+        {
+            let mut event_cx = EventContext::new_with_current(&mut cx, target);
+            sync_text_input(&mut event_cx, true, false);
+            assert!(!event_cx.is_checked());
+        }
+        BackendContext::new_with_event_manager(&mut cx).process_events();
+        assert_eq!(&*transitions.borrow(), &[(target, true), (target, false)]);
+    }
 }

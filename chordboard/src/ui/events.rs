@@ -17,6 +17,7 @@ impl ChordboardView {
             self.end_drag(cx);
             self.release_keys();
             self.edit = None;
+            self.menu = None;
             return false;
         }
         if self.edit.is_some() {
@@ -45,6 +46,50 @@ impl ChordboardView {
                 WindowEvent::MouseDown(MouseButton::Left) => {
                     self.commit_edit(cx);
                     if self.edit.is_some() {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(menu) = self.menu {
+            match event {
+                WindowEvent::KeyDown(code, _) => {
+                    match code {
+                        Code::Escape => self.menu = None,
+                        Code::Enter | Code::NumpadEnter => {
+                            self.select_menu(cx, menu, self.menu_cursor);
+                        }
+                        Code::ArrowRight => {
+                            self.menu_cursor = (self.menu_cursor + 1) % menu.items().len();
+                        }
+                        Code::ArrowLeft => {
+                            self.menu_cursor =
+                                (self.menu_cursor + menu.items().len() - 1) % menu.items().len();
+                        }
+                        Code::ArrowDown => {
+                            self.menu_cursor =
+                                (self.menu_cursor + menu.columns()) % menu.items().len();
+                        }
+                        Code::ArrowUp => {
+                            self.menu_cursor = (self.menu_cursor + menu.items().len()
+                                - menu.columns())
+                                % menu.items().len();
+                        }
+                        _ => {}
+                    }
+                    return true;
+                }
+                WindowEvent::KeyUp(_, _) => return true,
+                WindowEvent::MouseDown(MouseButton::Left) => {
+                    for index in 0..menu.items().len() {
+                        if hit(menu.option_rect(index), x, y) {
+                            self.select_menu(cx, menu, index);
+                            return true;
+                        }
+                    }
+                    self.menu = None;
+                    if hit(menu.trigger_rect(), x, y) {
                         return true;
                     }
                 }
@@ -112,12 +157,6 @@ impl ChordboardView {
                     prefs().toggle();
                     return true;
                 }
-                if hit((1016.0, 24.0, 72.0, 30.0), x, y) {
-                    self.bridge.panic.store(true, Ordering::Release);
-                    self.release_keys();
-                    self.pulse.trigger_click();
-                    return true;
-                }
                 if hit((814.0, 24.0, 112.0, 30.0), x, y) {
                     self.set(
                         cx,
@@ -131,18 +170,6 @@ impl ChordboardView {
                     if self.params.keyboard.value() {
                         self.release_keys();
                     }
-                    return true;
-                }
-                if hit((280.0, 24.0, 194.0, 30.0), x, y) {
-                    self.preset = (self.preset + 1) % PRESETS.len();
-                    return true;
-                }
-                if hit((482.0, 24.0, 62.0, 30.0), x, y) {
-                    self.load_preset(cx);
-                    return true;
-                }
-                if hit((552.0, 24.0, 62.0, 30.0), x, y) {
-                    self.save_preset();
                     return true;
                 }
                 for i in 0..4 {
@@ -208,22 +235,12 @@ impl ChordboardView {
                         return true;
                     }
                 }
-                if hit((32.0, 441.0, 158.0, 28.0), x, y) {
-                    let next = (self.params.key.value() + 1) % 12;
-                    Self::emit(
-                        cx,
-                        self.params.key.as_ptr(),
-                        self.params.key.preview_normalized(next),
-                    );
+                if hit(Menu::Key.trigger_rect(), x, y) {
+                    self.open_menu(Menu::Key);
                     return true;
                 }
-                if hit((198.0, 441.0, 228.0, 28.0), x, y) {
-                    let next = (self.params.scale.value() + 1) % 8;
-                    Self::emit(
-                        cx,
-                        self.params.scale.as_ptr(),
-                        self.params.scale.preview_normalized(next),
-                    );
+                if hit(Menu::Scale.trigger_rect(), x, y) {
+                    self.open_menu(Menu::Scale);
                     return true;
                 }
                 if hit((434.0, 441.0, 130.0, 28.0), x, y) {
@@ -358,18 +375,17 @@ impl ChordboardView {
                     }
                 }
                 if hit((982.0, 585.0, 106.0, 28.0), x, y) {
-                    let count = self
-                        .params
-                        .controls()
-                        .iter()
-                        .filter(|c| c.group == self.group)
-                        .count();
+                    let count = self.group_controls().len();
                     self.page = (self.page + 1) % count.div_ceil(8).max(1);
                     return true;
                 }
                 for (i, c) in self.shown_controls().iter().enumerate() {
                     let r = control_rect(i);
                     if hit(r, x, y) {
+                        if c.toggle {
+                            Self::emit(cx, c.ptr, if c.norm >= 0.5 { 0.0 } else { 1.0 });
+                            return true;
+                        }
                         self.drag = Some(Drag::Control(c.ptr, r));
                         cx.capture();
                         cx.emit(RawParamEvent::BeginSetParameter(c.ptr));
@@ -387,6 +403,9 @@ impl ChordboardView {
                 for (i, c) in self.shown_controls().iter().enumerate() {
                     let r = control_rect(i);
                     if hit(r, x, y) {
+                        if c.toggle {
+                            return true;
+                        }
                         self.release_keys();
                         self.edit = Some(ValueEdit::new(
                             c.id,

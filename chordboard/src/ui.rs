@@ -18,7 +18,7 @@ use nih_plug_vizia::{
 };
 use pleasant_ui::{
     theme::{BG, COLORS, GOLD, LINE, MUTED, PANEL, TEAL, TEXT},
-    AppearanceStore, ButtonAnim, Draw, ValueEdit, FONT_JETBRAINS_MONO,
+    AppearanceStore, Draw, ValueEdit, FONT_JETBRAINS_MONO,
 };
 use std::{
     cell::Cell,
@@ -37,21 +37,44 @@ const GROUPS: [&str; 6] = [
     "INPUT",
     "DISCOVERY",
 ];
-const PRESETS: [&str; 13] = [
-    "Chords",
-    "Manual Strum",
-    "Auto Strum",
-    "Arpeggiator",
-    "Osmose MPE",
-    "User 1",
-    "User 2",
-    "User 3",
-    "User 4",
-    "User 5",
-    "User 6",
-    "User 7",
-    "User 8",
-];
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Menu {
+    Key,
+    Scale,
+}
+impl Menu {
+    fn items(self) -> &'static [&'static str] {
+        match self {
+            Self::Key => &harmony::NOTE_NAMES,
+            Self::Scale => &harmony::SCALE_NAMES,
+        }
+    }
+    fn option_rect(self, index: usize) -> Rect {
+        let (x, y, w, h) = match self {
+            Self::Key => (32.0, 472.0, 64.0, 30.0),
+            Self::Scale => (198.0, 472.0, 114.0, 30.0),
+        };
+        let columns = self.columns();
+        (
+            x + (index % columns) as f32 * w,
+            y + (index / columns) as f32 * h,
+            w,
+            h,
+        )
+    }
+    fn columns(self) -> usize {
+        match self {
+            Self::Scale => 2,
+            Self::Key => 3,
+        }
+    }
+    fn trigger_rect(self) -> Rect {
+        match self {
+            Self::Key => (32.0, 441.0, 158.0, 28.0),
+            Self::Scale => (198.0, 441.0, 228.0, 28.0),
+        }
+    }
+}
 const CODES: [Code; 21] = [
     Code::KeyQ,
     Code::KeyW,
@@ -125,16 +148,14 @@ struct ChordboardView {
     group: usize,
     page: usize,
     edit: Option<ValueEdit<&'static str>>,
-    preset: usize,
+    menu: Option<Menu>,
+    menu_cursor: usize,
     status: String,
     key_anim: [f32; 21],
     string_anim: [f32; 12],
     trail: Vec<(f32, f32, Instant)>,
     last_frame: Instant,
-    note_positions: [f32; 128],
-    note_alpha: [f32; 128],
     meters: [f32; 3],
-    pulse: ButtonAnim,
     controls_signature: Vec<f32>,
     slot_signature: [u64; 8],
     mapping_axis: usize,
@@ -165,16 +186,14 @@ impl ChordboardView {
             group: 0,
             page: 0,
             edit: None,
-            preset: 0,
+            menu: None,
+            menu_cursor: 0,
             status: String::new(),
             key_anim: [0.0; 21],
             string_anim: [0.0; 12],
             trail: Vec::with_capacity(24),
             last_frame: Instant::now(),
-            note_positions: std::array::from_fn(|i| i as f32),
-            note_alpha: [0.0; 128],
             meters: [0.0, 0.5, 0.5],
-            pulse: ButtonAnim::new(),
             controls_signature: Vec::new(),
             slot_signature: [0; 8],
             mapping_axis: 0,
@@ -183,11 +202,22 @@ impl ChordboardView {
     fn control(&self, id: &str) -> Option<Control> {
         self.params.controls().into_iter().find(|c| c.id == id)
     }
-    fn shown_controls(&self) -> Vec<Control> {
+    fn group_controls(&self) -> Vec<Control> {
         self.params
             .controls()
             .into_iter()
             .filter(|c| c.group == self.group)
+            .filter(|c| {
+                !matches!(
+                    c.id,
+                    "latch" | "mpe" | "keyboard" | "fifths" | "key" | "scale" | "highlight"
+                )
+            })
+            .collect()
+    }
+    fn shown_controls(&self) -> Vec<Control> {
+        self.group_controls()
+            .into_iter()
             .skip(self.page * 8)
             .take(8)
             .collect()
@@ -203,6 +233,29 @@ impl ChordboardView {
     fn set(&self, cx: &mut EventContext, id: &str, norm: f32) {
         if let Some(c) = self.control(id) {
             Self::emit(cx, c.ptr, norm);
+        }
+    }
+    fn open_menu(&mut self, menu: Menu) {
+        self.release_keys();
+        self.menu_cursor = match menu {
+            Menu::Key => self.params.key.value() as usize,
+            Menu::Scale => self.params.scale.value() as usize,
+        };
+        self.menu = Some(menu);
+    }
+    fn select_menu(&mut self, cx: &mut EventContext, menu: Menu, index: usize) {
+        self.menu = None;
+        match menu {
+            Menu::Key => Self::emit(
+                cx,
+                self.params.key.as_ptr(),
+                self.params.key.preview_normalized(index as i32),
+            ),
+            Menu::Scale => Self::emit(
+                cx,
+                self.params.scale.as_ptr(),
+                self.params.scale.preview_normalized(index as i32),
+            ),
         }
     }
     fn inversion(&self, cx: &mut EventContext, step: i8) {
@@ -271,75 +324,6 @@ impl ChordboardView {
             }
         }
     }
-    fn preset_path(&self) -> Option<std::path::PathBuf> {
-        pleasant_ui::preferences::app_appearance_path("Chordboard").and_then(|p| {
-            p.parent().map(|p| {
-                p.join("Presets")
-                    .join(format!("user-{}.json", self.preset.saturating_sub(4)))
-            })
-        })
-    }
-    fn load_preset(&mut self, cx: &mut EventContext) {
-        self.release_keys();
-        self.bridge.reset.store(true, Ordering::Release);
-        if self.preset < 5 {
-            for c in self.params.controls() {
-                if c.group < 4 || c.id == "filter" {
-                    Self::emit(cx, c.ptr, c.default);
-                }
-            }
-            let mode = match self.preset {
-                1 | 4 => 2,
-                2 => 1,
-                3 => 3,
-                _ => 0,
-            };
-            Self::emit(
-                cx,
-                self.params.mode.as_ptr(),
-                self.params.mode.preview_normalized(mode),
-            );
-            Self::emit(
-                cx,
-                self.params.mpe.as_ptr(),
-                if self.preset == 4 { 1.0 } else { 0.0 },
-            );
-            self.status = format!("Loaded {}", PRESETS[self.preset]);
-        } else if let Some(path) = self.preset_path() {
-            match std::fs::read(&path)
-                .map_err(|e| e.to_string())
-                .and_then(|bytes| {
-                    serde_json::from_slice::<PluginState>(&bytes).map_err(|e| e.to_string())
-                }) {
-                Ok(state) => {
-                    self.context.set_state(state);
-                    self.status = format!("Loaded {}", PRESETS[self.preset]);
-                }
-                Err(e) => self.status = format!("Load failed: {e}"),
-            }
-        }
-    }
-    fn save_preset(&mut self) {
-        if self.preset < 5 {
-            self.status = "Choose a User preset before saving".into();
-            return;
-        }
-        let result = self
-            .preset_path()
-            .ok_or_else(|| "No preset directory".to_string())
-            .and_then(|path| {
-                if let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-                }
-                let bytes = serde_json::to_vec_pretty(&self.context.get_state())
-                    .map_err(|e| e.to_string())?;
-                std::fs::write(path, bytes).map_err(|e| e.to_string())
-            });
-        self.status = match result {
-            Ok(()) => format!("Saved {}", PRESETS[self.preset]),
-            Err(e) => format!("Save failed: {e}"),
-        };
-    }
     fn tick(&mut self, cx: &mut EventContext) {
         if !self.params.editor_state.is_open() && self.context.plugin_api() != PluginApi::Standalone
         {
@@ -390,38 +374,6 @@ impl ChordboardView {
         self.trail
             .retain(|p| now.duration_since(p.2).as_secs_f32() < 0.35);
         changed |= !self.trail.is_empty();
-        for note in 0..128 {
-            let target = self.snapshot.full_notes.as_slice().contains(&(note as u8));
-            let a = if target { 1.0 } else { 0.0 };
-            let old_alpha = self.note_alpha[note];
-            self.note_alpha[note] = if reduced {
-                a
-            } else {
-                old_alpha + (a - old_alpha) * (1.0 - (-dt / 0.08).exp())
-            };
-            changed |= (old_alpha - self.note_alpha[note]).abs() > 0.001;
-            if target {
-                if !old.full_notes.as_slice().contains(&(note as u8)) {
-                    if let Some(&origin) = old
-                        .full_notes
-                        .as_slice()
-                        .iter()
-                        .filter(|&&n| !self.snapshot.full_notes.as_slice().contains(&n))
-                        .min_by_key(|&&n| (n as i16 - note as i16).abs())
-                    {
-                        self.note_positions[note] = origin as f32;
-                    }
-                }
-                let desired = note as f32;
-                let old = self.note_positions[note];
-                self.note_positions[note] = if reduced {
-                    desired
-                } else {
-                    old + (desired - old) * (1.0 - (-dt / 0.10).exp())
-                };
-                changed |= (old - self.note_positions[note]).abs() > 0.001;
-            }
-        }
         let targets = [
             self.snapshot.pressure,
             self.snapshot.timbre,
@@ -458,6 +410,7 @@ impl View for ChordboardView {
         Some("chordboard")
     }
     fn event(&mut self, cx: &mut EventContext, event: &mut Event) {
+        let was_editing = self.edit.is_some();
         event.map(|_: &Tick, _| self.tick(cx));
         event.map(|param: &RawParamEvent, _| {
             if let RawParamEvent::SetParameterNormalized(ptr, value) = param {
@@ -479,6 +432,7 @@ impl View for ChordboardView {
                 cx.needs_redraw();
             }
         });
+        pleasant_ui::value_edit::sync_text_input(cx, was_editing, self.edit.is_some());
     }
     fn draw(&self, cx: &mut DrawContext, canvas: &mut Canvas) {
         self.render(cx, canvas);

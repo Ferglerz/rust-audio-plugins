@@ -69,7 +69,7 @@ fn text_editing_key(code: Code, key: &Key, modifiers: KeyboardModifiers) -> bool
     if modifiers.contains(KeyboardModifiers::META) {
         return modifiers == KeyboardModifiers::META && matches!(code, KeyA | KeyC | KeyV | KeyX);
     }
-    if matches!(code, Enter | Escape | Tab | Backspace | Delete | ArrowLeft | ArrowRight
+    if matches!(code, Enter | NumpadEnter | Escape | Tab | Backspace | Delete | ArrowLeft | ArrowRight
         | ArrowUp | ArrowDown | Home | End | PageUp | PageDown)
     {
         return true;

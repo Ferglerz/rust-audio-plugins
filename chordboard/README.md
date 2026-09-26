@@ -10,7 +10,7 @@ On a MIDI keyboard, click **Learn Low Octave**, then press its lowest physical k
 
 The first performance note anchors the chord. A second note adds or replaces a degree: C+D gives Csus2, C+F gives Csus4, C+F# gives C–E–F#. A third note is ignored until released and pressed again when space is available. Releasing the second input removes its alteration. Releasing the root first keeps its original identity until the second key also releases. The second note never becomes the root.
 
-Up/Down arrows cycle inversions within the original register, wrapping to root position. They do not accumulate octave changes. Input key repeats are ignored. Escape/Panic releases generated notes. Focus loss releases computer-keyboard notes without releasing unrelated MIDI inputs.
+Up/Down arrows cycle inversions within the original register, wrapping to root position. They do not accumulate octave changes. Input key repeats are ignored. Escape releases generated notes while the editor has keyboard focus. Focus loss releases computer-keyboard notes without releasing unrelated MIDI inputs.
 
 ## Performance
 
@@ -25,7 +25,7 @@ Choose MAP X, MAP Y or MAP GATE, click MIDI LEARN, then move a controller. The m
 
 ## Osmose / MPE
 
-Use **Osmose Play / Port 1**, External MIDI mode **MPE**. Choose the Osmose MPE factory preset; it enables MPE and Manual Strum. Select an MPE-capable destination instrument and enable MPE in that instrument/host. Configure matching bend ranges: default member ±48 semitones, master ±2.
+Use **Osmose Play / Port 1**, External MIDI mode **MPE**. Enable MPE Output and select Manual Strum. Select an MPE-capable destination instrument and enable MPE in that instrument/host. Configure matching bend ranges: default member ±48 semitones, master ±2.
 
 The first accepted note's pressure, CC74 and bend fan out to every generated voice. The second input affects harmony only. Each output voice receives its own member channel, with expression initialized before Note On, including later strummed notes. Master expression remains separate. Incoming RPN bend sensitivity and zone configuration are recognized. Released source channels cannot take expression ownership when reused.
 
@@ -35,19 +35,19 @@ Actual Osmose feel, downstream patch response, and host-specific MIDI routing re
 
 ## Discover and recall
 
-Select a key and scale to highlight compatible chords and display Roman numerals. Outside chords remain playable. Highlighting considers all chord tones, not only the root. Major, natural/harmonic minor, Dorian, Mixolydian, Lydian and major/minor pentatonic scales are available.
+Select a key and scale from the menus below the chord keyboard to highlight compatible chords and display Roman numerals. Outside chords remain playable. Highlighting considers all chord tones, not only the root. Major, natural/harmonic minor, Dorian, Mixolydian, Lydian and major/minor pentatonic scales are available.
 
-**Shift-click one of eight memory slots** to capture the current harmonic recipe: root, alteration, quality, inversion, transpose and spread. Click to recall it into the current performance mode. Recall remains available for strumming until a new performance input replaces it or Panic clears it. Slots persist with project state and user presets.
+**Shift-click one of eight memory slots** to capture the current harmonic recipe: root, alteration, quality, inversion, transpose and spread. Click to recall it into the current performance mode. Recall remains available for strumming until a new performance input replaces it or Escape clears it. Slots persist with project state and host presets.
 
 Discovery's **Note Filter** outputs all tones, bass, top, bass+top, odd tones or even tones after voicing. Standard MIDI can route bass and upper voices to separate channels. MPE retains its member-channel allocator.
 
 The eight slots are a manual progression sketchpad, not a step sequencer. MIDI drag-out, constrained chord search and a separate previous/current comparison view are follow-ons.
 
-## Interface and presets
+## Interface
 
-The interface uses shared Pleasant UI colors, appearance preferences and controls. Key depression, pressure glow, string pulses, gesture trails, note motion and meters follow engine state; visuals never control MIDI timing. Reduced Motion removes decorative motion while preserving state feedback. Controls can be dragged, scrolled or double-clicked for text entry.
+The interface uses shared colors, appearance preferences and controls. Key depression, pressure glow, string pulses, gesture trails and expression meters follow engine state; visuals never control MIDI timing. Reduced Motion removes decorative motion while preserving state feedback. Continuous controls can be dragged, scrolled or double-clicked for text entry; on/off settings are buttons.
 
-The preset selector cycles through five factory presets and eight user presets. LOAD applies a selection; SAVE writes a selected User slot under the platform's application-support directory (`Chordboard/Presets`); factory presets cannot be overwritten. Host state also persists mappings, chord memories and editor settings. Runtime held notes are never saved. Appearance follows Pleasant UI's application preference file.
+Use the host's preset and project features to save custom setups. Host state persists mappings, chord memories and editor settings. Runtime held notes are never saved. Appearance follows the application's preference file.
 
 ## Build and install
 

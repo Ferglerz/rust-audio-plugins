@@ -445,7 +445,7 @@ impl ChordboardParams {
             control("inversion", 0, &self.inversion),
             control("transpose", 0, &self.transpose),
             control("spread", 0, &self.spread),
-            control("latch", 0, &self.latch),
+            toggle("latch", 0, &self.latch),
             control("velocity", 0, &self.velocity),
             control("length_ms", 0, &self.length_ms),
             control("strings", 1, &self.strings),
@@ -458,33 +458,33 @@ impl ChordboardParams {
             control("swing", 1, &self.swing),
             control("octaves", 1, &self.octaves),
             control("humanize", 1, &self.humanize),
-            control("mpe", 2, &self.mpe),
-            control("upper", 2, &self.upper),
+            toggle("mpe", 2, &self.mpe),
+            toggle("upper", 2, &self.upper),
             control("members", 2, &self.members),
             control("bend_range", 2, &self.bend_range),
             control("master_range", 2, &self.master_range),
             control("output_channel", 2, &self.output_channel),
             control("y_target", 3, &self.y_target),
             control("y_cc", 3, &self.y_cc),
-            control("x_reverse", 3, &self.x_reverse),
-            control("y_reverse", 3, &self.y_reverse),
+            toggle("x_reverse", 3, &self.x_reverse),
+            toggle("y_reverse", 3, &self.y_reverse),
             control("x_min", 3, &self.x_min),
             control("x_max", 3, &self.x_max),
             control("y_min", 3, &self.y_min),
             control("y_max", 3, &self.y_max),
             control("x", 4, &self.x),
             control("y", 4, &self.y),
-            control("touch", 4, &self.touch),
-            control("keyboard", 4, &self.keyboard),
-            control("fifths", 4, &self.fifths),
+            toggle("touch", 4, &self.touch),
+            toggle("keyboard", 4, &self.keyboard),
+            toggle("fifths", 4, &self.fifths),
             control("bank", 4, &self.bank),
             control("keyboard_octave", 4, &self.keyboard_octave),
-            control("reduced_motion", 4, &self.reduced_motion),
+            toggle("reduced_motion", 4, &self.reduced_motion),
             control("key", 5, &self.key),
             control("scale", 5, &self.scale),
-            control("highlight", 5, &self.highlight),
+            toggle("highlight", 5, &self.highlight),
             control("filter", 5, &self.filter),
-            control("split_channels", 5, &self.split_channels),
+            toggle("split_channels", 5, &self.split_channels),
             control("bass_channel", 5, &self.bass_channel),
             control("upper_channel", 5, &self.upper_channel),
         ]
@@ -497,10 +497,10 @@ pub struct Control {
     pub name: String,
     pub ptr: ParamPtr,
     pub norm: f32,
-    pub default: f32,
     pub prev: f32,
     pub next: f32,
     pub value: String,
+    pub toggle: bool,
 }
 fn control(id: &'static str, group: usize, p: &impl Param) -> Control {
     let norm = p.unmodulated_normalized_value();
@@ -510,11 +510,16 @@ fn control(id: &'static str, group: usize, p: &impl Param) -> Control {
         name: p.name().to_string(),
         ptr: p.as_ptr(),
         norm,
-        default: p.default_normalized_value(),
         prev: p.previous_normalized_step(norm, false),
         next: p.next_normalized_step(norm, false),
         value: p.normalized_value_to_string(norm, true),
+        toggle: false,
     }
+}
+fn toggle(id: &'static str, group: usize, p: &BoolParam) -> Control {
+    let mut c = control(id, group, p);
+    c.toggle = true;
+    c
 }
 impl ChordboardParams {
     pub fn slot(&self, index: usize) -> &AtomicU64 {
@@ -534,6 +539,25 @@ impl ChordboardParams {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn main_buttons_resolve_their_parameters_without_settings_duplicates() {
+        let params = ChordboardParams::default();
+        let controls = params.controls();
+        for (id, ptr) in [
+            ("keyboard", params.keyboard.as_ptr()),
+            ("latch", params.latch.as_ptr()),
+            ("mpe", params.mpe.as_ptr()),
+            ("fifths", params.fifths.as_ptr()),
+            ("highlight", params.highlight.as_ptr()),
+        ] {
+            assert_eq!(
+                controls.iter().find(|c| c.id == id).map(|c| c.ptr),
+                Some(ptr),
+                "{id}"
+            );
+        }
+    }
+
     #[test]
     fn saved_fields_roundtrip_without_held_notes() {
         let params = ChordboardParams::default();

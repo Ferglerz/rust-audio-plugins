@@ -245,6 +245,19 @@ impl ParamValueEdit {
         param: &ParamWidgetBase,
         control: super::appearance::Control,
     ) -> bool {
+        let was_editing = self.edit.is_some();
+        let handled = self.handle_event(cx, event, param, control);
+        pleasant_ui::value_edit::sync_text_input(cx, was_editing, self.edit.is_some());
+        handled
+    }
+
+    fn handle_event(
+        &mut self,
+        cx: &mut EventContext,
+        event: &nih_plug_vizia::vizia::prelude::WindowEvent,
+        param: &ParamWidgetBase,
+        control: super::appearance::Control,
+    ) -> bool {
         use nih_plug_vizia::vizia::prelude::*;
         use pleasant_ui::value_edit::{typed_char, ValueEdit};
         if super::EditorData::appearance.get(cx) == 2 {
