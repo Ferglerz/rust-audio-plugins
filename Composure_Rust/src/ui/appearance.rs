@@ -30,6 +30,11 @@ pub const TRANS_W: f32 = HARM_X - MODULE_GAP - TRANS_X;
 pub const MID_H: f32 = SIDE_H;
 pub const ENVELOPE_FOOTER_H: f32 = 96.0;
 pub const DETECTION_BUTTON_W: f32 = 120.0;
+pub const ENVELOPE_GRAPH_X: f32 = ENV_X + 10.0;
+pub const ENVELOPE_GRAPH_Y: f32 = ENV_Y + MODULE_HEADER_H + 8.0;
+pub const ENVELOPE_GRAPH_W: f32 = ENV_W - 20.0;
+pub const ENVELOPE_GRAPH_H: f32 = 300.0;
+pub const ENVELOPE_KNOB_Y: f32 = ENVELOPE_GRAPH_Y + ENVELOPE_GRAPH_H + 8.0;
 
 pub fn pleasant_knob_size(_x: f32) -> f32 {
     theme::KNOB_SIZE

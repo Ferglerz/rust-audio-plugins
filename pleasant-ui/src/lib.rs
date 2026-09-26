@@ -1,8 +1,9 @@
 pub mod draw;
-pub mod page_slide;
+pub mod envelope;
 pub mod graph;
 pub mod handles;
 pub mod math;
+pub mod page_slide;
 pub mod pointer;
 pub mod preferences;
 pub mod spectrum;
