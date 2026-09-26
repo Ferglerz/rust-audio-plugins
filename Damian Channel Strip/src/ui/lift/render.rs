@@ -128,7 +128,7 @@ impl StripView {
                     &lift_pts,
                     lift_color,
                     1.8,
-                    Some((lift_pts.as_slice(), GY + GH, fill)),
+                    Some((lift_pts.as_slice(), GY + GH, fill, false)),
                 );
             }
 

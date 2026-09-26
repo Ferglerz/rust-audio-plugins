@@ -238,7 +238,7 @@ impl StripView {
             let extras = bands.iter().filter(|b| b.enabled).map(|b| b.freq);
             let xs = eq_curve_xs(gx, gw, extras);
             let mut sum = vec![0.0; xs.len()];
-            let mut selected_curve: Option<(Vec<(f32, f32)>, C)> = None;
+            let mut selected_curve: Option<(Vec<(f32, f32)>, C, bool)> = None;
             for b in &bands {
                 if !b.enabled {
                     continue;
@@ -257,9 +257,20 @@ impl StripView {
                     let points = eq_points(&xs, &dbs, self.graph_db);
                     let mut fill = color;
                     fill.a = if eq1_bypassed { 0.02 } else { 0.07 };
-                    d.area(&points, db_y(0.0, self.graph_db), fill);
+                    let between = b.dynamic && b.shape.has_gain();
+                    let fill_points = if between {
+                        let range = range_curve_points(
+                            b, &xs, (gx, gw, self.graph_db), (sr, eq_sr),
+                        );
+                        let polygon = between_curve_polygon(&points, &range);
+                        d.fill_poly(&polygon, fill);
+                        polygon
+                    } else {
+                        d.area(&points, db_y(0.0, self.graph_db), fill);
+                        points.clone()
+                    };
                     d.poly(&points, color, 1.2);
-                    selected_curve = Some((points, color));
+                    selected_curve = Some((fill_points, color, between));
                 }
             }
             let points = eq_points(&xs, &sum, self.graph_db);
@@ -269,10 +280,10 @@ impl StripView {
                 .iter()
                 .find(|b| b.id == self.shared.solo_id.load(Ordering::Relaxed))
             {
-                let fill = selected_curve.as_ref().map(|(pts, color)| {
+                let fill = selected_curve.as_ref().map(|(pts, color, between)| {
                     let mut fill = *color;
                     fill.a = if eq1_bypassed { 0.02 } else { 0.07 };
-                    (pts.as_slice(), db_y(0.0, self.graph_db), fill)
+                    (pts.as_slice(), db_y(0.0, self.graph_db), fill, *between)
                 });
                 draw_solo_shade(
                     &mut d, b.shape, b.freq, b.q, gx, gw, eq_b, &points, sum_color, 2.2, fill,
@@ -424,7 +435,7 @@ impl StripView {
             let extras = page_bands.iter().filter(|b| b.enabled).map(|b| b.freq);
             let xs = eq_curve_xs(gx, gw, extras);
             let mut sum = vec![0.0; xs.len()];
-            let mut selected_curve: Option<(Vec<(f32, f32)>, C)> = None;
+            let mut selected_curve: Option<(Vec<(f32, f32)>, C, bool)> = None;
             for b in page_bands {
                 if !b.enabled {
                     continue;
@@ -444,9 +455,20 @@ impl StripView {
                     let points = eq_points(&xs, &dbs, self.graph_db);
                     let mut fill = color;
                     fill.a = if page_bypassed { 0.02 } else { 0.07 };
-                    d.area(&points, db_y(0.0, self.graph_db), fill);
+                    let between = allow_dyn && b.dynamic && b.shape.has_gain();
+                    let fill_points = if between {
+                        let range = range_curve_points(
+                            b, &xs, (gx, gw, self.graph_db), (sr, eq_sr),
+                        );
+                        let polygon = between_curve_polygon(&points, &range);
+                        d.fill_poly(&polygon, fill);
+                        polygon
+                    } else {
+                        d.area(&points, db_y(0.0, self.graph_db), fill);
+                        points.clone()
+                    };
                     d.poly(&points, color, 1.2);
-                    selected_curve = Some((points, color));
+                    selected_curve = Some((fill_points, color, between));
                 }
             }
             let points = eq_points(&xs, &sum, self.graph_db);
@@ -456,10 +478,10 @@ impl StripView {
                 .iter()
                 .find(|b| b.id == self.shared.solo_id.load(Ordering::Relaxed))
             {
-                let fill = selected_curve.as_ref().map(|(pts, color)| {
+                let fill = selected_curve.as_ref().map(|(pts, color, between)| {
                     let mut fill = *color;
                     fill.a = if page_bypassed { 0.02 } else { 0.07 };
-                    (pts.as_slice(), db_y(0.0, self.graph_db), fill)
+                    (pts.as_slice(), db_y(0.0, self.graph_db), fill, *between)
                 });
                 draw_solo_shade(
                     &mut d, b.shape, b.freq, b.q, gx, gw, eq_b, &points, sum_color, 2.2, fill,

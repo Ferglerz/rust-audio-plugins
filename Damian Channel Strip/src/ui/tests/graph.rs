@@ -685,6 +685,7 @@ fn curved_range_grips_are_grabbable_at_high_q() {
     let lines = range_grip_lines(&b, graph, rates);
     for line in &lines {
         assert_eq!(line.len(), 33);
+        assert!(line.windows(2).all(|pair| pair[1].0 > pair[0].0));
         for &(x, y) in line {
             assert!(range_grip_hit(&b, x, y, graph, rates));
         }
@@ -694,6 +695,24 @@ fn curved_range_grips_are_grabbable_at_high_q() {
         ..b
     };
     assert!(!range_grip_hit(&off, lines[0][16].0, lines[0][16].1, graph, rates));
+}
+
+#[test]
+fn narrow_q_meter_clears_response_edges() {
+    let b = Band {
+        dynamic: true,
+        gain: 18.0,
+        range: 4.0,
+        q: 18.0,
+        ..Band::default()
+    };
+    let geom = dyn_meter_geom(&b, 24.0, GX, GW);
+    let (_, bottom) = meter_curve_extents(&b, 24.0, GX, GW, geom.rule_half_w);
+    assert!(!geom.inline && !geom.detached_above);
+    assert!(geom.y0 >= bottom + DYN_METER_PAD);
+    let wide = Band { q: 0.5, ..b };
+    let wide_geom = dyn_meter_geom(&wide, 24.0, GX, GW);
+    assert!(geom.y0 > wide_geom.y0);
 }
 
 #[test]

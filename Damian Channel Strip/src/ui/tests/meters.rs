@@ -121,7 +121,7 @@ fn dyn_meter_inline_when_stem_tall_and_detaches_by_free_space() {
     assert!((outside_g.range_y - outside_g.node_y).abs() >= DYN_METER_MIN_INLINE);
     assert!(!outside_g.inline);
     assert!(!outside_g.detached_above);
-    assert!((outside_g.y0 - outside_g.range_y - DYN_METER_PAD).abs() < 0.5);
+    assert!(outside_g.y0 >= outside_g.range_y + DYN_METER_PAD);
     assert!(outside_g.y60 > outside_g.y0);
 
     let low = Band {
@@ -136,7 +136,7 @@ fn dyn_meter_inline_when_stem_tall_and_detaches_by_free_space() {
     assert!(!low_g.inline);
     assert!(low_g.detached_above);
     assert!(
-        (low_g.node_y - low_g.y0 - DYN_DETACHED_NODE_GAP).abs() < 0.5,
+        low_g.node_y - low_g.y0 >= DYN_DETACHED_NODE_GAP - 0.5,
         "detached-above starts one node-gap above the node"
     );
     let center_y = db_y(0.0, 24.0);
@@ -175,7 +175,7 @@ fn dyn_meter_inline_when_stem_tall_and_detaches_by_free_space() {
     assert!(!high_g.inline);
     assert!(!high_g.detached_above);
     assert!(
-        (high_g.y0 - high_g.node_y - DYN_DETACHED_NODE_GAP).abs() < 0.5,
+        high_g.y0 - high_g.node_y >= DYN_DETACHED_NODE_GAP - 0.5,
         "detached-below starts one node-gap below the node"
     );
     let edge_bot = GRAPH_BOTTOM - DYN_METER_PAD;
@@ -210,7 +210,7 @@ fn dyn_meter_inline_when_stem_tall_and_detaches_by_free_space() {
     assert!(!same_below_g.inline);
     assert!(!same_below_g.detached_above);
     assert!(
-        (same_below_g.y0 - (same_below_g.range_y + DYN_METER_PAD)).abs() < 0.5,
+        same_below_g.y0 >= same_below_g.range_y + DYN_METER_PAD - 0.5,
         "same-side below meter starts at range end + graph-edge pad"
     );
     assert!(
@@ -236,7 +236,7 @@ fn dyn_meter_inline_when_stem_tall_and_detaches_by_free_space() {
     assert!(!same_above_g.inline);
     assert!(same_above_g.detached_above);
     assert!(
-        (same_above_g.range_y - same_above_g.y0 - DYN_METER_PAD).abs() < 0.5,
+        same_above_g.range_y - same_above_g.y0 >= DYN_METER_PAD - 0.5,
         "same-side above meter starts at range end - graph-edge pad"
     );
     assert!(

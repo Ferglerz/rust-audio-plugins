@@ -279,7 +279,7 @@ pub(in crate::ui) fn draw_solo_shade(
     sum: &[(f32, f32)],
     sum_color: C,
     sum_width: f32,
-    fill: Option<(&[(f32, f32)], f32, C)>,
+    fill: Option<(&[(f32, f32)], f32, C, bool)>,
 ) {
     let overlay = C::rgba(12, 12, 14, 178);
     let grey_sum = greyscale_darken(sum_color, 0.32);
@@ -290,8 +290,12 @@ pub(in crate::ui) fn draw_solo_shade(
             continue;
         };
         d.scissor(ix, iy, iw, ih);
-        if let Some((pts, baseline, fill_c)) = fill {
-            d.area(pts, baseline, greyscale_darken(fill_c, 0.40));
+        if let Some((pts, baseline, fill_c, between_curves)) = fill {
+            if between_curves {
+                d.fill_poly(pts, greyscale_darken(fill_c, 0.40));
+            } else {
+                d.area(pts, baseline, greyscale_darken(fill_c, 0.40));
+            }
         }
         d.poly(sum, grey_sum, sum_width);
         d.scissor(clip.0, clip.1, clip.2, clip.3);
@@ -512,6 +516,33 @@ fn detached_span_len(from_y: f32, far_y: f32) -> f32 {
     (from_y - far_y).abs()
 }
 
+/// Closest vertical extent of either response curve across the meter footprint.
+pub(in crate::ui) fn meter_curve_extents(
+    b: &Band,
+    graph_db: f64,
+    gx: f32,
+    gw: f32,
+    half_width: f32,
+) -> (f32, f32) {
+    let x = freq_x_at(b.freq, gx, gw);
+    let mut top = db_y(b.gain, graph_db).min(db_y(b.gain - b.range, graph_db));
+    let mut bottom = db_y(b.gain, graph_db).max(db_y(b.gain - b.range, graph_db));
+    let eq_sr = 48_000.0;
+    for band in [b.clone(), range_band(b)] {
+        let coeff = BandCoeffs::make(&band, eq_sr);
+        let center = coeff.response(b.freq.min(eq_sr * 0.49), eq_sr);
+        let anchor = db_y(band.gain, graph_db);
+        for i in 0..=32 {
+            let sample_x = (x + (i as f32 / 16.0 - 1.0) * half_width).clamp(gx, gx + gw);
+            let response = coeff.response(x_freq_at(sample_x, gx, gw).min(eq_sr * 0.49), eq_sr);
+            let y = anchor + db_y(response, graph_db) - db_y(center, graph_db);
+            top = top.min(y);
+            bottom = bottom.max(y);
+        }
+    }
+    (top, bottom)
+}
+
 pub(in crate::ui) fn dyn_meter_geom(b: &Band, graph_db: f64, gx: f32, gw: f32) -> DynMeterGeom {
     let x = freq_x_at(b.freq, gx, gw);
     let node_y = db_y(b.gain, graph_db);
@@ -520,19 +551,20 @@ pub(in crate::ui) fn dyn_meter_geom(b: &Band, graph_db: f64, gx: f32, gw: f32) -
     let stem_len = stem.abs();
     // Pill half-width plus 20% of the full range-UI width past each edge.
     let rule_half_w = DYN_PILL_R + DYN_RANGE_W * DYN_THRESH_OVERHANG;
+    let (curve_top, curve_bottom) = meter_curve_extents(b, graph_db, gx, gw, rule_half_w);
     // Compare usable track lengths after clearing both ends of the range pill.
     let range_down = stem >= 0.0;
     let y0_above = if range_down {
-        node_y - DYN_DETACHED_NODE_GAP
+        curve_top - DYN_DETACHED_NODE_GAP
     } else {
-        range_y - DYN_METER_PAD
+        curve_top - DYN_METER_PAD
     };
     let far_above = detached_far_above(y0_above, graph_db);
     let span_above = detached_span_len(y0_above, far_above);
     let y0_below = if range_down {
-        range_y + DYN_METER_PAD
+        curve_bottom + DYN_METER_PAD
     } else {
-        node_y + DYN_DETACHED_NODE_GAP
+        curve_bottom + DYN_DETACHED_NODE_GAP
     };
     let far_below = detached_far_below(y0_below, graph_db);
     let span_below = detached_span_len(y0_below, far_below);
@@ -766,6 +798,29 @@ pub(in crate::ui) fn range_band(b: &Band) -> Band {
     endpoint
 }
 
+pub(in crate::ui) fn between_curve_polygon(
+    main: &[(f32, f32)],
+    range: &[(f32, f32)],
+) -> Vec<(f32, f32)> {
+    let mut points = Vec::with_capacity(main.len() + range.len());
+    points.extend_from_slice(main);
+    points.extend(range.iter().rev().copied());
+    points
+}
+
+pub(in crate::ui) fn range_curve_points(
+    b: &Band,
+    xs: &[f32],
+    graph: (f32, f32, f64),
+    rates: (f64, f64),
+) -> Vec<(f32, f32)> {
+    let (gx, gw, graph_db) = graph;
+    let (sr, eq_sr) = rates;
+    let coeff = BandCoeffs::make(&range_band(b), eq_sr);
+    let dbs = eq_db_on_xs(&coeff, xs, gx, gw, sr, eq_sr);
+    eq_points(xs, &dbs, graph_db)
+}
+
 pub(in crate::ui) fn draw_dyn_range_curve(
     d: &mut Draw,
     b: &Band,
@@ -774,21 +829,15 @@ pub(in crate::ui) fn draw_dyn_range_curve(
     rates: (f64, f64),
     color: C,
 ) {
-    let (gx, gw, graph_db) = graph;
-    let (sr, eq_sr) = rates;
-    let coeff = BandCoeffs::make(&range_band(b), eq_sr);
-    let dbs = eq_db_on_xs(&coeff, xs, gx, gw, sr, eq_sr);
-    let points = eq_points(xs, &dbs, graph_db);
+    let points = range_curve_points(b, xs, graph, rates);
+    let range_color = C { a: color.a * 0.5, ..color };
     d.poly(
         &points,
-        C {
-            a: color.a * 0.5,
-            ..color
-        },
+        range_color,
         1.2,
     );
     for line in range_grip_lines(b, graph, rates) {
-        d.poly(&line, color, 1.2);
+        d.poly(&line, range_color, 1.2);
     }
 }
 
@@ -814,17 +863,15 @@ pub(in crate::ui) fn range_grip_lines(
                 let arc_distance = (i as f32 / 32.0 - 0.5) * width;
                 let x = curve_x_at_arc_distance(&curve_y_at, node_x, arc_distance);
                 let curve_y = curve_y_at(x);
-                let slope = (curve_y_at(x + 0.25) - curve_y_at(x - 0.25)) * 2.0;
-                let normal_scale = (1.0 + slope * slope).sqrt().recip();
                 let offset = if side == 0 {
                     -RANGE_GRIP_SPACING
                 } else {
                     RANGE_GRIP_SPACING
                 };
-                (
-                    x - slope * normal_scale * offset,
-                    curve_y + normal_scale * offset,
-                )
+                // A normal offset folds over itself when Q makes the peak's
+                // radius smaller than the grip spacing. Vertical separation
+                // keeps both strokes faithful to the response silhouette.
+                (x, curve_y + offset)
             })
             .collect()
     })
