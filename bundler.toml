@@ -9,3 +9,6 @@ name = "Tape Stop"
 
 [openwurli-ui]
 name = "OpenWurli UI"
+
+[chordboard]
+name = "Chordboard"

@@ -1,0 +1,25 @@
+[package]
+name = "chordboard"
+version = "0.1.0"
+edition = "2021"
+authors = ["Fergler"]
+license = "GPL-3.0-or-later"
+description = "Expressive two-note harmony and strumming MIDI effect"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+nih_plug_vizia = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+pleasant-ui = { path = "../pleasant-ui" }
+crossbeam-queue = "0.3"
+serde_json = "1"
+
+[features]
+ui-preview = []
+
+[[bin]]
+name = "chordboard-preview"
+path = "src/bin/preview.rs"
+required-features = ["ui-preview"]

@@ -954,6 +954,11 @@ impl<P: ClapPlugin> Wrapper<P> {
 
         let start_idx = resume_from_event_idx as u32;
         let mut event: *const clap_event_header = clap_call! { in_=>get(in_, start_idx) };
+        // The first event also needs a boundary check. Otherwise a block containing
+        // only a future parameter/transport event applies it at sample zero.
+        if (*event).time > current_sample_idx as u32 && stop_predicate(event) {
+            return Some(((*event).time as usize, start_idx as usize));
+        }
         for next_event_idx in (start_idx + 1)..num_events {
             self.handle_in_event(
                 event,

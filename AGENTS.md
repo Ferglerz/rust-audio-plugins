@@ -10,7 +10,7 @@ Do not use computer-use or UI automation to inspect or control REAPER for this p
 
 ## Plugin installation
 
-After changing a plugin, run that plugin's `scripts/install.sh`. All six wrappers call `scripts/install-plugin.sh`, which clears the plugin's release artifact, builds from the current checkout, verifies the bundled executable, installs it, and verifies the installed bundle. `cargo xtask bundle` alone does not update the DAW installation.
+After changing a plugin, run that plugin's `scripts/install.sh`. All seven wrappers call `scripts/install-plugin.sh`, which clears the plugin's release artifact, builds from the current checkout, verifies the bundled executable, installs it, and verifies the installed bundle. `cargo xtask bundle` alone does not update the DAW installation.
 
 Do not run `cargo test` after every edit. Tests stay in the repo. Default verify is a compile-check of the crate you touched.
 
@@ -18,7 +18,7 @@ Do not run `cargo test` after every edit. Tests stay in the repo. Default verify
 
 `cargo check -p <crate>`
 
-Plugin crate names: `composure`, `damian-channel-strip`, `flattery`, `tape_stop`, `openwurli-ui`. Check `scd-plugin` from `scd-rust/`, its separate Cargo workspace.
+Plugin crate names: `composure`, `damian-channel-strip`, `flattery`, `tape_stop`, `openwurli-ui`, `chordboard`. Check `scd-plugin` from `scd-rust/`, its separate Cargo workspace.
 
 - No `--workspace`
 - No `--all-targets` unless tests or examples themselves changed

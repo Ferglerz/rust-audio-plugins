@@ -9,6 +9,7 @@ All plugins and the shared UI are Git subtrees with their full histories:
 - `scd-rust/`: https://github.com/Ferglerz/scd-rust.git
 - `Composure_Rust/`: https://github.com/Ferglerz/Composure_Rust.git
 - `openwurli-ui/`: https://github.com/Ferglerz/openwurli-ui.git
+- `chordboard/`: https://github.com/Ferglerz/Chordboard.git
 
 A normal clone includes their tracked files; no submodule initialization is
 needed. Commit edits normally in audio-plugins, including coordinated changes
@@ -26,6 +27,7 @@ git remote add pleasant-ui https://github.com/Ferglerz/pleasant-ui.git
 git remote add scd-rust https://github.com/Ferglerz/scd-rust.git
 git remote add composure https://github.com/Ferglerz/Composure_Rust.git
 git remote add openwurli-ui https://github.com/Ferglerz/openwurli-ui.git
+git remote add chordboard https://github.com/Ferglerz/Chordboard.git
 ```
 
 ## Two-way sync
@@ -41,6 +43,7 @@ git subtree pull --prefix=pleasant-ui pleasant-ui main
 git subtree pull --prefix=scd-rust scd-rust main
 git subtree pull --prefix=Composure_Rust composure main
 git subtree pull --prefix=openwurli-ui openwurli-ui main
+git subtree pull --prefix=chordboard chordboard main
 ```
 
 Export committed changes to an individual repository:
@@ -53,6 +56,7 @@ git subtree push --prefix=pleasant-ui pleasant-ui main
 git subtree push --prefix=scd-rust scd-rust main
 git subtree push --prefix=Composure_Rust composure main
 git subtree push --prefix=openwurli-ui openwurli-ui main
+git subtree push --prefix=chordboard chordboard main
 ```
 
 Run only the commands for repositories you intend to sync. Replace the final
