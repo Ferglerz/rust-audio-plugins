@@ -23,33 +23,31 @@ where
     let analog = ControlLayout::from_jsfx();
     let pleasant = ControlLayout::pleasant();
 
-    placed_knob(
+    placed_analog_knob(
         cx,
         params.clone(),
         |p| &p.attack,
         display.clone(),
         analog.attack_knob,
-        pleasant.attack_knob,
         StepSet::Attack,
     );
-    placed_knob(
+    placed_analog_knob(
         cx,
         params.clone(),
         |p| &p.release,
         display.clone(),
         analog.release_knob,
-        pleasant.release_knob,
         StepSet::Release,
     );
-    placed_knob(
+    placed_analog_knob(
         cx,
         params.clone(),
         |p| &p.hold_ms,
         display.clone(),
         analog.hold_knob,
-        pleasant.hold_knob,
         StepSet::None,
     );
+    placed_envelope_graph(cx, params.clone(), display.clone());
 
     let filter_params = params.clone();
     let filter_display = display.clone();
@@ -152,22 +150,20 @@ where
         analog.inverse_btn,
         pleasant.inverse_btn,
     );
-    placed_envelope_control(
+    placed_analog_slider(
         cx,
         params.clone(),
         |p| &p.attack_curve,
         display.clone(),
         analog.attack_curve_slider,
-        pleasant.attack_curve_slider,
         (SliderFill::CenterOut, StepSet::None, "Attack Curve"),
     );
-    placed_envelope_control(
+    placed_analog_slider(
         cx,
         params.clone(),
         |p| &p.release_curve,
         display.clone(),
         analog.release_curve_slider,
-        pleasant.release_curve_slider,
         (SliderFill::CenterOut, StepSet::None, "Release Curve"),
     );
     placed_detection(
@@ -322,6 +318,54 @@ fn placed_knob<L, P, F>(
         ));
 }
 
+fn placed_analog_knob<L, P, F>(
+    cx: &mut Context,
+    params: L,
+    map: F,
+    display: Arc<UiDisplay>,
+    analog: (f32, f32),
+    step_set: StepSet,
+) where
+    L: Lens<Target = Arc<ComposureParams>> + Clone + 'static,
+    P: Param + 'static,
+    F: Fn(&Arc<ComposureParams>) -> &P + Copy + 'static,
+{
+    ImageKnob::new(cx, params, map, display, step_set)
+        .class("production-knob")
+        .display(super::EditorData::appearance.map(|mode| {
+            if *mode == 2 {
+                Display::Flex
+            } else {
+                Display::None
+            }
+        }))
+        .position_type(PositionType::SelfDirected)
+        .left(Pixels(analog.0))
+        .top(Pixels(analog.1))
+        .width(Pixels(theme::KNOB_SIZE))
+        .height(Pixels(theme::KNOB_SIZE));
+}
+
+fn placed_envelope_graph<L>(cx: &mut Context, params: L, display: Arc<UiDisplay>)
+where
+    L: Lens<Target = Arc<ComposureParams>> + Clone + 'static,
+{
+    super::envelope_view::EnvelopeView::new(cx, params, display)
+        .class("envelope-graph")
+        .display(super::EditorData::appearance.map(|mode| {
+            if *mode == 2 {
+                Display::None
+            } else {
+                Display::Flex
+            }
+        }))
+        .position_type(PositionType::SelfDirected)
+        .left(Pixels(super::appearance::ENVELOPE_GRAPH_X))
+        .top(Pixels(super::appearance::ENVELOPE_GRAPH_Y))
+        .width(Pixels(super::appearance::ENVELOPE_GRAPH_W))
+        .height(Pixels(super::appearance::ENVELOPE_GRAPH_H));
+}
+
 /// `PARALLAX_LABEL_Y_OFFSET` in FerglerUI rendering constants.
 const PARALLAX_LABEL_Y_OFFSET: f32 = 4.0;
 
@@ -382,6 +426,36 @@ fn placed_parallax<L, P, F>(
         .top(Pixels(pleasant.1))
         .width(Pixels(64.0))
         .height(Pixels(96.0));
+}
+
+fn placed_analog_slider<L, P, F>(
+    cx: &mut Context,
+    params: L,
+    map: F,
+    display: Arc<UiDisplay>,
+    analog: (f32, f32, f32),
+    presentation: (SliderFill, StepSet, &'static str),
+) where
+    L: Lens<Target = Arc<ComposureParams>> + Clone + 'static,
+    P: Param + 'static,
+    F: Fn(&Arc<ComposureParams>) -> &P + Copy + 'static,
+{
+    Binding::new(cx, super::EditorData::appearance, move |cx, mode| {
+        if mode.get(cx) == 2 {
+            placed_slider(
+                cx,
+                params,
+                map,
+                display.clone(),
+                analog,
+                analog,
+                presentation.0,
+                false,
+                presentation.1,
+                presentation.2,
+            );
+        }
+    });
 }
 
 /// Keep the Analog slider while Pleasant uses the envelope grid's knob.

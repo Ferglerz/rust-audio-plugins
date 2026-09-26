@@ -7,6 +7,7 @@ mod debug_view;
 mod detector_eq_view;
 mod display;
 mod draw_helpers;
+mod envelope_view;
 mod gr_meter_view;
 #[path = "graph/graph_chrome.rs"]
 mod graph_chrome;

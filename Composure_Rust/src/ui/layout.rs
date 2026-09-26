@@ -205,15 +205,12 @@ impl ControlLayout {
         let left = appearance::ENV_X + 14.0;
         let width = appearance::ENV_W - 28.0;
         let env_x = appearance::ENV_X + 6.0;
-        let env_y0 = appearance::ENV_Y + appearance::MODULE_HEADER_H + 8.0;
         let env_col_step = theme::KNOB_SIZE - 9.0;
-        let env_step = (appearance::ENV_Y + appearance::SIDE_H
-            - appearance::ENVELOPE_FOOTER_H
-            - 12.0
-            - theme::KNOB_SIZE
-            - env_y0)
-            * 0.5;
-        let rms_y = env_y0 + env_step + (env_step - 48.0) * 0.5;
+        let knob_y = appearance::ENVELOPE_KNOB_Y;
+        debug_assert!(
+            knob_y + theme::KNOB_SIZE + 44.0
+                <= appearance::ENV_Y + appearance::SIDE_H - appearance::ENVELOPE_FOOTER_H
+        );
 
         let harm_cx = appearance::HARM_X + appearance::HARM_W * 0.5;
         let switch_x = harm_cx - theme::SWITCH_SLOT_W * 0.5;
@@ -233,20 +230,20 @@ impl ControlLayout {
         let footer_y = appearance::ENV_Y + appearance::SIDE_H - 40.0;
 
         Self {
-            attack_knob: (env_x, env_y0),
-            release_knob: (env_x + 2.0 * env_col_step, env_y0),
-            hold_knob: (env_x + env_col_step, env_y0 + env_step * 0.5),
+            attack_knob: (env_x, appearance::ENVELOPE_GRAPH_Y),
+            release_knob: (env_x + 2.0 * env_col_step, appearance::ENVELOPE_GRAPH_Y),
+            hold_knob: (env_x + env_col_step, appearance::ENVELOPE_GRAPH_Y),
             hp_slider: (left, 56.0, width),
             listen_btn: (left, 96.0, (width - 12.0) * 0.5),
             sc_btn: (left + (width + 12.0) * 0.5, 96.0, (width - 12.0) * 0.5),
             lp_slider: (left, 56.0, width),
-            lookahead_slider: (env_x, env_y0 + 2.0 * env_step, theme::KNOB_SIZE),
+            lookahead_slider: (env_x, knob_y, theme::KNOB_SIZE),
             prog_blend_slider: (left, footer_y - 54.0, width),
             inverse_btn: (left + 126.0, footer_y, 72.0),
-            attack_curve_slider: (env_x, env_y0 + env_step, theme::KNOB_SIZE),
+            attack_curve_slider: (env_x, appearance::ENVELOPE_GRAPH_Y, theme::KNOB_SIZE),
             release_curve_slider: (
                 env_x + 2.0 * env_col_step,
-                env_y0 + env_step,
+                appearance::ENVELOPE_GRAPH_Y,
                 theme::KNOB_SIZE,
             ),
             detection_btn: (left, footer_y),
@@ -256,14 +253,14 @@ impl ControlLayout {
             harmonic_even,
             harmonic_odd,
             makeup_knob,
-            strength_knob: (env_x + 2.0 * env_col_step, env_y0 + 2.0 * env_step),
+            strength_knob: (env_x + 2.0 * env_col_step, knob_y),
             prog_mode_switch: (appearance::meter_x(0).0, appearance::PLEASANT_FOOTER_Y),
             ms_switch: (left + 204.0, footer_y),
             norm_switch: (
                 env_x + env_col_step + (theme::KNOB_SIZE - theme::SWITCH_SLOT_W) * 0.5,
-                rms_y + theme::KNOB_SIZE + 20.0,
+                knob_y + theme::KNOB_SIZE + 16.0,
             ),
-            rms_knob: (env_x + env_col_step, rms_y),
+            rms_knob: (env_x + env_col_step, knob_y),
             offset_knob: (
                 appearance::PLEASANT_GRAPH_X + 12.0,
                 appearance::PLEASANT_GRAPH_Y + 12.0,
@@ -374,24 +371,27 @@ mod tests {
         );
         assert!(appearance::HEADER_H + bar_bottom < appearance::PLEASANT_EDITOR_HEIGHT as f32);
         assert_eq!(
-            l.hold_knob.1,
-            (l.attack_knob.1 + l.attack_curve_slider.1) * 0.5
+            appearance::ENVELOPE_GRAPH_X + appearance::ENVELOPE_GRAPH_W,
+            appearance::ENV_X + appearance::ENV_W - 10.0
         );
-        assert_eq!(l.attack_knob.1, l.release_knob.1);
-        assert_eq!(l.attack_knob.0, l.attack_curve_slider.0);
-        assert_eq!(l.release_knob.0, l.release_curve_slider.0);
-        assert_eq!(l.lookahead_slider.0, l.attack_knob.0);
-        assert_eq!(l.strength_knob.0, l.release_knob.0);
+        assert!(appearance::ENVELOPE_GRAPH_Y >= appearance::ENV_Y + appearance::MODULE_HEADER_H);
+        assert_eq!(l.lookahead_slider.1, appearance::ENVELOPE_KNOB_Y);
         assert_eq!(l.lookahead_slider.1, l.strength_knob.1);
-        assert_eq!(l.rms_knob.0, l.hold_knob.0);
-        assert!(l.rms_knob.1 > l.hold_knob.1 + theme::KNOB_SIZE);
+        assert_eq!(l.rms_knob.1, l.lookahead_slider.1);
+        assert_eq!(l.lookahead_slider.0, appearance::ENV_X + 6.0);
+        assert_eq!(
+            l.strength_knob.0,
+            l.lookahead_slider.0 + 2.0 * (theme::KNOB_SIZE - 9.0)
+        );
+        assert_eq!(
+            l.rms_knob.0,
+            l.lookahead_slider.0 + (theme::KNOB_SIZE - 9.0)
+        );
         assert!(l.norm_switch.1 > l.rms_knob.1 + theme::KNOB_SIZE);
+        assert!(
+            appearance::ENVELOPE_GRAPH_Y + appearance::ENVELOPE_GRAPH_H <= l.lookahead_slider.1
+        );
         for (x, y) in [
-            l.attack_knob,
-            l.hold_knob,
-            l.release_knob,
-            (l.attack_curve_slider.0, l.attack_curve_slider.1),
-            (l.release_curve_slider.0, l.release_curve_slider.1),
             (l.lookahead_slider.0, l.lookahead_slider.1),
             l.strength_knob,
             l.rms_knob,
@@ -411,7 +411,12 @@ mod tests {
             meter_l + appearance::PLEASANT_METERS_W
                 <= appearance::TRANS_X + appearance::TRANS_W - 10.0
         );
-        let env_bottom = l.hold_knob.1 + theme::KNOB_SIZE;
+        assert!(
+            l.norm_switch.1 + 28.0
+                <= appearance::ENV_Y + appearance::SIDE_H - appearance::ENVELOPE_FOOTER_H
+        );
+        assert!(l.norm_switch.1 + 28.0 <= l.prog_blend_slider.1);
+        let env_bottom = l.norm_switch.1 + 28.0;
         assert!(env_bottom <= appearance::ENV_Y + appearance::SIDE_H - 8.0);
         let harm_bottom = l.makeup_knob.1 + theme::KNOB_SIZE;
         assert!(harm_bottom <= appearance::ENV_Y + appearance::SIDE_H - 8.0);
