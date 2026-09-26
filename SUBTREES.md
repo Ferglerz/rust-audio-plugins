@@ -69,8 +69,9 @@ A normal `git push origin main` publishes audio-plugins only. Subtree pushes
 export only the selected folder and do not include changes to sibling folders.
 Publishing coordinated changes to separate repositories takes separate pushes.
 
-`openwurli-ui` is the independent plugin wrapper. Its pinned OpenWurli DSP
-dependency remains in `Ferglerz/openwurli` and is not a subtree of this repo.
+`openwurli-ui` is the independent plugin wrapper. Its OpenWurli DSP dependency
+is vendored under `openwurli-ui/vendor/openwurli-dsp`, including the upstream
+SIMD updates. It travels with the plugin subtree; it is not a separate subtree.
 
 ## Cargo workspaces and shared code
 
