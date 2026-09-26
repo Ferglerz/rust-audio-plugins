@@ -6,7 +6,7 @@ The main panel exposes Volume, Tremolo Depth, Speaker Character, and MLP Correct
 
 ## Upstream source
 
-The dependency is the [Ferglerz fork](https://github.com/Ferglerz/openwurli), pinned in `Cargo.toml` to commit `6614ab9519471e956ecb0c82edc4fcf295f724dc` on `codex/pleasant-controls`. The fork's `main` stays equal to upstream commit `3023a8a6c42c654c5caeec52fd22dcf2cff3cb15` (OpenWurli v0.7.0). The branch adds only DSP control APIs and a short design note; all plugin and UI code lives in this directory.
+The engine is vendored at `vendor/openwurli-dsp`, taken from the [Ferglerz fork](https://github.com/Ferglerz/openwurli) commit `6614ab9519471e956ecb0c82edc4fcf295f724dc` on `codex/pleasant-controls`, plus the reed `f64x2` and mix-bus changes in this tree. The fork's `main` stays equal to upstream commit `3023a8a6c42c654c5caeec52fd22dcf2cff3cb15` (OpenWurli v0.7.0). When those DSP commits can land on the fork, switch `Cargo.toml` back to a git `rev` and drop the vendor directory.
 
 The wrapper uses OpenWurli's default fast preamp and power amp. Its Reed, Hammer, Pickup, and Tremolo controls still call the fork's engine APIs. Hiss and Sag are inexpensive output effects in the wrapper: Hiss adds low-level noise after the engine, and Sag applies a level-dependent gain reduction. Both default off, preserving the fast engine's output until enabled. These approximate the heavier circuit features rather than reproducing their exact electrical behavior. Existing host parameter IDs and ranges are retained for preset compatibility; saved projects with Sag enabled keep that setting.
 
