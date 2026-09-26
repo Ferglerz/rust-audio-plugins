@@ -756,6 +756,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "chordboard"
+version = "0.1.0"
+dependencies = [
+ "crossbeam-queue",
+ "nih_plug",
+ "nih_plug_vizia",
+ "pleasant-ui",
+ "serde_json",
+]
+
+[[package]]
+name = "chordboard-xtask"
+version = "0.1.0"
+dependencies = [
+ "nih_plug_xtask",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,5 +1,7 @@
 [workspace]
 members = [
+    "chordboard",
+    "chordboard/xtask",
     "pleasant-curves",
     "pleasant-dynamics",
     "pleasant-dsp",
