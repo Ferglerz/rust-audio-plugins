@@ -1,4 +1,6 @@
 use crate::harmony::Notes;
+pub const POINTER_KEY_OFFSET: u8 = 64;
+pub const KEY_TOKEN_COUNT: usize = 128;
 pub const CHORD: u8 = 0;
 pub const AUTO: u8 = 1;
 pub const MANUAL: u8 = 2;
@@ -186,8 +188,8 @@ pub struct Snapshot {
     pub second: i16,
     pub quality: u8,
     pub inversion: u8,
-    pub accepted: u32,
-    pub ignored: u32,
+    pub accepted: u64,
+    pub ignored: u64,
     pub pressure: f32,
     pub timbre: f32,
     pub bend: f32,

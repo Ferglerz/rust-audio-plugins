@@ -4,7 +4,7 @@ A MIDI-only harmony and strumming effect with Pleasant UI. VST3 and CLAP; no int
 
 ## Play
 
-Click the chord keyboard to focus the editor. QWERTY captures playing keys only while focused and enabled. Q–U selects major chords, A–J minor, Z–M dominant seventh. The seven columns follow the displayed staggered keyboard. `1` / `2` switches root banks; Chromatic/Fifths changes their order. The last two columns in bank two are intentionally disabled. Keyboard base C and transpose are independent controls.
+Click the chord keyboard to focus the editor. QWERTY captures playing keys only while focused and enabled. The number row (`1 2 3 4 5 6 7 8 9 0 - +`) selects major chords, `Q W E R T Y U I O P [ ]` selects minor chords, and `A S D F G H J K L ; ' Enter` selects dominant seventh chords. The `+` position uses the physical `=/+` key without requiring Shift; Enter is labelled `ENT`. Each staggered row includes all twelve roots; Chromatic/Fifths changes their order. Keyboard base C and transpose are independent controls.
 
 On a MIDI keyboard, click **Learn Low Octave**, then press its lowest physical key. That key and the following eleven semitones become latched quality selectors: major, minor, dominant seventh, major seventh, minor seventh, diminished, augmented, major sixth, minor sixth, diminished seventh, half-diminished seventh, power chord. The control diagram shows assignments and MIDI numbers. Everything outside the zone is a performance note. Learn can be cancelled with a second click.
 
@@ -37,7 +37,7 @@ Actual Osmose feel, downstream patch response, and host-specific MIDI routing re
 
 Select a key and scale from the menus below the chord keyboard to highlight compatible chords and display Roman numerals. Outside chords remain playable. Highlighting considers all chord tones, not only the root. Major, natural/harmonic minor, Dorian, Mixolydian, Lydian and major/minor pentatonic scales are available.
 
-**Shift-click one of eight memory slots** to capture the current harmonic recipe: root, alteration, quality, inversion, transpose and spread. Click to recall it into the current performance mode. Recall remains available for strumming until a new performance input replaces it or Escape clears it. Slots persist with project state and host presets.
+**Shift-click one of eight memory slots** to capture the current harmonic recipe: root, alteration, quality, inversion, transpose and spread. Click to recall it into the current performance mode. Recall remains available for strumming until a new performance input replaces it or Escape clears it. Empty slots have a dashed outline. Hover a filled slot to reveal its × delete button. Drag a filled slot onto an empty slot to move it, or onto another filled slot to swap the two. Release outside the slots or press Escape to cancel a drag. Slots persist with project state and host presets.
 
 Discovery's **Note Filter** outputs all tones, bass, top, bass+top, odd tones or even tones after voicing. Standard MIDI can route bass and upper voices to separate channels. MPE retains its member-channel allocator.
 

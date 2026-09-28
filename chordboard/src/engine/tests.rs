@@ -546,8 +546,8 @@ fn keyboard_focus_loss_does_not_clear_midi_latch() {
 fn pointer_and_physical_key_have_independent_ownership() {
     let mut e = Engine::default();
     send(&mut e, Command::KeyDown(0, 60, 0));
-    send(&mut e, Command::KeyDown(32, 60, 0));
-    send(&mut e, Command::KeyUp(32));
+    send(&mut e, Command::KeyDown(POINTER_KEY_OFFSET, 60, 0));
+    send(&mut e, Command::KeyUp(POINTER_KEY_OFFSET));
     assert!(e.root.is_some_and(|s| s.held));
     assert!(e.voices.iter().any(Option::is_some));
     send(&mut e, Command::KeyUp(0));
@@ -559,4 +559,34 @@ fn standard_midi_bend_keeps_master_range() {
     on(&mut e, 60, 0);
     e.bend(0, 0.75, &mut |_| {});
     assert_eq!(e.expression.bend, 0.75);
+}
+
+#[test]
+fn extended_keyboard_tracks_last_key_and_releases_every_pointer_token() {
+    let mut e = Engine::default();
+    let last = harmony::KEY_COUNT as u8 - 1;
+    send(&mut e, Command::KeyDown(last, 71, 2));
+    assert_eq!(e.snapshot().accepted, 1_u64 << last);
+    send(&mut e, Command::KeyDown(last + POINTER_KEY_OFFSET, 71, 2));
+    send(&mut e, Command::KeyUp(last + POINTER_KEY_OFFSET));
+    assert!(e.root.is_some_and(|s| s.held));
+    send(&mut e, Command::ReleaseKeyboard);
+    assert_eq!(e.snapshot().accepted, 0);
+    assert!(e.down[2048..].iter().all(|&down| !down));
+    assert!(e.voices.iter().all(Option::is_none));
+    send(&mut e, Command::KeyDown(last + POINTER_KEY_OFFSET, 71, 2));
+    assert_eq!(e.snapshot().accepted, 1_u64 << last);
+    send(&mut e, Command::ReleaseKeyboard);
+    assert!(e.down[2048..].iter().all(|&down| !down));
+}
+
+#[test]
+fn extended_ignored_keys_have_distinct_snapshot_bits() {
+    let mut e = Engine::default();
+    send(&mut e, Command::KeyDown(0, 60, 0));
+    send(&mut e, Command::KeyDown(1, 61, 0));
+    send(&mut e, Command::KeyDown(35, 71, 2));
+    assert_eq!(e.snapshot().ignored, 1_u64 << 35);
+    send(&mut e, Command::ReleaseKeyboard);
+    assert_eq!(e.snapshot().ignored, 0);
 }

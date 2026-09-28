@@ -14,11 +14,30 @@ impl ChordboardView {
         };
         if matches!(event, WindowEvent::FocusOut) {
             self.focused = false;
+            self.pointer = None;
+            cx.needs_redraw();
             self.end_drag(cx);
             self.release_keys();
             self.edit = None;
             self.menu = None;
             return false;
+        }
+        if matches!(event, WindowEvent::MouseLeave) {
+            self.pointer = None;
+            cx.needs_redraw();
+        } else if matches!(
+            event,
+            WindowEvent::MouseMove(_, _) | WindowEvent::MouseDown(_)
+        ) {
+            self.pointer = Some((x, y));
+            cx.needs_redraw();
+        }
+        if matches!(event, WindowEvent::KeyDown(Code::Escape, _))
+            && matches!(self.drag, Some(Drag::Memory(_)))
+        {
+            self.end_drag(cx);
+            self.status = "Memory drag cancelled".into();
+            return true;
         }
         if self.edit.is_some() {
             match event {
@@ -107,8 +126,6 @@ impl ChordboardView {
                 let index = match code {
                     Code::ArrowUp => Some(0),
                     Code::ArrowDown => Some(1),
-                    Code::Digit1 => Some(2),
-                    Code::Digit2 => Some(3),
                     _ => None,
                 };
                 if let Some(index) = index {
@@ -117,8 +134,7 @@ impl ChordboardView {
                         match index {
                             0 => self.inversion(cx, 1),
                             1 => self.inversion(cx, -1),
-                            2 => self.set(cx, "bank", 0.0),
-                            _ => self.set(cx, "bank", 1.0),
+                            _ => unreachable!(),
                         }
                     }
                     return true;
@@ -140,8 +156,6 @@ impl ChordboardView {
                 let index = match code {
                     Code::ArrowUp => Some(0),
                     Code::ArrowDown => Some(1),
-                    Code::Digit1 => Some(2),
-                    Code::Digit2 => Some(3),
                     _ => None,
                 };
                 if let Some(i) = index {
@@ -173,16 +187,20 @@ impl ChordboardView {
                     return true;
                 }
                 for i in 0..4 {
-                    if hit((32.0 + i as f32 * 142.0, 91.0, 134.0, 34.0), x, y) {
+                    if hit(mode_rect(i as usize), x, y) {
                         Self::emit(
                             cx,
                             self.params.mode.as_ptr(),
                             self.params.mode.preview_normalized(i),
                         );
+                        self.end_drag(cx);
+                        self.set_setup(false);
+                        self.group = if i == 1 || i == 2 { 1 } else { 0 };
+                        self.page = if i == 1 || i == 2 { 1 } else { 0 };
                         return true;
                     }
                 }
-                if hit((632.0, 91.0, 144.0, 34.0), x, y) {
+                if self.group == 6 && hit(LEARN_OCTAVE, x, y) {
                     self.bridge
                         .send(Command::Learn(if self.snapshot.learning == 4 {
                             0
@@ -191,16 +209,12 @@ impl ChordboardView {
                         }));
                     return true;
                 }
-                if hit((784.0, 91.0, 144.0, 34.0), x, y) {
+                if hit(LATCH, x, y) {
                     self.set(
                         cx,
                         "latch",
                         if self.params.latch.value() { 0.0 } else { 1.0 },
                     );
-                    return true;
-                }
-                if hit((936.0, 91.0, 152.0, 34.0), x, y) {
-                    self.set(cx, "mpe", if self.params.mpe.value() { 0.0 } else { 1.0 });
                     return true;
                 }
                 if hit((32.0, 190.0, 154.0, 28.0), x, y) {
@@ -211,26 +225,18 @@ impl ChordboardView {
                     );
                     return true;
                 }
-                for i in 0..2 {
-                    if hit((194.0 + i as f32 * 76.0, 190.0, 68.0, 28.0), x, y) {
-                        self.set(cx, "bank", i as f32);
-                        return true;
-                    }
-                }
-                for i in 0..21 {
+                for i in 0..KEY_COUNT {
                     if hit(key_rect(i), x, y) {
-                        if let Some(root) = harmony::keyboard_root(
-                            self.params.fifths.value(),
-                            self.params.bank.value() as u8,
-                            i % 7,
-                        ) {
+                        if let Some(root) =
+                            harmony::keyboard_root(self.params.fifths.value(), i % KEY_COLUMNS)
+                        {
                             self.bridge.send(Command::KeyDown(
-                                i as u8 + 32,
+                                i as u8 + POINTER_KEY_OFFSET,
                                 (self.params.keyboard_octave.value() + root as i32).min(127) as u8,
-                                harmony::row_quality(i / 7),
+                                harmony::row_quality(i / KEY_COLUMNS),
                             ));
                         }
-                        self.drag = Some(Drag::Key(i as u8 + 32));
+                        self.drag = Some(Drag::Key(i as u8 + POINTER_KEY_OFFSET));
                         cx.capture();
                         return true;
                     }
@@ -255,55 +261,14 @@ impl ChordboardView {
                     );
                     return true;
                 }
-                for i in 0..8 {
-                    if hit((32.0 + i as f32 * 67.0, 504.0, 61.0, 46.0), x, y) {
-                        if cx.modifiers().shift() {
-                            self.bridge.send(Command::Capture(i));
-                            self.status = format!("Captured chord in slot {}", i + 1);
-                        } else {
-                            let word = self.params.slot(i).load(Ordering::Relaxed);
-                            if let Some(chord) = SavedChord::decode(word) {
-                                self.release_keys();
-                                Self::emit(
-                                    cx,
-                                    self.params.inversion.as_ptr(),
-                                    self.params
-                                        .inversion
-                                        .preview_normalized(chord.inversion as i32),
-                                );
-                                Self::emit(
-                                    cx,
-                                    self.params.quality.as_ptr(),
-                                    self.params.quality.preview_normalized(chord.quality as i32),
-                                );
-                                Self::emit(
-                                    cx,
-                                    self.params.spread.as_ptr(),
-                                    self.params.spread.preview_normalized(chord.spread as i32),
-                                );
-                                Self::emit(
-                                    cx,
-                                    self.params.transpose.as_ptr(),
-                                    self.params
-                                        .transpose
-                                        .preview_normalized(chord.transpose as i32),
-                                );
-                                self.bridge.send(Command::Recall(word));
-                                self.status = format!("Recalled slot {}", i + 1);
-                            } else {
-                                self.status =
-                                    "Hold Shift and click a slot to capture the current chord"
-                                        .into();
-                            }
-                        }
-                        return true;
-                    }
+                if self.memory_press(cx, x, y) {
+                    return true;
                 }
-                if hit(PAD, x, y) {
+                if !self.arp_main() && hit(PLAY_PAD, x, y) {
                     self.drag = Some(Drag::Pad);
                     cx.capture();
-                    let px = ((x - PAD.0) / PAD.2).clamp(0.0, 1.0);
-                    let py = (1.0 - (y - PAD.1) / PAD.3).clamp(0.0, 1.0);
+                    let px = ((x - PLAY_PAD.0) / PLAY_PAD.2).clamp(0.0, 1.0);
+                    let py = (1.0 - (y - PLAY_PAD.1) / PLAY_PAD.3).clamp(0.0, 1.0);
                     for ptr in [self.params.x.as_ptr(), self.params.y.as_ptr()] {
                         cx.emit(RawParamEvent::BeginSetParameter(ptr));
                     }
@@ -318,72 +283,120 @@ impl ChordboardView {
                     self.bridge.send(Command::BeginGesture(px, py));
                     return true;
                 }
-                if hit((600.0, 516.0, 40.0, 34.0), x, y) {
+                if hit(inversion_rect(0), x, y) {
                     self.inversion(cx, -1);
                     return true;
                 }
-                if hit((648.0, 516.0, 40.0, 34.0), x, y) {
+                if hit(inversion_rect(1), x, y) {
                     self.inversion(cx, 1);
                     return true;
                 }
-                if hit((856.0, 516.0, 112.0, 34.0), x, y) {
-                    self.mapping_axis = (self.mapping_axis + 1) % 3;
-                    return true;
-                }
-                if hit((976.0, 516.0, 112.0, 34.0), x, y) {
-                    self.bridge.send(Command::Learn(
-                        if self.snapshot.learning == self.mapping_axis as u8 + 1 {
-                            0
-                        } else {
-                            self.mapping_axis as u8 + 1
-                        },
-                    ));
-                    return true;
-                }
-                if hit((600.0, 556.0, 250.0, 22.0), x, y) {
-                    let field = self.params.mapping(self.mapping_axis);
-                    let mut m = crate::engine::Mapping::decode(field.load(Ordering::Relaxed));
-                    m.kind = (m.kind + 1) % 4;
-                    if m.kind == 2 {
-                        m.number %= 32;
+                for axis in 0..3 {
+                    if hit(mapping_summary_rect(axis), x, y) {
+                        if self.mapping_axis != axis {
+                            self.bridge.send(Command::Learn(0));
+                        }
+                        self.set_setup(true);
+                        self.mapping_axis = axis;
+                        return true;
                     }
-                    if m.kind == 3 && m.channel == 16 {
-                        m.channel = 0;
+                }
+                if self.group == 6 {
+                    for axis in 0..3 {
+                        if hit(axis_rect(axis), x, y) {
+                            if self.mapping_axis != axis
+                                && (1..=3).contains(&self.snapshot.learning)
+                            {
+                                self.bridge.send(Command::Learn(0));
+                            }
+                            self.mapping_axis = axis;
+                            return true;
+                        }
                     }
-                    field.store(m.encode(), Ordering::Relaxed);
+                    if hit(LEARN, x, y) {
+                        self.bridge.send(Command::Learn(
+                            if self.snapshot.learning == self.mapping_axis as u8 + 1 {
+                                0
+                            } else {
+                                self.mapping_axis as u8 + 1
+                            },
+                        ));
+                        return true;
+                    }
+                    for menu in [
+                        Menu::MappingKind,
+                        Menu::MappingChannel(self.mapping().kind == 3),
+                        Menu::MappingCc(self.mapping().kind == 2),
+                    ] {
+                        if hit(menu.trigger_rect(), x, y) {
+                            if matches!(menu, Menu::MappingCc(_))
+                                && !matches!(self.mapping().kind, 1 | 2)
+                            {
+                                return true;
+                            }
+                            self.open_menu(menu);
+                            return true;
+                        }
+                    }
+                }
+                if hit(SETUP, x, y) {
+                    self.set_setup(!self.setup_open);
                     return true;
                 }
-                if hit((856.0, 556.0, 110.0, 22.0), x, y) {
-                    let field = self.params.mapping(self.mapping_axis);
-                    let mut m = crate::engine::Mapping::decode(field.load(Ordering::Relaxed));
-                    m.channel = (m.channel + 1) % 17;
-                    field.store(m.encode(), Ordering::Relaxed);
-                    return true;
-                }
-                if hit((976.0, 556.0, 112.0, 22.0), x, y) {
-                    let field = self.params.mapping(self.mapping_axis);
-                    let mut m = crate::engine::Mapping::decode(field.load(Ordering::Relaxed));
-                    m.number = (m.number + 1) % if m.kind == 2 { 32 } else { 128 };
-                    field.store(m.encode(), Ordering::Relaxed);
-                    return true;
-                }
-                for i in 0..6 {
-                    if hit((32.0 + i as f32 * 157.0, 585.0, 149.0, 28.0), x, y) {
-                        self.group = i;
+                for (i, &(group, _)) in self.groups().iter().enumerate() {
+                    if hit(group_rect(i), x, y) {
+                        if self.group == 6 {
+                            self.bridge.send(Command::Learn(0));
+                        }
+                        self.group = group;
                         self.page = 0;
                         return true;
                     }
                 }
-                if hit((982.0, 585.0, 106.0, 28.0), x, y) {
-                    let count = self.group_controls().len();
-                    self.page = (self.page + 1) % count.div_ceil(8).max(1);
+                if self.pages() > 1 && hit(PAGE, x, y) {
+                    self.page = (self.page + 1) % self.pages();
                     return true;
                 }
-                for (i, c) in self.shown_controls().iter().enumerate() {
-                    let r = control_rect(i);
+                if self.arp_visible() {
+                    for i in 0..5 {
+                        if hit(pattern_rect(i, self.arp_main()), x, y) {
+                            Self::emit(
+                                cx,
+                                self.params.arp_pattern.as_ptr(),
+                                self.params.arp_pattern.preview_normalized(i as i32),
+                            );
+                            return true;
+                        }
+                    }
+                    for (i, (_, beats)) in ARP_RATES.iter().enumerate() {
+                        if hit(rate_rect(i, self.arp_main()), x, y) {
+                            Self::emit(
+                                cx,
+                                self.params.rate.as_ptr(),
+                                self.params.rate.preview_normalized(*beats),
+                            );
+                            return true;
+                        }
+                    }
+                    for i in 0..4 {
+                        if hit(octave_rect(i, self.arp_main()), x, y) {
+                            Self::emit(
+                                cx,
+                                self.params.octaves.as_ptr(),
+                                self.params.octaves.preview_normalized(i as i32 + 1),
+                            );
+                            return true;
+                        }
+                    }
+                }
+                for (c, r) in self.placed_controls() {
                     if hit(r, x, y) {
                         if c.toggle {
                             Self::emit(cx, c.ptr, if c.norm >= 0.5 { 0.0 } else { 1.0 });
+                            return true;
+                        }
+                        // Leave value labels stable for double-click text entry.
+                        if y < r.1 + 22.0 {
                             return true;
                         }
                         self.drag = Some(Drag::Control(c.ptr, r));
@@ -400,8 +413,17 @@ impl ChordboardView {
             }
             WindowEvent::MouseDoubleClick(MouseButton::Left) => {
                 self.end_drag(cx);
-                for (i, c) in self.shown_controls().iter().enumerate() {
-                    let r = control_rect(i);
+                if self.arp_visible() && hit(rate_header(self.arp_main()), x, y) {
+                    self.release_keys();
+                    let r = rate_header(self.arp_main());
+                    self.edit = Some(ValueEdit::new(
+                        "rate",
+                        (r.0 + r.2 - 176.0, r.1, 176.0, 24.0),
+                        format!("{}", self.params.rate.value()),
+                    ));
+                    return true;
+                }
+                for (c, r) in self.placed_controls() {
                     if hit(r, x, y) {
                         if c.toggle {
                             return true;
@@ -409,7 +431,7 @@ impl ChordboardView {
                         self.release_keys();
                         self.edit = Some(ValueEdit::new(
                             c.id,
-                            (r.0 + 100.0, r.1 + 3.0, r.2 - 108.0, 24.0),
+                            (r.0 + 8.0, r.1 + 3.0, r.2 - 16.0, 24.0),
                             c.value.clone(),
                         ));
                         return true;
@@ -417,14 +439,19 @@ impl ChordboardView {
                 }
             }
             WindowEvent::MouseMove(_, _) => match self.drag {
+                Some(Drag::Memory(mut drag)) => {
+                    drag.update(x, y);
+                    self.drag = Some(Drag::Memory(drag));
+                    return true;
+                }
                 Some(Drag::Pad) => {
                     cx.emit(RawParamEvent::SetParameterNormalized(
                         self.params.x.as_ptr(),
-                        ((x - PAD.0) / PAD.2).clamp(0.0, 1.0),
+                        ((x - PLAY_PAD.0) / PLAY_PAD.2).clamp(0.0, 1.0),
                     ));
                     cx.emit(RawParamEvent::SetParameterNormalized(
                         self.params.y.as_ptr(),
-                        (1.0 - (y - PAD.1) / PAD.3).clamp(0.0, 1.0),
+                        (1.0 - (y - PLAY_PAD.1) / PLAY_PAD.3).clamp(0.0, 1.0),
                     ));
                     return true;
                 }
@@ -438,14 +465,19 @@ impl ChordboardView {
                 _ => {}
             },
             WindowEvent::MouseUp(MouseButton::Left) => {
+                if let Some(Drag::Memory(drag)) = self.drag {
+                    self.end_drag(cx);
+                    self.finish_memory_drag(cx, drag, x, y);
+                    return true;
+                }
                 if self.drag.is_some() {
                     self.end_drag(cx);
                     return true;
                 }
             }
             WindowEvent::MouseScroll(_, dy) => {
-                for (i, c) in self.shown_controls().iter().enumerate() {
-                    if hit(control_rect(i), x, y) {
+                for (c, r) in self.placed_controls() {
+                    if hit(r, x, y) {
                         Self::emit(cx, c.ptr, if *dy > 0.0 { c.next } else { c.prev });
                         return true;
                     }

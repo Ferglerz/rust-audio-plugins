@@ -8,9 +8,11 @@ pub const QUALITY_SUFFIX: [&str; 12] = [
 pub const NOTE_NAMES: [&str; 12] = [
     "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
 ];
-pub const HINTS: [&str; 21] = [
-    "Q", "W", "E", "R", "T", "Y", "U", "A", "S", "D", "F", "G", "H", "J", "Z", "X", "C", "V", "B",
-    "N", "M",
+pub const KEY_COLUMNS: usize = 12;
+pub const KEY_COUNT: usize = KEY_COLUMNS * 3;
+pub const HINTS: [&str; KEY_COUNT] = [
+    "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "+", "Q", "W", "E", "R", "T", "Y", "U",
+    "I", "O", "P", "[", "]", "A", "S", "D", "F", "G", "H", "J", "K", "L", ";", "'", "ENT",
 ];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -37,15 +39,14 @@ impl Notes {
     }
 }
 
-pub fn keyboard_root(fifths: bool, bank: u8, column: usize) -> Option<u8> {
-    if column >= 7 || (bank == 1 && column >= 5) {
+pub fn keyboard_root(fifths: bool, column: usize) -> Option<u8> {
+    if column >= KEY_COLUMNS {
         return None;
     }
-    let index = bank.min(1) as usize * 7 + column;
     Some(if fifths {
-        ((5 + index * 7) % 12) as u8
+        ((5 + column * 7) % 12) as u8
     } else {
-        index as u8
+        column as u8
     })
 }
 pub fn row_quality(row: usize) -> u8 {
@@ -173,17 +174,15 @@ mod tests {
         assert_eq!(voice(60, 0, None, 0, 2, 0).as_slice(), &[67, 72, 76]);
     }
     #[test]
-    fn banks_cover_all_roots_once() {
+    fn full_keyboard_row_covers_all_roots_once() {
         for fifths in [false, true] {
             let mut seen = [false; 12];
-            for bank in 0..2 {
-                for col in 0..7 {
-                    if let Some(n) = keyboard_root(fifths, bank, col) {
-                        assert!(!seen[n as usize]);
-                        seen[n as usize] = true;
-                    }
-                }
+            for col in 0..KEY_COLUMNS {
+                let n = keyboard_root(fifths, col).expect("valid keyboard column");
+                assert!(!seen[n as usize]);
+                seen[n as usize] = true;
             }
+            assert_eq!(keyboard_root(fifths, KEY_COLUMNS), None);
             assert!(seen.into_iter().all(|v| v));
         }
     }

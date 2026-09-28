@@ -1,11 +1,18 @@
+mod chords;
 mod events;
+mod layout;
+mod mapping;
+mod memories;
+use memories::MemoryDrag;
+mod performance;
 mod render;
 use crate::{
     bridge::Bridge,
-    engine::{Command, Snapshot},
-    harmony::{self, SavedChord},
+    engine::{Command, Snapshot, POINTER_KEY_OFFSET},
+    harmony::{self, SavedChord, KEY_COLUMNS, KEY_COUNT},
     params::{ChordboardParams, Control},
 };
+use layout::*;
 use nih_plug::prelude::*;
 use nih_plug_vizia::{
     create_vizia_editor,
@@ -25,34 +32,39 @@ use std::{
     sync::{atomic::Ordering, Arc, OnceLock},
     time::{Duration, Instant},
 };
-const W: f32 = 1120.0;
-const H: f32 = 780.0;
-type Rect = (f32, f32, f32, f32);
-const PAD: Rect = (600.0, 190.0, 488.0, 310.0);
-const GROUPS: [&str; 6] = [
-    "VOICING",
-    "RHYTHM",
-    "MPE",
-    "EXPRESSION",
-    "INPUT",
-    "DISCOVERY",
-];
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Menu {
     Key,
     Scale,
+    MappingKind,
+    MappingChannel(bool),
+    MappingCc(bool),
 }
 impl Menu {
-    fn items(self) -> &'static [&'static str] {
+    fn items(self) -> Vec<String> {
         match self {
-            Self::Key => &harmony::NOTE_NAMES,
-            Self::Scale => &harmony::SCALE_NAMES,
+            Self::Key => harmony::NOTE_NAMES.iter().map(|s| s.to_string()).collect(),
+            Self::Scale => harmony::SCALE_NAMES.iter().map(|s| s.to_string()).collect(),
+            Self::MappingKind => ["OFF", "CC 7-BIT", "CC 14-BIT", "PITCH BEND"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+            Self::MappingChannel(bend) => (1..=16)
+                .map(|n| n.to_string())
+                .chain((!bend).then(|| "ANY".into()))
+                .collect(),
+            Self::MappingCc(wide) => (0..if wide { 32 } else { 128 })
+                .map(|n| n.to_string())
+                .collect(),
         }
     }
     fn option_rect(self, index: usize) -> Rect {
         let (x, y, w, h) = match self {
             Self::Key => (32.0, 472.0, 64.0, 30.0),
             Self::Scale => (198.0, 472.0, 114.0, 30.0),
+            Self::MappingKind => (32.0, 606.0, 122.0, 30.0),
+            Self::MappingChannel(_) => (288.0, 586.0, 38.0, 30.0),
+            Self::MappingCc(_) => (408.0, 430.0, 30.0, 30.0),
         };
         let columns = self.columns();
         (
@@ -64,7 +76,9 @@ impl Menu {
     }
     fn columns(self) -> usize {
         match self {
-            Self::Scale => 2,
+            Self::Scale | Self::MappingKind => 2,
+            Self::MappingChannel(_) => 6,
+            Self::MappingCc(_) => 16,
             Self::Key => 3,
         }
     }
@@ -72,10 +86,25 @@ impl Menu {
         match self {
             Self::Key => (32.0, 441.0, 158.0, 28.0),
             Self::Scale => (198.0, 441.0, 228.0, 28.0),
+            Self::MappingKind => (32.0, 682.0, 244.0, 30.0),
+            Self::MappingChannel(_) => (288.0, 682.0, 110.0, 30.0),
+            Self::MappingCc(_) => (408.0, 682.0, 120.0, 30.0),
         }
     }
 }
-const CODES: [Code; 21] = [
+const CODES: [Code; KEY_COUNT] = [
+    Code::Digit1,
+    Code::Digit2,
+    Code::Digit3,
+    Code::Digit4,
+    Code::Digit5,
+    Code::Digit6,
+    Code::Digit7,
+    Code::Digit8,
+    Code::Digit9,
+    Code::Digit0,
+    Code::Minus,
+    Code::Equal,
     Code::KeyQ,
     Code::KeyW,
     Code::KeyE,
@@ -83,6 +112,11 @@ const CODES: [Code; 21] = [
     Code::KeyT,
     Code::KeyY,
     Code::KeyU,
+    Code::KeyI,
+    Code::KeyO,
+    Code::KeyP,
+    Code::BracketLeft,
+    Code::BracketRight,
     Code::KeyA,
     Code::KeyS,
     Code::KeyD,
@@ -90,38 +124,19 @@ const CODES: [Code; 21] = [
     Code::KeyG,
     Code::KeyH,
     Code::KeyJ,
-    Code::KeyZ,
-    Code::KeyX,
-    Code::KeyC,
-    Code::KeyV,
-    Code::KeyB,
-    Code::KeyN,
-    Code::KeyM,
+    Code::KeyK,
+    Code::KeyL,
+    Code::Semicolon,
+    Code::Quote,
+    Code::Enter,
 ];
+
 static PREFS: OnceLock<AppearanceStore> = OnceLock::new();
 fn prefs() -> &'static AppearanceStore {
     PREFS.get_or_init(|| AppearanceStore::new("Chordboard"))
 }
 fn hit(r: Rect, x: f32, y: f32) -> bool {
     (r.0..=r.0 + r.2).contains(&x) && (r.1..=r.1 + r.3).contains(&y)
-}
-fn key_rect(index: usize) -> Rect {
-    let row = index / 7;
-    let col = index % 7;
-    (
-        32.0 + ([0.0, 0.25, 0.75][row] + col as f32) * 68.0,
-        230.0 + row as f32 * 67.0,
-        61.0,
-        59.0,
-    )
-}
-fn control_rect(index: usize) -> Rect {
-    (
-        32.0 + (index % 4) as f32 * 268.0,
-        624.0 + (index / 4) as f32 * 64.0,
-        252.0,
-        54.0,
-    )
 }
 fn alpha(mut color: Color, a: f32) -> Color {
     color.a = a;
@@ -134,6 +149,7 @@ enum Drag {
     Pad,
     Control(ParamPtr, Rect),
     Key(u8),
+    Memory(MemoryDrag),
 }
 struct ChordboardView {
     params: Arc<ChordboardParams>,
@@ -141,9 +157,10 @@ struct ChordboardView {
     context: Arc<dyn GuiContext>,
     font: Cell<Option<FontId>>,
     snapshot: Snapshot,
-    pressed: [bool; 21],
-    special: [bool; 4],
+    pressed: [bool; KEY_COUNT],
+    special: [bool; 2],
     focused: bool,
+    pointer: Option<(f32, f32)>,
     drag: Option<Drag>,
     group: usize,
     page: usize,
@@ -151,7 +168,7 @@ struct ChordboardView {
     menu: Option<Menu>,
     menu_cursor: usize,
     status: String,
-    key_anim: [f32; 21],
+    key_anim: [f32; KEY_COUNT],
     string_anim: [f32; 12],
     trail: Vec<(f32, f32, Instant)>,
     last_frame: Instant,
@@ -159,6 +176,9 @@ struct ChordboardView {
     controls_signature: Vec<f32>,
     slot_signature: [u64; 8],
     mapping_axis: usize,
+    setup_open: bool,
+    performance_group: usize,
+    mapping_signature: [u32; 3],
 }
 impl Drop for ChordboardView {
     fn drop(&mut self) {
@@ -179,9 +199,10 @@ impl ChordboardView {
             context,
             font: Cell::new(None),
             snapshot: Snapshot::default(),
-            pressed: [false; 21],
-            special: [false; 4],
+            pressed: [false; KEY_COUNT],
+            special: [false; 2],
             focused: false,
+            pointer: None,
             drag: None,
             group: 0,
             page: 0,
@@ -189,7 +210,7 @@ impl ChordboardView {
             menu: None,
             menu_cursor: 0,
             status: String::new(),
-            key_anim: [0.0; 21],
+            key_anim: [0.0; KEY_COUNT],
             string_anim: [0.0; 12],
             trail: Vec::with_capacity(24),
             last_frame: Instant::now(),
@@ -197,6 +218,9 @@ impl ChordboardView {
             controls_signature: Vec::new(),
             slot_signature: [0; 8],
             mapping_axis: 0,
+            setup_open: false,
+            performance_group: 0,
+            mapping_signature: [0; 3],
         }
     }
     fn control(&self, id: &str) -> Option<Control> {
@@ -210,17 +234,102 @@ impl ChordboardView {
             .filter(|c| {
                 !matches!(
                     c.id,
-                    "latch" | "mpe" | "keyboard" | "fifths" | "key" | "scale" | "highlight"
+                    "latch"
+                        | "mode"
+                        | "keyboard"
+                        | "fifths"
+                        | "key"
+                        | "scale"
+                        | "highlight"
+                        | "bank"
+                        | "strings"
+                        | "velocity"
+                        | "length_ms"
                 )
             })
             .collect()
     }
+    fn arp_main(&self) -> bool {
+        self.params.mode.value() == 3
+    }
+    fn arp_visible(&self) -> bool {
+        self.arp_main() || (self.group == 1 && self.page == 0)
+    }
+    fn groups(&self) -> &'static [(usize, &'static str)] {
+        if self.setup_open {
+            &SETUP_GROUPS
+        } else {
+            &PERFORMANCE_GROUPS
+        }
+    }
+    fn set_setup(&mut self, open: bool) {
+        if open && !self.setup_open {
+            self.performance_group = self.group;
+        }
+        self.setup_open = open;
+        self.group = if open { 6 } else { self.performance_group };
+        self.page = 0;
+        self.menu = None;
+        if !open {
+            self.bridge.send(Command::Learn(0));
+        }
+    }
+    fn pages(&self) -> usize {
+        if self.group == 1 {
+            if self.arp_main() {
+                1
+            } else {
+                2
+            }
+        } else {
+            self.group_controls().len().div_ceil(8).max(1)
+        }
+    }
     fn shown_controls(&self) -> Vec<Control> {
+        if self.group == 1 {
+            return self
+                .group_controls()
+                .into_iter()
+                .filter(|c| matches!(c.id, "strum_ms" | "direction" | "contour"))
+                .collect();
+        }
         self.group_controls()
             .into_iter()
             .skip(self.page * 8)
             .take(8)
             .collect()
+    }
+    fn placed_controls(&self) -> Vec<(Control, Rect)> {
+        let mut controls =
+            if self.group == 6 || (self.group == 1 && self.page == 0 && !self.arp_main()) {
+                Vec::new()
+            } else {
+                self.shown_controls()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, c)| (c, control_rect(i)))
+                    .collect::<Vec<_>>()
+            };
+        if self.arp_visible() {
+            controls.extend(
+                arp_controls(self.arp_main())
+                    .into_iter()
+                    .filter_map(|(id, r)| self.control(id).map(|c| (c, r))),
+            );
+        }
+        controls.extend(
+            output_controls()
+                .into_iter()
+                .filter_map(|(id, rect)| self.control(id).map(|c| (c, rect))),
+        );
+        controls
+    }
+    fn mapping(&self) -> crate::engine::Mapping {
+        crate::engine::Mapping::decode(
+            self.params
+                .mapping(self.mapping_axis)
+                .load(Ordering::Relaxed),
+        )
     }
     fn emit(cx: &mut EventContext, ptr: ParamPtr, norm: f32) {
         cx.emit(RawParamEvent::BeginSetParameter(ptr));
@@ -240,6 +349,9 @@ impl ChordboardView {
         self.menu_cursor = match menu {
             Menu::Key => self.params.key.value() as usize,
             Menu::Scale => self.params.scale.value() as usize,
+            Menu::MappingKind => self.mapping().kind as usize,
+            Menu::MappingChannel(_) => self.mapping().channel as usize,
+            Menu::MappingCc(_) => self.mapping().number as usize,
         };
         self.menu = Some(menu);
     }
@@ -256,6 +368,26 @@ impl ChordboardView {
                 self.params.scale.as_ptr(),
                 self.params.scale.preview_normalized(index as i32),
             ),
+            _ => {
+                let mut m = self.mapping();
+                match menu {
+                    Menu::MappingKind => {
+                        m.kind = index as u8;
+                        if m.kind == 2 {
+                            m.number %= 32;
+                        }
+                        if m.kind == 3 && m.channel == 16 {
+                            m.channel = 0;
+                        }
+                    }
+                    Menu::MappingChannel(_) => m.channel = index as u8,
+                    Menu::MappingCc(_) => m.number = index as u8,
+                    _ => {}
+                }
+                self.params
+                    .mapping(self.mapping_axis)
+                    .store(m.encode(), Ordering::Relaxed);
+            }
         }
     }
     fn inversion(&self, cx: &mut EventContext, step: i8) {
@@ -276,16 +408,12 @@ impl ChordboardView {
         if self.pressed[key] {
             return;
         }
-        if let Some(root) = harmony::keyboard_root(
-            self.params.fifths.value(),
-            self.params.bank.value() as u8,
-            key % 7,
-        ) {
+        if let Some(root) = harmony::keyboard_root(self.params.fifths.value(), key % KEY_COLUMNS) {
             self.pressed[key] = true;
             self.bridge.send(Command::KeyDown(
                 key as u8,
                 (self.params.keyboard_octave.value() + root as i32).min(127) as u8,
-                harmony::row_quality(key / 7),
+                harmony::row_quality(key / KEY_COLUMNS),
             ));
         }
     }
@@ -298,9 +426,10 @@ impl ChordboardView {
                     }
                     self.bridge.send(Command::EndGesture);
                 }
+                Drag::Memory(_) => {}
                 Drag::Control(ptr, _) => cx.emit(RawParamEvent::EndSetParameter(ptr)),
                 Drag::Key(key) => {
-                    if key < 21 {
+                    if (key as usize) < KEY_COUNT {
                         self.pressed[key as usize] = false;
                     }
                     self.bridge.send(Command::KeyUp(key));
@@ -338,7 +467,7 @@ impl ChordboardView {
         }
         let reduced = self.params.reduced_motion.value();
         let mut changed = old != self.snapshot;
-        for i in 0..21 {
+        for i in 0..KEY_COUNT {
             let target = if self.pressed[i] || self.snapshot.accepted & (1 << i) != 0 {
                 1.0
             } else {
@@ -392,6 +521,13 @@ impl ChordboardView {
         if signature != self.controls_signature {
             self.controls_signature = signature;
             changed = true;
+        }
+        for i in 0..3 {
+            let value = self.params.mapping(i).load(Ordering::Relaxed);
+            if value != self.mapping_signature[i] {
+                self.mapping_signature[i] = value;
+                changed = true;
+            }
         }
         for i in 0..8 {
             let v = self.params.slot(i).load(Ordering::Relaxed);
@@ -486,14 +622,30 @@ pub fn preview() {
     }
     nih_plug_vizia::vizia::Application::new(|cx| {
         nih_plug_vizia::assets::register_noto_sans_light(cx);
-        let params = Arc::new(ChordboardParams::default());
+        let params = Arc::new(ChordboardParams {
+            mode: IntParam::new(
+                "Play mode",
+                if std::env::args().any(|arg| arg == "--manual") {
+                    2
+                } else {
+                    3
+                },
+                IntRange::Linear { min: 0, max: 3 },
+            ),
+            ..ChordboardParams::default()
+        });
         let bridge = Arc::new(Bridge::default());
         bridge.visible.store(true, Ordering::Relaxed);
         let mut engine = crate::engine::Engine::default();
         engine.note_on(2048, 60, 16, 0.8, Some(0), &mut |_| {});
         engine.note_on(2054, 66, 16, 0.8, Some(0), &mut |_| {});
         let mut view = ChordboardView::new(params, bridge, Arc::new(PreviewContext));
+        if std::env::args().any(|arg| arg == "--setup") {
+            view.set_setup(true);
+        }
         view.snapshot = engine.snapshot();
+        view.snapshot.bend = 0.35;
+        view.meters[2] = 0.35;
         view.key_anim[0] = 1.0;
         view.key_anim[6] = 1.0;
         view.snapshot.x = 0.6;

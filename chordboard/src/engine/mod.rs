@@ -23,7 +23,7 @@ pub struct Engine {
     pub quality: u8,
     pub inversion: u8,
     pub pedal: bool,
-    pub down: [bool; 2112],
+    pub down: [bool; 2048 + KEY_TOKEN_COUNT],
     pub x: f32,
     pub y: f32,
     pub y_active: bool,
@@ -68,7 +68,7 @@ impl Default for Engine {
             quality: 0,
             inversion: 0,
             pedal: false,
-            down: [false; 2112],
+            down: [false; 2048 + KEY_TOKEN_COUNT],
             x: 0.0,
             y: 0.8,
             y_active: false,
@@ -243,7 +243,7 @@ impl Engine {
             Command::KeyUp(key) => self.note_off(2048 + key as u16, 0.0, out),
             Command::ReleaseKeyboard => {
                 let had_keyboard = self.down[2048..].iter().any(|&v| v);
-                for key in 0..64 {
+                for key in 0..KEY_TOKEN_COUNT {
                     if self.down[2048 + key] {
                         self.note_off((2048 + key) as u16, 0.0, out);
                     }
@@ -283,14 +283,14 @@ impl Engine {
                     self.scheduled.fill(None);
                     self.down.fill(false);
                     self.root = Some(Slot {
-                        id: 2079,
+                        id: 2048 + KEY_TOKEN_COUNT as u16 - 1,
                         note: chord.root,
                         channel: 16,
                         held: true,
                         velocity: self.config.velocity,
                     });
                     self.second = chord.second.map(|note| Slot {
-                        id: 2078,
+                        id: 2048 + KEY_TOKEN_COUNT as u16 - 2,
                         note,
                         channel: 16,
                         held: false,
@@ -433,8 +433,8 @@ impl Engine {
     pub fn snapshot(&self) -> Snapshot {
         let mut accepted = 0;
         let mut ignored = 0;
-        for key in 0..21 {
-            for token in [key, key + 32] {
+        for key in 0..harmony::KEY_COUNT {
+            for token in [key, key + POINTER_KEY_OFFSET as usize] {
                 let id = 2048 + token as u16;
                 if self.down[id as usize] {
                     if self.root.is_some_and(|s| s.id == id)
