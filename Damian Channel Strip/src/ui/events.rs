@@ -14,9 +14,9 @@ impl StripView {
             ) else {
                 return;
             };
-            let command_down = !matches!(e, WindowEvent::FocusOut) && cx.modifiers().command();
-            if self.command_down != command_down {
-                self.command_down = command_down;
+            let shift_down = !matches!(e, WindowEvent::FocusOut) && cx.modifiers().shift();
+            if self.shift_down != shift_down {
+                self.shift_down = shift_down;
                 cx.needs_redraw();
             }
             if let WindowEvent::MouseScroll(_, dy) = e {

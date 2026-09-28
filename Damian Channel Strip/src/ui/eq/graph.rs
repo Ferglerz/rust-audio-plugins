@@ -604,7 +604,7 @@ pub(in crate::ui) fn dyn_meter_geom(b: &Band, graph_db: f64, gx: f32, gw: f32) -
     }
 }
 
-/// Reuse the meter's full travel for the 1:1–20:1 ratio while CMD is held.
+/// Reuse the meter's full travel for the 1:1–20:1 ratio while Shift is held.
 pub(in crate::ui) fn dynamics_control_band(b: &Band, ratio_mode: bool) -> Band {
     let mut control = b.clone();
     if ratio_mode {
@@ -857,24 +857,79 @@ pub(in crate::ui) fn range_grip_lines(
         let response = coeff.response(x_freq_at(sample_x, gx, gw).min(sr * 0.49), eq_sr);
         endpoint_y + db_y(response, graph_db) - db_y(center_response, graph_db)
     };
-    std::array::from_fn(|side| {
-        (0..=32)
+    let mut span = width;
+    // At very high Q an inward parallel curve develops a loop. Remove that
+    // loop, and extend the common source span if its end normals fall inside
+    // the cusp. Both strokes must still terminate on the same source normals.
+    let mut lines = [Vec::new(), Vec::new()];
+    for _ in 0..8 {
+        let anchors: Vec<_> = (0..=128)
             .map(|i| {
-                let arc_distance = (i as f32 / 32.0 - 0.5) * width;
-                let x = curve_x_at_arc_distance(&curve_y_at, node_x, arc_distance);
-                let curve_y = curve_y_at(x);
-                let offset = if side == 0 {
-                    -RANGE_GRIP_SPACING
-                } else {
-                    RANGE_GRIP_SPACING
-                };
-                // A normal offset folds over itself when Q makes the peak's
-                // radius smaller than the grip spacing. Vertical separation
-                // keeps both strokes faithful to the response silhouette.
-                (x, curve_y + offset)
+                let distance = (i as f32 / 128.0 - 0.5) * span;
+                let x = curve_x_at_arc_distance(&curve_y_at, node_x, distance);
+                let slope = (curve_y_at(x + 0.05) - curve_y_at(x - 0.05)) / 0.1;
+                let length = (1.0 + slope * slope).sqrt();
+                (x, curve_y_at(x), -slope / length, 1.0 / length)
             })
-            .collect()
-    })
+            .collect();
+        lines = std::array::from_fn(|side| {
+            let offset = if side == 0 {
+                -RANGE_GRIP_SPACING
+            } else {
+                RANGE_GRIP_SPACING
+            };
+            trim_offset_loops(
+                &anchors
+                    .iter()
+                    .map(|&(x, y, nx, ny)| (x + offset * nx, y + offset * ny))
+                    .collect::<Vec<_>>(),
+            )
+        });
+        if lines
+            .iter()
+            .all(|line| line.windows(2).all(|p| p[1].0 > p[0].0))
+        {
+            break;
+        }
+        span *= 1.5;
+    }
+    lines
+}
+
+/// Keep the exterior branch of a parallel curve when a tight bend produces a
+/// self-intersection. The original first and last points remain the end caps.
+fn trim_offset_loops(points: &[(f32, f32)]) -> Vec<(f32, f32)> {
+    let cross = |a: (f32, f32), b: (f32, f32)| a.0 * b.1 - a.1 * b.0;
+    let mut result: Vec<(f32, f32)> = Vec::with_capacity(points.len());
+    for &point in points {
+        while result.len() >= 3 {
+            let start = result[result.len() - 1];
+            let direction = (point.0 - start.0, point.1 - start.1);
+            let intersection = (0..result.len() - 2).find_map(|j| {
+                let a = result[j];
+                let edge = (result[j + 1].0 - a.0, result[j + 1].1 - a.1);
+                let denominator = cross(edge, direction);
+                if denominator.abs() < 1e-6 {
+                    return None;
+                }
+                let delta = (start.0 - a.0, start.1 - a.1);
+                let t = cross(delta, direction) / denominator;
+                let u = cross(delta, edge) / denominator;
+                if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u) {
+                    Some((j, (a.0 + t * edge.0, a.1 + t * edge.1)))
+                } else {
+                    None
+                }
+            });
+            let Some((j, intersection)) = intersection else {
+                break;
+            };
+            result.truncate(j + 1);
+            result.push(intersection);
+        }
+        result.push(point);
+    }
+    result
 }
 
 /// Find an X position by distance travelled along the mirrored curve, so a

@@ -642,7 +642,7 @@ fn range_drag_reaches_both_graph_edges() {
 }
 
 #[test]
-fn cmd_ratio_uses_threshold_meter_travel_without_changing_threshold() {
+fn shift_ratio_uses_threshold_meter_travel_without_changing_threshold() {
     let b = Band {
         id: 1,
         dynamic: true,
@@ -684,7 +684,7 @@ fn curved_range_grips_are_grabbable_at_high_q() {
     let rates = (48000.0, 48000.0);
     let lines = range_grip_lines(&b, graph, rates);
     for line in &lines {
-        assert_eq!(line.len(), 33);
+        assert!(line.len() >= 3);
         assert!(line.windows(2).all(|pair| pair[1].0 > pair[0].0));
         for &(x, y) in line {
             assert!(range_grip_hit(&b, x, y, graph, rates));
@@ -741,5 +741,53 @@ fn range_grip_columns_keep_tangent_spacing_on_a_steep_curve() {
             })
             .sum();
         assert!((length - spacing).abs() < 0.05);
+    }
+}
+
+#[test]
+fn range_grip_endpoints_follow_response_normals() {
+    for shape in [Shape::Bell, Shape::LowShelf, Shape::HighShelf] {
+        for q in [0.5, 3.0, 18.0] {
+            for gain in [-18.0, 18.0] {
+                let b = Band {
+                    dynamic: true,
+                    shape,
+                    q,
+                    gain,
+                    range: gain * 2.0,
+                    ..Band::default()
+                };
+                let coeff = BandCoeffs::make(&range_band(&b), 48000.0);
+                let response_y = |x| {
+                    db_y(
+                        coeff.response(x_freq_at(x, GX, GW).min(48000.0 * 0.49), 48000.0),
+                        24.0,
+                    )
+                };
+                let lines = range_grip_lines(&b, (GX, GW, 24.0), (48000.0, 48000.0));
+                let shift = db_y(b.gain - b.range, 24.0) - response_y(freq_x_at(b.freq, GX, GW));
+                for line in &lines {
+                    for &(x, y) in line {
+                        let distance = (-400..=400)
+                            .map(|i| {
+                                let cx = x + i as f32 * 0.02;
+                                (x - cx).hypot(y - response_y(cx) - shift)
+                            })
+                            .fold(f32::INFINITY, f32::min);
+                        assert!((distance - 4.0).abs() < 0.12, "grip is not equidistant: {shape:?}, Q={q}, gain={gain}, distance={distance}");
+                    }
+                }
+                for end in [false, true] {
+                    let a = lines[0][if end { lines[0].len() - 1 } else { 0 }];
+                    let c = lines[1][if end { lines[1].len() - 1 } else { 0 }];
+                    let x = (a.0 + c.0) * 0.5;
+                    let slope = (response_y(x + 0.05) - response_y(x - 0.05)) / 0.1;
+                    let tangent_component =
+                        ((c.0 - a.0) + (c.1 - a.1) * slope) / (1.0 + slope * slope).sqrt();
+                    assert!(tangent_component.abs() < 0.03, "endpoint misses normal: {shape:?}, Q={q}, gain={gain}, along-tangent={tangent_component}");
+                    assert!(((c.0 - a.0).hypot(c.1 - a.1) - 8.0).abs() < 0.01);
+                }
+            }
+        }
     }
 }

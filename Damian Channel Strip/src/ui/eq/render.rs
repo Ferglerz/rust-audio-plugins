@@ -318,7 +318,7 @@ impl StripView {
                         uncapped_for(b.id, &dyn_uncapped),
                         Some(b.id) == self.selected,
                         self.input_level_for(b.id, &dyn_input),
-                        self.command_down,
+                        self.shift_down,
                     );
                 }
                 d.eq_node(x, y, color, Some(b.id) == self.selected);
@@ -388,7 +388,7 @@ impl StripView {
                             self.selected,
                             &bands,
                             &dyn_uncapped,
-                            self.command_down,
+                            self.shift_down,
                         );
                     }
                 }
@@ -517,7 +517,7 @@ impl StripView {
                         uncapped_for(b.id, &dyn_uncapped),
                         Some(b.id) == self.selected,
                         self.input_level_for(b.id, &dyn_input),
-                        self.command_down,
+                        self.shift_down,
                     );
                 }
                 d.eq_node(x, y, color, Some(b.id) == self.selected);
@@ -587,7 +587,7 @@ impl StripView {
                             self.selected,
                             page_bands,
                             &dyn_uncapped,
-                            self.command_down,
+                            self.shift_down,
                         );
                     }
                 }

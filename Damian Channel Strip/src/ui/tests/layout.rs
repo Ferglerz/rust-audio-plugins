@@ -311,7 +311,7 @@ fn test_view() -> StripView {
         band_dyn_page: Cell::new(false),
         drag: None,
         hover: None,
-        command_down: false,
+        shift_down: false,
         font: Cell::new(None),
         signature: Cell::new(None),
         graph_db: 24.0,

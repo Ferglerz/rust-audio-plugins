@@ -167,7 +167,7 @@ impl StripView {
             .rev()
             .find(|b| {
                 threshold_handle_hit(
-                    &dynamics_control_band(b, self.command_down),
+                    &dynamics_control_band(b, self.shift_down),
                     x,
                     y,
                     self.graph_db,
@@ -210,7 +210,7 @@ impl StripView {
             }
             if b.shape.has_gain() {
                 let geom = dyn_meter_geom(b, self.graph_db, self.gx(), self.gw());
-                if cx.modifiers().command() {
+                if cx.modifiers().shift() {
                     b.ratio = 1.0 + 19.0 * (geom.y_to_threshold(y) + 60.0) / 60.0;
                 } else {
                     b.threshold = geom.y_to_threshold(y);
@@ -573,7 +573,7 @@ impl StripView {
                     }
                     b.dynamic = true;
                     let geom = dyn_meter_geom(b, graph_db, self.gx(), self.gw());
-                    if cmd {
+                    if shift {
                         b.ratio = 1.0 + 19.0 * (geom.y_to_threshold(y) + 60.0) / 60.0;
                     } else {
                         b.threshold = geom.y_to_threshold(y);
