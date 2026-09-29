@@ -13,4 +13,4 @@ crate-type = ["cdylib", "lib"]
 nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" }
 nih_plug_vizia = { git = "https://github.com/robbert-vdh/nih-plug.git" }
 pleasant-ui = { path = "../pleasant-ui" }
-openwurli-dsp = { path = "vendor/openwurli-dsp" }
+openwurli-dsp = { git = "https://github.com/Ferglerz/openwurli.git", rev = "fd4f603dd8deef7a57d4449826f2c9d5dd53757e" }

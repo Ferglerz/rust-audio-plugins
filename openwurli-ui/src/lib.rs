@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 pub mod params;
 pub mod ui;
+mod engine_info;
 
 use params::OpenWurliUiParams;
 

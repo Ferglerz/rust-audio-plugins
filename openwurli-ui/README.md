@@ -6,11 +6,30 @@ The main panel exposes Volume, Tremolo Depth, Speaker Character, and MLP Correct
 
 ## Upstream source
 
-The engine is vendored at `vendor/openwurli-dsp`, taken from the [Ferglerz fork](https://github.com/Ferglerz/openwurli) commit `6614ab9519471e956ecb0c82edc4fcf295f724dc` on `codex/pleasant-controls`, plus the reed `f64x2` and mix-bus changes in this tree. The fork's `main` stays equal to upstream commit `3023a8a6c42c654c5caeec52fd22dcf2cff3cb15` (OpenWurli v0.7.0). When those DSP commits can land on the fork, switch `Cargo.toml` back to a git `rev` and drop the vendor directory.
+The engine is a revision-pinned Git dependency from the [Ferglerz fork](https://github.com/Ferglerz/openwurli)
+on `codex/pleasant-controls`; `Cargo.toml` records the exact revision. The DSP
+changes are maintained independently on
+[`codex/dsp-cpu-optimizations`](https://github.com/Ferglerz/openwurli/tree/codex/dsp-cpu-optimizations),
+based on original upstream OpenWurli v0.7.0 (`3023a8a6c42c654c5caeec52fd22dcf2cff3cb15`),
+and merged into the controls branch. This wrapper has no private DSP source copy.
+
+The **ENGINE** page describes the active native processing and measured CPU/audio
+results. See [the implementation and evidence report](docs/cpu-optimization-results.md)
+for before/after timings, bitwise audio comparisons, rejected lookup candidates,
+reproduction commands and limitations. Original analytical equations remain
+permanent reference code; experimental tables are generated from those equations
+and are **disabled** in this plugin. Original complete engines can be reconstructed
+from pinned Git revisions by the fork's comparison tools.
 
 The wrapper uses OpenWurli's default fast preamp and power amp. Its Reed, Hammer, Pickup, and Tremolo controls still call the fork's engine APIs. Hiss and Sag are inexpensive output effects in the wrapper: Hiss adds low-level noise after the engine, and Sag applies a level-dependent gain reduction. Both default off, preserving the fast engine's output until enabled. These approximate the heavier circuit features rather than reproducing their exact electrical behavior. Existing host parameter IDs and ranges are retained for preset compatibility; saved projects with Sag enabled keep that setting.
 
-For an update, fetch upstream in a clone of the fork, verify the fork's `main` is an ancestor of the target upstream commit, and fast-forward `main`. Rebase `codex/pleasant-controls` onto the new upstream commit, resolve any DSP API conflicts there, and update the dependency `rev` here. Keep plugin and UI changes outside the fork. Run the fork's targeted DSP tests and wrapper checks before releasing.
+For future updates, port the optimization branch against the intended upstream
+revision, repeat its native/table comparisons, then integrate it into
+`codex/pleasant-controls` and update the pinned dependency here. Do not silently
+change the sound model while benchmarking a CPU patch: current upstream v0.9
+changes reed physics, pickup and amplifier behavior relative to this v0.7 engine.
+UI changes stay in this repository. The upstream-based branch is prepared for a
+later port/review; no pull request has been opened.
 
 ## Build
 
@@ -18,7 +37,6 @@ From the audio-plugins workspace root:
 
 ```sh
 cargo check -p openwurli-ui
-cargo test -p openwurli-ui --quiet
 cargo run -p openwurli-ui-xtask -- bundle openwurli-ui --release
 ```
 
