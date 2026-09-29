@@ -1,5 +1,58 @@
 use super::*;
 impl ChordboardView {
+    fn press_expanded_strum(&mut self, cx: &mut EventContext, x: f32, y: f32) -> bool {
+        if hit(self.expand_button(), x, y) {
+            self.end_pad_hover(cx);
+            self.toggle_expand();
+            return true;
+        }
+        if self.params.mode.value() == 1 {
+            if hit(strum_sync_rect(self.expand_t()), x, y) {
+                self.set(
+                    cx,
+                    "strum_sync",
+                    if self.params.strum_sync.value() {
+                        0.0
+                    } else {
+                        1.0
+                    },
+                );
+                return true;
+            }
+            if self.params.strum_sync.value() && hit(strum_rate_rect(self.expand_t()), x, y) {
+                self.open_menu(Menu::StrumRate);
+                return true;
+            }
+        }
+        if self.params.mode.value() == 2 && hit(strum_latch_rect(self.expand_t()), x, y) {
+            self.set(
+                cx,
+                "strum_latch",
+                if self.params.strum_latch.value() {
+                    0.0
+                } else {
+                    1.0
+                },
+            );
+            return true;
+        }
+        if self.params.mode.value() == 2 {
+            if let Some((y_axis, right)) = self.strum_bound_at(x, y) {
+                self.end_pad_hover(cx);
+                self.drag = Some(Drag::StrumBound(y_axis, right));
+                cx.capture();
+                cx.emit(RawParamEvent::BeginSetParameter(
+                    self.bound_param(y_axis, right).as_ptr(),
+                ));
+                return true;
+            }
+            if hit(self.play_pad(), x, y) {
+                self.begin_pad(cx, x, y, true);
+                return true;
+            }
+        }
+        true
+    }
     fn press_control(&mut self, cx: &mut EventContext, x: f32, y: f32) {
         for (c, r) in self.placed_controls() {
             if !hit(r, x, y) {
@@ -177,7 +230,16 @@ impl ChordboardView {
         }
         if self.panel.is_none()
             && self.page_elapsed < pleasant_ui::page_slide::DURATION
-            && hit((PAD.0, PAD.1, PAD.2, 360.0), x, y)
+            && hit(
+                (
+                    self.pad().0,
+                    self.pad().1,
+                    self.pad().2,
+                    self.pad().3.max(360.0),
+                ),
+                x,
+                y,
+            )
             && matches!(
                 event,
                 WindowEvent::MouseDown(_) | WindowEvent::MouseScroll(_, _)
@@ -249,9 +311,16 @@ impl ChordboardView {
                 cx.focus();
                 self.focused = true;
                 if self.strum_bound_at(x, y).is_some()
-                    || !(self.params.mode.value() == 2 && hit(PLAY_PAD, x, y))
+                    || !(self.params.mode.value() == 2 && hit(self.play_pad(), x, y))
                 {
                     self.end_pad_hover(cx);
+                }
+                if self.expand_t() > 0.0 && y >= HEADER_H {
+                    return self.press_expanded_strum(cx, x, y);
+                }
+                if self.can_expand_strum() && hit(self.expand_button(), x, y) {
+                    self.toggle_expand();
+                    return true;
                 }
                 if hit(MPE, x, y) {
                     self.open_menu(Menu::Protocol);
@@ -338,7 +407,7 @@ impl ChordboardView {
                     return true;
                 }
                 if self.params.mode.value() == 1 {
-                    if hit(STRUM_SYNC, x, y) {
+                    if hit(strum_sync_rect(self.expand_t()), x, y) {
                         self.set(
                             cx,
                             "strum_sync",
@@ -350,7 +419,8 @@ impl ChordboardView {
                         );
                         return true;
                     }
-                    if self.params.strum_sync.value() && hit(Menu::StrumRate.trigger_rect(), x, y) {
+                    if self.params.strum_sync.value() && hit(strum_rate_rect(self.expand_t()), x, y)
+                    {
                         self.open_menu(Menu::StrumRate);
                         return true;
                     }
@@ -369,7 +439,7 @@ impl ChordboardView {
                         return true;
                     }
                 }
-                if self.params.mode.value() == 2 && hit(STRUM_LATCH, x, y) {
+                if self.params.mode.value() == 2 && hit(strum_latch_rect(self.expand_t()), x, y) {
                     self.set(
                         cx,
                         "strum_latch",
@@ -483,7 +553,7 @@ impl ChordboardView {
                         return true;
                     }
                 }
-                if self.params.mode.value() == 2 && hit(PLAY_PAD, x, y) {
+                if self.params.mode.value() == 2 && hit(self.play_pad(), x, y) {
                     self.begin_pad(cx, x, y, true);
                     return true;
                 }
@@ -556,14 +626,15 @@ impl ChordboardView {
                     return true;
                 }
                 Some(Drag::StrumBound(y_axis, right)) => {
+                    let play = self.play_pad();
                     let (min, max, span, value) = if y_axis {
                         let (min, max) =
                             expression_bounds(self.params.y_min.value(), self.params.y_max.value());
-                        (min, max, 0.01, 1.0 - (y - PLAY_PAD.1) / PLAY_PAD.3)
+                        (min, max, 0.01, 1.0 - (y - play.1) / play.3)
                     } else {
                         let (min, max) =
                             strum_bounds(self.params.x_min.value(), self.params.x_max.value());
-                        (min, max, STRUM_MIN_SPAN, (x - PLAY_PAD.0) / PLAY_PAD.2)
+                        (min, max, STRUM_MIN_SPAN, (x - play.0) / play.2)
                     };
                     let value = if right {
                         value.clamp(min + span, 1.0)

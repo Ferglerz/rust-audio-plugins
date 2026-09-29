@@ -28,6 +28,7 @@ const KNOB_X: f32 = 45.0;
 const MLP_BUTTON: (f32, f32, f32, f32) = (45.0, 284.0, 238.0, 36.0);
 const THEME_BUTTON: (f32, f32, f32, f32) = (601.0, 21.0, 80.0, 30.0);
 const COG_BUTTON: (f32, f32, f32, f32) = (541.0, 21.0, 32.0, 30.0);
+const ENGINE_BUTTON: (f32, f32, f32, f32) = (426.0, 21.0, 94.0, 30.0);
 const NOISE_BUTTON: (f32, f32, f32, f32) = (375.0, 241.0, 144.0, 50.0);
 const SAG_BUTTON: (f32, f32, f32, f32) = (531.0, 241.0, 144.0, 50.0);
 
@@ -113,6 +114,7 @@ struct OpenWurliView {
     font: Cell<Option<FontId>>,
     drag: Option<Drag>,
     show_advanced: bool,
+    show_engine: bool,
 }
 
 impl OpenWurliView {
@@ -134,6 +136,9 @@ impl OpenWurliView {
     }
 
     fn knob_at(&self, x: f32, y: f32) -> Option<Knob> {
+        if self.show_engine {
+            return None;
+        }
         let choices: &[Knob] = if self.show_advanced {
             &Knob::ADVANCED
         } else {
@@ -216,9 +221,15 @@ impl View for OpenWurliView {
                 WindowEvent::MouseDown(MouseButton::Left) => {
                     if Self::hit(x, y, THEME_BUTTON) {
                         prefs().toggle();
+                    } else if Self::hit(x, y, ENGINE_BUTTON) {
+                        self.end_drag(cx);
+                        self.show_engine = !self.show_engine;
                     } else if Self::hit(x, y, COG_BUTTON) {
                         self.end_drag(cx);
-                        self.show_advanced = !self.show_advanced;
+                        self.show_advanced = self.show_engine || !self.show_advanced;
+                        self.show_engine = false;
+                    } else if self.show_engine {
+                        // The information page has no sound controls.
                     } else if !self.show_advanced && Self::hit(x, y, MLP_BUTTON) {
                         let next = if self.params.mlp_enabled.value() {
                             0.0
@@ -326,8 +337,20 @@ impl View for OpenWurliView {
             if self.show_advanced { GOLD } else { MUTED },
         );
         d.appearance_button(THEME_BUTTON, prefs().label());
+        d.button(ENGINE_BUTTON, "ENGINE", self.show_engine, TEAL);
 
-        if self.show_advanced {
+        if self.show_engine {
+            use crate::engine_info;
+            d.text(45.0, 103.0, engine_info::TITLE, 15.0, GOLD);
+            d.text(45.0, 125.0, engine_info::MODEL, 11.0, MUTED);
+            for (index, line) in engine_info::CHANGES.iter().enumerate() {
+                d.text(45.0, 157.0 + index as f32 * 21.0, line, 11.0, TEXT);
+            }
+            d.rect(45.0, 218.0, 630.0, 1.0, LINE);
+            d.text(45.0, 244.0, engine_info::CPU_RESULT, 12.0, TEAL);
+            d.text(45.0, 268.0, engine_info::AUDIO_RESULT, 12.0, GOLD);
+            d.text(45.0, 307.0, engine_info::CONDITIONS, 10.0, MUTED);
+        } else if self.show_advanced {
             for knob in Knob::ADVANCED {
                 self.draw_advanced_slider(&mut d, knob);
             }
@@ -402,6 +425,7 @@ pub fn create(params: Arc<OpenWurliUiParams>) -> Option<Box<dyn Editor>> {
                 font: Cell::new(None),
                 drag: None,
                 show_advanced: false,
+                show_engine: false,
             }
             .build(cx, |cx| {
                 let timer = cx.add_timer(Duration::from_millis(33), None, |cx, action| {

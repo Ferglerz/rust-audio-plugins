@@ -14,7 +14,8 @@ The native `ui-preview` executable uses the real plugin, parameter updates and p
 - Check direct Up/Down/Alternate direction buttons, Auto/MPE/Regular MIDI selection and effective protocol display in Auto. Menus and popovers must close explicitly.
 - Check displayed percentages, milliseconds and semitones; enter values using their displayed units. Verify host/manual tempo and sweep-sync retain their existing semantics.
 - Check X Strum and Y Destination summaries and local controller editors. Preserve learned source/channel and range behavior, field calibration, strum rendering, trail and processing timing.
-- Check Manual Strum trackpad Latch: hover plays the field without a click, click-drag still captures, and MIN / MAX grips still calibrate.
+- Check EXPAND / COLLAPSE on Auto and Manual Strum. The field should cover the body below the title header and return without changing strum calibration.
+- Check Manual Strum trackpad Latch: hover plays the field without a click, including when expanded; click-drag still captures, and MIN / MAX grips still calibrate.
 
 These checks cover the interface. The user-operated checks below remain necessary for host and hardware acceptance.
 

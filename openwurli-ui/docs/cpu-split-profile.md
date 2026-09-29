@@ -1,4 +1,9 @@
-# CPU split profile (release)
+# CPU split profile (historical release measurement)
+
+> Historical post-only x86 profile, not the current pre/post result. The former
+> vendor-path command below describes that archived checkout. See
+> [CPU optimization results](cpu-optimization-results.md) for the paired Apple M1
+> measurements and reproducible Git-based comparison tools.
 
 Measured on this agent VM (`x86_64`, `cargo test --release --test cpu_split_profile -- --ignored`).
 Shipping path: legacy 8-node preamp + behavioral power amp, 2× oversample, 44.1 kHz, 64-sample blocks, 2 s of audio after `warm_up()`.

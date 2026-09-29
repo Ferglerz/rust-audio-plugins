@@ -148,6 +148,10 @@ struct ChordboardView {
     page_start: f32,
     page_target: i32,
     page_elapsed: f32,
+    expand_progress: f32,
+    expand_start: f32,
+    expand_target: f32,
+    expand_elapsed: f32,
     controls_signature: Vec<f32>,
     slot_signature: [u64; 8],
     mapping_axis: usize,
@@ -199,6 +203,10 @@ impl ChordboardView {
             page_start: params.mode.value().max(1) as f32,
             page_target: params.mode.value().max(1),
             page_elapsed: pleasant_ui::page_slide::DURATION,
+            expand_progress: 0.0,
+            expand_start: 0.0,
+            expand_target: 0.0,
+            expand_elapsed: pleasant_ui::page_slide::DURATION,
             controls_signature: Vec::new(),
             slot_signature: [0; 8],
             mapping_axis: 0,
@@ -210,6 +218,35 @@ impl ChordboardView {
     }
     fn arp_main(&self) -> bool {
         self.params.mode.value() == 3
+    }
+    fn can_expand_strum(&self) -> bool {
+        matches!(self.params.mode.value().max(1), 1 | 2)
+    }
+    fn expand_t(&self) -> f32 {
+        self.expand_progress
+    }
+    fn pad(&self) -> Rect {
+        pad_rect(self.expand_t())
+    }
+    fn play_pad(&self) -> Rect {
+        play_pad_rect(self.expand_t())
+    }
+    fn field(&self, manual: bool) -> Rect {
+        field_rect(self.expand_t(), manual)
+    }
+    fn expand_button(&self) -> Rect {
+        expand_rect(self.expand_t())
+    }
+    fn toggle_expand(&mut self) {
+        if !self.can_expand_strum() && self.expand_target == 0.0 {
+            return;
+        }
+        self.expand_start = self.expand_progress;
+        self.expand_target = if self.expand_target > 0.5 { 0.0 } else { 1.0 };
+        self.expand_elapsed = 0.0;
+        self.menu = None;
+        self.panel = None;
+        self.edit = None;
     }
     fn set_panel(&mut self, panel: Option<Panel>) {
         self.release_keys();
@@ -287,6 +324,7 @@ impl ChordboardView {
             }
             Menu::MappingChannel(false) => (r.0 + 256.0, r.1 + 48.0, 116.0, 28.0),
             Menu::YTarget => (r.0 + 12.0, r.1 + 84.0, 172.0, 28.0),
+            Menu::StrumRate => strum_rate_rect(self.expand_t()),
             _ => menu.trigger_rect(),
         }
     }
@@ -490,16 +528,18 @@ impl ChordboardView {
             (true, true) => &self.params.y_max,
         }
     }
-    fn pad_norm(x: f32, y: f32) -> (f32, f32) {
+    fn pad_norm(&self, x: f32, y: f32) -> (f32, f32) {
+        let play = self.play_pad();
         (
-            ((x - PLAY_PAD.0) / PLAY_PAD.2).clamp(0.0, 1.0),
-            (1.0 - (y - PLAY_PAD.1) / PLAY_PAD.3).clamp(0.0, 1.0),
+            ((x - play.0) / play.2).clamp(0.0, 1.0),
+            (1.0 - (y - play.1) / play.3).clamp(0.0, 1.0),
         )
     }
     fn strum_bound_at(&self, x: f32, y: f32) -> Option<(bool, bool)> {
         if self.params.mode.value() != 2 {
             return None;
         }
+        let play = self.play_pad();
         for y_axis in [false, true] {
             let (min, max) = if y_axis {
                 expression_bounds(self.params.y_min.value(), self.params.y_max.value())
@@ -507,7 +547,7 @@ impl ChordboardView {
                 strum_bounds(self.params.x_min.value(), self.params.x_max.value())
             };
             for (right, value) in [(false, min), (true, max)] {
-                let (ax, ay, pointer) = strum_bound_anchor(y_axis, value);
+                let (ax, ay, pointer) = strum_bound_anchor_in(play, y_axis, value);
                 if pleasant_ui::tag_contains(ax, ay, pointer, x, y) {
                     return Some((y_axis, right));
                 }
@@ -525,7 +565,7 @@ impl ChordboardView {
             && self.page_elapsed >= pleasant_ui::page_slide::DURATION
     }
     fn set_pad_xy(&self, cx: &mut EventContext, x: f32, y: f32) {
-        let (px, py) = Self::pad_norm(x, y);
+        let (px, py) = self.pad_norm(x, y);
         cx.emit(RawParamEvent::SetParameterNormalized(
             self.params.x.as_ptr(),
             px,
@@ -537,7 +577,7 @@ impl ChordboardView {
     }
     fn begin_pad(&mut self, cx: &mut EventContext, x: f32, y: f32, capture: bool) {
         let starting = !self.pad_hover && !matches!(self.drag, Some(Drag::Pad));
-        let (px, py) = Self::pad_norm(x, y);
+        let (px, py) = self.pad_norm(x, y);
         if starting {
             for ptr in [self.params.x.as_ptr(), self.params.y.as_ptr()] {
                 cx.emit(RawParamEvent::BeginSetParameter(ptr));
@@ -567,7 +607,7 @@ impl ChordboardView {
         let over = self.can_pad_hover()
             && self
                 .pointer
-                .is_some_and(|(x, y)| hit(PLAY_PAD, x, y) && self.strum_bound_at(x, y).is_none());
+                .is_some_and(|(x, y)| hit(self.play_pad(), x, y) && self.strum_bound_at(x, y).is_none());
         if over {
             if !self.pad_hover {
                 if let Some((x, y)) = self.pointer {
@@ -647,6 +687,21 @@ impl ChordboardView {
             self.page_elapsed,
         );
         if was_sliding || self.page_elapsed < pleasant_ui::page_slide::DURATION {
+            cx.needs_redraw();
+        }
+        let was_expanding = self.expand_elapsed < pleasant_ui::page_slide::DURATION;
+        if !self.can_expand_strum() && self.expand_target != 0.0 {
+            self.expand_start = self.expand_progress;
+            self.expand_target = 0.0;
+            self.expand_elapsed = 0.0;
+        }
+        self.expand_elapsed = (self.expand_elapsed + dt).min(pleasant_ui::page_slide::DURATION);
+        self.expand_progress = pleasant_ui::page_slide::position(
+            self.expand_start,
+            self.expand_target,
+            self.expand_elapsed,
+        );
+        if was_expanding || self.expand_elapsed < pleasant_ui::page_slide::DURATION {
             cx.needs_redraw();
         }
         self.sync_pad_hover(cx);

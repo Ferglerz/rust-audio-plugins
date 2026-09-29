@@ -5,10 +5,10 @@ pinned OpenWurli DSP `6614ab9519471e956ecb0c82edc4fcf295f724dc`
 (`Ferglerz/openwurli`, `codex/pleasant-controls`). Ranked by whether the change
 can match the current sound with no audible compromise.
 
-This wrapper now vendors `vendor/openwurli-dsp` so the exact-path work can
-ship here (the fork is not writable from this agent). Land the same reed SIMD
-+ mix-bus commit on `Ferglerz/openwurli` when possible, then switch back to a
-git `rev`.
+> Historical planning review. The implemented changes, measured CPU/audio results,
+> rejected candidates, and current source ownership are documented in
+> [CPU optimization results](cpu-optimization-results.md). The UI now consumes the
+> pinned DSP fork directly; the former vendor copy has been retired.
 
 ## What the proposal gets right
 
