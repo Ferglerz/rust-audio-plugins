@@ -57,6 +57,7 @@ impl ChordboardView {
             self.memory_held.fill(false);
             self.pointer = None;
             cx.needs_redraw();
+            self.end_pad_hover(cx);
             self.end_drag(cx);
             self.release_keys();
             self.edit = None;
@@ -65,6 +66,7 @@ impl ChordboardView {
         }
         if matches!(event, WindowEvent::MouseLeave) {
             self.pointer = None;
+            self.end_pad_hover(cx);
             cx.needs_redraw();
         } else if matches!(
             event,
@@ -246,6 +248,11 @@ impl ChordboardView {
             WindowEvent::MouseDown(MouseButton::Left) => {
                 cx.focus();
                 self.focused = true;
+                if self.strum_bound_at(x, y).is_some()
+                    || !(self.params.mode.value() == 2 && hit(PLAY_PAD, x, y))
+                {
+                    self.end_pad_hover(cx);
+                }
                 if hit(MPE, x, y) {
                     self.open_menu(Menu::Protocol);
                     return true;
@@ -362,6 +369,18 @@ impl ChordboardView {
                         return true;
                     }
                 }
+                if self.params.mode.value() == 2 && hit(STRUM_LATCH, x, y) {
+                    self.set(
+                        cx,
+                        "strum_latch",
+                        if self.params.strum_latch.value() {
+                            0.0
+                        } else {
+                            1.0
+                        },
+                    );
+                    return true;
+                }
                 if hit(LEARN_OCTAVE, x, y) {
                     self.request_learn(if self.learning() == 4 { 0 } else { 4 });
                     return true;
@@ -454,42 +473,18 @@ impl ChordboardView {
                     return true;
                 }
                 if self.params.mode.value() == 2 {
-                    for y_axis in [false, true] {
-                        let (min, max) = if y_axis {
-                            expression_bounds(self.params.y_min.value(), self.params.y_max.value())
-                        } else {
-                            strum_bounds(self.params.x_min.value(), self.params.x_max.value())
-                        };
-                        for (right, value) in [(false, min), (true, max)] {
-                            let (ax, ay, pointer) = strum_bound_anchor(y_axis, value);
-                            if pleasant_ui::tag_contains(ax, ay, pointer, x, y) {
-                                self.drag = Some(Drag::StrumBound(y_axis, right));
-                                cx.capture();
-                                cx.emit(RawParamEvent::BeginSetParameter(
-                                    self.bound_param(y_axis, right).as_ptr(),
-                                ));
-                                return true;
-                            }
-                        }
+                    if let Some((y_axis, right)) = self.strum_bound_at(x, y) {
+                        self.end_pad_hover(cx);
+                        self.drag = Some(Drag::StrumBound(y_axis, right));
+                        cx.capture();
+                        cx.emit(RawParamEvent::BeginSetParameter(
+                            self.bound_param(y_axis, right).as_ptr(),
+                        ));
+                        return true;
                     }
                 }
                 if self.params.mode.value() == 2 && hit(PLAY_PAD, x, y) {
-                    self.drag = Some(Drag::Pad);
-                    cx.capture();
-                    let px = ((x - PLAY_PAD.0) / PLAY_PAD.2).clamp(0.0, 1.0);
-                    let py = (1.0 - (y - PLAY_PAD.1) / PLAY_PAD.3).clamp(0.0, 1.0);
-                    for ptr in [self.params.x.as_ptr(), self.params.y.as_ptr()] {
-                        cx.emit(RawParamEvent::BeginSetParameter(ptr));
-                    }
-                    cx.emit(RawParamEvent::SetParameterNormalized(
-                        self.params.x.as_ptr(),
-                        px,
-                    ));
-                    cx.emit(RawParamEvent::SetParameterNormalized(
-                        self.params.y.as_ptr(),
-                        py,
-                    ));
-                    self.bridge.send(Command::BeginGesture(px, py));
+                    self.begin_pad(cx, x, y, true);
                     return true;
                 }
                 if hit(inversion_rect(0), x, y) {
@@ -583,14 +578,7 @@ impl ChordboardView {
                     return true;
                 }
                 Some(Drag::Pad) => {
-                    cx.emit(RawParamEvent::SetParameterNormalized(
-                        self.params.x.as_ptr(),
-                        ((x - PLAY_PAD.0) / PLAY_PAD.2).clamp(0.0, 1.0),
-                    ));
-                    cx.emit(RawParamEvent::SetParameterNormalized(
-                        self.params.y.as_ptr(),
-                        (1.0 - (y - PLAY_PAD.1) / PLAY_PAD.3).clamp(0.0, 1.0),
-                    ));
+                    self.set_pad_xy(cx, x, y);
                     return true;
                 }
                 Some(Drag::Control(mut drag)) => {
@@ -612,7 +600,13 @@ impl ChordboardView {
                     self.drag = Some(Drag::Control(drag));
                     return true;
                 }
-                _ => {}
+                _ => {
+                    self.sync_pad_hover(cx);
+                    if self.pad_hover {
+                        self.set_pad_xy(cx, x, y);
+                        return true;
+                    }
+                }
             },
             WindowEvent::MouseUp(MouseButton::Left) => {
                 if let Some(Drag::Control(mut drag)) = self.drag {

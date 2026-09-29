@@ -280,13 +280,7 @@ impl ChordboardView {
             TEAL,
         );
         if manual {
-            d.text_right(
-                PAD.0 + PAD.2 - 18.0,
-                PAD.1 + 25.0,
-                "X STRUM · Y EXPRESSION",
-                TEXT_SMALL,
-                MUTED,
-            );
+            self.trackpad_latch_button(d, STRUM_LATCH, self.params.strum_latch.value(), TEAL);
         } else {
             d.button(
                 STRUM_SYNC,

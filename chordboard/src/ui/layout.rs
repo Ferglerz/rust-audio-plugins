@@ -125,6 +125,7 @@ pub(super) const TEMPO_CONTROL: Rect = (
     42.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA,
 );
 pub(super) const STRUM_SYNC: Rect = (904.0, 162.0, 164.0, 28.0);
+pub(super) const STRUM_LATCH: Rect = (1000.0, 162.0, 88.0, 28.0);
 pub(super) const OUTPUT: Rect = (988.0, 94.0, 100.0, 24.0);
 pub(super) const LEARN_OCTAVE: Rect = (344.0, 102.0, 204.0, 28.0);
 pub(super) fn mapping_summary_rect(i: usize) -> Rect {

@@ -47,6 +47,8 @@ pub struct ChordboardParams {
     pub spread: IntParam,
     #[id = "latch"]
     pub latch: BoolParam,
+    #[id = "strum_latch"]
+    pub strum_latch: BoolParam,
     #[id = "velocity"]
     pub velocity: FloatParam,
     #[id = "length_ms"]
@@ -174,6 +176,7 @@ impl Default for ChordboardParams {
                     ["Close", "Open", "Wide"][v as usize].to_string()
                 })),
             latch: BoolParam::new("Latch", false),
+            strum_latch: BoolParam::new("Trackpad latch", false),
             velocity: FloatParam::new(
                 "Velocity",
                 0.8,
@@ -499,6 +502,7 @@ control_catalog! {
     control(transpose, 0),
     control(spread, 0),
     toggle(latch, 0),
+    toggle(strum_latch, 1),
     control(velocity, 0),
     control(length_ms, 0),
     control(strings, 1),
@@ -600,6 +604,7 @@ mod tests {
         for (id, ptr) in [
             ("keyboard", params.keyboard.as_ptr()),
             ("latch", params.latch.as_ptr()),
+            ("strum_latch", params.strum_latch.as_ptr()),
             ("output_mode", params.output_mode.as_ptr()),
             ("fifths", params.fifths.as_ptr()),
         ] {
