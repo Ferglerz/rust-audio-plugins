@@ -1289,7 +1289,8 @@ fn strum_expand_slides_like_composure_pages() {
     view.tick(&mut EventContext::new_with_current(&mut cx, target));
     assert!(view.expand_progress > 0.0 && view.expand_progress < 1.0);
     let interrupted = view.expand_progress;
-    click(&mut view, &mut cx, target, view.expand_button());
+    let collapse = view.expand_button();
+    click(&mut view, &mut cx, target, collapse);
     assert_eq!(view.expand_target, 0.0);
     assert_eq!(view.expand_start, interrupted);
     for _ in 0..3 {
