@@ -67,6 +67,9 @@ impl ChordboardView {
         if self.can_capture() || self.memory_ui.armed {
             targets.push((SAVE_MEMORY, self.memory_ui.armed));
         }
+        if self.can_expand_strum() {
+            targets.push((self.expand_button(), self.expand_target > 0.5));
+        }
         targets.extend((0..KEY_COUNT).map(|i| (key_rect(i), false)));
         targets.extend((0..8).map(|i| (memory_rect(i), self.memory_ui.armed)));
         targets.extend((0..2).map(|i| (inversion_rect(i), false)));
@@ -84,9 +87,12 @@ impl ChordboardView {
         );
         match self.params.mode.value() {
             1 => {
-                targets.push((STRUM_SYNC, self.params.strum_sync.value()));
+                targets.push((
+                    strum_sync_rect(self.expand_t()),
+                    self.params.strum_sync.value(),
+                ));
                 if self.params.strum_sync.value() {
-                    targets.push((Menu::StrumRate.trigger_rect(), false));
+                    targets.push((strum_rate_rect(self.expand_t()), false));
                 }
                 targets.extend(
                     (0..3).map(|i| (direction_rect(i), self.params.direction.value() == i as i32)),

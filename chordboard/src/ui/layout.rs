@@ -3,9 +3,23 @@ use super::KEY_COLUMNS;
 pub(super) const W: f32 = 1120.0;
 pub(super) const H: f32 = 704.0;
 pub(super) type Rect = (f32, f32, f32, f32);
+pub(super) const HEADER_H: f32 = 76.0;
 pub(super) const PAD: Rect = (600.0, 158.0, 488.0, 310.0);
 // Keep drawing and pointer targets on the same performance surface.
 pub(super) const PLAY_PAD: Rect = (660.0, 233.0, 408.0, 205.0);
+pub(super) const AUTO_FIELD: Rect = (620.0, 203.0, 448.0, 115.0);
+pub(super) const CHORDS_SURFACE: Rect = (16.0, 92.0, 548.0, 424.0);
+pub(super) const VOICING_SURFACE: Rect = (16.0, 536.0, 548.0, 138.0);
+pub(super) const PERF_SURFACE: Rect = (584.0, 92.0, 520.0, 484.0);
+pub(super) const METERS_SURFACE: Rect = (584.0, 596.0, 520.0, 78.0);
+pub(super) const EXPAND: Rect = (808.0, 162.0, 88.0, 28.0);
+pub(super) const EXPANDED_SURFACE: Rect = (16.0, 92.0, 1088.0, 580.0);
+pub(super) const EXPANDED_PAD: Rect = (32.0, 108.0, 1056.0, 548.0);
+pub(super) const EXPANDED_PLAY_PAD: Rect = (80.0, 168.0, 960.0, 456.0);
+pub(super) const EXPANDED_EXPAND: Rect = (988.0, 116.0, 88.0, 28.0);
+pub(super) const EXPANDED_STRUM_SYNC: Rect = (816.0, 116.0, 164.0, 28.0);
+pub(super) const STRUM_RATE: Rect = (852.0, 342.0, 220.0, 42.0);
+pub(super) const EXPANDED_STRUM_RATE: Rect = (588.0, 116.0, 220.0, 28.0);
 pub(super) const LATCH: Rect = (462.0, 154.0, 86.0, 28.0);
 pub(super) const QWERTY: Rect = (432.0, 190.0, 116.0, 28.0);
 pub(super) const ORDER: Rect = (312.0, 190.0, 112.0, 28.0);
@@ -249,17 +263,75 @@ pub(super) fn expression_bounds(min: f32, max: f32) -> (f32, f32) {
     (min, max.clamp(min + 0.01, 1.0))
 }
 
+pub(super) fn lerp_rect(a: Rect, b: Rect, t: f32) -> Rect {
+    (
+        a.0 + (b.0 - a.0) * t,
+        a.1 + (b.1 - a.1) * t,
+        a.2 + (b.2 - a.2) * t,
+        a.3 + (b.3 - a.3) * t,
+    )
+}
+
+pub(super) fn pad_rect(expand: f32) -> Rect {
+    lerp_rect(PAD, EXPANDED_PAD, expand)
+}
+
+pub(super) fn play_pad_rect(expand: f32) -> Rect {
+    lerp_rect(PLAY_PAD, EXPANDED_PLAY_PAD, expand)
+}
+
+pub(super) fn auto_field_rect(expand: f32) -> Rect {
+    lerp_rect(AUTO_FIELD, EXPANDED_PLAY_PAD, expand)
+}
+
+pub(super) fn field_rect(expand: f32, manual: bool) -> Rect {
+    if manual {
+        play_pad_rect(expand)
+    } else {
+        auto_field_rect(expand)
+    }
+}
+
+pub(super) fn expand_rect(expand: f32) -> Rect {
+    lerp_rect(EXPAND, EXPANDED_EXPAND, expand)
+}
+
+pub(super) fn strum_sync_rect(expand: f32) -> Rect {
+    lerp_rect(STRUM_SYNC, EXPANDED_STRUM_SYNC, expand)
+}
+
+pub(super) fn strum_rate_rect(expand: f32) -> Rect {
+    lerp_rect(STRUM_RATE, EXPANDED_STRUM_RATE, expand)
+}
+
+pub(super) fn perf_surface_rect(expand: f32) -> Rect {
+    lerp_rect(PERF_SURFACE, EXPANDED_SURFACE, expand)
+}
+
+pub(super) fn shrink_width(rect: Rect, expand: f32) -> Rect {
+    (rect.0, rect.1, rect.2 * (1.0 - expand), rect.3)
+}
+
+#[cfg(test)]
 pub(super) fn strum_bound_anchor(y_axis: bool, value: f32) -> (f32, f32, pleasant_ui::TagPointer) {
+    strum_bound_anchor_in(PLAY_PAD, y_axis, value)
+}
+
+pub(super) fn strum_bound_anchor_in(
+    field: Rect,
+    y_axis: bool,
+    value: f32,
+) -> (f32, f32, pleasant_ui::TagPointer) {
     if y_axis {
         (
-            PLAY_PAD.0,
-            PLAY_PAD.1 + (1.0 - value) * PLAY_PAD.3,
+            field.0,
+            field.1 + (1.0 - value) * field.3,
             pleasant_ui::TagPointer::Right,
         )
     } else {
         (
-            PLAY_PAD.0 + value * PLAY_PAD.2,
-            PLAY_PAD.1,
+            field.0 + value * field.2,
+            field.1,
             pleasant_ui::TagPointer::Down,
         )
     }

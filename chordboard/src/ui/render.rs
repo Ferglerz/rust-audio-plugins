@@ -49,16 +49,38 @@ impl ChordboardView {
             false,
             TEAL,
         );
-        self.surface(&mut d, (16.0, 92.0, 548.0, 424.0));
-        self.surface(&mut d, (16.0, 536.0, 548.0, 138.0));
-        self.surface(&mut d, (584.0, 92.0, 520.0, 484.0));
-        self.surface(&mut d, (584.0, 596.0, 520.0, 78.0));
-        self.draw_chords(&mut d);
-        self.draw_performance_header(&mut d);
-        d.scissor(PAD.0, PAD.1, PAD.2, 360.0);
+        let expand = self.expand_t();
+        let chords = shrink_width(CHORDS_SURFACE, expand);
+        let voicing = shrink_width(VOICING_SURFACE, expand);
+        let performance = perf_surface_rect(expand);
+        if chords.2 > 1.0 {
+            self.surface(&mut d, chords);
+        }
+        if voicing.2 > 1.0 {
+            self.surface(&mut d, voicing);
+        }
+        if expand == 0.0 {
+            self.surface(&mut d, METERS_SURFACE);
+        }
+        self.surface(&mut d, performance);
+        if expand < 1.0 {
+            d.scissor(
+                chords.0,
+                chords.1,
+                chords.2.max(0.0),
+                CHORDS_SURFACE.3 + VOICING_SURFACE.3 + 20.0,
+            );
+            self.draw_chords(&mut d);
+            d.reset_scissor();
+        }
+        if expand == 0.0 {
+            self.draw_performance_header(&mut d);
+        }
+        let pad = self.pad();
+        d.scissor(pad.0, pad.1, pad.2, pad.3.max(360.0));
         for mode in 1..4 {
-            let offset = (mode as f32 - self.page_position) * PAD.2;
-            if offset.abs() >= PAD.2 {
+            let offset = (mode as f32 - self.page_position) * pad.2;
+            if offset.abs() >= pad.2 {
                 continue;
             }
             d.offset_x = offset;
@@ -69,98 +91,108 @@ impl ChordboardView {
                 d.font = self.font.get();
                 self.draw_pad(&mut d, mode);
                 d.font = self.ui_font.get();
-                if mode == 1 {
+                if mode == 1 && expand == 0.0 {
                     self.draw_direction(&mut d);
                 }
             }
-            for (c, r) in self.controls_for_mode(mode) {
-                if r.0 >= PAD.0
-                    && r.1 >= PAD.1
-                    && r.1 < 518.0
-                    && !(mode == 3 && matches!(c.id, "gate" | "swing"))
-                {
-                    self.draw_control(&mut d, &c, r, GOLD);
+            if expand == 0.0 {
+                for (c, r) in self.controls_for_mode(mode) {
+                    if r.0 >= PAD.0
+                        && r.1 >= PAD.1
+                        && r.1 < 518.0
+                        && !(mode == 3 && matches!(c.id, "gate" | "swing"))
+                    {
+                        self.draw_control(&mut d, &c, r, GOLD);
+                    }
                 }
             }
         }
         d.offset_x = 0.0;
         d.reset_scissor();
-        self.draw_meters(&mut d);
-        d.font = self.ui_font.get();
-        d.text(
-            600.0,
-            616.0,
-            if self.snapshot.voices > 0 {
-                "Playing your harmony"
-            } else {
-                "Ready to play"
-            },
-            13.0,
-            TEXT,
-        );
-        d.text(
-            600.0,
-            638.0,
-            match self.params.mode.value() {
-                2 => "Hold a chord, then sweep the strings.",
-                3 => "Hold a chord to hear the pattern.",
-                _ => "Click a chord or play your MIDI keyboard.",
-            },
-            11.0,
-            MUTED,
-        );
-        d.text(
-            600.0,
-            660.0,
-            "MIDI effect · route output to an instrument",
-            11.0,
-            MUTED,
-        );
-        for axis in 0..2 {
-            let mapping =
-                crate::engine::Mapping::decode(self.params.mapping(axis).load(Ordering::Relaxed));
-            let source = match mapping.kind {
-                1 => format!("CC {}", mapping.number),
-                2 => format!("CC {} / {}", mapping.number, mapping.number + 32),
-                3 => "Pitch bend".into(),
-                _ => "Unassigned".into(),
-            };
-            let channel = if mapping.kind == 0 {
-                String::new()
-            } else if mapping.channel == 16 {
-                " · Any channel".into()
-            } else {
-                format!(" · Ch {}", mapping.channel + 1)
-            };
-            let r = mapping_summary_rect(axis);
-            self.button(
-                &mut d,
-                r,
-                "",
-                self.panel == Some(Panel::Mapping) && self.mapping_axis == axis,
-                TEAL,
-            );
-            let label = if axis == 0 {
-                "X · Strum".into()
-            } else {
-                format!(
-                    "Y · {}",
-                    Menu::YTarget.items()[self.params.y_target.value() as usize]
-                )
-            };
-            d.text(r.0 + 12.0, r.1 + 17.0, &label, 12.0, TEAL);
-            d.text_right(r.0 + r.2 - 12.0, r.1 + 17.0, "Edit ▾", 11.0, MUTED);
+        if expand == 0.0 {
+            self.draw_meters(&mut d);
+        }
+        if expand == 0.0 {
+            d.font = self.ui_font.get();
             d.text(
-                r.0 + 12.0,
-                r.1 + 35.0,
-                &format!("{source}{channel}"),
+                600.0,
+                616.0,
+                if self.snapshot.voices > 0 {
+                    "Playing your harmony"
+                } else {
+                    "Ready to play"
+                },
+                13.0,
+                TEXT,
+            );
+            d.text(
+                600.0,
+                638.0,
+                match self.params.mode.value() {
+                    2 => "Hold a chord, then sweep the strings.",
+                    3 => "Hold a chord to hear the pattern.",
+                    _ => "Click a chord or play your MIDI keyboard.",
+                },
                 11.0,
                 MUTED,
             );
+            d.text(
+                600.0,
+                660.0,
+                "MIDI effect · route output to an instrument",
+                11.0,
+                MUTED,
+            );
+            for axis in 0..2 {
+                let mapping = crate::engine::Mapping::decode(
+                    self.params.mapping(axis).load(Ordering::Relaxed),
+                );
+                let source = match mapping.kind {
+                    1 => format!("CC {}", mapping.number),
+                    2 => format!("CC {} / {}", mapping.number, mapping.number + 32),
+                    3 => "Pitch bend".into(),
+                    _ => "Unassigned".into(),
+                };
+                let channel = if mapping.kind == 0 {
+                    String::new()
+                } else if mapping.channel == 16 {
+                    " · Any channel".into()
+                } else {
+                    format!(" · Ch {}", mapping.channel + 1)
+                };
+                let r = mapping_summary_rect(axis);
+                self.button(
+                    &mut d,
+                    r,
+                    "",
+                    self.panel == Some(Panel::Mapping) && self.mapping_axis == axis,
+                    TEAL,
+                );
+                let label = if axis == 0 {
+                    "X · Strum".into()
+                } else {
+                    format!(
+                        "Y · {}",
+                        Menu::YTarget.items()[self.params.y_target.value() as usize]
+                    )
+                };
+                d.text(r.0 + 12.0, r.1 + 17.0, &label, 12.0, TEAL);
+                d.text_right(r.0 + r.2 - 12.0, r.1 + 17.0, "Edit ▾", 11.0, MUTED);
+                d.text(
+                    r.0 + 12.0,
+                    r.1 + 35.0,
+                    &format!("{source}{channel}"),
+                    11.0,
+                    MUTED,
+                );
+            }
         }
         let base_controls = self.base_controls();
         let panel_controls = self.panel_controls();
         for (c, r) in &base_controls {
+            if expand > 0.0 && r.1 >= HEADER_H {
+                continue;
+            }
             if r.0 >= PAD.0 && r.1 >= PAD.1 && r.1 < 518.0 {
                 continue;
             }
@@ -227,6 +259,35 @@ impl ChordboardView {
 
     fn hover_hint(&self, controls: &[(Control, Rect)]) -> Option<String> {
         let (x, y) = self.pointer?;
+        if self.expand_t() > 0.0 && y >= HEADER_H {
+            if hit(self.expand_button(), x, y) {
+                return Some("Collapse the strum field".into());
+            }
+            if self.params.mode.value() == 2 {
+                let play = self.play_pad();
+                for y_axis in [false, true] {
+                    let (min, max) = if y_axis {
+                        expression_bounds(self.params.y_min.value(), self.params.y_max.value())
+                    } else {
+                        strum_bounds(self.params.x_min.value(), self.params.x_max.value())
+                    };
+                    if [min, max].iter().any(|&value| {
+                        let (ax, ay, pointer) = strum_bound_anchor_in(play, y_axis, value);
+                        pleasant_ui::tag_contains(ax, ay, pointer, x, y)
+                    }) {
+                        return Some(if y_axis {
+                            "Drag MIN / MAX vertically to set the expression range".into()
+                        } else {
+                            "Drag MIN / MAX to stretch the strings · Minimum span 25%".into()
+                        });
+                    }
+                }
+            }
+            return None;
+        }
+        if hit(self.expand_button(), x, y) && self.can_expand_strum() {
+            return Some("Expand the strum field over the plugin body".into());
+        }
         if let Some(slot) = (0..8).find(|&i| hit(memory_rect(i), x, y)) {
             let label = SavedChord::decode(self.params.slot(slot).load(Ordering::Relaxed))
                 .map_or_else(|| "Empty memory".into(), harmony::chord_name);
@@ -264,6 +325,7 @@ impl ChordboardView {
             );
         }
         if self.params.mode.value() == 2 && self.panel.is_none() {
+            let play = self.play_pad();
             for y_axis in [false, true] {
                 let (min, max) = if y_axis {
                     expression_bounds(self.params.y_min.value(), self.params.y_max.value())
@@ -271,7 +333,7 @@ impl ChordboardView {
                     strum_bounds(self.params.x_min.value(), self.params.x_max.value())
                 };
                 if [min, max].iter().any(|&value| {
-                    let (ax, ay, pointer) = strum_bound_anchor(y_axis, value);
+                    let (ax, ay, pointer) = strum_bound_anchor_in(play, y_axis, value);
                     pleasant_ui::tag_contains(ax, ay, pointer, x, y)
                 }) {
                     return Some(if y_axis {
