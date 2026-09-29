@@ -109,6 +109,10 @@ mod tests {
 
     #[test]
     fn pool_owns_pack_for_triggered_voice() -> Result<(), Box<dyn std::error::Error>> {
+        check_pool()
+    }
+
+    fn check_pool() -> Result<(), Box<dyn std::error::Error>> {
         let mut file = tempfile::NamedTempFile::new()?;
         let strike = StrikeEntry::new(
             36,
@@ -138,7 +142,7 @@ mod tests {
         file.write_all(&(index.len() as u64).to_le_bytes())?;
         file.write_all(&index)?;
         for _ in 0..4 {
-            file.write_all(&0.5f32.to_le_bytes())?;
+            file.write_all(&16384i16.to_le_bytes())?;
         }
         file.flush()?;
 
@@ -155,6 +159,52 @@ mod tests {
         assert!(mic_accum[MicChannel::Close as usize][0] > 0.3);
         assert!(kit_peaks[KitPieceId::Kick as usize] > 0.3);
 
+        Ok(())
+    }
+    #[test]
+    fn pcm16_stereo_pitch_interpolation() -> Result<(), Box<dyn std::error::Error>> {
+        {
+            let mut file = tempfile::NamedTempFile::new()?;
+            let mut slices = [None; MicChannel::COUNT];
+            slices[0] = Some(SampleSlice {
+                offset_bytes: 2,
+                length_frames: 4,
+                sample_rate: 44100,
+                channels: 2,
+            });
+            let strike = StrikeEntry::new(36, 1, 127, 1, 0, KitPieceId::Kick, slices);
+            let index = rkyv::to_bytes::<_, 256>(&PackIndex {
+                strikes: vec![strike.clone()],
+            })?;
+            file.write_all(SCD_MAGIC)?;
+            file.write_all(&(index.len() as u64).to_le_bytes())?;
+            file.write_all(&index)?;
+            let pcm = [123i16, i16::MIN, i16::MAX, 16384, -16384, 0, 0, 1000, -1000];
+            for value in pcm {
+                file.write_all(&value.to_le_bytes())?;
+            }
+            file.flush()?;
+            let mut pool = VoicePool::new();
+            pool.set_pack(ScdPack::open(file.path())?);
+            pool.trigger_strike(&strike, 1.0, 0.0, 0.0, 0.0, 88200.0);
+            let mix_gains = [[1.0; MicChannel::COUNT]; KitPieceId::COUNT];
+            let mut peaks = [0.0; KitPieceId::COUNT];
+            for step in 0..6 {
+                let mut accum = [[0.0; 2]; MicChannel::COUNT];
+                pool.process_sample(&mut accum, &mix_gains, &mut peaks);
+                let frame = step / 2;
+                let frac = (step % 2) as f32 * 0.5;
+                for channel in 0..2 {
+                    let a = pcm[1 + frame * 2 + channel] as f32 / 32768.0;
+                    let b = pcm[1 + (frame + 1) * 2 + channel] as f32 / 32768.0;
+                    let expected = (a + frac * (b - a)) * std::f32::consts::FRAC_1_SQRT_2;
+                    assert!(
+                        (accum[0][channel] - expected).abs() < 1e-6,
+                        "step={step}, channel={channel}"
+                    );
+                }
+            }
+        }
         Ok(())
     }
 }

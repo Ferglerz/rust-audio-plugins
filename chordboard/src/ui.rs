@@ -2,8 +2,11 @@ mod chords;
 mod events;
 mod layout;
 mod mapping;
+mod menu;
+mod style;
+use menu::Menu;
 mod memories;
-use memories::MemoryDrag;
+use memories::{MemoryDrag, MemoryUi};
 mod performance;
 mod render;
 use crate::{
@@ -32,88 +35,6 @@ use std::{
     sync::{atomic::Ordering, Arc, OnceLock},
     time::{Duration, Instant},
 };
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Menu {
-    Key,
-    Scale,
-    YTarget,
-    StrumRate,
-    MappingKind,
-    MappingChannel(bool),
-    MappingCc(bool),
-}
-impl Menu {
-    fn items(self) -> Vec<String> {
-        match self {
-            Self::StrumRate => ARP_RATES
-                .iter()
-                .map(|(label, _)| label.to_string())
-                .collect(),
-            Self::YTarget => [
-                "Velocity",
-                "Gate",
-                "Pressure",
-                "Timbre",
-                "Bend",
-                "Custom CC",
-            ]
-            .iter()
-            .map(|s| s.to_string())
-            .collect(),
-            Self::Key => harmony::NOTE_NAMES.iter().map(|s| s.to_string()).collect(),
-            Self::Scale => harmony::SCALE_NAMES.iter().map(|s| s.to_string()).collect(),
-            Self::MappingKind => ["OFF", "CC 7-BIT", "CC 14-BIT", "PITCH BEND"]
-                .iter()
-                .map(|s| s.to_string())
-                .collect(),
-            Self::MappingChannel(bend) => (1..=16)
-                .map(|n| n.to_string())
-                .chain((!bend).then(|| "ANY".into()))
-                .collect(),
-            Self::MappingCc(wide) => (0..if wide { 32 } else { 128 })
-                .map(|n| n.to_string())
-                .collect(),
-        }
-    }
-    fn option_rect(self, index: usize) -> Rect {
-        let (x, y, w, h) = match self {
-            Self::StrumRate => (852.0, 238.0, 110.0, 30.0),
-            Self::YTarget => (612.0, 310.0, 224.0, 30.0),
-            Self::Key => (32.0, 544.0, 64.0, 30.0),
-            Self::Scale => (198.0, 544.0, 114.0, 30.0),
-            Self::MappingKind => (616.0, 380.0, 114.0, 30.0),
-            Self::MappingChannel(_) => (824.0, 380.0, 38.0, 30.0),
-            Self::MappingCc(_) => (600.0, 380.0, 30.0, 30.0),
-        };
-        let columns = self.columns();
-        (
-            x + (index % columns) as f32 * w,
-            y + (index / columns) as f32 * h,
-            w,
-            h,
-        )
-    }
-    fn columns(self) -> usize {
-        match self {
-            Self::Scale | Self::MappingKind | Self::StrumRate => 2,
-            Self::MappingChannel(_) => 6,
-            Self::MappingCc(_) => 16,
-            Self::Key => 3,
-            Self::YTarget => 1,
-        }
-    }
-    fn trigger_rect(self) -> Rect {
-        match self {
-            Self::StrumRate => (852.0, 342.0, 220.0, 42.0),
-            Self::YTarget => (612.0, 494.0, 224.0, 30.0),
-            Self::Key => (32.0, 510.0, 158.0, 28.0),
-            Self::Scale => (198.0, 510.0, 228.0, 28.0),
-            Self::MappingKind => (616.0, 346.0, 200.0, 30.0),
-            Self::MappingChannel(_) => (824.0, 346.0, 110.0, 30.0),
-            Self::MappingCc(_) => (942.0, 346.0, 130.0, 30.0),
-        }
-    }
-}
 const CODES: [Code; KEY_COUNT] = [
     Code::Digit1,
     Code::Digit2,
@@ -199,6 +120,11 @@ struct ChordboardView {
     bridge: Arc<Bridge>,
     context: Arc<dyn GuiContext>,
     font: Cell<Option<FontId>>,
+    ui_font: Cell<Option<FontId>>,
+    bold_font: Cell<Option<FontId>>,
+    motion: Vec<style::ControlMotion>,
+    action_flash: Option<(Rect, f32)>,
+    memory_ui: MemoryUi,
     snapshot: Snapshot,
     pending_learn: Option<(u8, i32, u32)>,
     pressed: [bool; KEY_COUNT],
@@ -244,6 +170,11 @@ impl ChordboardView {
             bridge: bridge.clone(),
             context,
             font: Cell::new(None),
+            ui_font: Cell::new(None),
+            bold_font: Cell::new(None),
+            motion: Vec::new(),
+            action_flash: None,
+            memory_ui: MemoryUi::default(),
             snapshot: Snapshot::default(),
             pending_learn: None,
             pressed: [false; KEY_COUNT],
@@ -280,7 +211,9 @@ impl ChordboardView {
     }
     fn set_panel(&mut self, panel: Option<Panel>) {
         self.release_keys();
+        self.memory_held.fill(false);
         self.request_learn(0);
+        self.memory_ui.armed = false;
         self.panel = panel;
         self.menu = None;
     }
@@ -332,6 +265,39 @@ impl ChordboardView {
             .filter_map(|(id, r)| self.control(id).map(|c| (c, r)))
             .collect()
     }
+    fn panel_rect(&self, panel: Panel) -> Rect {
+        if panel == Panel::Mapping {
+            mapping_panel_rect(self.mapping_axis)
+        } else {
+            panel.rect()
+        }
+    }
+    fn panel_close_rect(&self, panel: Panel) -> Rect {
+        let r = self.panel_rect(panel);
+        (r.0 + r.2 - 40.0, r.1 + 8.0, 28.0, 28.0)
+    }
+    fn menu_trigger_rect(&self, menu: Menu) -> Rect {
+        let r = mapping_panel_rect(self.mapping_axis);
+        match menu {
+            Menu::MappingKind => (r.0 + 12.0, r.1 + 48.0, 132.0, 28.0),
+            Menu::MappingCc(_) | Menu::MappingChannel(true) => {
+                (r.0 + 152.0, r.1 + 48.0, 96.0, 28.0)
+            }
+            Menu::MappingChannel(false) => (r.0 + 256.0, r.1 + 48.0, 116.0, 28.0),
+            Menu::YTarget => (r.0 + 12.0, r.1 + 84.0, 172.0, 28.0),
+            _ => menu.trigger_rect(),
+        }
+    }
+    fn menu_bounds(&self, menu: Menu) -> Rect {
+        menu.bounds_at(self.menu_trigger_rect(menu))
+    }
+    fn menu_close_rect(&self, menu: Menu) -> Rect {
+        let r = self.menu_bounds(menu);
+        (r.0 + r.2 - 34.0, r.1 + 6.0, 26.0, 26.0)
+    }
+    fn menu_option_rect(&self, menu: Menu, index: usize) -> Rect {
+        menu.option_rect_at(self.menu_bounds(menu), index)
+    }
     fn panel_controls(&self) -> Vec<(Control, Rect)> {
         let Some(panel) = self.panel else {
             return Vec::new();
@@ -359,7 +325,7 @@ impl ChordboardView {
             .enumerate()
             .filter_map(|(i, id)| {
                 let r = if panel == Panel::Mapping {
-                    mapping_control_rect(if *id == "y_cc" { 5 } else { i })
+                    mapping_control_rect(self.mapping_axis, id)
                 } else {
                     local_control_rect(panel, i)
                 };
@@ -395,9 +361,10 @@ impl ChordboardView {
             Self::emit(cx, c.ptr, norm);
         }
     }
-    fn open_menu(&mut self, menu: Menu) {
-        self.release_keys();
-        self.menu_cursor = match menu {
+    fn menu_selection(&self, menu: Menu) -> usize {
+        match menu {
+            Menu::Quality => self.params.quality.value() as usize,
+            Menu::Protocol => self.params.output_mode.value() as usize,
             Menu::YTarget => self.params.y_target.value() as usize,
             Menu::StrumRate => ARP_RATES
                 .iter()
@@ -408,12 +375,28 @@ impl ChordboardView {
             Menu::MappingKind => self.mapping().kind as usize,
             Menu::MappingChannel(_) => self.mapping().channel as usize,
             Menu::MappingCc(_) => self.mapping().number as usize,
-        };
+        }
+    }
+    fn open_menu(&mut self, menu: Menu) {
+        self.release_keys();
+        self.memory_held.fill(false);
+        self.memory_ui.armed = false;
+        self.menu_cursor = self.menu_selection(menu);
         self.menu = Some(menu);
     }
     fn select_menu(&mut self, cx: &mut EventContext, menu: Menu, index: usize) {
         self.menu = None;
         match menu {
+            Menu::Quality => Self::emit(
+                cx,
+                self.params.quality.as_ptr(),
+                self.params.quality.preview_normalized(index as i32),
+            ),
+            Menu::Protocol => Self::emit(
+                cx,
+                self.params.output_mode.as_ptr(),
+                self.params.output_mode.preview_normalized(index as i32),
+            ),
             Menu::StrumRate => Self::emit(
                 cx,
                 self.params.strum_beats.as_ptr(),
@@ -541,7 +524,7 @@ impl ChordboardView {
         };
         if let Some(control) = self.control(edit.target) {
             // ParamPtr is kept alive by this view's Arc<ChordboardParams>.
-            let value = unsafe { control.ptr.string_to_normalized_value(&edit.text) };
+            let value = self.parse_display_value(&control, &edit.text);
             if let Some(value) = value {
                 Self::emit(cx, control.ptr, value);
             } else {
@@ -596,6 +579,8 @@ impl ChordboardView {
             }
         }
         let mut changed = old != self.snapshot;
+        changed |= self.tick_motion(dt);
+        changed |= self.tick_memories(dt);
         for i in 0..KEY_COUNT {
             let target = if self.key_active(i) { 1.0 } else { 0.0 };
             let previous = self.key_anim[i];

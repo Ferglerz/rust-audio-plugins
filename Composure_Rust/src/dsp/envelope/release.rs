@@ -7,7 +7,6 @@ use super::utils::{
     clamp_coeff, curve_cached_coeffs, normalized_blend,
 };
 use super::EnvelopeParams;
-use super::ReleaseMode;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ReleaseCoeffs {
@@ -182,10 +181,10 @@ impl ReleaseCoeffs {
         )
     }
 
-    /// Apply rate modulation to the release already chosen by curve and program blend.
+    /// Apply rate modulation to the release already chosen by curve and independent program influences.
     /// A steady/rising detector is neutral; a falling detector changes release speed.
     pub fn apply_input_rate(&self, p: &EnvelopeParams, base: f64, det_delta: f64) -> f64 {
-        let amount = p.input_rate_amount * (p.prog_release_blend * 0.01).clamp(0.0, 1.0);
+        let amount = p.input_rate_amount;
         if amount.abs() < EPS || det_delta <= 0.0 {
             return base;
         }
@@ -208,59 +207,6 @@ impl ReleaseCoeffs {
         let knee_w = knee_w.max(0.5);
         let level_above = input_level_db - p.input_level_threshold_db;
         clamp_coeff(INPUT_DEPENDENT_DRAMA * level_above / knee_w)
-    }
-
-    /// Threshold engagement before the independent input-rate modulation.
-    pub fn program_activity(
-        &self,
-        p: &EnvelopeParams,
-        detector_db: f64,
-        gr_abs: f64,
-        is_cut: bool,
-    ) -> f64 {
-        if p.prog_release_mode == ReleaseMode::InputAndGr {
-            return [ReleaseMode::InputDependent, ReleaseMode::GrDependent]
-                .iter()
-                .map(|&mode| {
-                    self.program_activity(
-                        &EnvelopeParams {
-                            prog_release_mode: mode,
-                            ..*p
-                        },
-                        detector_db,
-                        gr_abs,
-                        is_cut,
-                    )
-                })
-                .sum::<f64>()
-                * 0.5;
-        }
-        let engagement = match p.prog_release_mode {
-            ReleaseMode::InputDependent => {
-                let u = self.input_dependent_u(p, detector_db);
-                if p.prog_release_inverse {
-                    1.0 - u
-                } else {
-                    u
-                }
-            }
-            ReleaseMode::GrDependent => {
-                let (threshold, knee) = if is_cut {
-                    (
-                        p.gr_blend_threshold_reduction_db,
-                        p.gr_blend_threshold_reduction_knee_db,
-                    )
-                } else {
-                    (
-                        p.gr_blend_threshold_addition_db,
-                        p.gr_blend_threshold_addition_knee_db,
-                    )
-                };
-                Self::gr_dependent_blend_weights(gr_abs, threshold, knee, p.prog_release_inverse).1
-            }
-            ReleaseMode::Disabled | ReleaseMode::InputAndGr => 0.0,
-        };
-        engagement * (p.prog_release_blend * 0.01) * if is_cut { -1.0 } else { 1.0 }
     }
 
     fn input_dependent_blend(&self, u: f64, inverse: bool) -> f64 {
@@ -349,123 +295,69 @@ impl ReleaseCoeffs {
         apply_curve_amount_blending(base_gr_release, blended_coeff, curve_amount)
     }
 
-    pub fn select_program_release_coef(
+    /// Each source blends its own release law. Normalize overlapping influences
+    /// above 100% so coefficients remain between the fixed and source endpoints.
+    pub fn release_response(
         &self,
         p: &EnvelopeParams,
-        detector_level_db: f64,
-        current_gr_abs: f64,
-        is_negative_gr: bool,
-        _prev_detector_db: f64,
-    ) -> f64 {
-        let mode = p.prog_release_mode;
-        let is_inverse = p.prog_release_inverse;
-
-        match mode {
-            ReleaseMode::InputDependent => {
-                self.release_input_dependent(p, detector_level_db, is_inverse)
+        current_db: f64,
+        target_db: f64,
+        detector_db: f64,
+        gr_abs: f64,
+        is_cut: bool,
+    ) -> (f64, f64, f64, f64) {
+        let curved = p.release_curve.abs() >= EPS;
+        let fixed = if curved {
+            self.calculate_curve_shaped_release_coeff(current_db, target_db, p.release_curve, -1.0)
+        } else {
+            self.release_coeff
+        };
+        let input_weight = (p.input_dependence * 0.01).clamp(0.0, 1.0);
+        let gr_weight = (p.gr_dependence * 0.01).clamp(0.0, 1.0);
+        let total = (input_weight + gr_weight).max(1.0);
+        let input_weight = input_weight / total;
+        let gr_weight = gr_weight / total;
+        let input = if input_weight == 0.0 {
+            fixed
+        } else {
+            let coefficient = self.release_input_dependent(p, detector_db, p.prog_release_inverse);
+            if curved {
+                self.calculate_curve_shaped_release_coeff(
+                    current_db,
+                    target_db,
+                    p.release_curve,
+                    coefficient,
+                )
+            } else {
+                coefficient
             }
-            ReleaseMode::GrDependent => {
-                self.release_gr_dependent_dual(p, current_gr_abs, is_negative_gr, is_inverse)
-            }
-            ReleaseMode::InputAndGr => {
-                (self.release_input_dependent(p, detector_level_db, is_inverse)
-                    + self.release_gr_dependent_dual(p, current_gr_abs, is_negative_gr, is_inverse))
-                    * 0.5
-            }
-            ReleaseMode::Disabled => self.release_coeff,
-        }
-    }
-
-    pub fn calculate_release_coefficient(
-        &self,
-        p: &EnvelopeParams,
-        global_smoothed_gain_db: f64,
-        _target_gr_abs: f64,
-        target_gr_db: f64,
-        detector_level_db: f64,
-        current_gr_abs: f64,
-        current_gr_abs_before_strength: f64,
-        is_negative_gr: bool,
-        prev_detector_db: f64,
-    ) -> f64 {
-        if p.prog_release_mode == ReleaseMode::InputAndGr {
-            return [ReleaseMode::InputDependent, ReleaseMode::GrDependent]
-                .iter()
-                .map(|&mode| {
-                    self.calculate_release_coefficient(
-                        &EnvelopeParams {
-                            prog_release_mode: mode,
-                            ..*p
-                        },
-                        global_smoothed_gain_db,
-                        _target_gr_abs,
-                        target_gr_db,
-                        detector_level_db,
-                        current_gr_abs,
-                        current_gr_abs_before_strength,
-                        is_negative_gr,
-                        prev_detector_db,
-                    )
-                })
-                .sum::<f64>()
-                * 0.5;
-        }
-        let blend_amount = p.prog_release_blend * 0.01;
-        let program_enabled =
-            p.prog_release_blend > 0.0 && p.prog_release_mode != ReleaseMode::Disabled;
-        if p.release_curve.abs() >= EPS {
-            let fixed_rel_coef = self.calculate_curve_shaped_release_coeff(
-                global_smoothed_gain_db,
-                target_gr_db,
-                p.release_curve,
-                -1.0,
-            );
-            if program_enabled {
-                let prog_rel_coef = if p.prog_release_mode.is_gr_dependent() {
-                    let gr_threshold = if is_negative_gr {
-                        p.gr_blend_threshold_reduction_db
-                    } else {
-                        p.gr_blend_threshold_addition_db
-                    };
-                    self.calculate_gr_dependent_curve_release_coeff(
-                        p,
-                        current_gr_abs_before_strength,
-                        p.release_curve,
-                        gr_threshold,
-                        is_negative_gr,
-                    )
-                } else {
-                    let base_rel_coef = self.select_program_release_coef(
-                        p,
-                        detector_level_db,
-                        current_gr_abs,
-                        is_negative_gr,
-                        prev_detector_db,
-                    );
-                    self.calculate_curve_shaped_release_coeff(
-                        global_smoothed_gain_db,
-                        target_gr_db,
-                        p.release_curve,
-                        base_rel_coef,
-                    )
-                };
-                return fixed_rel_coef + (prog_rel_coef - fixed_rel_coef) * blend_amount;
-            }
-            return fixed_rel_coef;
-        }
-
-        let fixed_rel_coef = self.release_coeff;
-        if program_enabled {
-            let prog_rel_coef = self.select_program_release_coef(
+        };
+        let gr = if gr_weight == 0.0 {
+            fixed
+        } else if curved {
+            let threshold = if is_cut {
+                p.gr_blend_threshold_reduction_db
+            } else {
+                p.gr_blend_threshold_addition_db
+            };
+            self.calculate_gr_dependent_curve_release_coeff(
                 p,
-                detector_level_db,
-                current_gr_abs,
-                is_negative_gr,
-                prev_detector_db,
-            );
-            return fixed_rel_coef + (prog_rel_coef - fixed_rel_coef) * blend_amount;
-        }
-        fixed_rel_coef
+                gr_abs,
+                p.release_curve,
+                threshold,
+                is_cut,
+            )
+        } else {
+            self.release_gr_dependent_dual(p, gr_abs, is_cut, p.prog_release_inverse)
+        };
+        let input_effect = (input - fixed) * input_weight;
+        let gr_effect = (gr - fixed) * gr_weight;
+        (
+            fixed,
+            fixed + input_effect,
+            fixed + gr_effect,
+            fixed + input_effect + gr_effect,
+        )
     }
 }
 
@@ -484,7 +376,6 @@ mod tests {
     fn input_rate_zero_and_steady_detector_are_neutral() {
         let c = coeffs();
         let mut p = EnvelopeParams {
-            prog_release_blend: 100.0,
             ..EnvelopeParams::default()
         };
         for base in [c.rel_fast_cached, c.release_coeff, c.rel_slow_cached] {
@@ -499,42 +390,9 @@ mod tests {
     }
 
     #[test]
-    fn program_activity_tracks_threshold_and_cut_boost_polarity() {
-        let c = coeffs();
-        let mut p = EnvelopeParams {
-            prog_release_blend: 100.0,
-            ..EnvelopeParams::default()
-        };
-        assert_eq!(
-            c.program_activity(&p, p.input_level_threshold_db - 1.0, 6.0, true),
-            0.0
-        );
-        assert_eq!(
-            c.program_activity(&p, p.input_level_threshold_db + 20.0, 6.0, true),
-            -1.0
-        );
-        assert_eq!(
-            c.program_activity(&p, p.input_level_threshold_db + 20.0, 6.0, false),
-            1.0
-        );
-        p.prog_release_mode = ReleaseMode::GrDependent;
-        p.gr_blend_threshold_reduction_db = 6.0;
-        p.gr_blend_threshold_reduction_knee_db = 2.0;
-        assert_eq!(c.program_activity(&p, -20.0, 3.0, true), 0.0);
-        assert_eq!(c.program_activity(&p, -20.0, 5.0, true), -0.5);
-        assert_eq!(c.program_activity(&p, -20.0, 6.0, true), -1.0);
-        p.prog_release_inverse = true;
-        assert_eq!(c.program_activity(&p, -20.0, 3.0, true), -1.0);
-        assert_eq!(c.program_activity(&p, -20.0, 6.0, true), 0.0);
-        p.prog_release_blend = 0.0;
-        assert_eq!(c.program_activity(&p, -20.0, 3.0, true), 0.0);
-    }
-
-    #[test]
     fn input_rate_polarity_and_amount_scale_release_speed() {
         let c = coeffs();
         let mut p = EnvelopeParams {
-            prog_release_blend: 100.0,
             ..EnvelopeParams::default()
         };
         let base = c.release_coeff;
@@ -562,7 +420,6 @@ mod tests {
         let c = coeffs();
         let p = EnvelopeParams {
             input_rate_amount: 1.0,
-            prog_release_blend: 100.0,
             ..EnvelopeParams::default()
         };
         let old_neutral = c.release_rate_of_change(&p, 0.0, false);
@@ -571,86 +428,38 @@ mod tests {
     }
 
     #[test]
-    fn input_rate_combines_with_both_program_modes_and_release_curve() {
+    fn independent_influences_blend_and_remain_bounded() {
         let c = coeffs();
-        let mut p = EnvelopeParams {
-            input_rate_amount: 1.0,
-            prog_release_blend: 100.0,
-            ..EnvelopeParams::default()
-        };
-        for mode in [ReleaseMode::InputDependent, ReleaseMode::GrDependent] {
-            p.prog_release_mode = mode;
-            for blend in [0.0, 50.0, 100.0] {
-                p.prog_release_blend = blend;
-                for curve in [-0.5, 0.0, 0.5] {
-                    p.release_curve = curve;
-                    let base = c.calculate_release_coefficient(
-                        &p, -6.0, 0.0, 0.0, -20.0, 6.0, 6.0, true, -19.9,
-                    );
-                    if blend == 0.0 {
-                        assert_eq!(c.apply_input_rate(&p, base, 0.1), base);
-                    } else {
-                        assert!(c.apply_input_rate(&p, base, 0.1) < base);
-                    }
+        for curve in [-0.5, 0.0, 0.5] {
+            let mut p = EnvelopeParams {
+                release_curve: curve,
+                ..EnvelopeParams::default()
+            };
+            let response =
+                |p: &EnvelopeParams| c.release_response(p, -6.0, 0.0, -60.0, 6.0, true).3;
+            let fixed = response(&p);
+            p.input_dependence = 100.0;
+            let input = response(&p);
+            p.input_dependence = 50.0;
+            assert!((response(&p) - (fixed + input) * 0.5).abs() < 1e-12);
+            p.input_dependence = 0.0;
+            p.gr_dependence = 100.0;
+            let gr = response(&p);
+            p.gr_dependence = 50.0;
+            assert!((response(&p) - (fixed + gr) * 0.5).abs() < 1e-12);
+            p.input_dependence = 100.0;
+            p.gr_dependence = 100.0;
+            assert!((response(&p) - (input + gr) * 0.5).abs() < 1e-12);
+            for input_amount in [0.0, 25.0, 100.0] {
+                for gr_amount in [0.0, 50.0, 100.0] {
+                    p.input_dependence = input_amount;
+                    p.gr_dependence = gr_amount;
+                    let coefficient = response(&p);
+                    assert!(coefficient.is_finite() && coefficient > 0.0 && coefficient < 1.0);
+                    p.input_rate_amount = 1.0;
+                    assert!(c.apply_input_rate(&p, coefficient, 0.1) < coefficient);
                 }
             }
-        }
-    }
-
-    #[test]
-    fn shared_blend_zero_neutralizes_all_program_sources() {
-        let c = coeffs();
-        for mode in [
-            ReleaseMode::InputDependent,
-            ReleaseMode::GrDependent,
-            ReleaseMode::InputAndGr,
-            ReleaseMode::Disabled,
-        ] {
-            for curve in [-0.5, 0.0, 0.5] {
-                let p = EnvelopeParams {
-                    prog_release_mode: mode,
-                    prog_release_blend: 0.0,
-                    input_rate_amount: 5.0,
-                    release_curve: curve,
-                    ..EnvelopeParams::default()
-                };
-                let expected = if curve == 0.0 {
-                    c.release_coeff
-                } else {
-                    c.calculate_curve_shaped_release_coeff(-6.0, 0.0, curve, -1.0)
-                };
-                let base = c.calculate_release_coefficient(
-                    &p, -6.0, 0.0, 0.0, -20.0, 6.0, 6.0, true, -19.9,
-                );
-                assert_eq!(base, expected);
-                assert_eq!(c.apply_input_rate(&p, base, 0.1), expected);
-                assert_eq!(c.program_activity(&p, -20.0, 6.0, true), 0.0);
-            }
-        }
-    }
-
-    #[test]
-    fn enabling_both_sources_combines_their_release_responses() {
-        let c = coeffs();
-        let mut p = EnvelopeParams {
-            prog_release_blend: 100.0,
-            ..EnvelopeParams::default()
-        };
-        for curve in [-0.5, 0.0, 0.5] {
-            p.release_curve = curve;
-            let mut levels = Vec::new();
-            for mode in [
-                ReleaseMode::InputDependent,
-                ReleaseMode::GrDependent,
-                ReleaseMode::InputAndGr,
-            ] {
-                p.prog_release_mode = mode;
-                levels.push(c.calculate_release_coefficient(
-                    &p, -6.0, 0.0, 0.0, -60.0, 6.0, 6.0, true, -59.9,
-                ));
-            }
-            assert!((levels[0] - levels[1]).abs() > 1e-8);
-            assert!(levels[2] > levels[0].min(levels[1]) && levels[2] < levels[0].max(levels[1]));
         }
     }
 

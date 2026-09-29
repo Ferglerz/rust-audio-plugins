@@ -29,7 +29,6 @@ mod input_rate_tests {
         let mut engine = EnvelopeEngine::new();
         let params = EnvelopeParams {
             input_rate_amount: 1.0,
-            prog_release_blend: 100.0,
             ..EnvelopeParams::default()
         };
         engine.sync_coefficients(&params, 48000.0);
@@ -42,6 +41,54 @@ mod input_rate_tests {
         assert_eq!(engine.input_rate_activity, 0.0);
         engine.reset();
         assert_eq!(engine.input_rate_activity, 0.0);
+    }
+    #[test]
+    fn source_rings_report_speed_changes_only_during_release() {
+        for (input, gr) in [(100.0, 0.0), (0.0, 100.0), (50.0, 50.0)] {
+            let mut engine = EnvelopeEngine::new();
+            let params = EnvelopeParams {
+                input_dependence: input,
+                gr_dependence: gr,
+                ..EnvelopeParams::default()
+            };
+            engine.sync_coefficients(&params, 48000.0);
+            engine.global_smoothed_gain_db = -3.0;
+            engine.global_smoothed_gain_db_before_strength = -3.0;
+            engine.process_envelope_following(0.0, -60.0, 1.0, 0.0);
+            assert_eq!(engine.input_dependence_activity != 0.0, input != 0.0);
+            assert_eq!(engine.gr_dependence_activity != 0.0, gr != 0.0);
+            assert!(engine.global_smoothed_gain_db > -3.0);
+            engine.process_envelope_following(-12.0, -60.0, 1.0, 0.0);
+            assert_eq!(engine.input_dependence_activity, 0.0);
+            assert_eq!(engine.gr_dependence_activity, 0.0);
+        }
+    }
+
+    #[test]
+    fn detector_rate_speed_influence_is_consistent_across_sample_rates() {
+        let mut values = Vec::new();
+        for srate in [44100.0, 48000.0, 96000.0, 192000.0] {
+            let mut engine = EnvelopeEngine::new();
+            engine.sync_coefficients(
+                &EnvelopeParams {
+                    input_rate_amount: 1.0,
+                    ..EnvelopeParams::default()
+                },
+                srate,
+            );
+            engine.global_smoothed_gain_db = -6.0;
+            engine.global_smoothed_gain_db_before_strength = -6.0;
+            engine.prev_detector_db = -20.0 + 0.01 * 48000.0 / srate;
+            engine.process_envelope_following(0.0, -20.0, 1.0, 0.0);
+            values.push(engine.input_rate_activity);
+        }
+        for value in &values {
+            // Finite per-sample coefficients introduce a small discretization error.
+            assert!(
+                ((*value - values[1]).exp2() - 1.0).abs() < 0.001,
+                "speed octaves: {values:?}"
+            );
+        }
     }
 }
 
@@ -69,7 +116,7 @@ struct ReleaseRuntimeCache {
 impl ReleaseRuntimeCache {
     fn from_params(p: &EnvelopeParams) -> Self {
         Self {
-            use_linear_release: p.prog_release_blend * 0.01 <= 0.5,
+            use_linear_release: p.input_dependence + p.gr_dependence <= 50.0,
         }
     }
 }
@@ -79,8 +126,10 @@ pub struct EnvelopeEngine {
     pub global_smoothed_gain_db_before_strength: f64,
     pub prev_detector_db: f64,
     /// Signed live rate modulation: positive speeds release up, negative slows it.
+    detector_rate_scale: f64,
     pub input_rate_activity: f64,
-    pub program_activity: f64,
+    pub input_dependence_activity: f64,
+    pub gr_dependence_activity: f64,
     attack: AttackCoeffs,
     hold: HoldState,
     release: ReleaseCoeffs,
@@ -100,8 +149,10 @@ impl Default for EnvelopeEngine {
             global_smoothed_gain_db: 0.0,
             global_smoothed_gain_db_before_strength: 0.0,
             prev_detector_db: -20.0,
+            detector_rate_scale: 1.0,
             input_rate_activity: 0.0,
-            program_activity: 0.0,
+            input_dependence_activity: 0.0,
+            gr_dependence_activity: 0.0,
             attack: default_attack,
             hold: HoldState::default(),
             release: default_release,
@@ -120,6 +171,7 @@ impl EnvelopeEngine {
     }
 
     fn update_target_coefficients(&mut self, p: &EnvelopeParams, srate: f64) {
+        self.detector_rate_scale = srate / 48000.0;
         self.target_attack = update_attack_coefficients(p.attack, srate);
         let mut r = ReleaseCoeffs::default();
         r.update_release_coefficient(p.release_ms, srate);
@@ -178,12 +230,8 @@ impl EnvelopeEngine {
         let is_negative_gr = self.global_smoothed_gain_db < 0.0;
         let is_attack = self.determine_attack_or_release(target_gr_abs, current_gr_abs);
         self.input_rate_activity = 0.0;
-        self.program_activity = self.release.program_activity(
-            &self.params,
-            self.current_detector_level_db,
-            current_gr_abs_before_strength,
-            is_negative_gr,
-        );
+        self.input_dependence_activity = 0.0;
+        self.gr_dependence_activity = 0.0;
 
         if is_attack {
             let attack_coef = self.attack_coeff_for_sample(target_gr_db);
@@ -195,21 +243,31 @@ impl EnvelopeEngine {
                 target_gr_db_before_strength,
             );
         } else {
-            let base_rel_coef = self.release.calculate_release_coefficient(
+            let (fixed, input, gr, base_rel_coef) = self.release.release_response(
                 &self.params,
                 self.global_smoothed_gain_db,
-                target_gr_abs,
                 target_gr_db,
                 self.current_detector_level_db,
-                current_gr_abs,
                 current_gr_abs_before_strength,
                 is_negative_gr,
-                self.prev_detector_db,
             );
+            if (self.global_smoothed_gain_db - target_gr_db).abs() > EPS {
+                let speed = |coefficient: f64| {
+                    let ratio = (1.0 - coefficient.clamp(EPS, 1.0 - EPS))
+                        / (1.0 - self.release.release_coeff.clamp(EPS, 1.0 - EPS));
+                    if self.release_cache.use_linear_release {
+                        ratio.clamp(MIN_SPEED_RATIO, MAX_SPEED_RATIO)
+                    } else {
+                        ratio
+                    }
+                };
+                self.input_dependence_activity = (speed(input) / speed(fixed)).log2();
+                self.gr_dependence_activity = (speed(gr) / speed(fixed)).log2();
+            }
             let rel_coef_use = self.release.apply_input_rate(
                 &self.params,
                 base_rel_coef,
-                self.prev_detector_db - self.current_detector_level_db,
+                (self.prev_detector_db - self.current_detector_level_db) * self.detector_rate_scale,
             );
             if (self.global_smoothed_gain_db - target_gr_db).abs() > EPS {
                 let speed = (1.0 - rel_coef_use.clamp(EPS, 1.0 - EPS))
@@ -274,7 +332,8 @@ impl EnvelopeEngine {
         self.hold.counter_samples = 0;
         self.prev_detector_db = -20.0;
         self.input_rate_activity = 0.0;
-        self.program_activity = 0.0;
+        self.input_dependence_activity = 0.0;
+        self.gr_dependence_activity = 0.0;
     }
 
     pub fn flush_denormals(&mut self) {

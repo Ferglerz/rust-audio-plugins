@@ -2,38 +2,50 @@ use super::*;
 
 impl ChordboardView {
     pub(super) fn draw_performance_header(&self, d: &mut Draw) {
-        d.text(600.0, 105.0, "PLAYBACK", TEXT_SMALL, MUTED);
+        d.font = self.bold_font.get();
+        d.text(600.0, 111.0, "Performance", 15.0, TEXT);
+        d.font = self.ui_font.get();
         d.text_right(
-            892.0,
-            110.0,
-            &format!("{} VOICES", self.snapshot.voices),
-            TEXT_SMALL,
+            778.0,
+            109.0,
+            &format!("{} voices", self.snapshot.voices),
+            11.0,
             MUTED,
         );
-        d.button(
-            MPE,
-            ["AUTO", "MPE", "REG"][self.params.output_mode.value() as usize],
-            self.params.mpe_enabled(),
+        let protocol = match self.params.output_mode.value() {
+            0 if self.params.mpe_enabled() => "Auto · MPE ▾",
+            0 => "Auto · MIDI ▾",
+            1 => "MPE ▾",
+            _ => "Regular MIDI ▾",
+        };
+        self.button(d, MPE, protocol, self.menu == Some(Menu::Protocol), TEAL);
+        self.button(
+            d,
+            OUTPUT,
+            "Output ▾",
+            self.panel == Some(Panel::Output),
             TEAL,
         );
-        d.button(OUTPUT, "OUTPUT ▾", self.panel == Some(Panel::Output), TEAL);
-        d.button(
+        let synced = self.params.tempo_sync.value();
+        self.button(
+            d,
             TEMPO_SYNC,
-            "HOST SYNC",
-            self.params.tempo_sync.value(),
+            if synced { "Host tempo" } else { "Manual tempo" },
+            synced,
             TEAL,
         );
-        if self.params.tempo_sync.value() {
+        if synced {
             d.text(
-                732.0,
+                TEMPO_CONTROL.0 + 16.0,
                 41.0,
-                &format!("{:.1} BPM", self.snapshot.tempo),
-                TEXT_SMALL,
-                MUTED,
+                &format!("{:.1} bpm", self.snapshot.tempo),
+                13.0,
+                TEXT,
             );
         }
         for (i, label) in MODE_LABELS.iter().enumerate() {
-            d.tab_button(
+            self.button(
+                d,
                 mode_rect(i),
                 label,
                 self.params.mode.value().max(1) == i as i32 + 1,
@@ -41,9 +53,28 @@ impl ChordboardView {
             );
         }
     }
+
+    pub(super) fn draw_direction(&self, d: &mut Draw) {
+        d.font = self.ui_font.get();
+        d.text(616.0, 355.0, "Direction", 11.0, MUTED);
+        for (i, label) in ["Up", "Down", "Alternate"].iter().enumerate() {
+            let r = direction_rect(i);
+            let selected = self.params.direction.value() == i as i32;
+            self.button(d, r, "", selected, TEAL);
+            d.text_centered(
+                r.0 + r.2 / 2.0,
+                r.1 + r.3 / 2.0 + 4.0,
+                label,
+                12.0,
+                if selected { TEAL } else { TEXT },
+            );
+        }
+    }
     pub(super) fn draw_arp(&self, d: &mut Draw) {
         d.rounded_rect(PAD.0, PAD.1, PAD.2, PAD.3, 8.0, BG);
-        d.text(618.0, 183.0, "ARPEGGIATOR", TEXT_LABEL, GOLD);
+        d.font = self.bold_font.get();
+        d.text(618.0, 183.0, "Arpeggiator", 14.0, GOLD);
+        d.font = self.ui_font.get();
         let count = self.snapshot.notes.len.min(6);
         for i in 0..count {
             if let Some(note) = self.snapshot.notes.string(i) {
@@ -67,22 +98,28 @@ impl ChordboardView {
             [0, 3, 1, 2, 4],
             [2, 4, 0, 3, 1],
         ];
-        for (i, label) in ["UP", "DOWN", "UP/DN", "PLAYED", "RANDOM"]
+        for (i, label) in ["Up", "Down", "Up / Down", "As played", "Random"]
             .iter()
             .enumerate()
         {
             let r = pattern_rect(i);
             let selected = self.params.arp_pattern.value() == i as i32;
             let color = if selected { GOLD } else { MUTED };
-            d.rect(
+            let hover = self.hover_amount(r);
+            d.rounded_rect(
                 r.0,
                 r.1,
                 r.2,
                 r.3,
-                if selected { alpha(GOLD, 0.12) } else { BG },
+                5.0,
+                if selected {
+                    alpha(GOLD, 0.14 + hover * 0.05)
+                } else {
+                    alpha(TEXT, 0.025 + hover * 0.05)
+                },
             );
             if selected {
-                d.outline(r, GOLD);
+                d.rounded_rect(r.0 + 15.0, r.1 + r.3 - 2.0, r.2 - 30.0, 2.0, 1.0, GOLD);
             }
             let points: Vec<_> = contours[i]
                 .iter()
@@ -98,11 +135,12 @@ impl ChordboardView {
             for (x, y) in points {
                 d.circle(x, y, 1.7, color, true);
             }
-            d.text_centered(r.0 + r.2 / 2.0, r.1 + 35.0, label, TEXT_SMALL, color);
+            d.text_centered(r.0 + r.2 / 2.0, r.1 + 35.0, label, 11.0, color);
         }
-        d.text(618.0, 319.0, "OCTAVES", TEXT_SMALL, MUTED);
+        d.text(618.0, 319.0, "Octaves", 11.0, MUTED);
         for i in 0..4 {
-            d.tab_button(
+            self.button(
+                d,
                 octave_rect(i),
                 &(i + 1).to_string(),
                 self.params.octaves.value() == i as i32 + 1,
@@ -110,16 +148,17 @@ impl ChordboardView {
             );
         }
         let header = RATE_HEADER;
-        d.text(header.0, header.1 + 15.0, "RATE", TEXT_SMALL, GOLD);
+        d.text(header.0, header.1 + 15.0, "Rate", 11.0, MUTED);
         d.text_right(
             header.0 + header.2,
             header.1 + 15.0,
-            &format!("{:.3} BEATS", self.params.rate.value()),
+            &format!("{:.3} beats", self.params.rate.value()),
             TEXT_SMALL,
             MUTED,
         );
         for (i, (label, beats)) in ARP_RATES.iter().enumerate() {
-            d.tab_button(
+            self.button(
+                d,
                 rate_rect(i),
                 label,
                 (self.params.rate.value() - beats).abs() < 0.0001,
@@ -130,11 +169,11 @@ impl ChordboardView {
             let gate = self.params.gate.value();
             let swing = self.params.swing.value();
             let is_gate = id == "gate";
-            d.rect(r.0, r.1, r.2, r.3, BG);
+            d.rounded_rect(r.0, r.1, r.2, r.3, 6.0, alpha(TEXT, 0.025));
             d.text(
                 r.0 + 12.0,
                 r.1 + 17.0,
-                if is_gate { "GATE" } else { "SWING" },
+                if is_gate { "Gate" } else { "Swing" },
                 TEXT_SMALL,
                 MUTED,
             );
@@ -363,7 +402,15 @@ impl ChordboardView {
         let height = r.3 - 25.0;
         let hovered = self.pointer.is_some_and(|(x, y)| hit(r, x, y));
         d.text(r.0, r.1 + 15.0, "Spread", TEXT_SMALL, MUTED);
-        d.text_right(r.0 + r.2, r.1 + 15.0, label, TEXT_SMALL, GOLD);
+        d.text_right(
+            r.0 + r.2,
+            r.1 + 15.0,
+            &format!("{label} · click to change"),
+            TEXT_SMALL,
+            GOLD,
+        );
+        let white_key = if d.light { BG } else { alpha(TEXT, 0.65) };
+        let black_key = if d.light { TEXT } else { BG };
         let mut white_index = 0;
         for note in first..=last {
             if black(note) {
@@ -378,7 +425,7 @@ impl ChordboardView {
                 if tones.contains(&note) {
                     GOLD
                 } else {
-                    alpha(TEXT, 0.65)
+                    white_key
                 },
             );
             d.outline((x, top, key_w, height), BG);
@@ -396,7 +443,11 @@ impl ChordboardView {
                 top,
                 key_w * 0.6,
                 height * 0.62,
-                if tones.contains(&note) { GOLD } else { BG },
+                if tones.contains(&note) {
+                    GOLD
+                } else {
+                    black_key
+                },
             );
             d.outline((x, top, key_w * 0.6, height * 0.62), LINE);
         }
@@ -404,19 +455,36 @@ impl ChordboardView {
     }
 
     pub(super) fn draw_meters(&self, d: &mut Draw) {
-        for (i, label) in ["PRESS", "TIMBRE", "BEND"].iter().enumerate() {
+        d.font = self.ui_font.get();
+        for (i, label) in ["Pressure", "Timbre", "Bend"].iter().enumerate() {
             let r = meter_rect(i);
             let x = r.0 + r.2 / 2.0;
-            let top = r.1;
-            let bottom = r.1 + 60.0;
-            let end = bottom - self.meters[i].clamp(0.0, 1.0) * 60.0;
-            d.rounded_rect(x - 4.0, top, 8.0, 60.0, 3.0, LINE);
-            let origin = if i == 0 { bottom } else { top + 30.0 };
-            d.rect(x - 3.0, end.min(origin), 6.0, (end - origin).abs(), TEAL);
-            if i > 0 {
-                d.line(x - 8.0, origin, x + 8.0, origin, MUTED, 1.0);
+            let top = r.1 + 7.0;
+            let height = 52.0;
+            let bottom = top + height;
+            let end = bottom - self.meters[i].clamp(0.0, 1.0) * height;
+            d.rounded_rect(
+                x - 5.0,
+                top - 1.0,
+                10.0,
+                height + 2.0,
+                5.0,
+                alpha(TEXT, 0.055),
+            );
+            d.rounded_rect(x - 3.0, top, 6.0, height, 3.0, BG);
+            let origin = if i == 0 { bottom } else { top + height / 2.0 };
+            let amount = (end - origin).abs();
+            if amount > 0.0 {
+                d.rounded_rect(x - 3.0, end.min(origin), 6.0, amount, 2.5, TEAL);
             }
-            d.text_centered(x, r.1 + r.3, label, TEXT_SMALL, MUTED);
+            for tick in 0..=4 {
+                let y = top + tick as f32 * height / 4.0;
+                d.line(x + 9.0, y, x + 12.0, y, alpha(MUTED, 0.35), 1.0);
+            }
+            if i > 0 {
+                d.line(x - 8.0, origin, x + 8.0, origin, alpha(MUTED, 0.7), 1.0);
+            }
+            d.text_centered(x, r.1 + r.3 - 2.0, label, 11.0, MUTED);
         }
     }
 }

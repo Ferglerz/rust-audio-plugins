@@ -57,24 +57,17 @@ impl View for ImageKnob {
         let inactive = super::appearance::program_control_inactive(&params, self.param_base.name())
             || super::appearance::harmonic_control_inactive(&params, self.param_base.name());
         let norm = param_widget_ext::ui_normalized(&self.param_base, self.step_set);
-        if super::appearance::draw_control(
+        super::appearance::draw_control(
             cx,
             canvas,
             &self.param_base,
             super::appearance::Control::Knob,
             norm,
-        ) {
-            super::appearance::draw_knob_activity(
-                cx,
-                canvas,
-                self.param_base.name(),
-                &self.display,
-            );
-            if !inactive {
-                self.value_edit
-                    .draw(cx, canvas, super::appearance::Control::Knob);
-            }
-            return;
+        );
+        super::appearance::draw_knob_activity(cx, canvas, self.param_base.name(), &self.display);
+        if !inactive {
+            self.value_edit
+                .draw(cx, canvas, super::appearance::Control::Knob);
         }
     }
 

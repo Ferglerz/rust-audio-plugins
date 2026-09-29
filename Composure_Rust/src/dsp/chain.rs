@@ -80,6 +80,8 @@ pub struct ProcessingChain {
     block_detector_max_db: f64,
     block_input_max_db: f64,
     block_input_rate_activity: f64,
+    block_input_dependence_activity: f64,
+    block_gr_dependence_activity: f64,
     block_gr_max_db: f64,
     curve_input_db: f64,
     listen_crossfade: f64,
@@ -124,6 +126,8 @@ impl ProcessingChain {
             block_detector_max_db: MIN_DETECTOR_DB,
             block_input_max_db: MIN_DETECTOR_DB,
             block_input_rate_activity: 0.0,
+            block_input_dependence_activity: 0.0,
+            block_gr_dependence_activity: 0.0,
             block_gr_max_db: 0.0,
             curve_input_db: -20.0,
             listen_crossfade: 0.0,
@@ -209,18 +213,31 @@ impl ProcessingChain {
         self.param_smooth_counter -= 1;
 
         let om = self.param_smooth_one_minus;
-        // The master program Blend must reach zero exactly at the end of its ramp.
-        let program_blend = smooth_step(
-            self.smoothed_envelope_params.prog_release_blend,
-            self.target_envelope_params.prog_release_blend,
-            1.0 / (self.param_smooth_counter + 1) as f64,
+        // Influence knobs must reach exact zero when their automation ramp ends.
+        let finite_step = 1.0 / (self.param_smooth_counter + 1) as f64;
+        let input = smooth_step(
+            self.smoothed_envelope_params.input_dependence,
+            self.target_envelope_params.input_dependence,
+            finite_step,
+        );
+        let gr = smooth_step(
+            self.smoothed_envelope_params.gr_dependence,
+            self.target_envelope_params.gr_dependence,
+            finite_step,
+        );
+        let rate = smooth_step(
+            self.smoothed_envelope_params.input_rate_amount,
+            self.target_envelope_params.input_rate_amount,
+            finite_step,
         );
         smooth_envelope_params(
             &mut self.smoothed_envelope_params,
             &self.target_envelope_params,
             om,
         );
-        self.smoothed_envelope_params.prog_release_blend = program_blend;
+        self.smoothed_envelope_params.input_dependence = input;
+        self.smoothed_envelope_params.gr_dependence = gr;
+        self.smoothed_envelope_params.input_rate_amount = rate;
         self.envelope
             .update_runtime_params(&self.smoothed_envelope_params, self.srate, om);
         if !self.filters.coefficients_converged() {
@@ -307,6 +324,8 @@ impl ProcessingChain {
         self.block_detector_max_db = MIN_DETECTOR_DB;
         self.block_input_max_db = MIN_DETECTOR_DB;
         self.block_input_rate_activity = 0.0;
+        self.block_input_dependence_activity = 0.0;
+        self.block_gr_dependence_activity = 0.0;
         self.block_gr_max_db = 0.0;
     }
 
@@ -323,8 +342,11 @@ impl ProcessingChain {
         self.block_input_rate_activity
     }
 
-    pub fn meter_program_activity(&self) -> f64 {
-        self.envelope.program_activity
+    pub fn block_meter_input_dependence_activity(&self) -> f64 {
+        self.block_input_dependence_activity
+    }
+    pub fn block_meter_gr_dependence_activity(&self) -> f64 {
+        self.block_gr_dependence_activity
     }
 
     pub fn block_meter_gr_db(&self) -> f64 {
@@ -373,6 +395,8 @@ impl ProcessingChain {
         self.block_detector_max_db = MIN_DETECTOR_DB;
         self.block_input_max_db = MIN_DETECTOR_DB;
         self.block_input_rate_activity = 0.0;
+        self.block_input_dependence_activity = 0.0;
+        self.block_gr_dependence_activity = 0.0;
         self.block_gr_max_db = 0.0;
         self.denormal_quiet_i = 0;
         self.denormal_flush_done = false;
@@ -474,7 +498,8 @@ impl ProcessingChain {
             target_gr_db.abs() < 0.01 && self.envelope.global_smoothed_gain_db.abs() < 0.01;
         if can_skip_envelope {
             self.envelope.input_rate_activity = 0.0;
-            self.envelope.program_activity = 0.0;
+            self.envelope.input_dependence_activity = 0.0;
+            self.envelope.gr_dependence_activity = 0.0;
             self.envelope.global_smoothed_gain_db = 0.0;
             self.envelope.global_smoothed_gain_db_before_strength = 0.0;
         } else {
@@ -488,6 +513,14 @@ impl ProcessingChain {
 
         if self.envelope.input_rate_activity.abs() > self.block_input_rate_activity.abs() {
             self.block_input_rate_activity = self.envelope.input_rate_activity;
+        }
+        if self.envelope.input_dependence_activity.abs()
+            > self.block_input_dependence_activity.abs()
+        {
+            self.block_input_dependence_activity = self.envelope.input_dependence_activity;
+        }
+        if self.envelope.gr_dependence_activity.abs() > self.block_gr_dependence_activity.abs() {
+            self.block_gr_dependence_activity = self.envelope.gr_dependence_activity;
         }
         self.envelope.prev_detector_db = detector_level_db;
 
@@ -660,23 +693,29 @@ mod tests {
     use crate::dsp::graph::CompressionGraph;
 
     #[test]
-    fn shared_program_blend_reaches_bypass_after_automation_ramp() {
+    fn independent_influences_reach_zero_after_automation_ramp() {
         for srate in [44100.0, 48000.0, 96000.0, 192000.0] {
             let mut chain = ProcessingChain::new(srate);
             chain.set_envelope_params(EnvelopeParams {
-                prog_release_blend: 100.0,
+                input_dependence: 100.0,
+                gr_dependence: 100.0,
                 input_rate_amount: 5.0,
                 ..EnvelopeParams::default()
             });
-            chain.target_envelope_params.prog_release_blend = 0.0;
+            chain.target_envelope_params.input_dependence = 0.0;
+            chain.target_envelope_params.gr_dependence = 0.0;
+            chain.target_envelope_params.input_rate_amount = 0.0;
             let samples = (PARAM_SMOOTH_MS * srate / 1000.0).ceil() as usize;
             chain.param_smooth_counter = samples;
             for _ in 0..samples {
                 chain.process_sample(0.1, 0.1, None);
             }
-            assert_eq!(chain.smoothed_envelope_params.prog_release_blend, 0.0);
+            assert_eq!(chain.smoothed_envelope_params.input_dependence, 0.0);
+            assert_eq!(chain.smoothed_envelope_params.gr_dependence, 0.0);
+            assert_eq!(chain.smoothed_envelope_params.input_rate_amount, 0.0);
             assert_eq!(chain.envelope.input_rate_activity, 0.0);
-            assert_eq!(chain.envelope.program_activity, 0.0);
+            assert_eq!(chain.envelope.input_dependence_activity, 0.0);
+            assert_eq!(chain.envelope.gr_dependence_activity, 0.0);
         }
     }
 

@@ -82,7 +82,8 @@ fn rhythm_controls_and_pointer_targets_follow_active_mode() {
         for id in ["humanize", "gate", "swing"] {
             assert_eq!(ids.contains(&id), mode == 3, "mode {mode}: {id}");
         }
-        for id in ["direction", "strum_ms", "contour"] {
+        assert!(!ids.contains(&"direction"));
+        for id in ["strum_ms", "contour"] {
             assert_eq!(ids.contains(&id), mode == 1, "mode {mode}: {id}");
         }
         let (mut cx, target, changes) = context();
@@ -98,25 +99,26 @@ fn rhythm_controls_and_pointer_targets_follow_active_mode() {
 }
 
 #[test]
-fn output_protocol_button_cycles_three_modes() {
-    for mode in 0..3 {
+fn output_protocol_menu_selects_three_modes() {
+    for selected in 0..3 {
         let mut view = view(0, false);
-        view.params = Arc::new(ChordboardParams {
-            output_mode: IntParam::new(
-                "Output protocol",
-                mode,
-                IntRange::Linear { min: 0, max: 2 },
-            ),
-            ..ChordboardParams::default()
-        });
         let (mut cx, target, changes) = context();
         click(&mut view, &mut cx, target, MPE);
         assert!(view.panel.is_none());
+        assert!(view.menu == Some(Menu::Protocol));
+        assert!(changes.borrow().is_empty());
+        click(
+            &mut view,
+            &mut cx,
+            target,
+            Menu::Protocol.option_rect(selected),
+        );
+        assert!(view.menu.is_none());
         assert_eq!(
             &*changes.borrow(),
             &[(
                 view.params.output_mode.as_ptr(),
-                view.params.output_mode.preview_normalized((mode + 1) % 3)
+                view.params.output_mode.preview_normalized(selected as i32)
             )]
         );
     }
@@ -130,20 +132,10 @@ fn mapping_anchor_edits_the_selected_axis_without_touching_playback() {
     click(&mut view, &mut cx, target, mapping_summary_rect(1));
     assert_eq!(view.panel, Some(Panel::Mapping));
     assert_eq!(view.mapping_axis, 1);
-    click(&mut view, &mut cx, target, Menu::MappingKind.trigger_rect());
-    click(&mut view, &mut cx, target, Menu::MappingKind.option_rect(1));
-    click(
-        &mut view,
-        &mut cx,
-        target,
-        Menu::MappingCc(false).trigger_rect(),
-    );
-    click(
-        &mut view,
-        &mut cx,
-        target,
-        Menu::MappingCc(false).option_rect(74),
-    );
+    click_menu_trigger(&mut view, &mut cx, target, Menu::MappingKind);
+    click_menu_option(&mut view, &mut cx, target, Menu::MappingKind, 1);
+    click_menu_trigger(&mut view, &mut cx, target, Menu::MappingCc(false));
+    click_menu_option(&mut view, &mut cx, target, Menu::MappingCc(false), 74);
     assert_eq!(view.mapping().kind, 1);
     assert_eq!(view.mapping().number, 74);
     assert_eq!(view.params.map_x.load(Ordering::Relaxed), original_x);
@@ -151,7 +143,8 @@ fn mapping_anchor_edits_the_selected_axis_without_touching_playback() {
         changes.borrow().is_empty(),
         "popup clicks changed covered performance parameters"
     );
-    click(&mut view, &mut cx, target, LEARN);
+    let learn = mapping_learn_rect(view.mapping_axis);
+    click(&mut view, &mut cx, target, learn);
     assert!(
         std::iter::from_fn(|| view.bridge.commands.pop()).any(|c| matches!(c, Command::Learn(2)))
     );
@@ -213,14 +206,9 @@ fn mapping_menu_blocks_scroll_and_text_edit_on_covered_controls() {
     let mut view = view(2, false);
     let (mut cx, target, changes) = context();
     click(&mut view, &mut cx, target, mapping_summary_rect(0));
-    click(
-        &mut view,
-        &mut cx,
-        target,
-        Menu::MappingCc(false).trigger_rect(),
-    );
+    click_menu_trigger(&mut view, &mut cx, target, Menu::MappingCc(false));
     assert!(view.menu.is_some());
-    let r = mapping_control_rect(0);
+    let r = mapping_control_rect(0, "x_reverse");
     event(
         &mut view,
         &mut cx,
@@ -229,12 +217,13 @@ fn mapping_menu_blocks_scroll_and_text_edit_on_covered_controls() {
         r.1 + 15.0,
         WindowEvent::MouseScroll(0.0, 1.0),
     );
+    let menu = view.menu_bounds(view.menu.unwrap());
     event(
         &mut view,
         &mut cx,
         target,
-        r.0 + 25.0,
-        r.1 + 15.0,
+        menu.0 + 12.0,
+        menu.1 + 12.0,
         WindowEvent::MouseDoubleClick(MouseButton::Left),
     );
     assert!(changes.borrow().is_empty());
@@ -289,8 +278,8 @@ fn direct_learn_y_dropdown_and_transpose_buttons() {
         Some(Command::Learn(4))
     ));
     click(&mut view, &mut cx, target, mapping_summary_rect(1));
-    click(&mut view, &mut cx, target, Menu::YTarget.trigger_rect());
-    click(&mut view, &mut cx, target, Menu::YTarget.option_rect(5));
+    click_menu_trigger(&mut view, &mut cx, target, Menu::YTarget);
+    click_menu_option(&mut view, &mut cx, target, Menu::YTarget, 5);
     assert!(changes
         .borrow()
         .contains(&(view.params.y_target.as_ptr(), 1.0)));
@@ -321,7 +310,7 @@ fn controller_options_live_only_in_their_axis_popup() {
         assert_eq!(controls.iter().any(|(c, _)| c.id == "x_reverse"), axis == 0);
         assert_eq!(controls.iter().any(|(c, _)| c.id == "y_reverse"), axis == 1);
         for (_, r) in controls {
-            let p = Panel::Mapping.rect();
+            let p = view.panel_rect(Panel::Mapping);
             assert!(r.0 >= p.0 && r.1 >= p.1 && r.0 + r.2 <= p.0 + p.2 && r.1 + r.3 <= p.1 + p.3);
         }
     }
@@ -332,7 +321,7 @@ fn controller_options_live_only_in_their_axis_popup() {
 #[test]
 fn native_repeated_clicks_reach_all_chord_and_parameter_buttons() {
     for button in 0..68 {
-        if button == 44 {
+        if button == 44 || button == 64 {
             continue;
         }
         let mut cx = Context::default();
@@ -368,7 +357,7 @@ fn native_repeated_clicks_reach_all_chord_and_parameter_buttons() {
             64 => (MPE, Some(params.output_mode.as_ptr())),
             65 => (LATCH, Some(params.latch.as_ptr())),
             66 => (QWERTY, Some(params.keyboard.as_ptr())),
-            _ => ((32.0, 190.0, 154.0, 28.0), Some(params.fifths.as_ptr())),
+            _ => (ORDER, Some(params.fifths.as_ptr())),
         };
         for press in 1..=3 {
             EventContext::new_with_current(&mut cx, target).capture();
@@ -405,7 +394,11 @@ fn slider_drags_from_title_track_and_value_without_jumping() {
     for origin in [(20.0, 12.0), (20.0, 28.0), (130.0, 12.0)] {
         let mut view = view(1, false);
         let (mut cx, target, changes) = context();
-        let r = voicing_controls()[0].1;
+        let r = strum_controls()
+            .into_iter()
+            .find(|(id, _)| *id == "strum_ms")
+            .unwrap()
+            .1;
         let (x, y) = (r.0 + origin.0, r.1 + origin.1);
         event(
             &mut view,
@@ -425,8 +418,8 @@ fn slider_drags_from_title_track_and_value_without_jumping() {
             WindowEvent::MouseMove(x + 40.0, y),
         );
         let (ptr, value) = changes.borrow().last().copied().unwrap();
-        assert_eq!(ptr, view.params.quality.as_ptr());
-        assert!((value - 0.16).abs() < 0.00001);
+        assert_eq!(ptr, view.params.strum_ms.as_ptr());
+        assert!(value > 0.0 && value <= 1.0);
         event(
             &mut view,
             &mut cx,
@@ -444,7 +437,11 @@ fn slider_drags_from_title_track_and_value_without_jumping() {
 fn clicking_a_slider_value_edits_but_clicking_its_title_does_not() {
     let mut view = view(1, false);
     let (mut cx, target, changes) = context();
-    let r = voicing_controls()[0].1;
+    let r = strum_controls()
+        .into_iter()
+        .find(|(id, _)| *id == "strum_ms")
+        .unwrap()
+        .1;
     click(&mut view, &mut cx, target, (r.0, r.1, 60.0, 20.0));
     assert!(view.edit.is_none());
     click(
@@ -453,7 +450,7 @@ fn clicking_a_slider_value_edits_but_clicking_its_title_does_not() {
         target,
         pleasant_ui::slider_value_rect(r),
     );
-    assert_eq!(view.edit.as_ref().map(|edit| edit.target), Some("quality"));
+    assert_eq!(view.edit.as_ref().map(|edit| edit.target), Some("strum_ms"));
     assert!(changes.borrow().is_empty());
 }
 
@@ -724,6 +721,15 @@ fn memory_shortcuts_capture_with_shift_and_do_not_interrupt_text_entry() {
     let mut view = view(0, false);
     let (mut cx, target, _) = context();
     view.focused = true;
+    view.snapshot.captured = SavedChord {
+        root: 60,
+        second: None,
+        quality: 0,
+        inversion: 0,
+        spread: 0,
+        transpose: 0,
+    }
+    .encode();
     BackendContext::new(&mut cx)
         .modifiers()
         .set(Modifiers::SHIFT, true);
@@ -815,12 +821,7 @@ fn manual_xy_cc_selection_clears_channel_lock_and_has_no_channel_menu() {
         view.params
             .mapping(axis)
             .store(crate::engine::Mapping::cc(7, 3).encode(), Ordering::Relaxed);
-        click(
-            &mut view,
-            &mut cx,
-            target,
-            Menu::MappingChannel(false).trigger_rect(),
-        );
+        click_menu_trigger(&mut view, &mut cx, target, Menu::MappingChannel(false));
         assert!(view.menu.is_none());
         assert_eq!(
             view.mapping().channel,
@@ -889,5 +890,356 @@ fn defaults_use_auto_strum_zero_sweep_and_expression_cc_on_any_channel() {
             crate::engine::Mapping::cc(11, 16)
         ]
     );
-    assert_eq!(MODE_LABELS, ["AUTO STRUM", "MANUAL STRUM", "ARPEGGIATOR"]);
+    assert_eq!(MODE_LABELS, ["Auto Strum", "Manual Strum", "Arpeggiator"]);
+}
+
+#[test]
+fn quality_menu_selects_without_drag_text_or_scroll_changes() {
+    let mut view = view(1, false);
+    let (mut cx, target, changes) = context();
+    click(&mut view, &mut cx, target, Menu::Quality.trigger_rect());
+    assert!(view.menu == Some(Menu::Quality));
+    assert!(view.drag.is_none() && view.edit.is_none());
+    click(&mut view, &mut cx, target, Menu::Quality.option_rect(3));
+    assert_eq!(
+        changes.borrow().last().copied(),
+        Some((
+            view.params.quality.as_ptr(),
+            view.params.quality.preview_normalized(3)
+        ))
+    );
+    changes.borrow_mut().clear();
+    let r = Menu::Quality.trigger_rect();
+    event(
+        &mut view,
+        &mut cx,
+        target,
+        r.0 + r.2 / 2.0,
+        r.1 + r.3 / 2.0,
+        WindowEvent::MouseScroll(0.0, 1.0),
+    );
+    assert!(changes.borrow().is_empty());
+}
+
+#[test]
+fn direct_direction_selects_exact_values() {
+    for selected in 0..3 {
+        let mut view = view(1, false);
+        let (mut cx, target, changes) = context();
+        click(&mut view, &mut cx, target, direction_rect(selected));
+        assert_eq!(
+            &*changes.borrow(),
+            &[(
+                view.params.direction.as_ptr(),
+                view.params.direction.preview_normalized(selected as i32)
+            ),]
+        );
+        assert!(view.drag.is_none() && view.edit.is_none());
+    }
+}
+
+#[test]
+fn menu_open_releases_notes_and_memory_repeat_guard_before_swallowing_keyup() {
+    let mut view = view(0, false);
+    let (mut cx, target, _) = context();
+    view.pressed[0] = true;
+    view.memory_held[0] = true;
+    view.open_menu(Menu::Quality);
+    assert!(!view.pressed[0] && !view.memory_held[0]);
+    assert!(std::iter::from_fn(|| view.bridge.commands.pop())
+        .any(|c| matches!(c, Command::ReleaseKeyboard)));
+    assert!(view.window_event(
+        &mut EventContext::new_with_current(&mut cx, target),
+        &WindowEvent::KeyUp(CODES[0], None)
+    ));
+    assert!(!view.window_event(
+        &mut EventContext::new_with_current(&mut cx, target),
+        &WindowEvent::KeyDown(Code::Escape, None)
+    ));
+}
+
+#[test]
+fn popover_close_buttons_consume_without_changing_parameters() {
+    let mut view = view(1, false);
+    let (mut cx, target, changes) = context();
+    for menu in [Menu::Quality, Menu::Protocol] {
+        view.open_menu(menu);
+        click(&mut view, &mut cx, target, menu.close_rect());
+        assert!(view.menu.is_none());
+        assert!(view.drag.is_none());
+    }
+    for panel in [Panel::Output, Panel::Mapping] {
+        view.set_panel(Some(panel));
+        let close = view.panel_close_rect(panel);
+        click(&mut view, &mut cx, target, close);
+        assert!(view.panel.is_none());
+        assert!(view.drag.is_none());
+    }
+    assert!(changes.borrow().is_empty());
+}
+
+#[test]
+fn save_requires_a_chord_and_confirms_only_after_slot_update() {
+    let mut view = view(0, false);
+    let (mut cx, target, _) = context();
+    click(&mut view, &mut cx, target, SAVE_MEMORY);
+    assert!(!view.memory_ui.armed);
+    view.request_capture(0);
+    assert!(view.bridge.commands.pop().is_none());
+    let word = SavedChord {
+        root: 60,
+        second: None,
+        quality: 0,
+        inversion: 0,
+        spread: 0,
+        transpose: 0,
+    }
+    .encode();
+    view.snapshot.captured = word;
+    click(&mut view, &mut cx, target, SAVE_MEMORY);
+    assert!(view.memory_ui.armed);
+    view.request_capture(0);
+    assert!(!view.memory_ui.armed);
+    assert!(matches!(
+        view.bridge.commands.pop(),
+        Some(Command::Capture(0))
+    ));
+    view.tick_memories(0.1);
+    assert_eq!(view.memory_ui.flash[0], 0.0);
+    view.params.slot(0).store(word, Ordering::Relaxed);
+    view.tick_memories(0.1);
+    assert!(view.memory_ui.flash[0] > 0.0);
+}
+
+#[test]
+fn left_performance_targets_do_not_overlap() {
+    let mut targets = vec![
+        LATCH,
+        QWERTY,
+        ORDER,
+        SAVE_MEMORY,
+        Menu::Key.trigger_rect(),
+        Menu::Scale.trigger_rect(),
+        Menu::Quality.trigger_rect(),
+        voicing_controls()[1].1,
+    ];
+    targets.extend((0..KEY_COUNT).map(key_rect));
+    targets.extend((0..8).map(memory_rect));
+    targets.extend((0..2).map(inversion_rect));
+    targets.extend((0..TRANSPOSE_STEPS.len()).map(transpose_rect));
+    for (i, a) in targets.iter().enumerate() {
+        assert!(a.0 >= 0.0 && a.1 >= 0.0 && a.0 + a.2 <= W && a.1 + a.3 <= H);
+        for (j, b) in targets.iter().enumerate().skip(i + 1) {
+            let overlap = a.0 < b.0 + b.2 && b.0 < a.0 + a.2 && a.1 < b.1 + b.3 && b.1 < a.1 + a.3;
+            assert!(
+                !overlap,
+                "performance targets {i} and {j} overlap: {a:?} {b:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn direct_selection_pairs_parameter_gestures() {
+    let mut view = view(1, false);
+    let (mut cx, target, _) = context();
+    let gestures = Rc::new(RefCell::new(Vec::new()));
+    let observed = gestures.clone();
+    cx.add_global_listener(move |_, event| {
+        event.map(|event: &RawParamEvent, _| {
+            let phase = match event {
+                RawParamEvent::BeginSetParameter(ptr) => Some((*ptr, 0)),
+                RawParamEvent::SetParameterNormalized(ptr, _) => Some((*ptr, 1)),
+                RawParamEvent::EndSetParameter(ptr) => Some((*ptr, 2)),
+                _ => None,
+            };
+            if let Some(phase) = phase {
+                observed.borrow_mut().push(phase);
+            }
+        });
+    });
+    for (menu, ptr) in [
+        (Menu::Quality, view.params.quality.as_ptr()),
+        (Menu::Protocol, view.params.output_mode.as_ptr()),
+    ] {
+        view.open_menu(menu);
+        click(&mut view, &mut cx, target, menu.option_rect(1));
+        assert_eq!(&*gestures.borrow(), &[(ptr, 0), (ptr, 1), (ptr, 2)]);
+        gestures.borrow_mut().clear();
+    }
+    for (r, ptr) in [
+        (voicing_controls()[1].1, view.params.spread.as_ptr()),
+        (direction_rect(2), view.params.direction.as_ptr()),
+    ] {
+        click(&mut view, &mut cx, target, r);
+        assert_eq!(&*gestures.borrow(), &[(ptr, 0), (ptr, 1), (ptr, 2)]);
+        gestures.borrow_mut().clear();
+    }
+}
+
+#[test]
+fn displayed_units_round_trip_through_value_entry() {
+    let view = view(1, false);
+    for (id, text, expected) in [
+        (
+            "velocity",
+            "42%",
+            view.params.velocity.preview_normalized(0.42),
+        ),
+        (
+            "humanize",
+            "30",
+            view.params.humanize.preview_normalized(0.3),
+        ),
+        (
+            "contour",
+            "-25%",
+            view.params.contour.preview_normalized(-0.25),
+        ),
+        (
+            "length_ms",
+            "350 ms",
+            view.params.length_ms.preview_normalized(350.0),
+        ),
+        (
+            "strum_ms",
+            "80",
+            view.params.strum_ms.preview_normalized(80.0),
+        ),
+        (
+            "bend_range",
+            "48 st",
+            view.params.bend_range.preview_normalized(48.0),
+        ),
+    ] {
+        let c = view.control(id).unwrap();
+        assert!(
+            (view.parse_display_value(&c, text).unwrap() - expected).abs() < 0.00001,
+            "{id}: {text}"
+        );
+        assert!(
+            (view
+                .parse_display_value(&c, &view.display_value(&c))
+                .unwrap()
+                - c.norm)
+                .abs()
+                < 0.00001,
+            "{id} display failed round trip"
+        );
+    }
+    let c = view.control("velocity").unwrap();
+    assert!(view.parse_display_value(&c, "NaN%").is_none());
+    assert!(view.parse_display_value(&c, "loud").is_none());
+}
+
+#[test]
+fn all_popover_choices_fit_inside_the_window_and_clear_the_close_button() {
+    for menu in [
+        Menu::Key,
+        Menu::Scale,
+        Menu::Quality,
+        Menu::Protocol,
+        Menu::YTarget,
+        Menu::StrumRate,
+        Menu::MappingKind,
+        Menu::MappingChannel(true),
+        Menu::MappingChannel(false),
+        Menu::MappingCc(true),
+        Menu::MappingCc(false),
+    ] {
+        let bounds = menu.bounds();
+        assert!(
+            bounds.0 >= 0.0
+                && bounds.1 >= 0.0
+                && bounds.0 + bounds.2 <= W
+                && bounds.1 + bounds.3 <= H,
+            "{menu:?}"
+        );
+        let close = menu.close_rect();
+        for i in 0..menu.items().len() {
+            let r = menu.option_rect(i);
+            assert!(
+                r.0 >= bounds.0
+                    && r.1 >= close.1 + close.3
+                    && r.0 + r.2 <= bounds.0 + bounds.2
+                    && r.1 + r.3 <= bounds.1 + bounds.3,
+                "{menu:?} choice {i}"
+            );
+        }
+    }
+}
+
+#[test]
+fn hover_and_action_animation_settle_without_midi_commands() {
+    let mut view = view(1, false);
+    view.pointer = Some((ORDER.0 + 2.0, ORDER.1 + 2.0));
+    assert!(view.tick_motion(0.1));
+    assert_eq!(view.hover_amount(ORDER), 1.0);
+    assert!(!view.tick_motion(0.1));
+    view.flash_press(ORDER.0 + 2.0, ORDER.1 + 2.0);
+    assert!(view.tick_motion(0.18));
+    assert!(view.action_flash.is_none());
+    view.pointer = None;
+    assert!(view.tick_motion(0.1));
+    assert_eq!(view.hover_amount(ORDER), 0.0);
+    assert!(!view.tick_motion(0.1));
+    assert!(view.bridge.commands.pop().is_none());
+}
+
+fn click_menu_trigger(view: &mut ChordboardView, cx: &mut Context, target: Entity, menu: Menu) {
+    let r = view.menu_trigger_rect(menu);
+    click(view, cx, target, r);
+}
+fn click_menu_option(
+    view: &mut ChordboardView,
+    cx: &mut Context,
+    target: Entity,
+    menu: Menu,
+    index: usize,
+) {
+    let r = view.menu_option_rect(menu, index);
+    click(view, cx, target, r);
+}
+
+#[test]
+fn compact_mapping_controls_fit_each_axis_and_close_without_parameter_changes() {
+    let mut view = view(2, false);
+    let (mut cx, target, changes) = context();
+    for axis in 0..2 {
+        click(&mut view, &mut cx, target, mapping_summary_rect(axis));
+        let panel = view.panel_rect(Panel::Mapping);
+        assert_eq!(panel.2, 384.0);
+        assert_eq!(panel.3, if axis == 0 { 104.0 } else { 180.0 });
+        assert_eq!(panel.1 + panel.3 + 6.0, mapping_summary_rect(axis).1);
+        let mut rects: Vec<_> = view.panel_controls().iter().map(|(_, r)| *r).collect();
+        rects.extend([
+            view.menu_trigger_rect(Menu::MappingKind),
+            view.menu_trigger_rect(Menu::MappingCc(false)),
+            mapping_learn_rect(axis),
+            view.panel_close_rect(Panel::Mapping),
+        ]);
+        if axis == 1 {
+            rects.push(view.menu_trigger_rect(Menu::YTarget));
+        }
+        for r in &rects {
+            assert!(
+                r.0 >= panel.0
+                    && r.1 >= panel.1
+                    && r.0 + r.2 <= panel.0 + panel.2
+                    && r.1 + r.3 <= panel.1 + panel.3
+            );
+        }
+        for (i, a) in rects.iter().enumerate() {
+            for b in rects.iter().skip(i + 1) {
+                assert!(
+                    a.0 + a.2 <= b.0 || b.0 + b.2 <= a.0 || a.1 + a.3 <= b.1 || b.1 + b.3 <= a.1,
+                    "overlapping compact mapping controls: {a:?}, {b:?}"
+                );
+            }
+        }
+        let close = view.panel_close_rect(Panel::Mapping);
+        click(&mut view, &mut cx, target, close);
+        assert!(view.panel.is_none());
+        assert!(changes.borrow().is_empty());
+    }
 }

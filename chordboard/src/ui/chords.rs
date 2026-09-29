@@ -9,16 +9,44 @@ impl ChordboardView {
         }
         (self.snapshot.root, self.snapshot.second)
     }
+
+    pub(super) fn chord_state_label(&self) -> &'static str {
+        if self.snapshot.root >= 0 {
+            "Held"
+        } else if self.params.latch.value() && self.snapshot.full_notes.len > 0 {
+            "Latched"
+        } else if self.snapshot.notes.len > 0 {
+            "Sustained"
+        } else if self.can_capture() {
+            "Last chord"
+        } else {
+            "Ready"
+        }
+    }
+
     pub(super) fn draw_chords(&self, d: &mut Draw) {
-        let captured = SavedChord::decode(self.snapshot.captured);
-        let chord_name = captured.map_or_else(|| "PLAY A CHORD".into(), harmony::chord_name);
-        d.text(
-            32.0,
-            128.0,
-            &chord_name,
-            (278.0 / (chord_name.chars().count().max(1) as f32 * 0.61)).min(29.0),
-            TEXT,
+        d.font = self.ui_font.get();
+        d.text(32.0, 116.0, "CHORD", 11.0, MUTED);
+        let state = self.chord_state_label();
+        d.circle(
+            107.0,
+            112.0,
+            3.0,
+            if self.snapshot.voices > 0 {
+                TEAL
+            } else {
+                MUTED
+            },
+            true,
         );
+        d.text(117.0, 116.0, state, 11.0, MUTED);
+        let name = SavedChord::decode(self.snapshot.captured)
+            .map_or_else(|| "Play a chord".into(), harmony::chord_name);
+        d.font = self.bold_font.get();
+        let size = (33.0 * 284.0 / self.text_width(d, &name, 33.0).max(1.0)).clamp(24.0, 33.0);
+        let title = self.fit_text(d, &name, 284.0, size);
+        d.text(32.0, 153.0, &title, size, TEXT);
+        d.font = self.font.get();
         let tones = self
             .snapshot
             .full_notes
@@ -28,127 +56,142 @@ impl ChordboardView {
                 format!(
                     "{}{}",
                     harmony::NOTE_NAMES[*n as usize % 12],
-                    *n as i16 / 12 - 1,
+                    *n as i16 / 12 - 1
                 )
             })
             .collect::<Vec<_>>()
             .join("  ");
-        d.text(32.0, 144.0, &tones, TEXT_SMALL, MUTED);
-        let slot_label = |n: i16| {
+        let tones = self.fit_text(d, &tones, 284.0, 11.0);
+        d.text(
+            32.0,
+            174.0,
+            if tones.is_empty() {
+                "Click a key below to begin"
+            } else {
+                &tones
+            },
+            11.0,
+            MUTED,
+        );
+        d.font = self.ui_font.get();
+        self.button(
+            d,
+            LEARN_OCTAVE,
+            if self.learning() == 4 {
+                "Listening… Cancel learn"
+            } else {
+                "Learn MIDI keyboard"
+            },
+            self.learning() == 4,
+            TEAL,
+        );
+        let note = |n: i16| {
             if n < 0 {
-                "--".to_string()
+                "—".into()
             } else {
                 format!("{}{}", harmony::NOTE_NAMES[n as usize % 12], n / 12 - 1)
             }
         };
         let (root, second) = self.display_input_notes();
+        d.text(352.0, 150.0, "Root", 11.0, MUTED);
+        d.text(352.0, 173.0, "Second", 11.0, MUTED);
+        d.font = self.font.get();
         d.text(
-            325.0,
-            110.0,
-            &format!("ROOT {}", slot_label(root)),
-            TEXT_SMALL,
-            MUTED,
+            401.0,
+            150.0,
+            &note(root),
+            12.0,
+            if root >= 0 { TEAL } else { MUTED },
         );
         d.text(
-            325.0,
-            132.0,
-            &format!("COLOR {}", slot_label(second)),
-            TEXT_SMALL,
-            MUTED,
-        );
-        d.text_right(
-            564.0,
-            142.0,
-            &format!("TRANSPOSE {:+} st", self.params.transpose.value()),
-            TEXT_LABEL,
-            TEAL,
-        );
-        d.button(inversion_rect(0), "↓", false, TEAL);
-        d.button(inversion_rect(1), "↑", false, TEAL);
-        d.text(
-            124.0,
+            401.0,
             173.0,
+            &note(second),
+            12.0,
+            if second >= 0 { GOLD } else { MUTED },
+        );
+        d.font = self.ui_font.get();
+        self.button(d, LATCH, "Latch", self.params.latch.value(), GOLD);
+        self.button(
+            d,
+            Menu::Key.trigger_rect(),
             &format!(
-                "INV {}/{}",
-                self.snapshot.inversion,
-                self.snapshot.full_notes.len.saturating_sub(1)
+                "Key {} ▾",
+                harmony::NOTE_NAMES[self.params.key.value() as usize]
             ),
-            TEXT_LABEL,
-            TEXT,
+            self.menu == Some(Menu::Key),
+            TEAL,
         );
-        for (i, label) in ["-12", "-1", "Reset", "+1", "+12"].iter().enumerate() {
-            let r = transpose_rect(i);
-            let hovered = self.pointer.is_some_and(|(x, y)| hit(r, x, y));
-            d.rounded_rect(r.0, r.1 + 2.0, r.2, r.3, 4.0, BG);
-            d.rounded_rect(
-                r.0,
-                r.1,
-                r.2,
-                r.3,
-                4.0,
-                if hovered {
-                    alpha(TEAL, 0.16)
-                } else {
-                    alpha(TEAL, 0.07)
-                },
-            );
-            d.outline_rounded(
-                r.0,
-                r.1,
-                r.2,
-                r.3,
-                4.0,
-                if hovered { TEAL } else { LINE },
-                1.0,
-            );
-            d.text_centered(r.0 + r.2 / 2.0, r.1 + 19.0, label, TEXT_SMALL, TEXT);
-        }
-        d.button(LATCH, "LATCH", self.params.latch.value(), GOLD);
-        d.button(
-            (32.0, 190.0, 154.0, 28.0),
+        self.button(
+            d,
+            Menu::Scale.trigger_rect(),
+            &format!(
+                "{} ▾",
+                harmony::SCALE_NAMES[self.params.scale.value() as usize]
+            ),
+            self.menu == Some(Menu::Scale),
+            TEAL,
+        );
+        self.button(
+            d,
+            ORDER,
             if self.params.fifths.value() {
-                "FIFTHS"
+                "Order: fifths"
             } else {
-                "CHROMATIC"
+                "Chromatic"
             },
-            false,
+            self.params.fifths.value(),
             TEAL,
         );
-        d.button(
-            LEARN_OCTAVE,
-            if self.learning() == 4 {
-                "CANCEL LEARN"
+        self.button(
+            d,
+            QWERTY,
+            if !self.params.keyboard.value() {
+                "Keys off"
+            } else if self.focused
+                && self.menu.is_none()
+                && self.panel.is_none()
+                && self.edit.is_none()
+            {
+                "Keys active"
             } else {
-                "LEARN CONTROL OCTAVE"
+                "Keys enabled"
             },
-            self.learning() == 4,
+            self.params.keyboard.value(),
             TEAL,
         );
-        d.button(QWERTY, "QWERTY", self.params.keyboard.value(), TEAL);
+
         for i in 0..KEY_COUNT {
-            let (x, y, w, h) = key_rect(i);
+            let r = key_rect(i);
+            let (x, mut y, w, h) = r;
             let amt = if self.key_active(i) {
                 1.0
             } else {
                 self.key_anim[i]
             };
-            let y = y + 2.0 * amt;
-            let row = i / KEY_COLUMNS;
-            let color = [TEAL, COLORS[1], GOLD][row];
+            y += 2.0 * amt;
+            let color = [TEAL, COLORS[1], GOLD][i / KEY_COLUMNS];
             let root = self.keyboard_root(i % KEY_COLUMNS);
             let compatible = root.is_some_and(|root| {
                 harmony::in_key(
                     root,
-                    harmony::row_quality(row),
+                    harmony::row_quality(i / KEY_COLUMNS),
                     self.params.key.value() as u8,
                     self.params.scale.value() as u8,
                 )
             });
-            d.rounded_rect(x, y + 3.0, w, h, 7.0, alpha(LINE, 0.6));
+            let ignored = self.snapshot.ignored & (1 << i) != 0;
+            let hover = self.hover_amount(r);
+            d.rounded_rect(x, y + 3.0, w, h, 7.0, alpha(LINE, 0.7));
             d.rounded_rect(x, y, w, h, 7.0, BG);
-            if compatible {
-                d.rounded_rect(x, y, w, h, 7.0, alpha(color, 0.09));
-            }
+            d.rounded_rect(
+                x,
+                y,
+                w,
+                h,
+                7.0,
+                alpha(color, (if compatible { 0.08 } else { 0.0 }) + hover * 0.07),
+            );
             if amt > 0.005 {
                 d.rounded_rect(
                     x,
@@ -168,71 +211,86 @@ impl ChordboardView {
                     1.0,
                 );
             }
-            d.outline(
-                (x, y, w, h),
-                if self.snapshot.ignored & (1 << i) != 0 {
-                    COLORS[4]
-                } else if amt > 0.01 {
-                    alpha(color, 0.3 + amt * 0.7)
-                } else {
-                    LINE
-                },
+            d.outline_rounded(x, y, w, h, 7.0, if ignored { COLORS[4] } else { LINE }, 1.0);
+            d.outline_rounded(
+                x,
+                y,
+                w,
+                h,
+                7.0,
+                alpha(color, (hover * 0.4 + amt * 0.7).min(1.0)),
+                1.0,
             );
+            if compatible {
+                d.rounded_rect(x + 8.0, y, w - 16.0, 2.0, 1.0, alpha(color, 0.65));
+            }
             if let Some(root) = root {
-                let text = if amt > 0.1 { color } else { TEXT };
+                d.font = self.bold_font.get();
+                let chord = format!(
+                    "{}{}",
+                    harmony::NOTE_NAMES[root as usize],
+                    harmony::QUALITY_SUFFIX[harmony::row_quality(i / KEY_COLUMNS) as usize]
+                );
+                let key_size =
+                    (16.0 * (w - 8.0) / self.text_width(d, &chord, 16.0).max(1.0)).min(16.0);
                 d.text(
                     x + 4.0,
                     y + 24.0,
-                    &format!(
-                        "{}{}",
-                        harmony::NOTE_NAMES[root as usize],
-                        harmony::QUALITY_SUFFIX[harmony::row_quality(row) as usize]
+                    &chord,
+                    key_size,
+                    if amt > 0.1 { color } else { TEXT },
+                );
+                d.font = self.ui_font.get();
+                let roman = self.fit_text(
+                    d,
+                    &harmony::roman(
+                        root,
+                        harmony::row_quality(i / KEY_COLUMNS),
+                        self.params.key.value() as u8,
                     ),
-                    15.0,
-                    text,
+                    w - 8.0,
+                    11.0,
                 );
                 d.text(
                     x + 4.0,
-                    y + 39.0,
-                    &harmony::roman(
-                        root,
-                        harmony::row_quality(row),
-                        self.params.key.value() as u8,
-                    ),
-                    TEXT_SMALL,
+                    y + 40.0,
+                    &roman,
+                    11.0,
                     if compatible { color } else { MUTED },
                 );
-            } else {
-                d.text(x + 4.0, y + 25.0, "--", 15.0, MUTED);
+            }
+            if ignored {
+                d.text(x + w - 8.0, y + 13.0, "!", 11.0, COLORS[4]);
             }
             if self.params.keyboard.value() {
-                d.text_right(
-                    x + w - 4.0,
-                    y + h - 4.0,
-                    harmony::HINTS[i],
-                    TEXT_SMALL,
-                    if root.is_some() { MUTED } else { LINE },
-                );
+                d.font = self.font.get();
+                d.text_right(x + w - 4.0, y + h - 4.0, harmony::HINTS[i], 11.0, MUTED);
             }
         }
-        d.button(
-            (32.0, 510.0, 158.0, 28.0),
-            &format!(
-                "KEY {} ▾",
-                harmony::NOTE_NAMES[self.params.key.value() as usize]
-            ),
-            false,
-            TEAL,
-        );
-        d.button(
-            (198.0, 510.0, 228.0, 28.0),
-            &format!(
-                "{} ▾",
-                harmony::SCALE_NAMES[self.params.scale.value() as usize]
-            ),
-            false,
-            TEAL,
-        );
+        d.font = self.ui_font.get();
         self.draw_memories(d);
+        self.draw_voicing(d);
+    }
+
+    fn draw_voicing(&self, d: &mut Draw) {
+        d.text(32.0, 556.0, "Chord quality", 12.0, MUTED);
+        d.text(32.0, 622.0, "Inversion", 11.0, MUTED);
+        self.button(d, inversion_rect(0), "↓", false, TEAL);
+        self.button(d, inversion_rect(1), "↑", false, TEAL);
+        let label = match self.snapshot.inversion {
+            0 => "Root position".into(),
+            n => format!("Inversion {n}"),
+        };
+        d.text(110.0, 649.0, &label, 12.0, TEXT);
+        d.text(
+            326.0,
+            622.0,
+            &format!("Transpose  {:+} st", self.params.transpose.value()),
+            11.0,
+            MUTED,
+        );
+        for (i, label) in ["−12", "−1", "Reset", "+1", "+12"].iter().enumerate() {
+            self.button(d, transpose_rect(i), label, false, TEAL);
+        }
     }
 }

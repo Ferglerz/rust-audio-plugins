@@ -8,53 +8,6 @@
   child-space: 0px;
 }
 
-.editor-bg {
-  background-color: #202020;
-  background-image: url("composure_bg.png");
-  background-size: 1182px 504px;
-  background-position: left top;
-  background-repeat: no-repeat;
-}
-
-.group-title {
-  color: #d9d9d9;
-  font-size: 12;
-  font-weight: 600;
-  height: 22px;
-  text-align: center;
-  child-top: 4px;
-}
-
-.parallax-label {
-  color: #ffffff;
-  font-size: 11;
-  height: 14px;
-  text-align: center;
-}
-
-.readout-slider-label {
-  color: #ffffff;
-  font-size: 11;
-  height: 14px;
-  text-align: center;
-}
-
-.group-panel {
-  background-color: #2e2e2e20;
-  border-color: #666666;
-  border-width: 1px;
-  border-radius: 2px;
-  child-left: 8px;
-  child-top: 4px;
-}
-
-.toolbar {
-  background-color: #2e2e2e20;
-  border-color: #666666;
-  border-width: 1px;
-  border-radius: 2px;
-}
-
 composure-graph {
   background-color: transparent;
   border-color: #66666680;
@@ -69,26 +22,10 @@ composure-gr-meter {
 }
 
 image-knob,
-parallax-slider,
 image-switch,
 detection-mode-button {
   background-color: transparent;
   border-width: 0;
-}
-
-readout-slider,
-jsfx-button {
-  background-color: transparent;
-  border-width: 0;
-}
-
-.jsfx-button-label {
-  color: #ebebeb;
-  font-size: 11;
-  font-weight: 600;
-  text-align: center;
-  child-left: 4px;
-  child-right: 4px;
 }
 
 production-knob .param-label {
@@ -110,15 +47,6 @@ graph-range-button {
   child-space: 1px;
 }
 
-.graph-range-label {
-  color: #b3b3b3;
-  font-size: 11;
-  width: 100%;
-  height: 100%;
-  child-left: 4px;
-  child-top: 1px;
-}
-
 .graph-axis-label {
   color: #b3b3b3;
   font-size: 11;
@@ -129,18 +57,6 @@ graph-range-button {
   color: #999999cc;
   font-size: 9;
   text-align: right;
-}
-
-.control-readout {
-  color: #999999cc;
-  font-size: 18;
-  height: 24px;
-}
-
-.prog-mode-label {
-  color: #ebebeb;
-  font-size: 9;
-  text-align: center;
 }
 
 debug-toggle {
@@ -154,27 +70,9 @@ debug-toggle {
   child-top: 6px;
 }
 
-filter-param-slider {
-  background-color: #3a3a3a80;
-  border-color: #666666;
-  border-width: 1px;
-  border-radius: 2px;
-}
-
-
-/* Pleasant skins share the original widget events and parameter bindings. */
-.pleasant .prog-mode-label { display: none; }
-.pleasant .parallax-label { display: none; }
-.pleasant .jsfx-button-label { display: none; }
-resize-handle { background-color: #00000000; border-width: 0; color: #00000000; }
-.pleasant .parallax-label, .pleasant .readout-slider-label { color: #8f99a4; font-size: 13; }
-.pleasant .control-readout { color: #e1bb65; font-size: 14; }
-.pleasant .jsfx-button-label { color: #e5e9ed; font-size: 13; }
-.light .parallax-label, .light .readout-slider-label { color: #5f6972; }
-.light .control-readout { color: #9e701c; }
-.light .jsfx-button-label { color: #1e252c; }
+/* Shared control styling. */
 .pleasant { font-family: "JetBrains Mono"; }
-.pleasant .jsfx-button-label { child-space: 1s; font-weight: normal; }
+resize-handle { background-color: #00000000; border-width: 0; color: #00000000; }
 .light .graph-axis-label { color: #5f6972; }
 
 .pleasant .graph-axis-label { font-size: 13; }

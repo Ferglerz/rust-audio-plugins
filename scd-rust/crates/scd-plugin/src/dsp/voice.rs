@@ -1,5 +1,5 @@
 use super::{db_to_gain, exp_coeff, semitone_ratio_f64};
-use scd_core::{KitPieceId, MicChannel, ScdPack, StrikeEntry};
+use scd_core::{AudioSamples, KitPieceId, MicChannel, ScdPack, StrikeEntry};
 
 const ENV_FLOOR: f32 = 0.0001;
 const NATIVE_SR: f64 = 44100.0;
@@ -106,7 +106,7 @@ impl Voice {
     #[inline(always)]
     pub fn process_sample(
         &mut self,
-        audio_samples: &[f32],
+        audio_samples: AudioSamples<'_>,
         mic_accum: &mut [[f32; 2]; MicChannel::COUNT],
         mic_gains: &[f32; MicChannel::COUNT],
     ) -> f32 {
@@ -137,14 +137,15 @@ impl Voice {
                     continue;
                 }
                 let pair = super::simd::stereo_lerp_scale(
-                    [data[base], data[base + 1]],
-                    [data[base + 2], data[base + 3]],
+                    [data.sample(base), data.sample(base + 1)],
+                    [data.sample(base + 2), data.sample(base + 3)],
                     frac,
                     [mic_gain * self.pan_l, mic_gain * self.pan_r],
                 );
                 (pair[0], pair[1])
             } else if frame_idx + 1 < data.len() {
-                let mono = lerp(data[frame_idx], data[frame_idx + 1], frac) * mic_gain;
+                let mono =
+                    lerp(data.sample(frame_idx), data.sample(frame_idx + 1), frac) * mic_gain;
                 (mono * self.pan_l, mono * self.pan_r)
             } else {
                 continue;

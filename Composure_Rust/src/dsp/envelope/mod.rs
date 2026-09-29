@@ -11,21 +11,6 @@ mod utils;
 
 pub use orchestration::EnvelopeEngine;
 
-/// Runtime release law, independent of host parameter metadata.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReleaseMode {
-    InputDependent,
-    GrDependent,
-    InputAndGr,
-    Disabled,
-}
-
-impl ReleaseMode {
-    pub fn is_gr_dependent(self) -> bool {
-        matches!(self, Self::GrDependent)
-    }
-}
-
 // Scalar fields: keep in sync with `envelope_scalar_fields!` in scalar_fields.rs.
 /// Runtime envelope parameters (subset of plugin params).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -36,9 +21,9 @@ pub struct EnvelopeParams {
     pub release_curve: f64,
     pub hold_ms: f64,
     pub strength: f64,
-    pub prog_release_mode: ReleaseMode,
     pub prog_release_inverse: bool,
-    pub prog_release_blend: f64,
+    pub input_dependence: f64,
+    pub gr_dependence: f64,
     pub input_rate_amount: f64,
     pub input_level_threshold_db: f64,
     pub input_level_threshold_2_db: f64,
@@ -54,9 +39,8 @@ impl Default for EnvelopeParams {
     fn default() -> Self {
         use defaults::{
             ATTACK, ATTACK_CURVE, GR_BLEND_THRESHOLD_DB, GR_BLEND_THRESHOLD_KNEE_DB, HOLD_MS,
-            INPUT_LEVEL_THRESHOLD_2_DB, INPUT_LEVEL_THRESHOLD_DB, PROG_RELEASE_BLEND,
-            RATE_CHANGE_SENSITIVITY_DB, RATE_CHANGE_THRESHOLD_MODIFIER, RELEASE_CURVE, RELEASE_MS,
-            STRENGTH,
+            INPUT_LEVEL_THRESHOLD_2_DB, INPUT_LEVEL_THRESHOLD_DB, RATE_CHANGE_SENSITIVITY_DB,
+            RATE_CHANGE_THRESHOLD_MODIFIER, RELEASE_CURVE, RELEASE_MS, STRENGTH,
         };
         Self {
             attack: ATTACK,
@@ -65,9 +49,9 @@ impl Default for EnvelopeParams {
             release_curve: RELEASE_CURVE,
             hold_ms: HOLD_MS,
             strength: STRENGTH,
-            prog_release_mode: ReleaseMode::InputDependent,
             prog_release_inverse: false,
-            prog_release_blend: PROG_RELEASE_BLEND,
+            input_dependence: 0.0,
+            gr_dependence: 0.0,
             input_rate_amount: 0.0,
             input_level_threshold_db: INPUT_LEVEL_THRESHOLD_DB,
             input_level_threshold_2_db: INPUT_LEVEL_THRESHOLD_2_DB,
@@ -102,7 +86,7 @@ mod sync_tests {
     /// Smoothed scalar count — keep in sync with `envelope_scalar_fields!`.
     #[test]
     fn envelope_scalar_field_count() {
-        const EXPECTED_SMOOTHED_SCALARS: usize = 16;
+        const EXPECTED_SMOOTHED_SCALARS: usize = 17;
         let mut touched = 0usize;
         macro_rules! count_field {
             ($field:ident) => {

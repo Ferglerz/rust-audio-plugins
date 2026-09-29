@@ -11,7 +11,8 @@ macro_rules! envelope_scalar_fields {
         $mac!(release_curve);
         $mac!(hold_ms);
         $mac!(strength);
-        $mac!(prog_release_blend);
+        $mac!(input_dependence);
+        $mac!(gr_dependence);
         $mac!(input_rate_amount);
         $mac!(input_level_threshold_db);
         $mac!(input_level_threshold_2_db);
@@ -29,7 +30,8 @@ macro_rules! envelope_scalar_fields {
         $mac!($($args),+, release_curve);
         $mac!($($args),+, hold_ms);
         $mac!($($args),+, strength);
-        $mac!($($args),+, prog_release_blend);
+        $mac!($($args),+, input_dependence);
+        $mac!($($args),+, gr_dependence);
         $mac!($($args),+, input_rate_amount);
         $mac!($($args),+, input_level_threshold_db);
         $mac!($($args),+, input_level_threshold_2_db);

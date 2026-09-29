@@ -319,23 +319,19 @@ pub struct ComposureParams {
     // =========================================================================
     // GROUP 3: PROGRAM RELEASE & SETTINGS (JSFX sliders 22–27)
     // =========================================================================
-    /// Enable input-level program dependence.
-    #[id = "program_input_enable"]
-    pub program_input_enable: BoolParam,
+    /// Input-level influence on release speed (0–100%).
+    #[id = "input_dependence"]
+    pub input_dependence: FloatParam,
 
-    /// Enable gain-reduction program dependence.
-    #[id = "program_gr_enable"]
-    pub program_gr_enable: BoolParam,
+    /// Gain-reduction influence on release speed (0–100%).
+    #[id = "gr_dependence"]
+    pub gr_dependence: FloatParam,
 
     /// Inverse program release behavior.
     #[id = "prog_release_inverse"]
     pub prog_release_inverse: BoolParam,
 
-    /// Program release blend (0=fixed, 100=fully program-dependent).
-    #[id = "prog_release_blend"]
-    pub prog_release_blend: FloatParam,
-
-    /// Detector-rate influence scaled by program Blend; negative amounts invert its response.
+    /// Independent detector-rate influence; negative amounts invert its response.
     #[id = "input_rate_amount"]
     pub input_rate_amount: FloatParam,
 
@@ -403,11 +399,11 @@ pub struct ComposureParams {
 
 impl ComposureParams {
     pub fn program_input_enabled(&self) -> bool {
-        self.program_input_enable.value()
+        self.input_dependence.value() > 0.0
     }
 
     pub fn program_gr_enabled(&self) -> bool {
-        self.program_gr_enable.value()
+        self.gr_dependence.value() > 0.0
     }
 }
 
@@ -613,20 +609,27 @@ impl Default for ComposureParams {
             .with_step_size(0.1),
 
             // === PROGRAM RELEASE ===
-            program_input_enable: BoolParam::new("Program Input", true),
-            program_gr_enable: BoolParam::new("Program GR", false),
-
-            prog_release_inverse: BoolParam::new("Program Release Inverse", false),
-
-            prog_release_blend: FloatParam::new(
-                "Program Release Blend",
+            input_dependence: FloatParam::new(
+                "Input Dep",
                 0.0,
                 FloatRange::Linear {
                     min: 0.0,
                     max: 100.0,
                 },
             )
+            .with_unit("%")
             .with_step_size(1.0),
+            gr_dependence: FloatParam::new(
+                "GR Dep",
+                0.0,
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: 100.0,
+                },
+            )
+            .with_unit("%")
+            .with_step_size(1.0),
+            prog_release_inverse: BoolParam::new("Program Release Inverse", false),
 
             input_rate_amount: FloatParam::new(
                 "Input Rate",

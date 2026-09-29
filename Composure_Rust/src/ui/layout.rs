@@ -3,7 +3,7 @@ use super::{appearance, theme};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ControlLayout {
-    pub prog_blend_slider: (f32, f32, f32),
+    pub input_dependence_knob: (f32, f32, f32),
     pub inverse_btn: (f32, f32, f32),
     pub detection_btn: (f32, f32),
     pub harmonic_type_switch: (f32, f32),
@@ -25,14 +25,14 @@ impl ControlLayout {
             appearance::ENV_Y + appearance::SIDE_H - 10.0 - appearance::STRENGTH_KNOB_SIZE;
         let harm_cx = appearance::HARM_X + appearance::HARM_W * 0.5;
         let makeup_knob = (
-            harm_cx - theme::KNOB_SIZE * 0.5,
+            harm_cx - appearance::GAIN_KNOB_SIZE * 0.5,
             appearance::OUTPUT_Y + appearance::MODULE_HEADER_H + 8.0,
         );
         let quad_left = appearance::HARM_X + 10.0;
         let quad_right =
             appearance::HARM_X + appearance::HARM_W - 10.0 - appearance::HARMONIC_KNOB_W;
         Self {
-            prog_blend_slider: (
+            input_dependence_knob: (
                 appearance::ENV_X + 14.0,
                 appearance::ENVELOPE_KNOB_Y,
                 theme::KNOB_SIZE,
@@ -53,8 +53,8 @@ impl ControlLayout {
                 bottom_y,
             ),
             ms_switch: (
-                harm_cx - theme::SWITCH_SLOT_W * 0.5,
-                makeup_knob.1 + theme::KNOB_SIZE + 12.0,
+                appearance::HARM_X + appearance::HARM_W - 10.0 - appearance::MS_BUTTON_W,
+                appearance::OUTPUT_Y + (appearance::MODULE_HEADER_H - 28.0) * 0.5,
             ),
             norm_switch: (
                 env_x + (theme::KNOB_SIZE - theme::SWITCH_SLOT_W) * 0.5,
@@ -71,11 +71,10 @@ mod tests {
     #[test]
     fn envelope_program_and_bottom_controls_do_not_overlap() {
         let l = ControlLayout::pleasant();
-        let program_y = l.prog_blend_slider.1;
-        let source_x = appearance::ENV_X + appearance::ENV_W - 130.0;
+        let program_y = l.input_dependence_knob.1;
         let rects = [
             (
-                l.prog_blend_slider.0,
+                l.input_dependence_knob.0,
                 program_y,
                 theme::KNOB_SIZE,
                 theme::KNOB_SIZE,
@@ -86,8 +85,12 @@ mod tests {
                 theme::KNOB_SIZE,
                 theme::KNOB_SIZE,
             ),
-            (source_x, program_y, 120.0, 28.0),
-            (source_x, program_y + 36.0, 120.0, 28.0),
+            (
+                appearance::ENV_X + 258.0,
+                program_y,
+                theme::KNOB_SIZE,
+                theme::KNOB_SIZE,
+            ),
             (
                 l.rms_knob.0,
                 l.rms_knob.1,

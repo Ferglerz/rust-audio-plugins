@@ -7,7 +7,6 @@ use std::time::Instant;
 
 use nih_plug_vizia::vizia::prelude::*;
 use nih_plug_vizia::vizia::vg::{Paint, Path};
-use nih_plug_vizia::widgets::param_base::ParamWidgetBase;
 use nih_plug_vizia::widgets::util::ModifiersExt;
 
 use super::graph_display::DISPLAY_PAD_DB;
@@ -20,7 +19,6 @@ use super::graph_display;
 use super::graph_hit;
 use super::graph_view_draw::*;
 use super::theme;
-use super::threshold_lines::{self, ThresholdLine};
 
 const DOUBLE_CLICK_MS: u128 = 300;
 const GRAPH_POINT_RADIUS: f32 = 8.0;
@@ -58,11 +56,8 @@ pub struct GraphView<L1, L2, P> {
     params: P,
     detector_db: L1,
     gr_db: L2,
-    input_thresh_base: ParamWidgetBase,
     dragging_point: i32,
     mouse_down: bool,
-    dragging_threshold: bool,
-    hovered_threshold: Option<ThresholdLine>,
     hovered_point: i32,
     last_click_point: i32,
     last_click_time: Option<Instant>,
@@ -83,18 +78,14 @@ impl GraphView<(), (), ()> {
         L2: Lens<Target = f32>,
         P: Lens<Target = Arc<ComposureParams>> + Clone + 'static,
     {
-        let input_thresh_base = ParamWidgetBase::new(cx, params, |p| &p.input_level_threshold_db);
         GraphView {
             graph,
             display,
             params,
             detector_db,
             gr_db,
-            input_thresh_base,
             dragging_point: -1,
             mouse_down: false,
-            dragging_threshold: false,
-            hovered_threshold: None,
             hovered_point: -1,
             last_click_point: -1,
             last_click_time: None,
@@ -125,19 +116,8 @@ where
         cx.needs_redraw();
     }
 
-    fn active_threshold(&self) -> Option<ThresholdLine> {
-        if self.dragging_threshold {
-            Some(ThresholdLine::InputLevel)
-        } else {
-            self.hovered_threshold
-        }
-    }
-
     fn update_graph_hint(&self) {
-        let show = self.dragging_threshold
-            || self.dragging_point >= 0
-            || self.hovered_threshold.is_some()
-            || self.hovered_point >= 0;
+        let show = self.dragging_point >= 0 || self.hovered_point >= 0;
         self.display.set_graph_hint(show);
     }
 
@@ -262,11 +242,6 @@ where
                 meta.consume();
             }
             WindowEvent::MouseUp(MouseButton::Left) => {
-                if self.dragging_threshold {
-                    self.input_thresh_base.end_set_parameter(cx);
-                    self.dragging_threshold = false;
-                    self.update_graph_hint();
-                }
                 if self.mouse_down {
                     self.mouse_down = false;
                     self.dragging_point = -1;
@@ -276,23 +251,7 @@ where
                 }
             }
             WindowEvent::MouseMove(_, _) => {
-                if self.dragging_threshold && self.mouse_down {
-                    let (_mx, my) = Self::local_mouse(cx);
-                    let b = cx.bounds();
-                    let snapshot = self.graph.load();
-                    let graph = &snapshot.graph;
-                    let (min_db, max_db, range_db) = (graph.min_db, graph.max_db, graph.range_db);
-                    let new_db = threshold_lines::clamp_input_level(
-                        graph_display::graph_y_to_db(my, b.h, min_db, range_db),
-                        min_db,
-                        max_db,
-                    );
-                    self.input_thresh_base.set_normalized_value(
-                        cx,
-                        self.input_thresh_base.preview_normalized(new_db as f32),
-                    );
-                    meta.consume();
-                } else if self.dragging_point >= 0 && self.mouse_down {
+                if self.dragging_point >= 0 && self.mouse_down {
                     let (mx, my) = Self::local_mouse(cx);
                     let b = cx.bounds();
                     let idx = self.dragging_point as usize;
@@ -322,7 +281,6 @@ where
                         graph_hit::find_interior_point(graph, mx, my, b.w, b.h, DISPLAY_PAD_DB)
                             .map(|i| i as i32)
                             .unwrap_or(-1);
-                    self.hovered_threshold = { None };
                     self.hovered_point = hovered_point;
                     self.update_graph_hint();
                     let _ = mx;

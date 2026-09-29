@@ -219,7 +219,8 @@ pub struct UiDisplay {
     /// Input meter level after sidechain EQ and detection, before input offset.
     pub input_meter_db: AtomicF32Crate,
     pub input_rate_activity: AtomicF32Crate,
-    pub program_activity: AtomicF32Crate,
+    pub input_dependence_activity: AtomicF32Crate,
+    pub gr_dependence_activity: AtomicF32Crate,
     pub gr_db: AtomicF32Crate,
     /// Interior graph point count for overlay label.
     pub graph_interior_points: std::sync::atomic::AtomicU32,
@@ -248,7 +249,8 @@ impl Default for UiDisplay {
             detector_db: AtomicF32Crate::new(crate::dsp::constants::MIN_DETECTOR_DB as f32),
             input_meter_db: AtomicF32Crate::new(crate::dsp::constants::MIN_DETECTOR_DB as f32),
             input_rate_activity: AtomicF32Crate::new(0.0),
-            program_activity: AtomicF32Crate::new(0.0),
+            input_dependence_activity: AtomicF32Crate::new(0.0),
+            gr_dependence_activity: AtomicF32Crate::new(0.0),
             gr_db: AtomicF32Crate::new(0.0),
             graph_interior_points: std::sync::atomic::AtomicU32::new(4),
             graph_points_version: std::sync::atomic::AtomicU32::new(0),

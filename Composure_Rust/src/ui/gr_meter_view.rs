@@ -293,9 +293,6 @@ fn input_db_from_y(bounds: BoundingBox, y: f32) -> f32 {
 }
 fn meter_thresholds(params: &ComposureParams) -> Vec<(usize, ThresholdLine, f32, f32)> {
     let mut thresholds = Vec::new();
-    if params.prog_release_blend.value() == 0.0 {
-        return thresholds;
-    }
     if params.program_gr_enabled() {
         thresholds.extend([
             (

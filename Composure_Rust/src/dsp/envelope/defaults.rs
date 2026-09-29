@@ -6,7 +6,6 @@ pub const RELEASE_MS: f64 = 100.0;
 pub const RELEASE_CURVE: f64 = 0.0;
 pub const HOLD_MS: f64 = 0.0;
 pub const STRENGTH: f64 = 100.0;
-pub const PROG_RELEASE_BLEND: f64 = 0.0;
 pub const INPUT_LEVEL_THRESHOLD_DB: f64 = -20.0;
 pub const INPUT_LEVEL_THRESHOLD_2_DB: f64 = -40.0;
 pub const GR_BLEND_THRESHOLD_DB: f64 = 6.0;

@@ -32,15 +32,6 @@ pub fn toggle_bool_param(cx: &mut EventContext, param_base: &ParamWidgetBase) {
     param_base.end_set_parameter(cx);
 }
 
-pub fn cycle_enum_param(cx: &mut EventContext, param_base: &ParamWidgetBase, count: u32) {
-    param_base.begin_set_parameter(cx);
-    let current = param_base.modulated_plain_value().round() as i32;
-    let next_plain = ((current + 1).rem_euclid(count as i32)) as f32;
-    let norm = param_base.preview_normalized(next_plain);
-    param_base.set_normalized_value(cx, norm);
-    param_base.end_set_parameter(cx);
-}
-
 pub fn reset_to_default_on_command_click(
     cx: &mut EventContext,
     param_base: &ParamWidgetBase,
@@ -103,25 +94,6 @@ pub fn apply_drag_ui_norm(
     set_readout_from_ui_norm(display, param_base, step_set, ui_norm);
 }
 
-pub fn param_drag_begin_horizontal(
-    session: &mut ParamDragSession,
-    cx: &mut EventContext,
-    param_base: &ParamWidgetBase,
-    display: &UiDisplay,
-    step_set: StepSet,
-    ui_norm: f32,
-    filter_preview: bool,
-) {
-    session.active = true;
-    if filter_preview {
-        display.set_filter_preview_drag(true);
-    }
-    cx.capture();
-    cx.focus();
-    param_base.begin_set_parameter(cx);
-    apply_drag_ui_norm(cx, param_base, display, step_set, ui_norm);
-}
-
 pub fn param_drag_begin_vertical(
     session: &mut ParamDragSession,
     cx: &mut EventContext,
@@ -162,17 +134,6 @@ pub fn param_drag_end(
     param_base.end_set_parameter(cx);
     cx.needs_redraw();
     true
-}
-
-pub fn param_drag_move_horizontal(
-    cx: &mut EventContext,
-    param_base: &ParamWidgetBase,
-    display: &UiDisplay,
-    step_set: StepSet,
-    ui_norm: f32,
-) {
-    apply_drag_ui_norm(cx, param_base, display, step_set, ui_norm);
-    cx.needs_redraw();
 }
 
 pub fn param_drag_move_vertical(

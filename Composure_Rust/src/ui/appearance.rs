@@ -32,6 +32,8 @@ pub const TRANS_X: f32 = ENV_X + ENV_W + MODULE_GAP;
 pub const TRANS_W: f32 = HARM_X - MODULE_GAP - TRANS_X;
 pub const MID_H: f32 = SIDE_H;
 pub const OUTPUT_H: f32 = MODULE_HEADER_H + 8.0 + theme::KNOB_SIZE + 12.0 + 28.0 + 12.0;
+pub const GAIN_KNOB_SIZE: f32 = OUTPUT_H - MODULE_HEADER_H - 16.0;
+pub const MS_BUTTON_W: f32 = 52.0;
 pub const HARM_H: f32 = SIDE_H - MODULE_GAP - OUTPUT_H;
 pub const OUTPUT_Y: f32 = ENV_Y + HARM_H + MODULE_GAP;
 pub const DETECTION_BUTTON_W: f32 = 100.0;
@@ -158,8 +160,9 @@ pub(super) fn program_control_inactive(
     params: &crate::params::ComposureParams,
     name: &str,
 ) -> bool {
-    matches!(name, "Input Rate" | "Program Release Inverse")
-        && params.prog_release_blend.value() == 0.0
+    name == "Program Release Inverse"
+        && !params.program_input_enabled()
+        && !params.program_gr_enabled()
 }
 
 /// Draw a parameter control using the supported interface.
@@ -169,7 +172,7 @@ pub fn draw_control(
     param: &ParamWidgetBase,
     control: Control,
     norm: f32,
-) -> bool {
+) {
     let b = cx.bounds();
     let scale = cx.scale_factor();
     let w = b.w / scale;
@@ -239,7 +242,7 @@ pub fn draw_control(
                 button(
                     &mut d,
                     (0.0, 0.0, w, h),
-                    if norm > 0.0 { "MID/SIDE" } else { "LEFT/RIGHT" },
+                    if norm > 0.0 { "M/S" } else { "L/R" },
                     true,
                     if norm > 0.0 { GOLD } else { TEAL },
                 );
@@ -292,7 +295,6 @@ pub fn draw_control(
             );
         }
     }
-    true
 }
 
 fn knob_arc(
@@ -326,33 +328,27 @@ pub(super) fn draw_knob_activity(
     display: &super::display::UiDisplay,
 ) {
     use std::sync::atomic::Ordering;
-    let is_rate = name == "Input Rate";
-    if !is_rate && name != "Program Release Blend" {
-        return;
-    }
-    if EditorData::params.get(cx).prog_release_blend.value() == 0.0 {
-        return;
-    }
+    let params = EditorData::params.get(cx);
+    let activity = match name {
+        "Input Rate" if params.input_rate_amount.value() != 0.0 => {
+            display.input_rate_activity.load(Ordering::Relaxed)
+        }
+        "Input Dep" if params.program_input_enabled() => {
+            display.input_dependence_activity.load(Ordering::Relaxed)
+        }
+        "GR Dep" if params.program_gr_enabled() => {
+            display.gr_dependence_activity.load(Ordering::Relaxed)
+        }
+        "Input Rate" | "Input Dep" | "GR Dep" => 0.0,
+        _ => return,
+    };
     let w = cx.bounds().w / cx.scale_factor();
     let h = cx.bounds().h / cx.scale_factor();
     let layout = pleasant_ui::draw::KnobLayout::new((0.0, 0.0, w, h)).with_text_sizes(13.0, 15.0);
     let mut d = painter(cx, canvas, w);
     let start = 135.0_f32.to_radians();
     let sweep = 270.0_f32.to_radians();
-    let activity = if is_rate {
-        display.input_rate_activity.load(Ordering::Relaxed)
-    } else {
-        display.program_activity.load(Ordering::Relaxed)
-    };
-    let color = if is_rate {
-        if activity >= 0.0 {
-            TEAL
-        } else {
-            GOLD
-        }
-    } else {
-        super::draw_helpers::gr_vg_color(activity, 1.0)
-    };
+    let color = if activity >= 0.0 { TEAL } else { GOLD };
     knob_arc(
         &mut d,
         &layout,
@@ -362,19 +358,10 @@ pub(super) fn draw_knob_activity(
         Color { a: 0.3, ..LINE },
         2.5,
     );
-    let amount = if is_rate {
-        activity.abs() / (activity.abs() + 4.0)
-    } else {
-        activity.abs().clamp(0.0, 1.0)
-    };
-    let (origin, extent) = if is_rate {
-        (
-            start + sweep * 0.5,
-            sweep * 0.5 * amount * activity.signum(),
-        )
-    } else {
-        (start, sweep * amount)
-    };
+    // One octave (2x speed) fills two thirds of the corresponding half-ring.
+    let amount = activity.abs() / (activity.abs() + 0.5);
+    let origin = start + sweep * 0.5;
+    let extent = sweep * 0.5 * amount * activity.signum();
     knob_arc(
         &mut d,
         &layout,
@@ -392,7 +379,6 @@ fn short_name(name: &str) -> &str {
         "Input Rate" => "INPUT RATE",
         "Input Offset" => "Offset",
         "Makeup Gain" => "Gain",
-        "Program Release Blend" => "Program Blend",
         "Adaptive" => "ADAPTIVE",
         "Mid/Side Mode" => "MID / SIDE",
         "Harmonic Type" => "HARMONICS",
@@ -614,7 +600,7 @@ impl View for AppearanceSelector {
     fn draw(&self, cx: &mut DrawContext, canvas: &mut Canvas) {
         let label = EditorData::appearance_choice.get(cx).label();
         let mut d = painter(cx, canvas, 108.0);
-        d.appearance_button((24.0, 0.0, 84.0, 28.0), label);
+        d.appearance_button((0.0, 0.0, 108.0, 28.0), label);
     }
 
     fn event(&mut self, cx: &mut EventContext, event: &mut Event) {

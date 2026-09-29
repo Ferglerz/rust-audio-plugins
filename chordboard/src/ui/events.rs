@@ -5,7 +5,9 @@ impl ChordboardView {
             if !hit(r, x, y) {
                 continue;
             }
-            if c.id == "spread" {
+            if c.id == "quality" {
+                self.open_menu(Menu::Quality);
+            } else if c.id == "spread" {
                 Self::emit(
                     cx,
                     c.ptr,
@@ -69,6 +71,9 @@ impl ChordboardView {
             WindowEvent::MouseMove(_, _) | WindowEvent::MouseDown(_)
         ) {
             self.pointer = Some((x, y));
+            if matches!(event, WindowEvent::MouseDown(MouseButton::Left)) {
+                self.flash_press(x, y);
+            }
             cx.needs_redraw();
         }
         // Escape belongs to the host; it is not a Chordboard shortcut.
@@ -138,14 +143,21 @@ impl ChordboardView {
                 }
                 WindowEvent::KeyUp(_, _) => return true,
                 WindowEvent::MouseDown(MouseButton::Left) => {
+                    if hit(self.menu_close_rect(menu), x, y) {
+                        self.menu = None;
+                        return true;
+                    }
                     for index in 0..menu.items().len() {
-                        if hit(menu.option_rect(index), x, y) {
+                        if hit(self.menu_option_rect(menu, index), x, y) {
                             self.select_menu(cx, menu, index);
                             return true;
                         }
                     }
+                    if hit(self.menu_bounds(menu), x, y) {
+                        return true;
+                    }
                     self.menu = None;
-                    if hit(menu.trigger_rect(), x, y) {
+                    if hit(self.menu_trigger_rect(menu), x, y) {
                         return true;
                     }
                 }
@@ -178,9 +190,8 @@ impl ChordboardView {
                 if let Some(slot) = MEMORY_CODES.iter().position(|c| c == code) {
                     if !self.memory_held[slot] {
                         self.memory_held[slot] = true;
-                        if cx.modifiers().shift() {
-                            self.bridge.send(Command::Capture(slot));
-                            self.status = format!("Captured chord in slot {}", slot + 1);
+                        if cx.modifiers().shift() || self.memory_ui.armed {
+                            self.request_capture(slot);
                         } else {
                             self.recall_memory(cx, slot);
                         }
@@ -236,13 +247,7 @@ impl ChordboardView {
                 cx.focus();
                 self.focused = true;
                 if hit(MPE, x, y) {
-                    Self::emit(
-                        cx,
-                        self.params.output_mode.as_ptr(),
-                        self.params
-                            .output_mode
-                            .preview_normalized((self.params.output_mode.value() + 1) % 3),
-                    );
+                    self.open_menu(Menu::Protocol);
                     return true;
                 }
                 for (r, panel) in [(OUTPUT, Panel::Output)] {
@@ -264,15 +269,21 @@ impl ChordboardView {
                     }
                 }
                 if let Some(panel) = self.panel {
-                    if !hit(panel.rect(), x, y) {
+                    if hit(self.panel_close_rect(panel), x, y) {
+                        self.set_panel(None);
+                        return true;
+                    }
+                    if !hit(self.panel_rect(panel), x, y) {
                         self.set_panel(None);
                     } else {
                         if panel == Panel::Mapping {
-                            if self.mapping_axis == 1 && hit(Menu::YTarget.trigger_rect(), x, y) {
+                            if self.mapping_axis == 1
+                                && hit(self.menu_trigger_rect(Menu::YTarget), x, y)
+                            {
                                 self.open_menu(Menu::YTarget);
                                 return true;
                             }
-                            if hit(LEARN, x, y) {
+                            if hit(mapping_learn_rect(self.mapping_axis), x, y) {
                                 self.request_learn(
                                     if self.learning() == self.mapping_axis as u8 + 1 {
                                         0
@@ -293,7 +304,7 @@ impl ChordboardView {
                                 {
                                     continue;
                                 }
-                                if hit(menu.trigger_rect(), x, y) {
+                                if hit(self.menu_trigger_rect(menu), x, y) {
                                     if !matches!(menu, Menu::MappingCc(_))
                                         || matches!(self.mapping().kind, 1 | 2)
                                     {
@@ -334,6 +345,20 @@ impl ChordboardView {
                     }
                     if self.params.strum_sync.value() && hit(Menu::StrumRate.trigger_rect(), x, y) {
                         self.open_menu(Menu::StrumRate);
+                        return true;
+                    }
+                }
+                if hit(SAVE_MEMORY, x, y) {
+                    self.toggle_memory_save();
+                    return true;
+                }
+                for i in 0..3 {
+                    if self.params.mode.value() == 1 && hit(direction_rect(i), x, y) {
+                        Self::emit(
+                            cx,
+                            self.params.direction.as_ptr(),
+                            self.params.direction.preview_normalized(i as i32),
+                        );
                         return true;
                     }
                 }
@@ -395,7 +420,7 @@ impl ChordboardView {
                     );
                     return true;
                 }
-                if hit((32.0, 190.0, 154.0, 28.0), x, y) {
+                if hit(ORDER, x, y) {
                     self.set(
                         cx,
                         "fifths",
@@ -595,8 +620,13 @@ impl ChordboardView {
                     self.end_drag(cx);
                     if edit {
                         self.release_keys();
+                        self.memory_held.fill(false);
                         if let Some(c) = self.control(drag.press.target) {
-                            self.edit = Some(ValueEdit::new(c.id, drag.press.rect, c.value));
+                            self.edit = Some(ValueEdit::new(
+                                c.id,
+                                drag.press.rect,
+                                self.display_value(&c),
+                            ));
                         }
                     }
                     return true;
@@ -614,6 +644,9 @@ impl ChordboardView {
             WindowEvent::MouseScroll(_, dy) => {
                 for (c, r) in self.placed_controls() {
                     if hit(r, x, y) {
+                        if c.id == "quality" {
+                            return true;
+                        }
                         Self::emit(cx, c.ptr, if *dy > 0.0 { c.next } else { c.prev });
                         return true;
                     }

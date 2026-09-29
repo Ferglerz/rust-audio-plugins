@@ -5,10 +5,10 @@ impl ChordboardView {
         let Some(panel) = self.panel else {
             return;
         };
-        let r = panel.rect();
-        d.rounded_rect(r.0 - 4.0, r.1 - 4.0, r.2 + 8.0, r.3 + 8.0, 10.0, BG);
-        d.rounded_rect(r.0, r.1, r.2, r.3, 8.0, PANEL);
-        d.outline_rounded(r.0, r.1, r.2, r.3, 8.0, LINE, 1.0);
+        let r = self.panel_rect(panel);
+        d.rounded_rect(r.0 - 4.0, r.1 - 4.0, r.2 + 8.0, r.3 + 8.0, 12.0, BG);
+        self.surface(d, r);
+        self.button(d, self.panel_close_rect(panel), "×", false, TEAL);
         match panel {
             Panel::Mapping => self.draw_mapping(d),
             Panel::Output => {
@@ -16,9 +16,9 @@ impl ChordboardView {
                     r.0 + 16.0,
                     r.1 + 23.0,
                     if self.params.mpe_enabled() {
-                        "MPE OUTPUT"
+                        "MPE output"
                     } else {
-                        "MIDI OUTPUT"
+                        "Regular MIDI output"
                     },
                     TEXT_LABEL,
                     TEAL,
@@ -38,92 +38,86 @@ impl ChordboardView {
         }
     }
     fn draw_mapping(&self, d: &mut Draw) {
-        d.text(
-            616.0,
-            326.0,
-            ["X CONTROLLER", "Y CONTROLLER"][self.mapping_axis],
-            TEXT_LABEL,
-            TEAL,
-        );
-        d.button(
-            LEARN,
-            if self.learning() == self.mapping_axis as u8 + 1 {
-                "CANCEL LEARN"
+        let r = mapping_panel_rect(self.mapping_axis);
+        let learning = self.learning() == self.mapping_axis as u8 + 1;
+        let title = if learning {
+            ["X · Move controller", "Y · Move controller"][self.mapping_axis]
+        } else {
+            ["X · Strum", "Y · Expression"][self.mapping_axis]
+        };
+        d.text(r.0 + 12.0, r.1 + 26.0, title, 12.0, TEAL);
+        self.button(
+            d,
+            mapping_learn_rect(self.mapping_axis),
+            if learning {
+                "Cancel learn"
             } else {
-                "MIDI LEARN"
+                "MIDI Learn"
             },
-            self.learning() == self.mapping_axis as u8 + 1,
+            learning,
             TEAL,
         );
         let m = self.mapping();
-        for (menu, label) in [
-            (
-                Menu::MappingKind,
-                format!(
-                    "{} ▾",
-                    ["OFF", "CC 7-BIT", "CC 14-BIT", "PITCH BEND"][m.kind as usize]
-                ),
+        self.button(
+            d,
+            self.menu_trigger_rect(Menu::MappingKind),
+            &format!(
+                "{} ▾",
+                ["Off", "CC 7-bit", "CC 14-bit", "Pitch bend"][m.kind as usize]
             ),
-            (
-                Menu::MappingChannel(m.kind == 3),
-                format!(
-                    "CH {} ▾",
-                    if m.channel == 16 {
-                        "ANY".into()
-                    } else {
-                        (m.channel + 1).to_string()
-                    }
-                ),
-            ),
-            (
-                Menu::MappingCc(m.kind == 2),
-                if matches!(m.kind, 1 | 2) {
-                    format!("CC {} ▾", m.number)
-                } else {
-                    "CC —".into()
-                },
-            ),
-        ] {
-            if matches!(menu, Menu::MappingChannel(_)) && self.mapping_axis < 2 && m.kind != 3 {
-                let r = menu.trigger_rect();
-                let label = if m.channel == 16 || m.kind == 0 {
-                    "ANY CHANNEL".into()
-                } else {
-                    format!("LEARNED CH {}", m.channel + 1)
-                };
-                d.text_centered(
-                    r.0 + r.2 / 2.0,
-                    r.1 + r.3 / 2.0 + 4.0,
-                    &label,
-                    TEXT_SMALL,
-                    MUTED,
-                );
+            self.menu == Some(Menu::MappingKind),
+            TEAL,
+        );
+        let menu = if m.kind == 3 {
+            Menu::MappingChannel(true)
+        } else {
+            Menu::MappingCc(m.kind == 2)
+        };
+        if matches!(m.kind, 1..=3) {
+            let label = if m.kind == 3 {
+                format!("Ch {} ▾", m.channel + 1)
             } else {
-                d.button(menu.trigger_rect(), &label, true, TEAL);
-            }
+                format!("CC {} ▾", m.number)
+            };
+            self.button(
+                d,
+                self.menu_trigger_rect(menu),
+                &label,
+                self.menu == Some(menu),
+                TEAL,
+            );
+        } else {
+            let cc = self.menu_trigger_rect(menu);
+            d.text_centered(cc.0 + cc.2 / 2.0, cc.1 + 18.0, "CC —", 11.0, MUTED);
         }
         if self.mapping_axis == 1 {
-            d.button(
-                Menu::YTarget.trigger_rect(),
+            self.button(
+                d,
+                self.menu_trigger_rect(Menu::YTarget),
                 &format!(
-                    "Destination: {} ▾",
+                    "{} ▾",
                     Menu::YTarget.items()[self.params.y_target.value() as usize]
                 ),
                 self.menu == Some(Menu::YTarget),
                 TEAL,
             );
-        } else {
+        }
+        if !learning && matches!(m.kind, 1 | 2) {
+            let channel = if m.channel == 16 {
+                "Any channel".into()
+            } else {
+                format!("Learned Ch {}", m.channel + 1)
+            };
             d.text(
-                616.0,
-                530.0,
-                if (1..=2).contains(&self.learning()) {
-                    "Move a controller to assign it."
-                } else {
-                    "Drag MIN / MAX on the strum pad to set its range."
-                },
-                TEXT_SMALL,
+                r.0 + 256.0,
+                r.1 + 66.0,
+                if self.mapping_axis == 1 { &channel } else { "" },
+                10.0,
                 MUTED,
             );
+            if self.mapping_axis == 0 {
+                d.text(r.0 + 12.0, r.1 + 95.0, &channel, 10.0, MUTED);
+            }
         }
     }
 }

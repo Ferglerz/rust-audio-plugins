@@ -69,8 +69,24 @@ impl Draw<'_> {
     }
 
     pub fn appearance_button(&mut self, r: (f32, f32, f32, f32), label: &str) {
-        self.button(r, label, false, MUTED);
-        self.palette_icon(r.0 - 16.0, r.1 + r.3 * 0.5, MUTED);
+        const TEXT_SIZE: f32 = 13.0;
+        const ICON_WIDTH: f32 = 14.0;
+        const GAP: f32 = 6.0;
+        let mut paint = Paint::color(self.color(MUTED));
+        if let Some(font) = self.font {
+            paint.set_font(&[font]);
+        }
+        paint.set_font_size(TEXT_SIZE * self.s);
+        let text_width = self
+            .c
+            .measure_text(0.0, 0.0, label, &paint)
+            .map(|metrics| metrics.width() / self.s)
+            .unwrap_or(label.len() as f32 * TEXT_SIZE * 0.6);
+        let left = r.0 + (r.2 - ICON_WIDTH - GAP - text_width) * 0.5;
+        let center_y = r.1 + r.3 * 0.5;
+        self.rect(r.0, r.1, r.2, r.3, PANEL);
+        self.palette_icon(left + ICON_WIDTH * 0.5, center_y, MUTED);
+        self.text_middle(left + ICON_WIDTH + GAP, center_y, label, TEXT_SIZE, MUTED);
     }
 
     pub fn button_left(&mut self, r: (f32, f32, f32, f32), label: &str, on: bool, color: Color) {

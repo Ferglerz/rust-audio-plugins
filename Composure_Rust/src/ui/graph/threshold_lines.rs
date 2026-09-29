@@ -4,7 +4,6 @@ use nih_plug_vizia::vizia::prelude::*;
 
 use super::draw_helpers;
 
-const MIN_THRESHOLD_SPACING: f64 = 6.0;
 const GR_THRESHOLD_MIN: f32 = 1.0;
 const GR_THRESHOLD_MAX: f32 = 24.0;
 
@@ -52,8 +51,4 @@ pub fn meter_threshold_value_from_y(
         )),
         ThresholdLine::InputLevel => None,
     }
-}
-
-pub fn clamp_input_level(v: f64, min_db: f64, max_db: f64) -> f64 {
-    v.clamp(min_db, max_db - MIN_THRESHOLD_SPACING)
 }

@@ -146,29 +146,35 @@ impl Plugin for Composure {
                 block_gr_max,
                 self.chain.block_meter_input_db() as f32,
             );
-            let rate_activity = self.chain.block_meter_input_rate_activity() as f32;
-            self.ui_display.program_activity.store(
-                self.chain.meter_program_activity() as f32,
-                std::sync::atomic::Ordering::Relaxed,
-            );
-            let previous = self
-                .ui_display
-                .input_rate_activity
-                .load(std::sync::atomic::Ordering::Relaxed);
             let duration = channels[0].len() as f32
                 / self
                     .ui_display
                     .sample_rate
                     .load(std::sync::atomic::Ordering::Relaxed);
-            let faded = previous * (-duration / 0.12).exp();
-            let activity = if rate_activity * previous < 0.0 || rate_activity.abs() >= faded.abs() {
-                rate_activity
-            } else {
-                faded
-            };
-            self.ui_display
-                .input_rate_activity
-                .store(activity, std::sync::atomic::Ordering::Relaxed);
+            for (meter, value) in [
+                (
+                    &self.ui_display.input_rate_activity,
+                    self.chain.block_meter_input_rate_activity(),
+                ),
+                (
+                    &self.ui_display.input_dependence_activity,
+                    self.chain.block_meter_input_dependence_activity(),
+                ),
+                (
+                    &self.ui_display.gr_dependence_activity,
+                    self.chain.block_meter_gr_dependence_activity(),
+                ),
+            ] {
+                let previous = meter.load(std::sync::atomic::Ordering::Relaxed);
+                let faded = previous * (-duration / 0.25).exp();
+                let value = value as f32;
+                let activity = if value * previous < 0.0 || value.abs() >= faded.abs() {
+                    value
+                } else {
+                    faded
+                };
+                meter.store(activity, std::sync::atomic::Ordering::Relaxed);
+            }
             self.ui_display.update_debug_telemetry(
                 block_detector_max,
                 block_gr_max,

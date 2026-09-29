@@ -1,7 +1,7 @@
 //! Controls for the supported Dark and Light interfaces.
 use super::display::UiDisplay;
 use super::image_knob::ImageKnob;
-use super::image_switch::{DetectionModeButton, ImageSwitch, ProgramEnableButton};
+use super::image_switch::{DetectionModeButton, ImageSwitch};
 use super::layout::ControlLayout;
 use super::param_button::ParamButton;
 use super::step_points::StepSet;
@@ -31,35 +31,34 @@ where
             appearance::SC_EQ_BUTTON_W,
         ),
     );
+    let size = (theme::KNOB_SIZE, theme::KNOB_SIZE);
     knob(
         cx,
         params.clone(),
-        |p| &p.prog_release_blend,
+        |p| &p.input_dependence,
         display.clone(),
-        (l.prog_blend_slider.0, l.prog_blend_slider.1),
-        (theme::KNOB_SIZE, theme::KNOB_SIZE),
-        StepSet::Percent0_100,
+        (l.input_dependence_knob.0, l.input_dependence_knob.1),
+        size,
+        StepSet::None,
+    );
+    knob(
+        cx,
+        params.clone(),
+        |p| &p.gr_dependence,
+        display.clone(),
+        (appearance::ENV_X + 136.0, appearance::ENVELOPE_KNOB_Y),
+        size,
+        StepSet::None,
     );
     knob(
         cx,
         params.clone(),
         |p| &p.input_rate_amount,
         display.clone(),
-        (appearance::ENV_X + 136.0, l.prog_blend_slider.1),
-        (theme::KNOB_SIZE, theme::KNOB_SIZE),
+        (appearance::ENV_X + 258.0, appearance::ENVELOPE_KNOB_Y),
+        size,
         StepSet::None,
     );
-    for (input, y) in [
-        (true, l.prog_blend_slider.1),
-        (false, l.prog_blend_slider.1 + 36.0),
-    ] {
-        ProgramEnableButton::new(cx, input)
-            .position_type(PositionType::SelfDirected)
-            .left(Pixels(appearance::ENV_X + appearance::ENV_W - 130.0))
-            .top(Pixels(y))
-            .width(Pixels(120.0))
-            .height(Pixels(28.0));
-    }
     ParamButton::new(cx, params.clone(), |p| &p.prog_release_inverse)
         .class("jsfx-button")
         .position_type(PositionType::SelfDirected)
@@ -125,7 +124,7 @@ where
         |p| &p.makeup_gain_db,
         display.clone(),
         l.makeup_knob,
-        standard_size,
+        (appearance::GAIN_KNOB_SIZE, appearance::GAIN_KNOB_SIZE),
         StepSet::None,
     );
     knob(
@@ -140,7 +139,12 @@ where
         ),
         StepSet::None,
     );
-    switch(cx, params.clone(), |p| &p.mid_side_mode, l.ms_switch);
+    ImageSwitch::new(cx, params.clone(), |p| &p.mid_side_mode)
+        .position_type(PositionType::SelfDirected)
+        .left(Pixels(l.ms_switch.0))
+        .top(Pixels(l.ms_switch.1))
+        .width(Pixels(appearance::MS_BUTTON_W))
+        .height(Pixels(28.0));
     switch(cx, params.clone(), |p| &p.rms_normalization, l.norm_switch);
     knob(
         cx,

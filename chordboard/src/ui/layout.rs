@@ -6,15 +6,21 @@ pub(super) type Rect = (f32, f32, f32, f32);
 pub(super) const PAD: Rect = (600.0, 158.0, 488.0, 310.0);
 // Keep drawing and pointer targets on the same performance surface.
 pub(super) const PLAY_PAD: Rect = (660.0, 233.0, 408.0, 205.0);
-pub(super) const LATCH: Rect = (440.0, 154.0, 124.0, 28.0);
-pub(super) const QWERTY: Rect = (440.0, 190.0, 124.0, 28.0);
-pub(super) const APPEARANCE: Rect = (1010.0, 24.0, 78.0, 30.0);
-pub(super) const MODE_LABELS: [&str; 3] = ["AUTO STRUM", "MANUAL STRUM", "ARPEGGIATOR"];
+pub(super) const LATCH: Rect = (462.0, 154.0, 86.0, 28.0);
+pub(super) const QWERTY: Rect = (432.0, 190.0, 116.0, 28.0);
+pub(super) const ORDER: Rect = (312.0, 190.0, 112.0, 28.0);
+pub(super) const APPEARANCE: Rect = (950.0, 24.0, 138.0, 30.0);
+pub(super) const SAVE_MEMORY: Rect = (416.0, 442.0, 132.0, 28.0);
+pub(super) const QUALITY: Rect = (32.0, 564.0, 176.0, 32.0);
+pub(super) const MODE_LABELS: [&str; 3] = ["Auto Strum", "Manual Strum", "Arpeggiator"];
 pub(super) fn mode_rect(i: usize) -> Rect {
     (600.0 + i as f32 * 164.0, 122.0, 160.0, 28.0)
 }
 pub(super) fn inversion_rect(i: usize) -> Rect {
-    (32.0 + i as f32 * 42.0, 154.0, 34.0, 28.0)
+    (32.0 + i as f32 * 38.0, 630.0, 32.0, 28.0)
+}
+pub(super) fn direction_rect(i: usize) -> Rect {
+    (616.0 + i as f32 * 76.0, 366.0, 70.0, 28.0)
 }
 pub(super) fn output_controls(mode: i32) -> Vec<(&'static str, Rect)> {
     if !matches!(mode, 1 | 2) {
@@ -110,7 +116,7 @@ pub(super) fn arp_controls() -> [(&'static str, Rect); 3] {
         ),
     ]
 }
-pub(super) const MPE: Rect = (908.0, 94.0, 72.0, 24.0);
+pub(super) const MPE: Rect = (790.0, 94.0, 190.0, 24.0);
 pub(super) const TEMPO_SYNC: Rect = (600.0, 24.0, 108.0, 24.0);
 pub(super) const TEMPO_CONTROL: Rect = (
     716.0,
@@ -120,10 +126,9 @@ pub(super) const TEMPO_CONTROL: Rect = (
 );
 pub(super) const STRUM_SYNC: Rect = (904.0, 162.0, 164.0, 28.0);
 pub(super) const OUTPUT: Rect = (988.0, 94.0, 100.0, 24.0);
-pub(super) const LEARN: Rect = (884.0, 308.0, 188.0, 28.0);
-pub(super) const LEARN_OCTAVE: Rect = (202.0, 190.0, 220.0, 28.0);
+pub(super) const LEARN_OCTAVE: Rect = (344.0, 102.0, 204.0, 28.0);
 pub(super) fn mapping_summary_rect(i: usize) -> Rect {
-    (600.0 + i as f32 * 248.0, 524.0, 240.0, 22.0)
+    (600.0 + i as f32 * 248.0, 524.0, 240.0, 40.0)
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Panel {
@@ -133,7 +138,7 @@ pub(super) enum Panel {
 impl Panel {
     pub(super) fn rect(self) -> Rect {
         match self {
-            Self::Mapping => (600.0, 300.0, 488.0, 248.0),
+            Self::Mapping => (600.0, 276.0, 488.0, 242.0),
             Self::Output => (600.0, 122.0, 488.0, 224.0),
         }
     }
@@ -148,51 +153,44 @@ pub(super) fn local_control_rect(panel: Panel, index: usize) -> Rect {
         42.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA,
     )
 }
-pub(super) fn mapping_control_rect(index: usize) -> Rect {
-    let mut r = local_control_rect(Panel::Mapping, index);
-    r.1 += 54.0;
-    r
+pub(super) fn mapping_panel_rect(axis: usize) -> Rect {
+    let summary = mapping_summary_rect(axis);
+    let height = if axis == 0 { 104.0 } else { 180.0 };
+    (
+        summary.0.min(704.0),
+        summary.1 - height - 6.0,
+        384.0,
+        height,
+    )
+}
+pub(super) fn mapping_learn_rect(axis: usize) -> Rect {
+    let r = mapping_panel_rect(axis);
+    (r.0 + 228.0, r.1 + 8.0, 108.0, 28.0)
+}
+pub(super) fn mapping_control_rect(axis: usize, id: &str) -> Rect {
+    let r = mapping_panel_rect(axis);
+    match id {
+        "x_reverse" => (r.0 + 256.0, r.1 + 48.0, 116.0, 28.0),
+        "y_reverse" => (r.0 + 200.0, r.1 + 132.0, 172.0, 28.0),
+        "y_cc" => (r.0 + 200.0, r.1 + 84.0, 172.0, 42.0),
+        _ => (r.0 + 12.0, r.1 + 132.0, 172.0, 42.0),
+    }
 }
 pub(super) const TRANSPOSE_STEPS: [i32; 5] = [-12, -1, 0, 1, 12];
 pub(super) fn transpose_rect(i: usize) -> Rect {
-    (226.0 + i as f32 * 42.0, 154.0, 38.0, 28.0)
+    (326.0 + i as f32 * 45.0, 630.0, 42.0, 28.0)
 }
 pub(super) fn voicing_controls() -> [(&'static str, Rect); 2] {
     [
-        (
-            "quality",
-            (
-                600.0,
-                624.0,
-                140.0,
-                42.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA,
-            ),
-        ),
-        (
-            "spread",
-            (
-                748.0,
-                624.0,
-                140.0,
-                42.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA,
-            ),
-        ),
+        ("quality", QUALITY),
+        ("spread", (244.0, 541.0, 304.0, 55.0)),
     ]
 }
 pub(super) fn meter_rect(i: usize) -> Rect {
-    (904.0 + i as f32 * 64.0, 594.0, 56.0, 80.0)
+    (904.0 + i as f32 * 64.0, 600.0, 56.0, 70.0)
 }
-pub(super) fn strum_controls() -> [(&'static str, Rect); 3] {
+pub(super) fn strum_controls() -> [(&'static str, Rect); 2] {
     [
-        (
-            "direction",
-            (
-                616.0,
-                342.0,
-                220.0,
-                42.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA,
-            ),
-        ),
         (
             "strum_ms",
             (
@@ -217,17 +215,17 @@ pub(super) fn key_rect(index: usize) -> Rect {
     let row = index / KEY_COLUMNS;
     let col = index % KEY_COLUMNS;
     (
-        32.0 + ([0.0, 0.25, 0.75][row] + col as f32) * 42.0,
-        230.0 + row as f32 * 67.0,
-        38.0,
-        59.0,
+        32.0 + ([0.0, 0.25, 0.75][row] + col as f32) * 40.5,
+        226.0 + row as f32 * 64.0,
+        36.5,
+        57.0,
     )
 }
 // Minimum readable size for hints and secondary labels at the native window size.
 pub(super) const TEXT_SMALL: f32 = 11.0;
 pub(super) const TEXT_LABEL: f32 = 12.0;
 pub(super) fn memory_rect(i: usize) -> Rect {
-    (32.0 + (1.25 + i as f32) * 42.0, 431.0, 38.0, 59.0)
+    (32.0 + (1.25 + i as f32) * 40.5, 426.0, 36.5, 57.0)
 }
 pub(super) fn memory_delete_rect(i: usize) -> Rect {
     let r = memory_rect(i);
