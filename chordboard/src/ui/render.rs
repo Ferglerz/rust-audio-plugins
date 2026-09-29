@@ -129,7 +129,7 @@ impl ChordboardView {
                 600.0,
                 638.0,
                 match self.params.mode.value() {
-                    2 => "Hold a chord, then sweep the strings.",
+                    2 => "Hold a chord, then sweep the strings · Latch plays on hover.",
                     3 => "Hold a chord to hear the pattern.",
                     _ => "Click a chord or play your MIDI keyboard.",
                 },
@@ -263,6 +263,12 @@ impl ChordboardView {
             if hit(self.expand_button(), x, y) {
                 return Some("Collapse the strum field".into());
             }
+            if hit(strum_latch_rect(self.expand_t()), x, y) && self.params.mode.value() == 2 {
+                return Some(
+                    "Hover the strum field to play without clicking · Click the field to drag as usual"
+                        .into(),
+                );
+            }
             if self.params.mode.value() == 2 {
                 let play = self.play_pad();
                 for y_axis in [false, true] {
@@ -281,6 +287,13 @@ impl ChordboardView {
                             "Drag MIN / MAX to stretch the strings · Minimum span 25%".into()
                         });
                     }
+                }
+                if hit(play, x, y) {
+                    return Some(if self.params.strum_latch.value() {
+                        "Latch on · move across the strings to strum without clicking".into()
+                    } else {
+                        "Click and drag to strum · Latch plays the field on hover".into()
+                    });
                 }
             }
             return None;
@@ -324,6 +337,12 @@ impl ChordboardView {
                 "Computer keys play only when enabled and this window is focused · Click a chord key to focus".into(),
             );
         }
+        if hit(strum_latch_rect(self.expand_t()), x, y) && self.params.mode.value() == 2 {
+            return Some(
+                "Hover the strum field to play without clicking · Click the field to drag as usual"
+                    .into(),
+            );
+        }
         if self.params.mode.value() == 2 && self.panel.is_none() {
             let play = self.play_pad();
             for y_axis in [false, true] {
@@ -342,6 +361,13 @@ impl ChordboardView {
                         "Drag MIN / MAX to stretch the strings · Minimum span 25%".into()
                     });
                 }
+            }
+            if hit(play, x, y) {
+                return Some(if self.params.strum_latch.value() {
+                    "Latch on · move across the strings to strum without clicking".into()
+                } else {
+                    "Click and drag to strum · Latch plays the field on hover".into()
+                });
             }
         }
         if controls

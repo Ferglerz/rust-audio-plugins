@@ -288,15 +288,14 @@ impl ChordboardView {
             self.expand_target > 0.5,
             TEAL,
         );
-        if manual && self.expand_t() == 0.0 {
-            d.text_right(
-                pad.0 + pad.2 - 18.0,
-                pad.1 + 25.0,
-                "X STRUM · Y EXPRESSION",
-                TEXT_SMALL,
-                MUTED,
+        if manual {
+            self.trackpad_latch_button(
+                d,
+                strum_latch_rect(self.expand_t()),
+                self.params.strum_latch.value(),
+                TEAL,
             );
-        } else if !manual {
+        } else {
             d.button(
                 strum_sync_rect(self.expand_t()),
                 "SWEEP SYNC",

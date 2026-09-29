@@ -139,6 +139,8 @@ pub(super) const TEMPO_CONTROL: Rect = (
     42.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA,
 );
 pub(super) const STRUM_SYNC: Rect = (904.0, 162.0, 164.0, 28.0);
+pub(super) const STRUM_LATCH: Rect = (1000.0, 162.0, 88.0, 28.0);
+pub(super) const EXPANDED_STRUM_LATCH: Rect = (892.0, 116.0, 88.0, 28.0);
 pub(super) const OUTPUT: Rect = (988.0, 94.0, 100.0, 24.0);
 pub(super) const LEARN_OCTAVE: Rect = (344.0, 102.0, 204.0, 28.0);
 pub(super) fn mapping_summary_rect(i: usize) -> Rect {
@@ -298,6 +300,10 @@ pub(super) fn expand_rect(expand: f32) -> Rect {
 
 pub(super) fn strum_sync_rect(expand: f32) -> Rect {
     lerp_rect(STRUM_SYNC, EXPANDED_STRUM_SYNC, expand)
+}
+
+pub(super) fn strum_latch_rect(expand: f32) -> Rect {
+    lerp_rect(STRUM_LATCH, EXPANDED_STRUM_LATCH, expand)
 }
 
 pub(super) fn strum_rate_rect(expand: f32) -> Rect {

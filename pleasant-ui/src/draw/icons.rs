@@ -84,6 +84,12 @@ impl Draw<'_> {
         self.line(cx + 4.0, cy - 4.0, cx - 4.0, cy + 4.0, color, 1.4);
     }
 
+    /// Rounded trackpad with a contact point; pairs with a short "Latch" label.
+    pub fn trackpad_icon(&mut self, cx: f32, cy: f32, color: Color) {
+        self.outline_rounded(cx - 6.5, cy - 4.5, 13.0, 9.0, 2.4, color, 1.3);
+        self.circle(cx + 1.0, cy - 0.2, 1.35, color, true);
+    }
+
     pub fn headphones(&mut self, cx: f32, cy: f32, color: Color) {
         let mut points = Vec::new();
         for i in 0..=12 {

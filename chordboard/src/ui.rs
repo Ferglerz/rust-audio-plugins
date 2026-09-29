@@ -133,6 +133,7 @@ struct ChordboardView {
     focused: bool,
     pointer: Option<(f32, f32)>,
     drag: Option<Drag>,
+    pad_hover: bool,
     panel: Option<Panel>,
     edit: Option<ValueEdit<&'static str>>,
     menu: Option<Menu>,
@@ -187,6 +188,7 @@ impl ChordboardView {
             focused: false,
             pointer: None,
             drag: None,
+            pad_hover: false,
             panel: None,
             edit: None,
             menu: None,
@@ -526,6 +528,96 @@ impl ChordboardView {
             (true, true) => &self.params.y_max,
         }
     }
+    fn pad_norm(&self, x: f32, y: f32) -> (f32, f32) {
+        let play = self.play_pad();
+        (
+            ((x - play.0) / play.2).clamp(0.0, 1.0),
+            (1.0 - (y - play.1) / play.3).clamp(0.0, 1.0),
+        )
+    }
+    fn strum_bound_at(&self, x: f32, y: f32) -> Option<(bool, bool)> {
+        if self.params.mode.value() != 2 {
+            return None;
+        }
+        let play = self.play_pad();
+        for y_axis in [false, true] {
+            let (min, max) = if y_axis {
+                expression_bounds(self.params.y_min.value(), self.params.y_max.value())
+            } else {
+                strum_bounds(self.params.x_min.value(), self.params.x_max.value())
+            };
+            for (right, value) in [(false, min), (true, max)] {
+                let (ax, ay, pointer) = strum_bound_anchor_in(play, y_axis, value);
+                if pleasant_ui::tag_contains(ax, ay, pointer, x, y) {
+                    return Some((y_axis, right));
+                }
+            }
+        }
+        None
+    }
+    fn can_pad_hover(&self) -> bool {
+        self.params.mode.value() == 2
+            && self.params.strum_latch.value()
+            && self.panel.is_none()
+            && self.menu.is_none()
+            && self.edit.is_none()
+            && self.drag.is_none()
+            && self.page_elapsed >= pleasant_ui::page_slide::DURATION
+    }
+    fn set_pad_xy(&self, cx: &mut EventContext, x: f32, y: f32) {
+        let (px, py) = self.pad_norm(x, y);
+        cx.emit(RawParamEvent::SetParameterNormalized(
+            self.params.x.as_ptr(),
+            px,
+        ));
+        cx.emit(RawParamEvent::SetParameterNormalized(
+            self.params.y.as_ptr(),
+            py,
+        ));
+    }
+    fn begin_pad(&mut self, cx: &mut EventContext, x: f32, y: f32, capture: bool) {
+        let starting = !self.pad_hover && !matches!(self.drag, Some(Drag::Pad));
+        let (px, py) = self.pad_norm(x, y);
+        if starting {
+            for ptr in [self.params.x.as_ptr(), self.params.y.as_ptr()] {
+                cx.emit(RawParamEvent::BeginSetParameter(ptr));
+            }
+            self.bridge.send(Command::BeginGesture(px, py));
+        }
+        self.set_pad_xy(cx, x, y);
+        if capture {
+            self.pad_hover = false;
+            self.drag = Some(Drag::Pad);
+            cx.capture();
+        } else {
+            self.pad_hover = true;
+        }
+    }
+    fn end_pad_hover(&mut self, cx: &mut EventContext) {
+        if !self.pad_hover {
+            return;
+        }
+        self.pad_hover = false;
+        for ptr in [self.params.x.as_ptr(), self.params.y.as_ptr()] {
+            cx.emit(RawParamEvent::EndSetParameter(ptr));
+        }
+        self.bridge.send(Command::EndGesture);
+    }
+    fn sync_pad_hover(&mut self, cx: &mut EventContext) {
+        let over = self.can_pad_hover()
+            && self
+                .pointer
+                .is_some_and(|(x, y)| hit(self.play_pad(), x, y) && self.strum_bound_at(x, y).is_none());
+        if over {
+            if !self.pad_hover {
+                if let Some((x, y)) = self.pointer {
+                    self.begin_pad(cx, x, y, false);
+                }
+            }
+        } else {
+            self.end_pad_hover(cx);
+        }
+    }
     fn end_drag(&mut self, cx: &mut EventContext) {
         if let Some(drag) = self.drag.take() {
             match drag {
@@ -612,6 +704,7 @@ impl ChordboardView {
         if was_expanding || self.expand_elapsed < pleasant_ui::page_slide::DURATION {
             cx.needs_redraw();
         }
+        self.sync_pad_hover(cx);
         let old = self.snapshot;
         while let Some(s) = self.bridge.snapshots.pop() {
             self.snapshot = s;

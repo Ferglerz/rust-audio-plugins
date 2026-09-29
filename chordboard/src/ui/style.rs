@@ -98,6 +98,12 @@ impl ChordboardView {
                     (0..3).map(|i| (direction_rect(i), self.params.direction.value() == i as i32)),
                 );
             }
+            2 => {
+                targets.push((
+                    strum_latch_rect(self.expand_t()),
+                    self.params.strum_latch.value(),
+                ));
+            }
             3 => {
                 targets.extend(
                     (0..5).map(|i| (pattern_rect(i), self.params.arp_pattern.value() == i as i32)),
@@ -177,6 +183,22 @@ impl ChordboardView {
     }
 
     pub(super) fn button(&self, d: &mut Draw, r: Rect, label: &str, on: bool, color: Color) {
+        self.paint_button(d, r, label, on, color, false);
+    }
+
+    pub(super) fn trackpad_latch_button(&self, d: &mut Draw, r: Rect, on: bool, color: Color) {
+        self.paint_button(d, r, "Latch", on, color, true);
+    }
+
+    fn paint_button(
+        &self,
+        d: &mut Draw,
+        r: Rect,
+        label: &str,
+        on: bool,
+        color: Color,
+        trackpad: bool,
+    ) {
         let hover = self.hover_amount(r);
         let selected = self
             .motion
@@ -208,15 +230,26 @@ impl ChordboardView {
         );
         let old = d.font;
         d.font = self.ui_font.get();
+        let label_color = if on || color == MUTED { color } else { TEXT };
         let padding = if r.2 < 64.0 { 6.0 } else { 12.0 };
         let text = self.fit_text(d, label, r.2 - padding, 12.0);
-        d.text_centered(
-            r.0 + r.2 / 2.0,
-            r.1 + r.3 / 2.0 + 4.0,
-            &text,
-            12.0,
-            if on || color == MUTED { color } else { TEXT },
-        );
+        if trackpad {
+            const ICON_WIDTH: f32 = 14.0;
+            const GAP: f32 = 5.0;
+            let text_w = self.text_width(d, &text, 12.0);
+            let left = r.0 + (r.2 - ICON_WIDTH - GAP - text_w) * 0.5;
+            let center_y = r.1 + r.3 * 0.5;
+            d.trackpad_icon(left + ICON_WIDTH * 0.5, center_y, label_color);
+            d.text_middle(left + ICON_WIDTH + GAP, center_y, &text, 12.0, label_color);
+        } else {
+            d.text_centered(
+                r.0 + r.2 / 2.0,
+                r.1 + r.3 / 2.0 + 4.0,
+                &text,
+                12.0,
+                label_color,
+            );
+        }
         d.font = old;
     }
 
