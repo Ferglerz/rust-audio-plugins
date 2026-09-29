@@ -305,3 +305,55 @@ fn test_return_meets_write_head_at_unity() {
     );
     assert!(peak > 1.0, "catch-up should exceed realtime, peak {peak}");
 }
+
+#[test]
+fn test_return_and_crossfade_follow_live_audio() {
+    let mut engine = TapeStopEngine::new();
+    engine.set_sample_rate(1000.0);
+    for i in 0..100 {
+        let s = 0.4 + 0.001 * i as f32;
+        engine.process_sample(s, -s, 0.01, 50.0, 0.05, 1.0, 0.0, false, -18.0, true);
+    }
+    engine.note_on(60, 1.0);
+    for i in 100..200 {
+        let s = 0.4 + 0.001 * i as f32;
+        engine.process_sample(s, -s, 0.01, 50.0, 0.05, 1.0, 0.0, false, -18.0, true);
+    }
+    engine.note_off(60);
+    let mut joined = false;
+    let mut saw_crossfade = false;
+    for i in 200..1000 {
+        let s = 0.4 + 0.001 * i as f32;
+        let out = engine.process_sample(s, -s, 0.01, 50.0, 0.05, 1.0, 0.0, false, -18.0, true);
+        if !engine.is_returning() {
+            joined = true;
+            saw_crossfade |= engine.is_crossfading();
+            assert!(
+                (out.0 - s).abs() < 1e-6,
+                "Live join L mismatch at {i}: {} versus {s}",
+                out.0
+            );
+            assert!(
+                (out.1 + s).abs() < 1e-6,
+                "Live join R mismatch at {i}: {} versus {}",
+                out.1,
+                -s
+            );
+        }
+    }
+    assert!(joined && saw_crossfade);
+}
+
+#[test]
+fn test_hermite_live_edge_uses_recorded_samples() {
+    use tape_stop::dsp::ring_buffer::StereoRingBuffer;
+    let mut ring = StereoRingBuffer::new();
+    for _ in 0..8 {
+        ring.push(0.75, -0.25);
+    }
+    for offset in [0.0, 0.25, 0.5, 0.75] {
+        let pos = ring.live_head() as f64 - offset;
+        assert!((ring.read_left(pos) - 0.75).abs() < 1e-6);
+        assert!((ring.read_right(pos) + 0.25).abs() < 1e-6);
+    }
+}

@@ -477,9 +477,13 @@ impl StripView {
                         }
                         if !b.dynamic {
                             b.dynamic = true;
-                            b.range = default_dyn_range(graph_db);
+                            b.range = 0.0;
                         }
-                        b.ratio = (b.ratio + dy * 0.05).clamp(1.0, 20.0);
+                        // Move the range endpoint by the pointer delta, keeping
+                        // an existing endpoint at its original grab offset.
+                        b.range = (b.range - dy * 2.0 * graph_db / GH as f64)
+                            .clamp(b.gain - graph_db, b.gain + graph_db)
+                            .clamp(-MAX_RANGE_DB, MAX_RANGE_DB);
                     });
                     self.open_band_dyn_settings();
                 } else {

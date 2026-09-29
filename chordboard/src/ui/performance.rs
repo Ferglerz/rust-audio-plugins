@@ -4,53 +4,60 @@ impl ChordboardView {
     pub(super) fn draw_performance_header(&self, d: &mut Draw) {
         d.text(600.0, 105.0, "PLAYBACK", TEXT_SMALL, MUTED);
         d.text_right(
-            1088.0,
-            105.0,
-            &format!(
-                "{} VOICES  /  {}",
-                self.snapshot.voices,
-                if self.params.mpe.value() {
-                    "MPE"
-                } else {
-                    "MIDI"
-                }
-            ),
+            892.0,
+            110.0,
+            &format!("{} VOICES", self.snapshot.voices),
             TEXT_SMALL,
             MUTED,
         );
+        d.button(
+            MPE,
+            ["AUTO", "MPE", "REG"][self.params.output_mode.value() as usize],
+            self.params.mpe_enabled(),
+            TEAL,
+        );
+        d.button(OUTPUT, "OUTPUT ▾", self.panel == Some(Panel::Output), TEAL);
+        d.button(
+            TEMPO_SYNC,
+            "HOST SYNC",
+            self.params.tempo_sync.value(),
+            TEAL,
+        );
+        if self.params.tempo_sync.value() {
+            d.text(
+                732.0,
+                41.0,
+                &format!("{:.1} BPM", self.snapshot.tempo),
+                TEXT_SMALL,
+                MUTED,
+            );
+        }
         for (i, label) in MODE_LABELS.iter().enumerate() {
             d.tab_button(
                 mode_rect(i),
                 label,
-                self.params.mode.value() == i as i32,
+                self.params.mode.value().max(1) == i as i32 + 1,
                 TEAL,
             );
         }
     }
     pub(super) fn draw_arp(&self, d: &mut Draw) {
-        let main = self.arp_main();
-        if main {
-            d.rect(PAD.0, PAD.1, PAD.2, PAD.3, PANEL);
-            d.text(618.0, 215.0, "ARPEGGIATOR", TEXT_LABEL, GOLD);
-            let count = self.snapshot.notes.len.min(6);
-            for i in 0..count {
-                if let Some(note) = self.snapshot.notes.string(i) {
-                    let x = 840.0 + i as f32 * 40.0;
-                    let pulse = self.string_anim[i];
-                    d.circle(x, 211.0, 10.0, alpha(GOLD, pulse * 0.25), true);
-                    d.text_centered(
-                        x,
-                        215.0,
-                        harmony::NOTE_NAMES[note as usize % 12],
-                        TEXT_SMALL,
-                        if pulse > 0.1 { GOLD } else { MUTED },
-                    );
-                }
+        d.rounded_rect(PAD.0, PAD.1, PAD.2, PAD.3, 8.0, BG);
+        d.text(618.0, 183.0, "ARPEGGIATOR", TEXT_LABEL, GOLD);
+        let count = self.snapshot.notes.len.min(6);
+        for i in 0..count {
+            if let Some(note) = self.snapshot.notes.string(i) {
+                let x = 840.0 + i as f32 * 40.0;
+                let pulse = self.string_anim[i];
+                d.circle(x, 179.0, 10.0, alpha(GOLD, pulse * 0.25), true);
+                d.text_centered(
+                    x,
+                    183.0,
+                    harmony::NOTE_NAMES[note as usize % 12],
+                    TEXT_SMALL,
+                    if pulse > 0.1 { GOLD } else { MUTED },
+                );
             }
-        } else {
-            d.rect(32.0, 624.0, 340.0, 118.0, PANEL);
-            d.text(44.0, 640.0, "NOTE PATH", TEXT_SMALL, GOLD);
-            d.text_right(360.0, 640.0, "CHOOSE A CONTOUR", TEXT_SMALL, MUTED);
         }
         // Glyphs illustrate each ordering rule; they are not a playback position.
         let contours = [
@@ -64,7 +71,7 @@ impl ChordboardView {
             .iter()
             .enumerate()
         {
-            let r = pattern_rect(i, main);
+            let r = pattern_rect(i);
             let selected = self.params.arp_pattern.value() == i as i32;
             let color = if selected { GOLD } else { MUTED };
             d.rect(
@@ -93,22 +100,16 @@ impl ChordboardView {
             }
             d.text_centered(r.0 + r.2 / 2.0, r.1 + 35.0, label, TEXT_SMALL, color);
         }
-        d.text(
-            if main { 618.0 } else { 44.0 },
-            if main { 351.0 } else { 728.0 },
-            "OCTAVES",
-            TEXT_SMALL,
-            MUTED,
-        );
+        d.text(618.0, 319.0, "OCTAVES", TEXT_SMALL, MUTED);
         for i in 0..4 {
             d.tab_button(
-                octave_rect(i, main),
+                octave_rect(i),
                 &(i + 1).to_string(),
                 self.params.octaves.value() == i as i32 + 1,
                 GOLD,
             );
         }
-        let header = rate_header(main);
+        let header = RATE_HEADER;
         d.text(header.0, header.1 + 15.0, "RATE", TEXT_SMALL, GOLD);
         d.text_right(
             header.0 + header.2,
@@ -119,26 +120,21 @@ impl ChordboardView {
         );
         for (i, (label, beats)) in ARP_RATES.iter().enumerate() {
             d.tab_button(
-                rate_rect(i, main),
+                rate_rect(i),
                 label,
                 (self.params.rate.value() - beats).abs() < 0.0001,
                 GOLD,
             );
         }
-        for (id, r) in arp_controls(main).into_iter().skip(1) {
+        for (id, r) in arp_controls().into_iter().skip(1) {
             let gate = self.params.gate.value();
             let swing = self.params.swing.value();
             let is_gate = id == "gate";
-            d.rect(r.0, r.1, r.2, r.3, PANEL);
-            d.line(r.0, r.1, r.0 + r.2, r.1, LINE, 1.0);
+            d.rect(r.0, r.1, r.2, r.3, BG);
             d.text(
                 r.0 + 12.0,
                 r.1 + 17.0,
-                if is_gate {
-                    "GATE / NOTE LENGTH"
-                } else {
-                    "SWING / LONG · SHORT"
-                },
+                if is_gate { "GATE" } else { "SWING" },
                 TEXT_SMALL,
                 MUTED,
             );
@@ -177,121 +173,250 @@ impl ChordboardView {
             }
         }
     }
-    pub(super) fn draw_pad(&self, d: &mut Draw) {
-        d.rounded_rect(PAD.0, PAD.1, PAD.2, PAD.3, 9.0, PANEL);
-        d.outline(PAD, LINE);
+    pub(super) fn draw_pad(&self, d: &mut Draw, mode: i32) {
+        d.rounded_rect(PAD.0, PAD.1, PAD.2, PAD.3, 8.0, BG);
+        let manual = mode == 2;
+        let field = if manual {
+            PLAY_PAD
+        } else {
+            (620.0, 203.0, 448.0, 115.0)
+        };
+        let (min, max) = if manual {
+            strum_bounds(self.params.x_min.value(), self.params.x_max.value())
+        } else {
+            (0.0, 1.0)
+        };
+        let (y_min, y_max) =
+            expression_bounds(self.params.y_min.value(), self.params.y_max.value());
+        let expression_position = |value: f32| {
+            y_min
+                + if self.params.y_reverse.value() {
+                    1.0 - value
+                } else {
+                    value
+                } * (y_max - y_min)
+        };
         let n = self.params.strings.value() as usize;
         for i in 0..n {
-            let x = PAD.0 + 20.0 + i as f32 * (PAD.2 - 40.0) / (n - 1) as f32;
-            let pulse = self.string_anim[i];
-            let color = if self.snapshot.notes.string(i).is_some() {
+            let x = field.0 + (min + i as f32 * (max - min) / (n - 1) as f32) * field.2;
+            let string = if manual && self.params.x_reverse.value() {
+                n - 1 - i
+            } else {
+                i
+            };
+            let pulse = self.string_anim[string];
+            let color = if self.snapshot.notes.string(string).is_some() {
                 TEAL
             } else {
                 MUTED
             };
             if pulse > 0.01 {
-                d.rect(
-                    x - 5.0,
-                    PAD.1 + 45.0,
-                    10.0,
-                    PLAY_PAD.3,
-                    alpha(color, pulse * 0.10),
-                );
+                d.rect(x - 5.0, field.1, 10.0, field.3, alpha(color, pulse * 0.10));
             }
-            let displacement = if self.params.reduced_motion.value() {
-                0.0
-            } else {
-                (pulse * 24.0).sin() * pulse * 3.0
-            };
+            let displacement = (pulse * 24.0).sin() * pulse * 3.0;
             d.poly(
                 &[
-                    (x, PAD.1 + 45.0),
-                    (x + displacement, PLAY_PAD.1 + PLAY_PAD.3 / 2.0),
-                    (x, PLAY_PAD.1 + PLAY_PAD.3),
+                    (x, field.1),
+                    (x + displacement, field.1 + field.3 / 2.0),
+                    (x, field.1 + field.3),
                 ],
                 alpha(color, 0.15 + pulse * 0.7),
                 1.0 + pulse,
             );
-            if let Some(note) = self.snapshot.notes.string(i) {
+            if let Some(note) = self.snapshot.notes.string(string) {
                 d.text_centered(
                     x,
-                    PLAY_PAD.1 + PLAY_PAD.3 + 14.0,
+                    field.1 + field.3 + 14.0,
                     harmony::NOTE_NAMES[note as usize % 12],
                     TEXT_SMALL,
                     if pulse > 0.1 { color } else { MUTED },
                 );
             }
         }
-        d.text(PAD.0 + 18.0, PAD.1 + 25.0, "STRUM FIELD", TEXT_LABEL, TEAL);
-        d.text_right(
-            PAD.0 + PAD.2 - 18.0,
+        d.text(
+            PAD.0 + 18.0,
             PAD.1 + 25.0,
-            if self.params.mode.value() == 2 {
-                "CC1 ↔ STRINGS"
-            } else {
-                "SELECT MANUAL TO STRUM"
-            },
-            TEXT_SMALL,
-            MUTED,
+            if manual { "STRUM FIELD" } else { "AUTO STRUM" },
+            TEXT_LABEL,
+            TEAL,
         );
-        if !self.params.reduced_motion.value() {
+        if manual {
+            d.text_right(
+                PAD.0 + PAD.2 - 18.0,
+                PAD.1 + 25.0,
+                "X STRUM · Y EXPRESSION",
+                TEXT_SMALL,
+                MUTED,
+            );
+        } else {
+            d.button(
+                STRUM_SYNC,
+                "SWEEP SYNC",
+                self.params.strum_sync.value(),
+                TEAL,
+            );
+            if self.params.strum_sync.value() {
+                let label = ARP_RATES
+                    .iter()
+                    .find(|(_, beats)| (*beats - self.params.strum_beats.value()).abs() < 0.0001)
+                    .map_or_else(
+                        || format!("{:.3} beats", self.params.strum_beats.value()),
+                        |(label, _)| label.to_string(),
+                    );
+                d.button(
+                    Menu::StrumRate.trigger_rect(),
+                    &format!("Sweep: {label} ▾"),
+                    self.menu == Some(Menu::StrumRate),
+                    GOLD,
+                );
+            }
+        }
+        if !manual {
+            return;
+        }
+        {
             for &(x, y, time) in &self.trail {
                 let age = time.elapsed().as_secs_f32();
                 let strength = (1.0 - age / 0.35).max(0.0);
                 d.circle(
-                    PLAY_PAD.0 + x * PLAY_PAD.2,
-                    PLAY_PAD.1 + (1.0 - y) * PLAY_PAD.3,
+                    field.0
+                        + (min
+                            + if self.params.x_reverse.value() {
+                                1.0 - x
+                            } else {
+                                x
+                            } * (max - min))
+                            * field.2,
+                    field.1 + (1.0 - expression_position(y)) * field.3,
                     3.0 + strength * 3.0,
                     alpha(TEAL, strength * 0.17),
                     true,
                 );
             }
         }
-        let x = PLAY_PAD.0 + self.snapshot.x * PLAY_PAD.2;
-        let y = PLAY_PAD.1 + (1.0 - self.snapshot.y) * PLAY_PAD.3;
+        for (y_axis, low, high) in [(false, min, max), (true, y_min, y_max)] {
+            for (maximum, value) in [(false, low), (true, high)] {
+                let (ax, ay, pointer) = strum_bound_anchor(y_axis, value);
+                if y_axis {
+                    d.line(field.0, ay, field.0 + field.2, ay, alpha(GOLD, 0.35), 1.0);
+                } else {
+                    d.line(ax, field.1, ax, field.1 + field.3, alpha(TEAL, 0.35), 1.0);
+                }
+                let color = if y_axis { GOLD } else { TEAL };
+                d.tag_handle(ax, ay, pointer, color);
+                let dragging = matches!(self.drag, Some(Drag::StrumBound(axis, end)) if axis == y_axis && end == maximum);
+                let label = if dragging {
+                    format!("{value:.2}")
+                } else if maximum {
+                    "MAX".into()
+                } else {
+                    "MIN".into()
+                };
+                if y_axis {
+                    d.text_centered(ax - 22.0, ay + 22.0, &label, TEXT_SMALL, color);
+                } else if maximum {
+                    d.text_right(ax - 14.0, ay - 17.0, &label, TEXT_SMALL, color);
+                } else {
+                    d.text(ax + 14.0, ay - 17.0, &label, TEXT_SMALL, color);
+                }
+            }
+        }
+        let position = if self.params.x_reverse.value() {
+            1.0 - self.snapshot.x
+        } else {
+            self.snapshot.x
+        };
+        let x = field.0 + (min + position * (max - min)) * field.2;
+        let y = field.1 + (1.0 - expression_position(self.snapshot.y)) * field.3;
         d.circle(
-            x.clamp(PLAY_PAD.0 + 8.0, PLAY_PAD.0 + PLAY_PAD.2 - 8.0),
-            y.clamp(PLAY_PAD.1 + 8.0, PLAY_PAD.1 + PLAY_PAD.3 - 8.0),
+            x.clamp(field.0 + 8.0, field.0 + field.2 - 8.0),
+            y.clamp(field.1 + 8.0, field.1 + field.3 - 8.0),
             7.0,
             TEAL,
             false,
         );
     }
+    pub(super) fn spread_preview_notes(&self) -> harmony::Notes {
+        if self.snapshot.full_notes.len > 0 {
+            self.snapshot.full_notes
+        } else {
+            harmony::voice(
+                (self.params.keyboard_octave.value() + self.params.key.value()).clamp(0, 127) as u8,
+                self.params.quality.value() as u8,
+                None,
+                self.params.transpose.value() as i8,
+                self.params.inversion.value() as u8,
+                self.params.spread.value() as u8,
+            )
+        }
+    }
+
+    pub(super) fn draw_spread_keyboard(&self, d: &mut Draw, r: Rect, label: &str) {
+        let notes = self.spread_preview_notes();
+        let tones = notes.as_slice();
+        let first = tones.first().copied().unwrap_or(48) / 12 * 12;
+        let last = ((tones.last().copied().unwrap_or(60) as u16 / 12 + 1) * 12 - 1).min(127) as u8;
+        let black = |note: u8| matches!(note % 12, 1 | 3 | 6 | 8 | 10);
+        let whites = (first..=last).filter(|&n| !black(n)).count().max(1);
+        let key_w = r.2 / whites as f32;
+        let top = r.1 + 23.0;
+        let height = r.3 - 25.0;
+        let hovered = self.pointer.is_some_and(|(x, y)| hit(r, x, y));
+        d.text(r.0, r.1 + 15.0, "Spread", TEXT_SMALL, MUTED);
+        d.text_right(r.0 + r.2, r.1 + 15.0, label, TEXT_SMALL, GOLD);
+        let mut white_index = 0;
+        for note in first..=last {
+            if black(note) {
+                continue;
+            }
+            let x = r.0 + white_index as f32 * key_w;
+            d.rect(
+                x,
+                top,
+                key_w,
+                height,
+                if tones.contains(&note) {
+                    GOLD
+                } else {
+                    alpha(TEXT, 0.65)
+                },
+            );
+            d.outline((x, top, key_w, height), BG);
+            white_index += 1;
+        }
+        white_index = 0;
+        for note in first..=last {
+            if !black(note) {
+                white_index += 1;
+                continue;
+            }
+            let x = r.0 + white_index as f32 * key_w - key_w * 0.3;
+            d.rect(
+                x,
+                top,
+                key_w * 0.6,
+                height * 0.62,
+                if tones.contains(&note) { GOLD } else { BG },
+            );
+            d.outline((x, top, key_w * 0.6, height * 0.62), LINE);
+        }
+        d.outline((r.0, top, r.2, height), if hovered { GOLD } else { LINE });
+    }
+
     pub(super) fn draw_meters(&self, d: &mut Draw) {
-        for (i, label) in ["PRESSURE", "TIMBRE", "BEND"].iter().enumerate() {
-            let x = 600.0 + i as f32 * 164.0;
-            d.text(x, 132.0, label, TEXT_SMALL, MUTED);
+        for (i, label) in ["PRESS", "TIMBRE", "BEND"].iter().enumerate() {
+            let r = meter_rect(i);
+            let x = r.0 + r.2 / 2.0;
+            let top = r.1;
+            let bottom = r.1 + 60.0;
+            let end = bottom - self.meters[i].clamp(0.0, 1.0) * 60.0;
+            d.rounded_rect(x - 4.0, top, 8.0, 60.0, 3.0, LINE);
+            let origin = if i == 0 { bottom } else { top + 30.0 };
+            d.rect(x - 3.0, end.min(origin), 6.0, (end - origin).abs(), TEAL);
             if i > 0 {
-                let value = if i == 1 {
-                    self.snapshot.timbre
-                } else {
-                    self.snapshot.bend
-                };
-                let signed = (value.clamp(0.0, 1.0) - 0.5) * 200.0;
-                let value = if signed.abs() < 0.5 {
-                    "0%".into()
-                } else {
-                    format!("{signed:+.0}%")
-                };
-                d.text_right(x + 152.0, 119.0, &value, TEXT_SMALL, TEAL);
-                d.text(x + 69.0, 143.0, "−", TEXT_SMALL, MUTED);
-                d.text_centered(x + 112.0, 143.0, "0", TEXT_SMALL, MUTED);
-                d.text_right(x + 155.0, 143.0, "+", TEXT_SMALL, MUTED);
+                d.line(x - 8.0, origin, x + 8.0, origin, MUTED, 1.0);
             }
-            d.rect(x + 72.0, 123.0, 80.0, 8.0, LINE);
-            if i > 0 {
-                let end = x + 72.0 + 80.0 * self.meters[i];
-                d.rect(
-                    (x + 112.0).min(end),
-                    123.0,
-                    (end - (x + 112.0)).abs(),
-                    8.0,
-                    TEAL,
-                );
-                d.line(x + 112.0, 121.0, x + 112.0, 133.0, TEXT, 1.0);
-            } else {
-                d.rect(x + 72.0, 123.0, 80.0 * self.meters[i], 8.0, TEAL);
-            }
+            d.text_centered(x, r.1 + r.3, label, TEXT_SMALL, MUTED);
         }
     }
 }

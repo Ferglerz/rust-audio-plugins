@@ -1,7 +1,7 @@
 //! Gain reduction calculation ported from `06_gain_reduction.jsfx-inc`.
 
 use super::compression_lut::CompressionLUT;
-use super::constants::{MAX_CURVE_INPUT_DB, MIN_DETECTOR_DB_FLOOR, clamp_gr_db};
+use super::constants::{clamp_gr_db, MAX_CURVE_INPUT_DB, MIN_DETECTOR_DB_FLOOR};
 
 pub struct GainReductionResult {
     pub target_gr_db: f64,
@@ -16,10 +16,8 @@ pub fn calculate_gain_reduction_from_db(
     input_offset_db: f64,
     strength_multiplier: f64,
 ) -> GainReductionResult {
-    let curve_input_db = (detector_level_db + input_offset_db).clamp(
-        MIN_DETECTOR_DB_FLOOR,
-        MAX_CURVE_INPUT_DB,
-    );
+    let curve_input_db =
+        (detector_level_db + input_offset_db).clamp(MIN_DETECTOR_DB_FLOOR, MAX_CURVE_INPUT_DB);
 
     let threshold_db = lut.threshold();
     if curve_input_db < threshold_db {
@@ -46,8 +44,8 @@ pub fn calculate_gain_reduction_from_db(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::graph::CompressionGraph;
+    use super::*;
 
     #[test]
     fn below_threshold_skips_gr() {

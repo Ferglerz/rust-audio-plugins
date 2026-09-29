@@ -93,12 +93,7 @@ impl StripView {
         let (sr, config, gx, gw) = self.render_eq_panel(&mut d, next_p, target_p);
         let (comp_bypassed, is_pre) = self.render_dynamics_panels(&mut d);
         d.line(32.0, FOOTER_LINE_Y, UI_W - 32.0, FOOTER_LINE_Y, LINE, 1.0);
-        d.button(
-            THEME_BUTTON,
-            if d.light { "LIGHT" } else { "DARK" },
-            false,
-            TEXT,
-        );
+        d.appearance_button(THEME_BUTTON, preferences::label());
         d.button(
             PROCESS_BUTTON,
             &format!("{} ▾", config.mode.label()),
@@ -195,13 +190,13 @@ impl StripView {
                     .idle_hover()
                     .is_some_and(|(hx, hy)| inside(hx, hy, val_r))
             {
-                d.value_underline(val_r, GOLD);
+                d.value_underline(val_r, r.1 + 13.0, GOLD);
             }
         }
 
         let bar_x = r.0 + 8.0;
         let bar_w = r.2 - 16.0;
-        let bar_y = r.1 + 19.0;
+        let bar_y = r.1 + 19.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA;
         let bar_h = 4.0;
         d.rect(bar_x, bar_y, bar_w, bar_h, LINE);
         let mid_x = bar_x + bar_w * 0.5;
@@ -255,8 +250,18 @@ impl StripView {
                     {
                         d.rect(r.0, row_y, r.2, row_h, LINE);
                     }
+                    let text_x = if matches!(menu, BandMenu::Shape) {
+                        d.filter_curve(
+                            pleasant_eq::EqShape::from(Shape::ALL[row]).biquad_kind(),
+                            (r.0 + 10.0, row_y + (row_h - 16.0) * 0.5, 30.0, 16.0),
+                            if selected { GOLD } else { TEXT },
+                        );
+                        r.0 + 50.0
+                    } else {
+                        r.0 + 10.0
+                    };
                     d.text(
-                        r.0 + 10.0,
+                        text_x,
                         row_y + row_h * 0.5 + text_size * 0.32,
                         &label,
                         text_size,
@@ -300,14 +305,7 @@ impl StripView {
             && self.processing_menu.is_none()
         {
             if let Some((target, r)) = self.idle_hover().and_then(|(x, y)| self.value_at(x, y)) {
-                d.line(
-                    r.0 + 4.0,
-                    r.1 + r.3 - 1.0,
-                    r.0 + r.2 - 4.0,
-                    r.1 + r.3 - 1.0,
-                    self.value_color(target),
-                    1.0,
-                );
+                d.value_underline(r, self.value_baseline(target), self.value_color(target));
             }
         }
         if let Some(edit) = &self.edit {

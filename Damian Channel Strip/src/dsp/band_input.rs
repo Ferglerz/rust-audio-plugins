@@ -14,6 +14,7 @@ pub struct BandInputMeters {
     sample_rate: f64,
 }
 
+#[derive(Clone)]
 struct BandInputMeter {
     id: u64,
     frequency_hz: f64,
@@ -26,11 +27,20 @@ struct BandInputMeter {
 }
 
 impl BandInputMeters {
+    #[cfg(test)]
     pub fn new(sample_rate: f64) -> Self {
+        Self::with_capacity(sample_rate, DYNAMIC_BAND_METER_RESERVE)
+    }
+
+    pub(crate) fn with_capacity(sample_rate: f64, capacity: usize) -> Self {
         Self {
-            meters: Vec::with_capacity(DYNAMIC_BAND_METER_RESERVE),
+            meters: Vec::with_capacity(capacity.max(DYNAMIC_BAND_METER_RESERVE)),
             sample_rate: sample_rate.max(1.0),
         }
+    }
+
+    pub(crate) fn inherit(&mut self, previous: &Self) {
+        self.meters.extend(previous.meters.iter().cloned());
     }
 
     pub fn reset(&mut self) {
@@ -62,7 +72,7 @@ impl BandInputMeters {
         for band in bands.filter(|b| b.dynamic && b.shape.has_gain()) {
             if let Some(meter) = self.meters.iter_mut().find(|m| m.id == band.id) {
                 meter.update(band.freq, band.q, self.sample_rate);
-            } else {
+            } else if self.meters.len() < self.meters.capacity() {
                 self.meters.push(BandInputMeter::new(
                     band.id,
                     band.freq,
@@ -81,7 +91,13 @@ impl BandInputMeters {
 
     pub fn write_levels_db(&self, levels: &mut Vec<(u64, f32)>) {
         levels.clear();
-        levels.extend(self.meters.iter().map(|m| (m.id, m.level_db() as f32)));
+        // Telemetry is bounded independently of the number of audible EQ bands.
+        levels.extend(
+            self.meters
+                .iter()
+                .take(levels.capacity())
+                .map(|m| (m.id, m.level_db() as f32)),
+        );
     }
 }
 
@@ -171,7 +187,7 @@ mod tests {
             let sample = (2.0 * PI * 1000.0 * t).sin() * 0.5;
             meters.tick([sample, sample]);
         }
-        let mut levels = Vec::new();
+        let mut levels = Vec::with_capacity(DYNAMIC_BAND_METER_RESERVE);
         meters.write_levels_db(&mut levels);
         let in_band = levels[0].1;
         meters.sync([&Band {

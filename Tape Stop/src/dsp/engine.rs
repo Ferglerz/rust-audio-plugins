@@ -87,6 +87,7 @@ pub struct TapeStopEngine {
 
     // MIDI Note tracking
     active_note_count: usize,
+    held_notes: [usize; 128],
     manual_trigger: bool,
 
     // Auto-Restart Transient & Envelope Detection
@@ -139,6 +140,7 @@ impl TapeStopEngine {
             return_a_l: 0.0,
             return_a_r: 0.0,
             active_note_count: 0,
+            held_notes: [0; 128],
             manual_trigger: false,
             envelope: 0.0,
             attack_coeff,
@@ -179,6 +181,7 @@ impl TapeStopEngine {
         self.pending_release = false;
         self.return_pos = 0.0;
         self.active_note_count = 0;
+        self.held_notes.fill(0);
         self.manual_trigger = false;
         self.envelope = 0.0;
         self.lockout_samples = 0.0;
@@ -193,13 +196,24 @@ impl TapeStopEngine {
 
     // --- MIDI Trigger Handling ---
 
-    pub fn note_on(&mut self, _note: u8, _velocity: f32) {
+    pub fn note_on(&mut self, note: u8, _velocity: f32) {
+        let Some(held) = self.held_notes.get_mut(note as usize) else {
+            return;
+        };
+        *held += 1;
         self.active_note_count += 1;
         self.evaluate_trigger_state();
     }
 
-    pub fn note_off(&mut self, _note: u8) {
-        self.active_note_count = self.active_note_count.saturating_sub(1);
+    pub fn note_off(&mut self, note: u8) {
+        let Some(held) = self.held_notes.get_mut(note as usize) else {
+            return;
+        };
+        if *held == 0 {
+            return;
+        }
+        *held -= 1;
+        self.active_note_count -= 1;
         self.evaluate_trigger_state();
     }
 
@@ -210,6 +224,7 @@ impl TapeStopEngine {
 
     pub fn clear_held_notes(&mut self) {
         self.active_note_count = 0;
+        self.held_notes.fill(0);
         self.evaluate_trigger_state();
     }
 
@@ -234,7 +249,7 @@ impl TapeStopEngine {
             self.pending_release = false;
             self.lockout_samples = 0.06 * self.sample_rate;
             // Align playhead to current live write head
-            let head = self.ring_buffer.write_head() as f64;
+            let head = self.ring_buffer.live_head() as f64;
             self.play_pos_l = head;
             self.play_pos_r = head;
         } else if !should_brake && self.is_braking {
@@ -341,6 +356,7 @@ impl TapeStopEngine {
                     self.is_returning = true;
                     self.pending_release = true;
                     self.active_note_count = 0;
+                    self.held_notes.fill(0);
                     self.manual_trigger = false;
                     self.transient_flash = 1.0;
                 }
@@ -391,7 +407,7 @@ impl TapeStopEngine {
             self.play_pos_r += self.speed_r;
             self.return_pos += 1.0;
             if self.return_pos >= self.return_len {
-                let head = self.ring_buffer.write_head() as f64;
+                let head = self.ring_buffer.live_head() as f64;
                 self.play_pos_l = head;
                 self.play_pos_r = head;
                 self.speed_l = 1.0;
@@ -430,7 +446,7 @@ impl TapeStopEngine {
             // Normal live passthrough
             self.speed_l = 1.0;
             self.speed_r = 1.0;
-            let head = self.ring_buffer.write_head() as f64;
+            let head = self.ring_buffer.live_head() as f64;
             self.play_pos_l = head;
             self.play_pos_r = head;
             (in_l, in_r)
@@ -444,7 +460,9 @@ impl TapeStopEngine {
         self.is_crossfading = false;
         self.return_pos = 0.0;
 
-        let head = self.ring_buffer.write_head();
+        // The first return sample has already been pushed. Measure lag at the
+        // preceding live frame so n return advances meet the live frame at n.
+        let head = (self.ring_buffer.live_head() + BUFFER_SIZE - 1) % BUFFER_SIZE;
         let lag_l = lag_samples(head, self.play_pos_l, BUFFER_SIZE);
         let lag_r = lag_samples(head, self.play_pos_r, BUFFER_SIZE);
         let requested = (return_sec as f64 * self.sample_rate as f64).max(1.0);
@@ -453,7 +471,7 @@ impl TapeStopEngine {
             lag_r,
             requested,
         ));
-        self.return_len = n.max(1.0);
+        self.return_len = n.max(1.0).ceil();
         self.return_s0_l = self.speed_l;
         self.return_s0_r = self.speed_r;
         self.return_a_l = return_coeff(self.speed_l, lag_l, self.return_len);
@@ -520,12 +538,12 @@ impl TapeStopEngine {
 
     #[inline(always)]
     pub fn play_lag_left(&self) -> f64 {
-        lag_samples(self.ring_buffer.write_head(), self.play_pos_l, BUFFER_SIZE)
+        lag_samples(self.ring_buffer.live_head(), self.play_pos_l, BUFFER_SIZE)
     }
 
     #[inline(always)]
     pub fn play_lag_right(&self) -> f64 {
-        lag_samples(self.ring_buffer.write_head(), self.play_pos_r, BUFFER_SIZE)
+        lag_samples(self.ring_buffer.live_head(), self.play_pos_r, BUFFER_SIZE)
     }
 
     #[inline(always)]

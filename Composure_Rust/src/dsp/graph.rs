@@ -21,26 +21,47 @@ pub struct CurveSegment {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(try_from = "PersistedGraph")]
 pub struct CompressionGraph {
     points: [f64; MAX_POINTS * 2],
     pub num_points: usize,
-    #[serde(skip, default = "default_segments")]
+    #[serde(skip)]
     segments: [CurveSegment; MAX_CURVE_SEGMENTS],
-    #[serde(skip, default = "default_num_segments")]
+    #[serde(skip)]
     num_segments: usize,
-    #[serde(skip, default = "default_true")]
+    #[serde(skip)]
     pub segments_dirty: bool,
     pub range_db: f64,
     pub min_db: f64,
     pub max_db: f64,
 }
 
-fn default_num_segments() -> usize {
-    0
+#[derive(Deserialize)]
+struct PersistedGraph {
+    points: [f64; MAX_POINTS * 2],
+    num_points: usize,
+    range_db: f64,
+    min_db: f64,
+    max_db: f64,
 }
 
-fn default_true() -> bool {
-    true
+impl TryFrom<PersistedGraph> for CompressionGraph {
+    type Error = &'static str;
+
+    fn try_from(saved: PersistedGraph) -> Result<Self, Self::Error> {
+        let graph = Self {
+            points: saved.points,
+            num_points: saved.num_points,
+            segments: default_segments(),
+            num_segments: 0,
+            segments_dirty: true,
+            range_db: saved.range_db,
+            min_db: saved.min_db,
+            max_db: saved.max_db,
+        };
+        graph.validate()?;
+        Ok(graph)
+    }
 }
 
 fn default_segments() -> [CurveSegment; MAX_CURVE_SEGMENTS] {
@@ -67,6 +88,27 @@ impl Default for CompressionGraph {
 impl CompressionGraph {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), &'static str> {
+        if !(MIN_POINTS..=MAX_POINTS).contains(&self.num_points) {
+            return Err("compression graph point count is outside supported limits");
+        }
+        let span = self.max_db - self.min_db;
+        if !self.range_db.is_finite()
+            || self.range_db <= 0.0
+            || !self.min_db.is_finite()
+            || !self.max_db.is_finite()
+            || !span.is_finite()
+            || span <= 0.0
+            || (span - self.range_db).abs() > self.range_db * 1.0e-9
+        {
+            return Err("compression graph range is invalid");
+        }
+        if self.points.iter().any(|value| !value.is_finite()) {
+            return Err("compression graph coordinates must be finite");
+        }
+        Ok(())
     }
 
     pub fn set_range_db(&mut self, range_db: f64) {

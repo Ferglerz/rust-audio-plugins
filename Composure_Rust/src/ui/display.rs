@@ -7,7 +7,7 @@ use std::time::Instant;
 use atomic_float::AtomicF32 as AtomicF32Crate;
 use crossbeam_queue::ArrayQueue;
 
-/// Four times the original 180-block history at the same capture cadence.
+/// Four times the original history length, capturing peaks from pairs of blocks.
 pub const HISTOGRAM_LEN: usize = 180 * 4;
 
 /// ~2.5s of meter trail lines.
@@ -183,11 +183,30 @@ mod histogram_tests {
         assert_eq!(history.sample_at_age(0), -18.0);
         assert_eq!(history.sample_at_age(1), f32::NEG_INFINITY);
     }
+
+    #[test]
+    fn histogram_captures_every_second_block_and_retains_peaks() {
+        let display = super::UiDisplay::default();
+        display.update_block(-20.0, -6.0, -20.0);
+        display.drain_queue();
+        display.read_histograms(|gr, input| {
+            assert_eq!(input.sample_at_age(0), f32::NEG_INFINITY);
+            assert_eq!(gr.sample_at_age(0), f32::NEG_INFINITY);
+        });
+        display.update_block(-30.0, -2.0, -30.0);
+        display.drain_queue();
+        display.read_histograms(|gr, input| {
+            assert_eq!(input.sample_at_age(0), -20.0);
+            assert_eq!(gr.sample_at_age(0), -6.0);
+            assert_eq!(input.sample_at_age(1), f32::NEG_INFINITY);
+        });
+    }
 }
 
 struct BlockVisualInner {
     gr_hist: HistogramBuffer,
     input_hist: HistogramBuffer,
+    histogram_pending: Option<(f32, f32)>,
     trails: RingBuffer<f32, TRAIL_MAX_LINES>,
     dots: RingBuffer<f32, DOT_TRAIL_MAX>,
     last_update: Instant,
@@ -197,6 +216,10 @@ struct BlockVisualInner {
 pub struct UiDisplay {
     pub sample_rate: AtomicF32Crate,
     pub detector_db: AtomicF32Crate,
+    /// Input meter level after sidechain EQ and detection, before input offset.
+    pub input_meter_db: AtomicF32Crate,
+    pub input_rate_activity: AtomicF32Crate,
+    pub program_activity: AtomicF32Crate,
     pub gr_db: AtomicF32Crate,
     /// Interior graph point count for overlay label.
     pub graph_interior_points: std::sync::atomic::AtomicU32,
@@ -223,6 +246,9 @@ impl Default for UiDisplay {
         Self {
             sample_rate: AtomicF32Crate::new(48000.0),
             detector_db: AtomicF32Crate::new(crate::dsp::constants::MIN_DETECTOR_DB as f32),
+            input_meter_db: AtomicF32Crate::new(crate::dsp::constants::MIN_DETECTOR_DB as f32),
+            input_rate_activity: AtomicF32Crate::new(0.0),
+            program_activity: AtomicF32Crate::new(0.0),
             gr_db: AtomicF32Crate::new(0.0),
             graph_interior_points: std::sync::atomic::AtomicU32::new(4),
             graph_points_version: std::sync::atomic::AtomicU32::new(0),
@@ -237,6 +263,7 @@ impl Default for UiDisplay {
             block_visuals: RwLock::new(BlockVisualInner {
                 gr_hist: HistogramBuffer::default(),
                 input_hist: HistogramBuffer::default(),
+                histogram_pending: None,
                 trails: RingBuffer::default(),
                 dots: RingBuffer::default(),
                 last_update: Instant::now(),
@@ -366,8 +393,14 @@ impl UiDisplay {
     pub fn drain_queue(&self) {
         if let Ok(mut v) = self.block_visuals.write() {
             while let Some((detector_db, gr_db)) = self.block_visuals_queue.pop() {
-                v.gr_hist.push(gr_db);
-                v.input_hist.push(detector_db);
+                // One histogram sample per two blocks, retaining both blocks' peaks.
+                if let Some((input, gr)) = v.histogram_pending.take() {
+                    v.input_hist.push(input.max(detector_db));
+                    v.gr_hist
+                        .push(if gr.abs() > gr_db.abs() { gr } else { gr_db });
+                } else {
+                    v.histogram_pending = Some((detector_db, gr_db));
+                }
                 v.dots.push(detector_db);
                 if gr_db.abs() > 0.01 {
                     v.trails.push(gr_db);
@@ -406,8 +439,9 @@ impl UiDisplay {
         }
     }
 
-    pub fn update_block(&self, detector_db: f32, gr_db: f32) {
+    pub fn update_block(&self, detector_db: f32, gr_db: f32, input_meter_db: f32) {
         self.detector_db.store(detector_db, Ordering::Relaxed);
+        self.input_meter_db.store(input_meter_db, Ordering::Relaxed);
         self.gr_db.store(gr_db, Ordering::Relaxed);
         let _ = self.block_visuals_queue.push((detector_db, gr_db));
     }

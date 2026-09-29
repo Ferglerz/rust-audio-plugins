@@ -31,14 +31,14 @@ impl StripView {
                         }
                         let delta = *dy * if cx.modifiers().shift() { 0.001 } else { 0.01 };
                         self.adjust_value(cx, target, delta);
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, e, meta);
                         cx.needs_redraw();
                         return;
                     }
                 }
             }
             if self.handle_value_press(cx, e, x, y) {
-                meta.consume();
+                nih_plug_vizia::consume_window_event(cx, e, meta);
                 return;
             }
             if self.edit.is_some() {
@@ -47,7 +47,7 @@ impl StripView {
                         if !cx.modifiers().command() && c.is_ascii() && !c.is_control() {
                             self.edit.as_mut().unwrap().insert(&c.to_string());
                         }
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, e, meta);
                         cx.needs_redraw();
                         return;
                     }
@@ -60,7 +60,7 @@ impl StripView {
                                 self.edit.as_mut().unwrap().insert(&c.to_string());
                             }
                         }
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, e, meta);
                         cx.needs_redraw();
                         return;
                     }

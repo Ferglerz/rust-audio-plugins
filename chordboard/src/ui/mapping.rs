@@ -1,32 +1,71 @@
 use super::*;
 
 impl ChordboardView {
-    pub(super) fn draw_mapping(&self, d: &mut Draw) {
-        for (axis, label) in ["X", "Y", "GATE"].iter().enumerate() {
-            d.tab_button(axis_rect(axis), label, self.mapping_axis == axis, TEAL);
+    pub(super) fn draw_panel(&self, d: &mut Draw) {
+        let Some(panel) = self.panel else {
+            return;
+        };
+        let r = panel.rect();
+        d.rounded_rect(r.0 - 4.0, r.1 - 4.0, r.2 + 8.0, r.3 + 8.0, 10.0, BG);
+        d.rounded_rect(r.0, r.1, r.2, r.3, 8.0, PANEL);
+        d.outline_rounded(r.0, r.1, r.2, r.3, 8.0, LINE, 1.0);
+        match panel {
+            Panel::Mapping => self.draw_mapping(d),
+            Panel::Output => {
+                d.text(
+                    r.0 + 16.0,
+                    r.1 + 23.0,
+                    if self.params.mpe_enabled() {
+                        "MPE OUTPUT"
+                    } else {
+                        "MIDI OUTPUT"
+                    },
+                    TEXT_LABEL,
+                    TEAL,
+                );
+                d.text(
+                    r.0 + 16.0,
+                    r.1 + r.3 - 16.0,
+                    if self.params.mpe_enabled() {
+                        "Each voice uses its own member channel."
+                    } else {
+                        "Channels apply to standard MIDI output."
+                    },
+                    TEXT_SMALL,
+                    MUTED,
+                );
+            }
         }
+    }
+    fn draw_mapping(&self, d: &mut Draw) {
+        d.text(
+            616.0,
+            326.0,
+            ["X CONTROLLER", "Y CONTROLLER"][self.mapping_axis],
+            TEXT_LABEL,
+            TEAL,
+        );
         d.button(
             LEARN,
-            if self.snapshot.learning == self.mapping_axis as u8 + 1 {
+            if self.learning() == self.mapping_axis as u8 + 1 {
                 "CANCEL LEARN"
             } else {
                 "MIDI LEARN"
             },
-            self.snapshot.learning == self.mapping_axis as u8 + 1,
-            GOLD,
+            self.learning() == self.mapping_axis as u8 + 1,
+            TEAL,
         );
         let m = self.mapping();
         for (menu, label) in [
             (
                 Menu::MappingKind,
                 format!(
-                    "{} INPUT: {} ▾",
-                    ["X", "Y", "GATE"][self.mapping_axis],
+                    "{} ▾",
                     ["OFF", "CC 7-BIT", "CC 14-BIT", "PITCH BEND"][m.kind as usize]
                 ),
             ),
             (
-                Menu::MappingChannel(self.mapping().kind == 3),
+                Menu::MappingChannel(m.kind == 3),
                 format!(
                     "CH {} ▾",
                     if m.channel == 16 {
@@ -45,40 +84,46 @@ impl ChordboardView {
                 },
             ),
         ] {
-            d.button(menu.trigger_rect(), &label, false, TEAL);
-            d.outline(menu.trigger_rect(), LINE);
+            if matches!(menu, Menu::MappingChannel(_)) && self.mapping_axis < 2 && m.kind != 3 {
+                let r = menu.trigger_rect();
+                let label = if m.channel == 16 || m.kind == 0 {
+                    "ANY CHANNEL".into()
+                } else {
+                    format!("LEARNED CH {}", m.channel + 1)
+                };
+                d.text_centered(
+                    r.0 + r.2 / 2.0,
+                    r.1 + r.3 / 2.0 + 4.0,
+                    &label,
+                    TEXT_SMALL,
+                    MUTED,
+                );
+            } else {
+                d.button(menu.trigger_rect(), &label, true, TEAL);
+            }
         }
-        d.button(
-            LEARN_OCTAVE,
-            if self.snapshot.learning == 4 {
-                "CANCEL OCTAVE LEARN"
-            } else {
-                "LEARN CONTROL OCTAVE"
-            },
-            self.snapshot.learning == 4,
-            GOLD,
-        );
-        d.text(
-            600.0,
-            687.0,
-            if self.snapshot.learning == 4 {
-                "Play your keyboard's lowest key."
-            } else {
-                "Reserve the lowest octave for chord controls."
-            },
-            TEXT_SMALL,
-            MUTED,
-        );
-        d.text(
-            32.0,
-            738.0,
-            if (1..=3).contains(&self.snapshot.learning) {
-                "Move the controller to assign it. Click Cancel Learn to stop."
-            } else {
-                "Choose X, Y or Gate, then learn a controller or select its source."
-            },
-            TEXT_SMALL,
-            MUTED,
-        );
+        if self.mapping_axis == 1 {
+            d.button(
+                Menu::YTarget.trigger_rect(),
+                &format!(
+                    "Destination: {} ▾",
+                    Menu::YTarget.items()[self.params.y_target.value() as usize]
+                ),
+                self.menu == Some(Menu::YTarget),
+                TEAL,
+            );
+        } else {
+            d.text(
+                616.0,
+                530.0,
+                if (1..=2).contains(&self.learning()) {
+                    "Move a controller to assign it."
+                } else {
+                    "Drag MIN / MAX on the strum pad to set its range."
+                },
+                TEXT_SMALL,
+                MUTED,
+            );
+        }
     }
 }

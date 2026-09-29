@@ -26,13 +26,7 @@ impl TapeStopView {
         d.text(36.0, 44.0, "TAPE STOP", 24.0, GOLD);
         d.text(200.0, 44.0, "MIDI TAPE BRAKE", 13.0, TEXT);
 
-        let is_light = prefs().light();
-        d.button(
-            THEME_BUTTON,
-            if is_light { "LIGHT" } else { "DARK" },
-            false,
-            MUTED,
-        );
+        d.appearance_button(THEME_BUTTON, prefs().label());
 
         self.draw_graph(&mut d);
 

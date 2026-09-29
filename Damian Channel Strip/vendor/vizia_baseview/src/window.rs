@@ -181,7 +181,7 @@ impl WindowHandler for ViziaWindow {
     fn on_event(&mut self, _window: &mut Window<'_>, event: Event) -> EventStatus {
         let status = self.application.keyboard_status(&event);
         let mut should_quit = false;
-        self.application.handle_event(event, &mut should_quit);
+        self.application.handle_event(event.clone(), &mut should_quit);
 
         self.application.handle_idle(&self.on_idle);
 
@@ -189,7 +189,7 @@ impl WindowHandler for ViziaWindow {
             // TODO: Request close.
         }
 
-        status
+        self.application.finish_keyboard_event(&event, status)
     }
 }
 

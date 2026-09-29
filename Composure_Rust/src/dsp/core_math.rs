@@ -42,15 +42,13 @@ impl OnePole {
     pub fn new() -> Self {
         Self { y: 0.0 }
     }
-    
+
     #[inline]
     pub fn process(&mut self, x: f64, coeff: f64) -> f64 {
         self.y = coeff * x + (1.0 - coeff) * self.y;
         self.y
     }
 }
-
-
 
 /// Fast tanh (Padé approximant) with JSFX hard clamp beyond ±10.
 ///

@@ -63,7 +63,7 @@ fn dyn_meter_inline_when_stem_tall_and_detaches_by_free_space() {
     assert!(tall_stem >= DYN_METER_MIN_INLINE);
     assert!(tall_g.inline);
     assert!(!tall_g.detached_above);
-    assert!((tall_g.y0 - (tall_g.node_y + DYN_METER_PAD)).abs() < 0.5);
+    assert!((tall_g.y0 - (tall_g.node_y + DYN_INLINE_NODE_PAD)).abs() < 0.5);
 
     // Stem below the doubled threshold stays detached (was inline at the old 40px).
     let mid = Band {
@@ -110,8 +110,7 @@ fn dyn_meter_inline_when_stem_tall_and_detaches_by_free_space() {
         None
     ));
 
-    // At this gain/range the stem can fit a meter, but the open space below
-    // the range endpoint is longer and should win.
+    // Detach above when a node-anchored lower meter would cross the range cap.
     let outside = Band {
         gain: 26.0,
         range: 24.5,
@@ -120,9 +119,9 @@ fn dyn_meter_inline_when_stem_tall_and_detaches_by_free_space() {
     let outside_g = dyn_meter_geom(&outside, 36.0, gx, gw);
     assert!((outside_g.range_y - outside_g.node_y).abs() >= DYN_METER_MIN_INLINE);
     assert!(!outside_g.inline);
-    assert!(!outside_g.detached_above);
-    assert!(outside_g.y0 >= outside_g.range_y + DYN_METER_PAD);
-    assert!(outside_g.y60 > outside_g.y0);
+    assert!(outside_g.detached_above);
+    assert!(((outside_g.y0 - outside_g.node_y).abs() - DYN_INLINE_NODE_PAD).abs() < 0.01);
+    assert!(outside_g.y60 < outside_g.y0);
 
     let low = Band {
         freq: 1000.0,
@@ -136,8 +135,8 @@ fn dyn_meter_inline_when_stem_tall_and_detaches_by_free_space() {
     assert!(!low_g.inline);
     assert!(low_g.detached_above);
     assert!(
-        low_g.node_y - low_g.y0 >= DYN_DETACHED_NODE_GAP - 0.5,
-        "detached-above starts one node-gap above the node"
+        low_g.node_y - low_g.y0 >= DYN_METER_PAD - 0.5,
+        "detached-above starts with graph-edge padding above the curve"
     );
     let center_y = db_y(0.0, 24.0);
     let edge_top = GY + DYN_METER_PAD;
@@ -175,8 +174,8 @@ fn dyn_meter_inline_when_stem_tall_and_detaches_by_free_space() {
     assert!(!high_g.inline);
     assert!(!high_g.detached_above);
     assert!(
-        high_g.y0 - high_g.node_y >= DYN_DETACHED_NODE_GAP - 0.5,
-        "detached-below starts one node-gap below the node"
+        high_g.y0 - high_g.node_y >= DYN_METER_PAD - 0.5,
+        "detached-below starts with graph-edge padding below the curve"
     );
     let edge_bot = GRAPH_BOTTOM - DYN_METER_PAD;
     let expected_far_below = if (edge_bot - high_g.y0) >= (center_y - high_g.y0).max(0.0) {
@@ -197,52 +196,25 @@ fn dyn_meter_inline_when_stem_tall_and_detaches_by_free_space() {
         NodeChromeLayout::Flank
     );
 
-    // Same-side detach: positive range (stem down) + meter below starts past range end.
-    let same_below = Band {
-        freq: 1000.0,
-        gain: 18.0,
-        dynamic: true,
-        range: 4.0,
-        threshold: -30.0,
-        ..Band::default()
-    };
-    let same_below_g = dyn_meter_geom(&same_below, 24.0, gx, gw);
-    assert!(!same_below_g.inline);
-    assert!(!same_below_g.detached_above);
-    assert!(
-        same_below_g.y0 >= same_below_g.range_y + DYN_METER_PAD - 0.5,
-        "same-side below meter starts at range end + graph-edge pad"
-    );
-    assert!(
-        same_below_g.y0 > same_below_g.range_y,
-        "same-side below meter must not intersect the range pill"
-    );
-    let edge_bot_same = GRAPH_BOTTOM - DYN_METER_PAD;
-    assert!(
-        (same_below_g.y60 - edge_bot_same).abs() < 0.5 || same_below_g.y60 >= db_y(0.0, 24.0) - 0.5,
-        "outer end still uses graph-edge / center span"
-    );
-
-    // Same-side detach: negative range (stem up) + meter above starts past range top.
-    let same_above = Band {
-        freq: 1000.0,
-        gain: -18.0,
-        dynamic: true,
-        range: -4.0,
-        threshold: -30.0,
-        ..Band::default()
-    };
-    let same_above_g = dyn_meter_geom(&same_above, 24.0, gx, gw);
-    assert!(!same_above_g.inline);
-    assert!(same_above_g.detached_above);
-    assert!(
-        same_above_g.range_y - same_above_g.y0 >= DYN_METER_PAD - 0.5,
-        "same-side above meter starts at range end - graph-edge pad"
-    );
-    assert!(
-        same_above_g.y0 < same_above_g.range_y,
-        "same-side above meter must not intersect the range pill"
-    );
+    // A detached track that would cross the range cap switches sides, preserving
+    // the same node-edge padding in either direction.
+    for (gain, range, above) in [(18.0, 4.0, true), (-18.0, -4.0, false)] {
+        let band = Band {
+            freq: 1000.0,
+            gain,
+            range,
+            dynamic: true,
+            threshold: -30.0,
+            ..Band::default()
+        };
+        let geom = dyn_meter_geom(&band, 24.0, gx, gw);
+        assert!(!geom.inline);
+        assert_eq!(geom.detached_above, above);
+        assert!(((geom.y0 - geom.node_y).abs() - DYN_INLINE_NODE_PAD).abs() < 0.01);
+        assert!(
+            !((geom.range_y > geom.y0.min(geom.y60)) && (geom.range_y < geom.y0.max(geom.y60)))
+        );
+    }
 
     let level = tall_g.level_y(-60.0);
     assert!((level - tall_g.y60).abs() < 0.5);

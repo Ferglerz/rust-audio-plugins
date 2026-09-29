@@ -1,4 +1,4 @@
-//! Read-only native rendering preview. No DAW or audio-device access.
+//! Interactive native plugin preview; uses the dummy backend by default.
 fn main() {
     chordboard::preview();
 }

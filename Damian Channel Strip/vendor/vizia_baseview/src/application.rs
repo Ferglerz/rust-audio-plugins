@@ -422,7 +422,21 @@ impl ApplicationRunner {
         if matches!(event, baseview::Event::Keyboard(_)) {
             BackendContext::new_with_event_manager(&mut self.context).process_events();
         }
+        self.keyboard.begin_event();
         self.keyboard.status(&mut self.context, event)
+    }
+
+    pub(crate) fn finish_keyboard_event(
+        &mut self,
+        event: &baseview::Event,
+        status: baseview::EventStatus,
+    ) -> baseview::EventStatus {
+        // Native keyDown must return capture before AppKit can forward it.
+        // Frame-only dispatch reports ownership one key too late.
+        if cfg!(target_os = "macos") && matches!(event, baseview::Event::Keyboard(_)) {
+            BackendContext::new_with_event_manager(&mut self.context).process_events();
+        }
+        self.keyboard.finish_event(event, status)
     }
 
     pub fn handle_idle(&mut self, on_idle: &Option<Box<dyn Fn(&mut Context) + Send>>) {

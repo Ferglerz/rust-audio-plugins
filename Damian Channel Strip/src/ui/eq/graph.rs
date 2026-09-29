@@ -421,10 +421,10 @@ pub(in crate::ui) fn draw_band_graph_hover(
 
 pub(in crate::ui) const DYN_PILL_R: f32 = 12.0;
 pub(in crate::ui) const NODE_HIT_R: f32 = 16.0;
-/// Padding from the node toward the meter track (matches old end-cap clearance).
+/// Padding at graph edges and range caps.
 pub(in crate::ui) const DYN_METER_PAD: f32 = DYN_PILL_R;
-/// Gap between the node and a detached meter start.
-pub(in crate::ui) const DYN_DETACHED_NODE_GAP: f32 = 28.0;
+/// Inline tracks clear the full node ring plus the same edge padding.
+pub(in crate::ui) const DYN_INLINE_NODE_PAD: f32 = DYN_PILL_R + DYN_METER_PAD;
 /// Minimum stem length (px) before the input meter sits inside the range pill.
 /// Doubled from the original `DYN_METER_PAD + 28` (40px) so medium ranges stay detached.
 pub(in crate::ui) const DYN_METER_MIN_INLINE: f32 = (DYN_METER_PAD + 28.0) * 2.0;
@@ -512,37 +512,6 @@ fn detached_far_below(from_y: f32, graph_db: f64) -> f32 {
     }
 }
 
-fn detached_span_len(from_y: f32, far_y: f32) -> f32 {
-    (from_y - far_y).abs()
-}
-
-/// Closest vertical extent of either response curve across the meter footprint.
-pub(in crate::ui) fn meter_curve_extents(
-    b: &Band,
-    graph_db: f64,
-    gx: f32,
-    gw: f32,
-    half_width: f32,
-) -> (f32, f32) {
-    let x = freq_x_at(b.freq, gx, gw);
-    let mut top = db_y(b.gain, graph_db).min(db_y(b.gain - b.range, graph_db));
-    let mut bottom = db_y(b.gain, graph_db).max(db_y(b.gain - b.range, graph_db));
-    let eq_sr = 48_000.0;
-    for band in [b.clone(), range_band(b)] {
-        let coeff = BandCoeffs::make(&band, eq_sr);
-        let center = coeff.response(b.freq.min(eq_sr * 0.49), eq_sr);
-        let anchor = db_y(band.gain, graph_db);
-        for i in 0..=32 {
-            let sample_x = (x + (i as f32 / 16.0 - 1.0) * half_width).clamp(gx, gx + gw);
-            let response = coeff.response(x_freq_at(sample_x, gx, gw).min(eq_sr * 0.49), eq_sr);
-            let y = anchor + db_y(response, graph_db) - db_y(center, graph_db);
-            top = top.min(y);
-            bottom = bottom.max(y);
-        }
-    }
-    (top, bottom)
-}
-
 pub(in crate::ui) fn dyn_meter_geom(b: &Band, graph_db: f64, gx: f32, gw: f32) -> DynMeterGeom {
     let x = freq_x_at(b.freq, gx, gw);
     let node_y = db_y(b.gain, graph_db);
@@ -551,35 +520,34 @@ pub(in crate::ui) fn dyn_meter_geom(b: &Band, graph_db: f64, gx: f32, gw: f32) -
     let stem_len = stem.abs();
     // Pill half-width plus 20% of the full range-UI width past each edge.
     let rule_half_w = DYN_PILL_R + DYN_RANGE_W * DYN_THRESH_OVERHANG;
-    let (curve_top, curve_bottom) = meter_curve_extents(b, graph_db, gx, gw, rule_half_w);
     // Compare usable track lengths after clearing both ends of the range pill.
-    let range_down = stem >= 0.0;
-    let y0_above = if range_down {
-        curve_top - DYN_DETACHED_NODE_GAP
-    } else {
-        curve_top - DYN_METER_PAD
-    };
+    let y0_above = node_y - DYN_INLINE_NODE_PAD;
     let far_above = detached_far_above(y0_above, graph_db);
-    let span_above = detached_span_len(y0_above, far_above);
-    let y0_below = if range_down {
-        curve_bottom + DYN_METER_PAD
-    } else {
-        curve_bottom + DYN_DETACHED_NODE_GAP
-    };
+    let span_above = (y0_above.min(range_y - DYN_METER_PAD) - far_above).max(0.0);
+    let y0_below = node_y + DYN_INLINE_NODE_PAD;
     let far_below = detached_far_below(y0_below, graph_db);
-    let span_below = detached_span_len(y0_below, far_below);
-    let inline_span = (stem_len - 2.0 * DYN_METER_PAD).max(0.0);
+    let span_below = (far_below - y0_below.max(range_y + DYN_METER_PAD)).max(0.0);
+    let inline_span = (stem_len - DYN_INLINE_NODE_PAD - DYN_METER_PAD).max(0.0);
     let (inline, detached_above, y0, y60) =
         if stem_len >= DYN_METER_MIN_INLINE && inline_span >= span_above.max(span_below) {
             let dir = if stem >= 0.0 { 1.0 } else { -1.0 };
             (
                 true,
                 false,
-                node_y + dir * DYN_METER_PAD,
+                node_y + dir * DYN_INLINE_NODE_PAD,
                 range_y - dir * DYN_METER_PAD,
             )
         } else {
-            if span_below >= span_above {
+            // Use the longer open side while keeping the node-edge gap fixed.
+            let mut below = span_below >= span_above;
+            // A fixed node anchor must not put the range cap inside the meter.
+            // Prefer the opposite side when the longer track crosses that cap.
+            if below && range_y > y0_below && range_y < far_below && span_above >= 8.0 {
+                below = false;
+            } else if !below && range_y < y0_above && range_y > far_above && span_below >= 8.0 {
+                below = true;
+            }
+            if below {
                 (false, false, y0_below, far_below)
             } else {
                 (false, true, y0_above, far_above)
@@ -730,11 +698,6 @@ pub(in crate::ui) fn near_eq_node(
     false
 }
 
-/// Graph axis, minus 25%, as an integer dB range when dynamics first turns on.
-pub(in crate::ui) fn default_dyn_range(graph_db: f64) -> f64 {
-    (graph_db.abs() * 0.75).round().clamp(1.0, 24.0)
-}
-
 /// Shift-drag: downward movement raises Q.
 pub(in crate::ui) fn q_from_shift_drag(q: f64, dy: f64) -> f64 {
     (q * (1.0 - dy * 0.025)).clamp(0.15, 18.0)
@@ -830,12 +793,11 @@ pub(in crate::ui) fn draw_dyn_range_curve(
     color: C,
 ) {
     let points = range_curve_points(b, xs, graph, rates);
-    let range_color = C { a: color.a * 0.5, ..color };
-    d.poly(
-        &points,
-        range_color,
-        1.2,
-    );
+    let range_color = C {
+        a: color.a * 0.5,
+        ..color
+    };
+    d.poly(&points, range_color, 1.2);
     for line in range_grip_lines(b, graph, rates) {
         d.poly(&line, range_color, 1.2);
     }

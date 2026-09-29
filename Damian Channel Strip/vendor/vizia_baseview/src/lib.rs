@@ -12,3 +12,4 @@ pub use baseview::WindowScalePolicy;
 use femtovg::renderer::OpenGl as Renderer;
 
 mod keyboard;
+pub use keyboard::KeyboardEventCaptured;

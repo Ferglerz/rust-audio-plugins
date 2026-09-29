@@ -22,6 +22,43 @@ mod bank;
 
 pub use bank::Bank;
 
+const AUX_BAND_RESERVE: usize = 64;
+
+struct AuxBuffers {
+    lift_bands: Vec<LiftBand>,
+    lift_scratch: Vec<LiftBand>,
+    sc_eq_bands: Vec<BandRuntime>,
+    sc_eq_scratch: Vec<BandRuntime>,
+    dyn_gr_scratch: Vec<(u64, f32)>,
+    dyn_input_scratch: Vec<(u64, f32)>,
+    dyn_gr_slot: Vec<(u64, f32)>,
+    dyn_input_slot: Vec<(u64, f32)>,
+    band_input: BandInputMeters,
+    sr: f64,
+}
+
+impl AuxBuffers {
+    fn new(lift: &[LiftBand], sc: &[Band], sr: f64, band_count: usize) -> Self {
+        let meter_capacity = band_count.max(DYNAMIC_BAND_METER_RESERVE);
+        let mut lift_bands = Vec::with_capacity(lift.len().max(AUX_BAND_RESERVE));
+        lift_bands.extend_from_slice(lift);
+        let mut sc_eq_bands = Vec::with_capacity(sc.len().max(AUX_BAND_RESERVE));
+        sc_eq_bands.extend(sc.iter().cloned().map(|b| BandRuntime::new(b, sr)));
+        Self {
+            lift_bands,
+            lift_scratch: Vec::with_capacity(lift.len().max(AUX_BAND_RESERVE)),
+            sc_eq_bands,
+            sc_eq_scratch: Vec::with_capacity(sc.len().max(AUX_BAND_RESERVE)),
+            dyn_gr_scratch: Vec::with_capacity(meter_capacity),
+            dyn_input_scratch: Vec::with_capacity(meter_capacity),
+            dyn_gr_slot: Vec::with_capacity(meter_capacity),
+            dyn_input_slot: Vec::with_capacity(meter_capacity),
+            band_input: BandInputMeters::with_capacity(sr, meter_capacity),
+            sr,
+        }
+    }
+}
+
 pub struct Shared {
     bands: Arc<Mutex<Vec<Band>>>,
     pub eq2_bands: Arc<Mutex<Vec<Band>>>,
@@ -53,6 +90,8 @@ pub struct Shared {
     pub dyn_band_input: Mutex<Vec<(u64, f32)>>,
     pub pending: ArrayQueue<Box<Bank>>,
     pub retired: ArrayQueue<Box<Bank>>,
+    pending_aux: ArrayQueue<Box<AuxBuffers>>,
+    retired_aux: ArrayQueue<Box<AuxBuffers>>,
     stop: Arc<AtomicBool>,
     worker: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
@@ -90,10 +129,12 @@ impl Shared {
             selected_id: std::sync::atomic::AtomicU64::new(0),
             solo_id: std::sync::atomic::AtomicU64::new(0),
             band_gr: AtomicF32::new(0.0),
-            dyn_gr_uncapped: Mutex::new(Vec::new()),
+            dyn_gr_uncapped: Mutex::new(Vec::with_capacity(DYNAMIC_BAND_METER_RESERVE)),
             dyn_band_input: Mutex::new(Vec::with_capacity(DYNAMIC_BAND_METER_RESERVE)),
             pending: ArrayQueue::new(1),
             retired: ArrayQueue::new(2),
+            pending_aux: ArrayQueue::new(1),
+            retired_aux: ArrayQueue::new(2),
             stop: Arc::new(AtomicBool::new(false)),
             worker: Mutex::new(None),
         });
@@ -101,9 +142,35 @@ impl Shared {
         let stop = shared.stop.clone();
         let handle = std::thread::spawn(move || {
             let mut last: Option<(Vec<Band>, Vec<Band>, f64, Config)> = None;
+            let mut last_aux: Option<(Vec<LiftBand>, Vec<Band>, f64, usize)> = None;
             while !stop.load(Ordering::Relaxed) {
                 if let Some(s) = weak.upgrade() {
                     while s.retired.pop().is_some() {}
+                    while s.retired_aux.pop().is_some() {}
+                    if !s.pending_aux.is_full() {
+                        let sr = s.sample_rate.load(Ordering::Relaxed) as f64;
+                        let lift = lift_bands.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                        let sc = sc_eq_bands
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .clone();
+                        let count = bands.lock().unwrap_or_else(|e| e.into_inner()).len()
+                            + eq2_bands.lock().unwrap_or_else(|e| e.into_inner()).len();
+                        if last_aux
+                            .as_ref()
+                            .is_none_or(|(old_lift, old_sc, rate, old_count)| {
+                                *old_lift != lift
+                                    || *old_sc != sc
+                                    || *rate != sr
+                                    || *old_count != count
+                            })
+                        {
+                            let aux = Box::new(AuxBuffers::new(&lift, &sc, sr, count));
+                            if s.pending_aux.push(aux).is_ok() {
+                                last_aux = Some((lift, sc, sr, count));
+                            }
+                        }
+                    }
                     if !s.pending.is_full() {
                         let sr = s.sample_rate.load(Ordering::Relaxed) as f64;
                         let config = Config::decode(s.requested_config.load(Ordering::Relaxed));
@@ -169,6 +236,7 @@ pub struct Engine {
     bank: Box<Bank>,
     previous: Option<Box<Bank>>,
     transition: usize,
+    pending_aux: Option<Box<AuxBuffers>>,
     sr: f64,
     comp: VocalComp,
     fft: Arc<dyn Fft<f32>>,
@@ -214,19 +282,38 @@ impl Engine {
             sr,
             config,
         ));
-        let lift_bands = shared
+        let lift_snapshot = shared
             .lift_bands
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        let sc_eq_bands = shared
+        let sc_snapshot = shared
             .sc_eq_bands
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .clone()
-            .into_iter()
-            .map(|b| BandRuntime::new(b, sr))
-            .collect();
+            .clone();
+        let mut aux = AuxBuffers::new(
+            &lift_snapshot,
+            &sc_snapshot,
+            sr,
+            bank.bands.len() + bank.eq2_bands.len(),
+        );
+        std::mem::swap(
+            &mut *shared
+                .dyn_gr_uncapped
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+            &mut aux.dyn_gr_slot,
+        );
+        std::mem::swap(
+            &mut *shared
+                .dyn_band_input
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+            &mut aux.dyn_input_slot,
+        );
+        let lift_bands = aux.lift_bands;
+        let sc_eq_bands = aux.sc_eq_bands;
         let lift_latency = if lift_bands.iter().any(|b| b.enabled) {
             LIFT_LATENCY as u32
         } else {
@@ -246,6 +333,7 @@ impl Engine {
             bank,
             previous: None,
             transition: 0,
+            pending_aux: None,
             sr,
             comp: VocalComp::new(),
             fft,
@@ -276,17 +364,17 @@ impl Engine {
             solo_topology: None,
             lift: LiftProcessor::new(),
             lift_bands,
-            lift_scratch: Vec::with_capacity(64),
+            lift_scratch: aux.lift_scratch,
             sc_eq_bands,
-            sc_eq_scratch: Vec::with_capacity(64),
+            sc_eq_scratch: aux.sc_eq_scratch,
             sc_eq_mix: 1.0,
             lift_mix: 1.0,
             wall_mix: 1.0,
             vad,
             speech_env: 0.0,
-            dyn_gr_scratch: Vec::with_capacity(128),
-            dyn_input_scratch: Vec::with_capacity(DYNAMIC_BAND_METER_RESERVE),
-            band_input: BandInputMeters::new(sr),
+            dyn_gr_scratch: aux.dyn_gr_scratch,
+            dyn_input_scratch: aux.dyn_input_scratch,
+            band_input: aux.band_input,
         }
     }
     pub fn reset(&mut self) {
@@ -338,8 +426,56 @@ impl Engine {
         self.bank.config.latency(self.sr) as u32 + lift_latency
     }
     pub fn sync(&mut self) {
+        if !self.shared.retired_aux.is_full() {
+            if self.pending_aux.is_none() {
+                self.pending_aux = self.shared.pending_aux.pop();
+            }
+            if let Some(mut aux) = self.pending_aux.take() {
+                let grow_meters = aux.sr == self.sr
+                    && aux.dyn_gr_scratch.capacity() > self.dyn_gr_scratch.capacity();
+                if grow_meters {
+                    if let (Ok(mut gr), Ok(mut input)) = (
+                        self.shared.dyn_gr_uncapped.try_lock(),
+                        self.shared.dyn_band_input.try_lock(),
+                    ) {
+                        aux.band_input.inherit(&self.band_input);
+                        std::mem::swap(&mut self.dyn_gr_scratch, &mut aux.dyn_gr_scratch);
+                        std::mem::swap(&mut self.dyn_input_scratch, &mut aux.dyn_input_scratch);
+                        std::mem::swap(&mut *gr, &mut aux.dyn_gr_slot);
+                        std::mem::swap(&mut *input, &mut aux.dyn_input_slot);
+                        std::mem::swap(&mut self.band_input, &mut aux.band_input);
+                    } else {
+                        self.pending_aux = Some(aux);
+                        return;
+                    }
+                }
+                // Only the worker can grow these buffers. Keep replaced storage
+                // alive until it can also be destroyed on the worker.
+                if aux.sr == self.sr
+                    && (aux.lift_bands.len() > self.lift_scratch.capacity()
+                        || aux.sc_eq_bands.len() > self.sc_eq_scratch.capacity())
+                {
+                    for runtime in &mut aux.sc_eq_bands {
+                        if let Some(old) = self
+                            .sc_eq_bands
+                            .iter()
+                            .find(|old| old.band.id == runtime.band.id)
+                        {
+                            runtime.inherit(old);
+                        }
+                    }
+                    std::mem::swap(&mut self.lift_bands, &mut aux.lift_bands);
+                    std::mem::swap(&mut self.lift_scratch, &mut aux.lift_scratch);
+                    std::mem::swap(&mut self.sc_eq_bands, &mut aux.sc_eq_bands);
+                    std::mem::swap(&mut self.sc_eq_scratch, &mut aux.sc_eq_scratch);
+                    self.shared.latency.store(self.latency(), Ordering::Relaxed);
+                }
+                let result = self.shared.retired_aux.push(aux);
+                debug_assert!(result.is_ok());
+            }
+        }
         if let Ok(guard) = self.shared.lift_bands.try_lock() {
-            if *guard != self.lift_bands {
+            if *guard != self.lift_bands && guard.len() <= self.lift_scratch.capacity() {
                 self.lift_scratch.clear();
                 self.lift_scratch.extend_from_slice(&guard);
                 std::mem::swap(&mut self.lift_bands, &mut self.lift_scratch);
@@ -347,12 +483,13 @@ impl Engine {
             }
         }
         if let Ok(guard) = self.shared.sc_eq_bands.try_lock() {
-            if self.sc_eq_bands.len() != guard.len()
-                || self
-                    .sc_eq_bands
-                    .iter()
-                    .zip(guard.iter())
-                    .any(|(r, b)| r.band != *b)
+            if guard.len() <= self.sc_eq_scratch.capacity()
+                && (self.sc_eq_bands.len() != guard.len()
+                    || self
+                        .sc_eq_bands
+                        .iter()
+                        .zip(guard.iter())
+                        .any(|(r, b)| r.band != *b))
             {
                 self.sc_eq_scratch.clear();
                 for b in guard.iter() {
@@ -442,8 +579,8 @@ impl Engine {
         bypass: bool,
     ) -> [f64; 2] {
         let k = 1.0 - (-1.0 / (self.sr * 0.010)).exp();
-        self.eq1_mix += k * (f64::from(eq_on) - self.eq1_mix);
-        self.eq2_mix += k * (f64::from(eq2_on) - self.eq2_mix);
+        smooth_eq_bypass(&mut self.eq1_mix, eq_on, k);
+        smooth_eq_bypass(&mut self.eq2_mix, eq2_on, k);
         self.sc_eq_mix += k * (f64::from(sc_eq_on) - self.sc_eq_mix);
         self.lift_mix += k * (f64::from(lift_on) - self.lift_mix);
         self.wall_mix += k * (f64::from(settings.wall.on) - self.wall_mix);
@@ -699,7 +836,10 @@ impl Engine {
             self.dyn_gr_scratch.clear();
             if self.bank.config.mode != ProcessingMode::LinearPhase {
                 for b in self.bank.bands.iter().chain(self.bank.eq2_bands.iter()) {
-                    if b.band.dynamic && b.band.shape.has_gain() {
+                    if b.band.dynamic
+                        && b.band.shape.has_gain()
+                        && self.dyn_gr_scratch.len() < self.dyn_gr_scratch.capacity()
+                    {
                         self.dyn_gr_scratch
                             .push((b.band.id, b.reduction_uncapped as f32));
                     }
@@ -721,6 +861,14 @@ impl Engine {
             self.wall_peak = 0.0;
         }
         x
+    }
+}
+
+fn smooth_eq_bypass(mix: &mut f64, enabled: bool, coefficient: f64) {
+    let target = f64::from(enabled);
+    *mix += coefficient * (target - *mix);
+    if (*mix - target).abs() < 1.0e-10 {
+        *mix = target;
     }
 }
 #[cfg(test)]

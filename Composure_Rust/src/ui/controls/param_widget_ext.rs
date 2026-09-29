@@ -218,7 +218,15 @@ impl ParamValueEdit {
         if let Some(edit) = &self.edit {
             d.value_edit(edit, pleasant_ui::GOLD);
         } else if self.hovered {
-            d.value_underline(rect, pleasant_ui::GOLD);
+            let baseline = match control {
+                super::appearance::Control::Knob => {
+                    pleasant_ui::draw::KnobLayout::new((0.0, 0.0, b.w / scale, b.h / scale))
+                        .with_text_sizes(13.0, 15.0)
+                        .value_y
+                }
+                _ => 14.0,
+            };
+            d.value_underline(rect, baseline, pleasant_ui::GOLD);
         }
     }
 
@@ -248,6 +256,9 @@ impl ParamValueEdit {
         let was_editing = self.edit.is_some();
         let handled = self.handle_event(cx, event, param, control);
         pleasant_ui::value_edit::sync_text_input(cx, was_editing, self.edit.is_some());
+        if handled {
+            nih_plug_vizia::report_handled_key(cx, event);
+        }
         handled
     }
 
@@ -260,18 +271,7 @@ impl ParamValueEdit {
     ) -> bool {
         use nih_plug_vizia::vizia::prelude::*;
         use pleasant_ui::value_edit::{typed_char, ValueEdit};
-        if super::EditorData::appearance.get(cx) == 2 {
-            self.edit = None;
-            self.hovered = false;
-            if self.press.take().is_some() {
-                cx.release();
-            }
-            if self.readout_drag.take().is_some() {
-                param.end_set_parameter(cx);
-                cx.release();
-            }
-            return false;
-        }
+
         let b = cx.bounds();
         let scale = cx.scale_factor();
         let rect = super::appearance::value_rect(control, b.w / scale, b.h / scale);

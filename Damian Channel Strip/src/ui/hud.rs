@@ -21,9 +21,9 @@ pub(super) const HUD_VALUE_SIZE: f32 = HUD_LABEL_SIZE;
 pub(super) const HUD_SHAPE_TEXT: f32 = HUD_LABEL_SIZE;
 pub(super) const HUD_COG: f32 = 24.0;
 pub(super) const HUD_RIGHT_GAP: f32 = 6.0;
-pub(super) const HUD_DYN_FIELD_H: f32 = 34.0;
+pub(super) const HUD_DYN_FIELD_H: f32 = 34.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA;
 pub(super) const HUD_DYN_VALUE_W: f32 = 72.0;
-pub(super) const AXIS_STRIP_H: f32 = 48.0;
+pub(super) const AXIS_STRIP_H: f32 = 48.0 + 2.0 * pleasant_ui::value_edit::SLIDER_SPACING_EXTRA;
 pub(super) const NODE_CHROME_BTN: f32 = 22.0;
 pub(super) const NODE_CHROME_GAP: f32 = 4.0;
 pub(super) const NODE_CHROME_CLEAR: f32 = 18.0;
@@ -475,12 +475,22 @@ pub(super) fn band_rect_at(i: usize, gx: f32, gw: f32) -> (f32, f32, f32, f32) {
 
 pub(super) fn band_slot_rect_at(i: usize, gx: f32, gw: f32, count: usize) -> (f32, f32, f32, f32) {
     let slot = (gw - 16.0) / count as f32;
-    (gx + 8.0 + i as f32 * slot, GY, (slot - 4.0).max(80.0), 52.0)
+    (
+        gx + 8.0 + i as f32 * slot,
+        GY,
+        (slot - 4.0).max(80.0),
+        52.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA,
+    )
 }
 
 pub(super) fn band_bar_rect_at(i: usize, gx: f32, gw: f32) -> (f32, f32, f32, f32) {
     let r = band_rect_at(i, gx, gw);
-    (r.0 + 12.0, r.1 + 28.0, r.2 - 24.0, 16.0)
+    (
+        r.0 + 12.0,
+        r.1 + 28.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA,
+        r.2 - 24.0,
+        16.0,
+    )
 }
 
 pub(super) fn band_value_rect_at(i: usize, gx: f32, gw: f32) -> (f32, f32, f32, f32) {

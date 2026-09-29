@@ -27,7 +27,7 @@ const KNOB_GAP: f32 = 18.0;
 const KNOB_X: f32 = 45.0;
 const MLP_BUTTON: (f32, f32, f32, f32) = (45.0, 284.0, 238.0, 36.0);
 const THEME_BUTTON: (f32, f32, f32, f32) = (601.0, 21.0, 80.0, 30.0);
-const COG_BUTTON: (f32, f32, f32, f32) = (557.0, 21.0, 32.0, 30.0);
+const COG_BUTTON: (f32, f32, f32, f32) = (541.0, 21.0, 32.0, 30.0);
 const NOISE_BUTTON: (f32, f32, f32, f32) = (375.0, 241.0, 144.0, 50.0);
 const SAG_BUTTON: (f32, f32, f32, f32) = (531.0, 241.0, 144.0, 50.0);
 
@@ -64,11 +64,36 @@ impl Knob {
             Self::Volume => (KNOB_X, KNOB_Y, KNOB_W, KNOB_H),
             Self::Tremolo => (KNOB_X + KNOB_W + KNOB_GAP, KNOB_Y, KNOB_W, KNOB_H),
             Self::Speaker => (KNOB_X + 2.0 * (KNOB_W + KNOB_GAP), KNOB_Y, KNOB_W, KNOB_H),
-            Self::ReedDecay => (45.0, 101.0, 300.0, 57.0),
-            Self::HammerHardness => (375.0, 101.0, 300.0, 57.0),
-            Self::PickupDrive => (45.0, 171.0, 300.0, 57.0),
-            Self::TremoloResponse => (375.0, 171.0, 300.0, 57.0),
-            Self::NoiseGain => (45.0, 241.0, 300.0, 50.0),
+            Self::ReedDecay => (
+                45.0,
+                101.0,
+                300.0,
+                57.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA,
+            ),
+            Self::HammerHardness => (
+                375.0,
+                101.0,
+                300.0,
+                57.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA,
+            ),
+            Self::PickupDrive => (
+                45.0,
+                171.0,
+                300.0,
+                57.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA,
+            ),
+            Self::TremoloResponse => (
+                375.0,
+                171.0,
+                300.0,
+                57.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA,
+            ),
+            Self::NoiseGain => (
+                45.0,
+                241.0,
+                300.0,
+                50.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA,
+            ),
         }
     }
 
@@ -300,12 +325,7 @@ impl View for OpenWurliView {
             COG_BUTTON.1 + COG_BUTTON.3 * 0.5,
             if self.show_advanced { GOLD } else { MUTED },
         );
-        d.button(
-            THEME_BUTTON,
-            if prefs().light() { "LIGHT" } else { "DARK" },
-            false,
-            TEAL,
-        );
+        d.appearance_button(THEME_BUTTON, prefs().label());
 
         if self.show_advanced {
             for knob in Knob::ADVANCED {

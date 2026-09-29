@@ -11,10 +11,20 @@ impl TapeStopView {
             if let WindowEvent::MouseScroll(_, dy) = window_event {
                 if *dy != 0.0 {
                     if let Some(id) = self.readout_at(mouse_x, mouse_y) {
-                        if self.edit.is_some() { self.commit_edit(cx); }
-                        let step = if matches!(id, KnobId::OverrideCc | KnobId::OverrideNote) { dy.signum() / 127.0 } else { *dy * if cx.modifiers().shift() {0.001} else {0.01} };
-                        self.emit_knob_norm(cx, id, (self.get_knob_norm(id) + step).clamp(0.0, 1.0));
-                        meta.consume();
+                        if self.edit.is_some() {
+                            self.commit_edit(cx);
+                        }
+                        let step = if matches!(id, KnobId::OverrideCc | KnobId::OverrideNote) {
+                            dy.signum() / 127.0
+                        } else {
+                            *dy * if cx.modifiers().shift() { 0.001 } else { 0.01 }
+                        };
+                        self.emit_knob_norm(
+                            cx,
+                            id,
+                            (self.get_knob_norm(id) + step).clamp(0.0, 1.0),
+                        );
+                        nih_plug_vizia::consume_window_event(cx, window_event, meta);
                         cx.needs_redraw();
                         return;
                     }
@@ -44,7 +54,7 @@ impl TapeStopView {
                             let (_, value, _) = self.knob_info(press.target);
                             self.start_edit(cx, press.target, press.rect, value);
                         }
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, window_event, meta);
                         cx.needs_redraw();
                         return;
                     }
@@ -67,7 +77,7 @@ impl TapeStopView {
                                 edit.insert(&c.to_string());
                             }
                         }
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, window_event, meta);
                         cx.needs_redraw();
                         return;
                     }
@@ -89,7 +99,7 @@ impl TapeStopView {
                                 }
                             }
                         }
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, window_event, meta);
                         cx.needs_redraw();
                         return;
                     }
@@ -97,18 +107,18 @@ impl TapeStopView {
                         let edit_rect = self.edit.as_ref().unwrap().rect;
                         if Self::inside(mouse_x, mouse_y, edit_rect) {
                             self.edit.as_mut().unwrap().handle_mouse_down(mouse_x);
-                            meta.consume();
+                            nih_plug_vizia::consume_window_event(cx, window_event, meta);
                             cx.needs_redraw();
                             return;
                         }
                         self.commit_edit(cx);
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, window_event, meta);
                         cx.needs_redraw();
                         return;
                     }
                     WindowEvent::MouseDoubleClick(MouseButton::Left) => {
                         self.edit.as_mut().unwrap().select_all();
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, window_event, meta);
                         cx.needs_redraw();
                         return;
                     }
@@ -335,8 +345,17 @@ impl TapeStopView {
                     }
 
                     match self.drag {
-                        Some(DragState::Value { id, start_x, start_y, start_norm }) => {
-                            let delta = pleasant_ui::pointer::readout_drag_delta(mouse_x - start_x, mouse_y - start_y, cx.modifiers().shift());
+                        Some(DragState::Value {
+                            id,
+                            start_x,
+                            start_y,
+                            start_norm,
+                        }) => {
+                            let delta = pleasant_ui::pointer::readout_drag_delta(
+                                mouse_x - start_x,
+                                mouse_y - start_y,
+                                cx.modifiers().shift(),
+                            );
                             self.emit_knob_norm(cx, id, (start_norm + delta).clamp(0.0, 1.0));
                             cx.needs_redraw();
                         }

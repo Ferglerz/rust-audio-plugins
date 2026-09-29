@@ -13,17 +13,12 @@ pub fn update_rms_coefficient(rms_size_ms: f64, srate: f64) -> (f64, f64) {
 }
 
 /// Smoothly interpolate RMS coefficients toward target (0.5 ms time constant).
-pub fn smooth_rms_coefficient(
-    current_coeff: f64,
-    target_coeff: f64,
-    srate: f64,
-) -> (f64, f64) {
+pub fn smooth_rms_coefficient(current_coeff: f64, target_coeff: f64, srate: f64) -> (f64, f64) {
     let smoothing_time = 0.0005;
     let smooth_coeff = (-1.0 / (smoothing_time * srate)).exp();
     let smooth_one_minus = 1.0 - smooth_coeff;
 
-    let mut coeff =
-        current_coeff * smooth_coeff + target_coeff * smooth_one_minus;
+    let mut coeff = current_coeff * smooth_coeff + target_coeff * smooth_one_minus;
 
     if (coeff - target_coeff).abs() < 0.001 {
         coeff = target_coeff;

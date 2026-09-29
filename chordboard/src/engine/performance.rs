@@ -166,7 +166,12 @@ impl Engine {
             return;
         }
         let (min, max, reverse) = if axis == 0 {
-            (self.config.x_min, self.config.x_max, self.config.x_reverse)
+            let min = self.config.x_min.clamp(0.0, 0.75);
+            (
+                min,
+                self.config.x_max.clamp(min + 0.25, 1.0),
+                self.config.x_reverse,
+            )
         } else {
             (self.config.y_min, self.config.y_max, self.config.y_reverse)
         };
@@ -183,7 +188,7 @@ impl Engine {
         self.x = value;
         let count = self.config.strings.clamp(3, 12) as i16;
         let location = value * (count - 1) as f32;
-        if !self.x_primed || !self.gate_open || self.config.mode != MANUAL || self.notes.len == 0 {
+        if !self.x_primed || self.config.mode != MANUAL || self.notes.len == 0 {
             self.last_string = location.round() as i16;
             self.x_primed = true;
             return;

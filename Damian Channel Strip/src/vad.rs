@@ -3,14 +3,14 @@
 //! Audio thread: LPF + resample to 16 kHz, push into a lock-free ring, read
 //! smoothed `speech_env`. Worker thread owns the ONNX session.
 
-use std::cell::UnsafeCell;
 use std::f64::consts::PI;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use atomic_float::AtomicF32;
+use crossbeam_queue::ArrayQueue;
 
 /// Official Silero VAD ONNX (v6.2.1).
 /// SHA-256: 1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3
@@ -84,62 +84,35 @@ impl VadBiquad {
 }
 
 struct VadShared {
-    ring: Box<[UnsafeCell<f32>]>,
-    write: AtomicUsize,
-    read: AtomicUsize,
+    ring: ArrayQueue<f32>,
     raw_prob: AtomicF32,
     running: AtomicBool,
     reset: AtomicBool,
 }
 
-unsafe impl Send for VadShared {}
-unsafe impl Sync for VadShared {}
-
 impl VadShared {
     fn new() -> Self {
         Self {
-            ring: (0..RING_CAP)
-                .map(|_| UnsafeCell::new(0.0f32))
-                .collect::<Vec<_>>()
-                .into_boxed_slice(),
-            write: AtomicUsize::new(0),
-            read: AtomicUsize::new(0),
+            ring: ArrayQueue::new(RING_CAP),
             raw_prob: AtomicF32::new(0.0),
             running: AtomicBool::new(true),
             reset: AtomicBool::new(false),
         }
     }
 
-    fn available(&self) -> usize {
-        let w = self.write.load(Ordering::Acquire);
-        let r = self.read.load(Ordering::Relaxed);
-        w.wrapping_sub(r)
-    }
-
     fn push(&self, sample: f32) {
-        let w = self.write.load(Ordering::Relaxed);
-        let r = self.read.load(Ordering::Acquire);
-        if w.wrapping_sub(r) >= RING_CAP - 1 {
-            // Drop oldest sample so the audio thread never blocks.
-            self.read.store(r.wrapping_add(1), Ordering::Release);
-        }
-        let idx = w % RING_CAP;
-        unsafe {
-            *self.ring[idx].get() = sample;
-        }
-        self.write.store(w.wrapping_add(1), Ordering::Release);
+        // A full queue drops the new sample without overwriting the worker's data.
+        let _ = self.ring.push(sample);
     }
 
     fn pop_chunk(&self, dest: &mut [f32]) -> bool {
-        if self.available() < dest.len() {
+        if self.ring.len() < dest.len() {
             return false;
         }
-        let r = self.read.load(Ordering::Relaxed);
-        for (i, slot) in dest.iter_mut().enumerate() {
-            *slot = unsafe { *self.ring[(r.wrapping_add(i)) % RING_CAP].get() };
+        for slot in dest.iter_mut() {
+            // This worker is the only consumer, so the available chunk stays queued.
+            *slot = self.ring.pop().expect("the VAD chunk is available");
         }
-        self.read
-            .store(r.wrapping_add(dest.len()), Ordering::Release);
         true
     }
 }
@@ -389,6 +362,58 @@ fn extract_state(outputs: &ort::session::SessionOutputs<'_>) -> Option<Vec<f32>>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn queue_overflow_preserves_unread_samples() {
+        let shared = VadShared::new();
+        for i in 0..RING_CAP * 2 {
+            shared.push(i as f32);
+        }
+        let mut chunk = [0.0; CHUNK_SAMPLES];
+        for offset in (0..RING_CAP).step_by(CHUNK_SAMPLES) {
+            assert!(shared.pop_chunk(&mut chunk));
+            for (i, sample) in chunk.iter().enumerate() {
+                assert_eq!(*sample, (offset + i) as f32);
+            }
+        }
+        assert!(!shared.pop_chunk(&mut chunk));
+        shared.push(-1.0);
+        assert_eq!(shared.ring.pop(), Some(-1.0));
+    }
+
+    #[test]
+    fn queue_concurrent_overflow_keeps_samples_ordered() {
+        let shared = Arc::new(VadShared::new());
+        let producer = Arc::clone(&shared);
+        let done = Arc::new(AtomicBool::new(false));
+        let producer_done = Arc::clone(&done);
+        let handle = thread::spawn(move || {
+            for i in 0..100_000 {
+                producer.push(i as f32);
+            }
+            producer_done.store(true, Ordering::Release);
+        });
+        let mut chunk = [0.0; 32];
+        let mut previous = -1.0;
+        loop {
+            if shared.pop_chunk(&mut chunk) {
+                for sample in chunk {
+                    assert!(sample > previous, "{sample} followed {previous}");
+                    previous = sample;
+                }
+            } else if done.load(Ordering::Acquire) {
+                while let Some(sample) = shared.ring.pop() {
+                    assert!(sample > previous, "{sample} followed {previous}");
+                    previous = sample;
+                }
+                break;
+            } else {
+                thread::yield_now();
+            }
+        }
+        handle.join().unwrap();
+        assert!(previous >= 0.0);
+    }
 
     #[test]
     fn vad_biquad_lowpass_attenuates_high_frequencies() {

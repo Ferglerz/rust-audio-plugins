@@ -163,6 +163,9 @@ impl GraphStore {
     /// Replace from a preset or host state. Keep its original range until the
     /// range parameter is selected again during processing or editor redraw.
     pub fn replace(&self, graph: CompressionGraph) {
+        if graph.validate().is_err() {
+            return;
+        }
         let selected = range_index(graph.range_db).unwrap_or(ORIGINAL_RANGE);
         // Prepare and publish first. Otherwise an old generation without an
         // arbitrary-range snapshot could be read under ORIGINAL_RANGE while
@@ -188,6 +191,52 @@ impl<'a> PersistentField<'a, CompressionGraph> for GraphStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_persisted_graph_does_not_replace_current_state() {
+        let store = GraphStore::default();
+        let before = store.load();
+        let generation = store.generation();
+        for count in [0, 1, 3, 14, usize::MAX] {
+            let mut graph = before.graph;
+            graph.num_points = count;
+            let json = serde_json::to_string(&graph).unwrap();
+            assert!(serde_json::from_str::<CompressionGraph>(&json).is_err());
+            PersistentField::set(&store, graph);
+            assert!(Arc::ptr_eq(&before, &store.load()));
+        }
+        for range in [0.0, -20.0, f64::INFINITY, f64::NAN] {
+            let mut graph = before.graph;
+            graph.range_db = range;
+            store.replace(graph);
+            assert!(Arc::ptr_eq(&before, &store.load()));
+        }
+        let mut graph = before.graph;
+        graph.graph_points_mut()[2] = f64::NAN;
+        store.replace(graph);
+        assert!(Arc::ptr_eq(&before, &store.load()));
+        assert_eq!(store.generation(), generation);
+    }
+
+    #[test]
+    fn persisted_graph_round_trip_keeps_legacy_range_and_curve() {
+        let store = GraphStore::default();
+        store.sync_range_if_needed(31.0);
+        store.mutate_and_publish(|graph| {
+            graph.adjust_interior_output_y(1, 2.0);
+            graph.finalize_after_edit();
+        });
+        let before = store.load();
+        let json = serde_json::to_string(&before.graph).unwrap();
+        let restored: CompressionGraph = serde_json::from_str(&json).unwrap();
+        let reopened = GraphStore::default();
+        PersistentField::set(&reopened, restored);
+        let after = reopened.load();
+        assert!(before.graph.content_eq(&after.graph));
+        for input in [-35.0, -20.0, -10.0, 0.0, 2.0] {
+            assert!((before.lut.lookup(input) - after.lut.lookup(input)).abs() < 1.0e-9);
+        }
+    }
 
     #[test]
     fn range_change_uses_prepared_graph_and_lut() {

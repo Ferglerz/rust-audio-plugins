@@ -2,7 +2,7 @@ use crate::engine::{Config, Mapping};
 use nih_plug::prelude::*;
 use nih_plug_vizia::ViziaState;
 use std::sync::{
-    atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering},
     Arc,
 };
 #[derive(Params)]
@@ -19,8 +19,6 @@ pub struct ChordboardParams {
     pub map_x: AtomicU32,
     #[persist = "map-y-v1"]
     pub map_y: AtomicU32,
-    #[persist = "map-gate-v1"]
-    pub map_gate: AtomicU32,
     #[persist = "chord-slot-1-v1"]
     pub slot_0: AtomicU64,
     #[persist = "chord-slot-2-v1"]
@@ -57,6 +55,14 @@ pub struct ChordboardParams {
     pub strings: IntParam,
     #[id = "strum_ms"]
     pub strum_ms: FloatParam,
+    #[id = "strum_sync"]
+    pub strum_sync: BoolParam,
+    #[id = "strum_beats"]
+    pub strum_beats: FloatParam,
+    #[id = "tempo_sync"]
+    pub tempo_sync: BoolParam,
+    #[id = "tempo"]
+    pub tempo: FloatParam,
     #[id = "direction"]
     pub direction: IntParam,
     #[id = "contour"]
@@ -75,6 +81,9 @@ pub struct ChordboardParams {
     pub humanize: FloatParam,
     #[id = "mpe"]
     pub mpe: BoolParam,
+    #[id = "output_mode"]
+    pub output_mode: IntParam,
+    pub detected_mpe: AtomicBool,
     #[id = "upper"]
     pub upper: BoolParam,
     #[id = "members"]
@@ -105,8 +114,6 @@ pub struct ChordboardParams {
     pub x: FloatParam,
     #[id = "y"]
     pub y: FloatParam,
-    #[id = "touch"]
-    pub touch: BoolParam,
     #[id = "keyboard"]
     pub keyboard: BoolParam,
     #[id = "fifths"]
@@ -115,12 +122,11 @@ pub struct ChordboardParams {
     pub bank: IntParam,
     #[id = "keyboard_octave"]
     pub keyboard_octave: IntParam,
-    #[id = "reduced_motion"]
-    pub reduced_motion: BoolParam,
     #[id = "key"]
     pub key: IntParam,
     #[id = "scale"]
     pub scale: IntParam,
+    // Retain the old parameter ID for saved projects; highlighting is always enabled.
     #[id = "highlight"]
     pub highlight: BoolParam,
     #[id = "filter"]
@@ -135,13 +141,12 @@ pub struct ChordboardParams {
 impl Default for ChordboardParams {
     fn default() -> Self {
         Self {
-            editor_state: ViziaState::new_screen_sized("Chordboard", || (1120, 780)),
+            editor_state: ViziaState::new_screen_sized("Chordboard", || (1120, 704)),
             schema_version: AtomicU32::new(1),
             selected_quality: AtomicU32::new(0),
             control_base: AtomicI32::new(-1),
             map_x: AtomicU32::new(Mapping::cc(1, 16).encode()),
-            map_y: AtomicU32::new(0),
-            map_gate: AtomicU32::new(0),
+            map_y: AtomicU32::new(Mapping::cc(11, 16).encode()),
             slot_0: AtomicU64::new(0),
             slot_1: AtomicU64::new(0),
             slot_2: AtomicU64::new(0),
@@ -150,9 +155,9 @@ impl Default for ChordboardParams {
             slot_5: AtomicU64::new(0),
             slot_6: AtomicU64::new(0),
             slot_7: AtomicU64::new(0),
-            mode: IntParam::new("Play mode", 0, IntRange::Linear { min: 0, max: 3 })
+            mode: IntParam::new("Play mode", 1, IntRange::Linear { min: 1, max: 3 })
                 .with_value_to_string(Arc::new(|v| {
-                    ["Chord", "Auto Strum", "Manual Strum", "Arpeggiator"][v as usize].to_string()
+                    ["Auto Strum", "Manual Strum", "Arpeggiator"][(v - 1) as usize].to_string()
                 })),
             quality: IntParam::new("Base quality", 0, IntRange::Linear { min: 0, max: 11 })
                 .with_value_to_string(Arc::new(|v| {
@@ -190,13 +195,32 @@ impl Default for ChordboardParams {
             strings: IntParam::new("Strings", 8, IntRange::Linear { min: 3, max: 12 }),
             strum_ms: FloatParam::new(
                 "Strum time ms",
-                120.0,
+                0.0,
                 FloatRange::Linear {
                     min: 0.0,
                     max: 1500.0,
                 },
             )
             .with_value_to_string(Arc::new(|v| format!("{v:.2}"))),
+            strum_sync: BoolParam::new("Sweep sync", false),
+            strum_beats: FloatParam::new(
+                "Sweep beats",
+                0.25,
+                FloatRange::Linear {
+                    min: 0.0625,
+                    max: 2.0,
+                },
+            ),
+            tempo_sync: BoolParam::new("Host sync", true),
+            tempo: FloatParam::new(
+                "Tempo BPM",
+                120.0,
+                FloatRange::Linear {
+                    min: 20.0,
+                    max: 400.0,
+                },
+            )
+            .with_value_to_string(Arc::new(|v| format!("{v:.1}"))),
             direction: IntParam::new("Strum direction", 0, IntRange::Linear { min: 0, max: 2 })
                 .with_value_to_string(Arc::new(|v| {
                     ["Up", "Down", "Alternate"][v as usize].to_string()
@@ -236,7 +260,7 @@ impl Default for ChordboardParams {
                 "Swing",
                 0.0,
                 FloatRange::Linear {
-                    min: 0.0,
+                    min: -0.75,
                     max: 0.75,
                 },
             )
@@ -244,7 +268,10 @@ impl Default for ChordboardParams {
             octaves: IntParam::new("Arp octaves", 1, IntRange::Linear { min: 1, max: 4 }),
             humanize: FloatParam::new("Humanize", 0.0, FloatRange::Linear { min: 0.0, max: 1.0 })
                 .with_value_to_string(Arc::new(|v| format!("{v:.2}"))),
-            mpe: BoolParam::new("MPE output", false),
+            mpe: BoolParam::new("MPE output (legacy)", false).hide(),
+            output_mode: IntParam::new("Output protocol", 0, IntRange::Linear { min: 0, max: 2 })
+                .with_value_to_string(Arc::new(|v| ["AUTO", "MPE", "REG"][v as usize].into())),
+            detected_mpe: AtomicBool::new(false),
             upper: BoolParam::new("Upper MPE zone", false),
             members: IntParam::new("MPE members", 15, IntRange::Linear { min: 1, max: 15 }),
             bend_range: FloatParam::new(
@@ -333,7 +360,6 @@ impl Default for ChordboardParams {
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
             .with_value_to_string(Arc::new(|v| format!("{v:.2}"))),
-            touch: BoolParam::new("Touch gate", true),
             keyboard: BoolParam::new("Keyboard play", true),
             fifths: BoolParam::new("Fifths layout", false),
             bank: IntParam::new("Root bank", 0, IntRange::Linear { min: 0, max: 1 })
@@ -343,7 +369,6 @@ impl Default for ChordboardParams {
                 48,
                 IntRange::Linear { min: 12, max: 96 },
             ),
-            reduced_motion: BoolParam::new("Reduced motion", false),
             key: IntParam::new("Key", 0, IntRange::Linear { min: 0, max: 11 })
                 .with_value_to_string(Arc::new(|v| {
                     [
@@ -365,7 +390,9 @@ impl Default for ChordboardParams {
                     ][v as usize]
                         .to_string()
                 })),
-            highlight: BoolParam::new("Key highlighting", true),
+            highlight: BoolParam::new("Key highlighting", true)
+                .hide()
+                .hide_in_generic_ui(),
             filter: IntParam::new("Note filter", 0, IntRange::Linear { min: 0, max: 5 })
                 .with_value_to_string(Arc::new(|v| {
                     [
@@ -385,6 +412,13 @@ impl Default for ChordboardParams {
     }
 }
 impl ChordboardParams {
+    pub fn mpe_enabled(&self) -> bool {
+        match self.output_mode.value() {
+            1 => true,
+            2 => false,
+            _ => self.detected_mpe.load(Ordering::Relaxed),
+        }
+    }
     pub fn config(&self) -> Config {
         Config {
             mode: self.mode.value() as u8,
@@ -397,6 +431,8 @@ impl ChordboardParams {
             length_ms: self.length_ms.value(),
             strings: self.strings.value() as u8,
             strum_ms: self.strum_ms.value(),
+            strum_sync: self.strum_sync.value(),
+            strum_beats: self.strum_beats.value(),
             direction: self.direction.value() as u8,
             contour: self.contour.value(),
             arp_pattern: self.arp_pattern.value() as u8,
@@ -405,7 +441,7 @@ impl ChordboardParams {
             swing: self.swing.value(),
             octaves: self.octaves.value() as u8,
             humanize: self.humanize.value(),
-            mpe: self.mpe.value(),
+            mpe: self.mpe_enabled(),
             upper: self.upper.value(),
             members: self.members.value() as u8,
             bend_range: self.bend_range.value(),
@@ -427,69 +463,86 @@ impl ChordboardParams {
             mappings: [
                 Mapping::decode(self.map_x.load(Ordering::Relaxed)),
                 Mapping::decode(self.map_y.load(Ordering::Relaxed)),
-                Mapping::decode(self.map_gate.load(Ordering::Relaxed)),
             ],
         }
     }
     pub fn mapping(&self, axis: usize) -> &AtomicU32 {
         match axis {
             0 => &self.map_x,
-            1 => &self.map_y,
-            _ => &self.map_gate,
+            _ => &self.map_y,
         }
     }
-    pub fn controls(&self) -> Vec<Control> {
-        vec![
-            control("mode", 0, &self.mode),
-            control("quality", 0, &self.quality),
-            control("inversion", 0, &self.inversion),
-            control("transpose", 0, &self.transpose),
-            control("spread", 0, &self.spread),
-            toggle("latch", 0, &self.latch),
-            control("velocity", 0, &self.velocity),
-            control("length_ms", 0, &self.length_ms),
-            control("strings", 1, &self.strings),
-            control("strum_ms", 1, &self.strum_ms),
-            control("direction", 1, &self.direction),
-            control("contour", 1, &self.contour),
-            control("arp_pattern", 1, &self.arp_pattern),
-            control("rate", 1, &self.rate),
-            control("gate", 1, &self.gate),
-            control("swing", 1, &self.swing),
-            control("octaves", 1, &self.octaves),
-            control("humanize", 1, &self.humanize),
-            toggle("mpe", 2, &self.mpe),
-            toggle("upper", 2, &self.upper),
-            control("members", 2, &self.members),
-            control("bend_range", 2, &self.bend_range),
-            control("master_range", 2, &self.master_range),
-            control("output_channel", 2, &self.output_channel),
-            control("y_target", 3, &self.y_target),
-            control("y_cc", 3, &self.y_cc),
-            toggle("x_reverse", 3, &self.x_reverse),
-            toggle("y_reverse", 3, &self.y_reverse),
-            control("x_min", 3, &self.x_min),
-            control("x_max", 3, &self.x_max),
-            control("y_min", 3, &self.y_min),
-            control("y_max", 3, &self.y_max),
-            control("x", 4, &self.x),
-            control("y", 4, &self.y),
-            toggle("touch", 4, &self.touch),
-            toggle("keyboard", 4, &self.keyboard),
-            toggle("fifths", 4, &self.fifths),
-            control("bank", 4, &self.bank),
-            control("keyboard_octave", 4, &self.keyboard_octave),
-            toggle("reduced_motion", 4, &self.reduced_motion),
-            control("key", 5, &self.key),
-            control("scale", 5, &self.scale),
-            toggle("highlight", 5, &self.highlight),
-            control("filter", 5, &self.filter),
-            toggle("split_channels", 5, &self.split_channels),
-            control("bass_channel", 5, &self.bass_channel),
-            control("upper_channel", 5, &self.upper_channel),
-        ]
-    }
 }
+
+// One catalog supports both full UI snapshots and allocation-light single lookups.
+macro_rules! control_catalog {
+    ($($builder:ident($field:ident, $group:literal)),* $(,)?) => {
+        impl ChordboardParams {
+            pub fn controls(&self) -> Vec<Control> {
+                vec![$($builder(stringify!($field), $group, &self.$field)),*]
+            }
+
+            pub fn control(&self, id: &str) -> Option<Control> {
+                match id {
+                    $(stringify!($field) => Some($builder(stringify!($field), $group, &self.$field)),)*
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+
+control_catalog! {
+    control(mode, 0),
+    control(quality, 0),
+    control(inversion, 0),
+    control(transpose, 0),
+    control(spread, 0),
+    toggle(latch, 0),
+    control(velocity, 0),
+    control(length_ms, 0),
+    control(strings, 1),
+    control(strum_ms, 1),
+    toggle(strum_sync, 1),
+    control(strum_beats, 1),
+    toggle(tempo_sync, 1),
+    control(tempo, 1),
+    control(direction, 1),
+    control(contour, 1),
+    control(arp_pattern, 1),
+    control(rate, 1),
+    control(gate, 1),
+    control(swing, 1),
+    control(octaves, 1),
+    control(humanize, 1),
+    control(output_mode, 2),
+    toggle(upper, 2),
+    control(members, 2),
+    control(bend_range, 2),
+    control(master_range, 2),
+    control(output_channel, 2),
+    control(y_target, 3),
+    control(y_cc, 3),
+    toggle(x_reverse, 3),
+    toggle(y_reverse, 3),
+    control(x_min, 3),
+    control(x_max, 3),
+    control(y_min, 3),
+    control(y_max, 3),
+    control(x, 4),
+    control(y, 4),
+    toggle(keyboard, 4),
+    toggle(fifths, 4),
+    control(bank, 4),
+    control(keyboard_octave, 4),
+    control(key, 5),
+    control(scale, 5),
+    control(filter, 5),
+    toggle(split_channels, 5),
+    control(bass_channel, 5),
+    control(upper_channel, 5),
+}
+
 #[derive(Clone)]
 pub struct Control {
     pub id: &'static str,
@@ -543,12 +596,12 @@ mod tests {
     fn main_buttons_resolve_their_parameters_without_settings_duplicates() {
         let params = ChordboardParams::default();
         let controls = params.controls();
+        assert!(params.control("highlight").is_none());
         for (id, ptr) in [
             ("keyboard", params.keyboard.as_ptr()),
             ("latch", params.latch.as_ptr()),
-            ("mpe", params.mpe.as_ptr()),
+            ("output_mode", params.output_mode.as_ptr()),
             ("fifths", params.fifths.as_ptr()),
-            ("highlight", params.highlight.as_ptr()),
         ] {
             assert_eq!(
                 controls.iter().find(|c| c.id == id).map(|c| c.ptr),

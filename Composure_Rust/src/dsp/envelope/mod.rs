@@ -16,7 +16,8 @@ pub use orchestration::EnvelopeEngine;
 pub enum ReleaseMode {
     InputDependent,
     GrDependent,
-    RateOfChange,
+    InputAndGr,
+    Disabled,
 }
 
 impl ReleaseMode {
@@ -38,6 +39,7 @@ pub struct EnvelopeParams {
     pub prog_release_mode: ReleaseMode,
     pub prog_release_inverse: bool,
     pub prog_release_blend: f64,
+    pub input_rate_amount: f64,
     pub input_level_threshold_db: f64,
     pub input_level_threshold_2_db: f64,
     pub gr_blend_threshold_reduction_db: f64,
@@ -66,6 +68,7 @@ impl Default for EnvelopeParams {
             prog_release_mode: ReleaseMode::InputDependent,
             prog_release_inverse: false,
             prog_release_blend: PROG_RELEASE_BLEND,
+            input_rate_amount: 0.0,
             input_level_threshold_db: INPUT_LEVEL_THRESHOLD_DB,
             input_level_threshold_2_db: INPUT_LEVEL_THRESHOLD_2_DB,
             gr_blend_threshold_reduction_db: GR_BLEND_THRESHOLD_DB,
@@ -99,7 +102,7 @@ mod sync_tests {
     /// Smoothed scalar count — keep in sync with `envelope_scalar_fields!`.
     #[test]
     fn envelope_scalar_field_count() {
-        const EXPECTED_SMOOTHED_SCALARS: usize = 15;
+        const EXPECTED_SMOOTHED_SCALARS: usize = 16;
         let mut touched = 0usize;
         macro_rules! count_field {
             ($field:ident) => {

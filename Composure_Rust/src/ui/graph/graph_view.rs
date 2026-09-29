@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use nih_plug_vizia::vizia::prelude::*;
-use nih_plug_vizia::vizia::vg::{Color as VgColor, Paint, Path};
+use nih_plug_vizia::vizia::vg::{Paint, Path};
 use nih_plug_vizia::widgets::param_base::ParamWidgetBase;
 use nih_plug_vizia::widgets::util::ModifiersExt;
 
@@ -188,28 +188,8 @@ where
                     return;
                 }
 
-                let plugin_params = self.params.get(cx);
                 let snapshot = self.graph.load();
                 let graph = &snapshot.graph;
-                let (min_db, _max_db, range_db) = (graph.min_db, graph.max_db, graph.range_db);
-                let line_y = graph_display::axis_label_y(
-                    plugin_params.input_level_threshold_db.value() as f64,
-                    min_db,
-                    range_db,
-                    b.h,
-                );
-
-                if super::EditorData::appearance.get(cx) == 2
-                    && threshold_lines::find_graph_threshold(&plugin_params, my, line_y).is_some()
-                {
-                    self.dragging_threshold = true;
-                    self.mouse_down = true;
-                    self.input_thresh_base.begin_set_parameter(cx);
-                    cx.capture();
-                    meta.consume();
-                    return;
-                }
-
                 self.mouse_down = true;
                 cx.capture();
 
@@ -336,25 +316,13 @@ where
                 } else {
                     let (mx, my) = Self::local_mouse(cx);
                     let b = cx.bounds();
-                    let plugin_params = self.params.get(cx);
                     let snapshot = self.graph.load();
                     let graph = &snapshot.graph;
                     let hovered_point =
                         graph_hit::find_interior_point(graph, mx, my, b.w, b.h, DISPLAY_PAD_DB)
                             .map(|i| i as i32)
                             .unwrap_or(-1);
-                    let (min_db, range_db) = (graph.min_db, graph.range_db);
-                    let line_y = graph_display::axis_label_y(
-                        plugin_params.input_level_threshold_db.value() as f64,
-                        min_db,
-                        range_db,
-                        b.h,
-                    );
-                    self.hovered_threshold = if super::EditorData::appearance.get(cx) == 2 {
-                        threshold_lines::find_graph_threshold(&plugin_params, my, line_y)
-                    } else {
-                        None
-                    };
+                    self.hovered_threshold = { None };
                     self.hovered_point = hovered_point;
                     self.update_graph_hint();
                     let _ = mx;
@@ -483,34 +451,18 @@ where
         let display_range = graph_display::display_range_db(range_db);
         let px_per_db = bounds.h / display_range as f32;
 
-        let analog = super::EditorData::appearance.get(cx) == 2;
-        if analog {
-            let mut bg = Path::new();
-            bg.rect(bounds.x, bounds.y, bounds.w, bounds.h);
-            canvas.fill_path(
-                &bg,
-                &Paint::color(VgColor::rgbaf(0.12, 0.12, 0.12, 0.45 * opacity)),
-            );
-        }
-
-        draw_histograms(canvas, bounds, &self.display, min_db, px_per_db, opacity);
+        let histogram_scale = cx.scale_factor();
+        draw_histograms(
+            canvas,
+            bounds,
+            &self.display,
+            min_db,
+            px_per_db,
+            opacity,
+            histogram_scale,
+        );
 
         draw_grid(canvas, bounds, min_db, range_db, opacity);
-        if analog {
-            draw_out_of_scope_fade(canvas, bounds, min_db, max_db, range_db, opacity);
-        }
-
-        if analog {
-            let active = self.active_threshold();
-            threshold_lines::draw_input_level_threshold(
-                canvas,
-                bounds,
-                &plugin_params,
-                db_to_y,
-                opacity,
-                active,
-            );
-        }
 
         let unity_paint = {
             let mut p = Paint::color(vg_color(theme::GRAPH_UNITY, opacity));
@@ -591,14 +543,10 @@ where
             draw_dot(
                 canvas,
                 db_to_x(detector as f64),
-                db_to_y((output_db + gr) as f64),
+                db_to_y(detector as f64),
                 3.0,
                 vg_color(theme::GRAPH_GR_DOT, opacity),
             );
-        }
-
-        if analog {
-            draw_graph_reflection(canvas, bounds, detector, range_db as f32, opacity);
         }
     }
 }

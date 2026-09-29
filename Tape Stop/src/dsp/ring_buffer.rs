@@ -47,6 +47,23 @@ impl StereoRingBuffer {
         self.write_head
     }
 
+    /// Latest frame that has been written, suitable for a live playback join.
+    #[inline(always)]
+    pub fn live_head(&self) -> usize {
+        (self.write_head + BUFFER_SIZE - 1) & BUFFER_MASK
+    }
+
+    #[inline(always)]
+    fn interpolation_index(&self, index: isize) -> usize {
+        let wrapped = (index as usize) & BUFFER_MASK;
+        // Hermite's forward neighbors may extend beyond the recorded live edge.
+        if (wrapped.wrapping_sub(self.write_head) & BUFFER_MASK) <= 1 {
+            self.live_head()
+        } else {
+            wrapped
+        }
+    }
+
     /// Raw left sample at an integer buffer index (wraps).
     #[inline(always)]
     pub fn left_at(&self, index: isize) -> f32 {
@@ -68,8 +85,8 @@ impl StereoRingBuffer {
 
         let y0 = self.left[((int_idx - 1) as usize) & BUFFER_MASK];
         let y1 = self.left[(int_idx as usize) & BUFFER_MASK];
-        let y2 = self.left[((int_idx + 1) as usize) & BUFFER_MASK];
-        let y3 = self.left[((int_idx + 2) as usize) & BUFFER_MASK];
+        let y2 = self.left[self.interpolation_index(int_idx + 1)];
+        let y3 = self.left[self.interpolation_index(int_idx + 2)];
 
         hermite_interpolate(y0, y1, y2, y3, frac)
     }
@@ -83,8 +100,8 @@ impl StereoRingBuffer {
 
         let y0 = self.right[((int_idx - 1) as usize) & BUFFER_MASK];
         let y1 = self.right[(int_idx as usize) & BUFFER_MASK];
-        let y2 = self.right[((int_idx + 1) as usize) & BUFFER_MASK];
-        let y3 = self.right[((int_idx + 2) as usize) & BUFFER_MASK];
+        let y2 = self.right[self.interpolation_index(int_idx + 1)];
+        let y3 = self.right[self.interpolation_index(int_idx + 2)];
 
         hermite_interpolate(y0, y1, y2, y3, frac)
     }

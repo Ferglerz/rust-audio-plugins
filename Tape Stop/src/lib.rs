@@ -32,6 +32,33 @@ impl Default for TapeStop {
     }
 }
 
+impl TapeStop {
+    fn handle_midi_event(
+        &mut self,
+        event: NoteEvent<()>,
+        assign: MidiAssign,
+        note_assignment: u8,
+        cc_assignment: u8,
+    ) {
+        match event {
+            NoteEvent::NoteOn { note, velocity, .. }
+                if assign == MidiAssign::Cc || note == note_assignment =>
+            {
+                self.engine.note_on(note, velocity);
+            }
+            NoteEvent::NoteOff { note, .. } => {
+                // Release the accepted note even if its assignment changed while held.
+                self.engine.note_off(note);
+            }
+            NoteEvent::MidiCC { cc, value, .. } if assign == MidiAssign::Cc => {
+                let cc_val = (value * 127.0).round() as u8;
+                self.engine.handle_midi_cc(cc, cc_val, cc_assignment);
+            }
+            _ => {}
+        }
+    }
+}
+
 impl Plugin for TapeStop {
     const NAME: &'static str = "Tape Stop";
     const VENDOR: &'static str = "Fergler";
@@ -127,25 +154,7 @@ impl Plugin for TapeStop {
                     break;
                 }
 
-                match event {
-                    NoteEvent::NoteOn { note, velocity, .. } => {
-                        if midi_assign == MidiAssign::Cc || note == override_note {
-                            self.engine.note_on(note, velocity);
-                        }
-                    }
-                    NoteEvent::NoteOff { note, .. } => {
-                        if midi_assign == MidiAssign::Cc || note == override_note {
-                            self.engine.note_off(note);
-                        }
-                    }
-                    NoteEvent::MidiCC { cc, value, .. } => {
-                        if midi_assign == MidiAssign::Cc {
-                            let cc_val = (value * 127.0).round() as u8;
-                            self.engine.handle_midi_cc(cc, cc_val, override_cc);
-                        }
-                    }
-                    _ => {}
-                }
+                self.handle_midi_event(event, midi_assign, override_note, override_cc);
 
                 next_event = context.next_event();
             }
@@ -226,3 +235,56 @@ impl Vst3Plugin for TapeStop {
 
 nih_export_clap!(TapeStop);
 nih_export_vst3!(TapeStop);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn held_note_releases_after_assignment_changes() {
+        let mut plugin = TapeStop::default();
+        plugin.handle_midi_event(
+            NoteEvent::NoteOn {
+                timing: 0,
+                voice_id: None,
+                channel: 0,
+                note: 60,
+                velocity: 1.0,
+            },
+            MidiAssign::Note,
+            60,
+            1,
+        );
+        assert!(plugin.engine.is_braking());
+        plugin.handle_midi_event(
+            NoteEvent::NoteOff {
+                timing: 0,
+                voice_id: None,
+                channel: 0,
+                note: 61,
+                velocity: 0.0,
+            },
+            MidiAssign::Note,
+            61,
+            1,
+        );
+        assert!(
+            plugin.engine.is_braking(),
+            "Unheld note must not release the accepted note"
+        );
+        plugin.handle_midi_event(
+            NoteEvent::NoteOff {
+                timing: 0,
+                voice_id: None,
+                channel: 0,
+                note: 60,
+                velocity: 0.0,
+            },
+            MidiAssign::Note,
+            61,
+            1,
+        );
+        assert!(!plugin.engine.is_braking());
+        assert!(plugin.engine.is_returning());
+    }
+}

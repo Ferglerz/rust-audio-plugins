@@ -22,6 +22,8 @@ pub struct Config {
     pub velocity: f32,
     pub length_ms: f32,
     pub strum_ms: f32,
+    pub strum_sync: bool,
+    pub strum_beats: f32,
     pub direction: u8,
     pub contour: f32,
     pub arp_pattern: u8,
@@ -45,7 +47,7 @@ pub struct Config {
     pub y_max: f32,
     pub y_target: u8,
     pub y_cc: u8,
-    pub mappings: [Mapping; 3],
+    pub mappings: [Mapping; 2],
 }
 impl Default for Config {
     fn default() -> Self {
@@ -64,6 +66,8 @@ impl Default for Config {
             velocity: 0.8,
             length_ms: 350.0,
             strum_ms: 120.0,
+            strum_sync: false,
+            strum_beats: 0.25,
             direction: 0,
             contour: 0.0,
             arp_pattern: 0,
@@ -87,7 +91,7 @@ impl Default for Config {
             y_max: 1.0,
             y_target: 0,
             y_cc: 11,
-            mappings: [Mapping::cc(1, 16), Mapping::default(), Mapping::default()],
+            mappings: [Mapping::cc(1, 16), Mapping::cc(11, 16)],
         }
     }
 }
@@ -173,7 +177,6 @@ pub enum Command {
     Learn(u8),
     X(f32),
     Y(f32),
-    Gate(bool),
     EndGesture,
     BeginGesture(f32, f32),
     Capture(usize),
@@ -198,6 +201,8 @@ pub struct Snapshot {
     pub strikes: [u32; 12],
     pub voices: u8,
     pub learning: u8,
+    pub output_mpe: bool,
+    pub tempo: f32,
 }
 impl Default for Snapshot {
     fn default() -> Self {
@@ -219,6 +224,8 @@ impl Default for Snapshot {
             strikes: [0; 12],
             voices: 0,
             learning: 0,
+            output_mpe: false,
+            tempo: 120.0,
         }
     }
 }

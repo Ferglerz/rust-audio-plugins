@@ -133,7 +133,7 @@ impl ChordboardView {
         }
     }
 
-    fn recall_memory(&mut self, cx: &mut EventContext, slot: usize) {
+    pub(super) fn recall_memory(&mut self, cx: &mut EventContext, slot: usize) {
         let word = self.params.slot(slot).load(Ordering::Relaxed);
         if let Some(chord) = SavedChord::decode(word) {
             self.release_keys();
@@ -151,14 +151,7 @@ impl ChordboardView {
     }
 
     pub(super) fn draw_memories(&self, d: &mut Draw) {
-        d.text(32.0, 492.0, "CHORD MEMORIES", TEXT_SMALL, MUTED);
-        d.text_right(
-            564.0,
-            492.0,
-            "SHIFT-CLICK TO CAPTURE · DRAG TO MOVE",
-            TEXT_SMALL,
-            MUTED,
-        );
+        d.text(32.0, 466.0, "MEM", TEXT_SMALL, MUTED);
         let drag = match self.drag {
             Some(Drag::Memory(drag)) if drag.active => Some(drag),
             _ => None,
@@ -187,7 +180,7 @@ impl ChordboardView {
                     if target || hovered == Some(i) {
                         TEAL
                     } else {
-                        MUTED
+                        alpha(MUTED, 0.35)
                     },
                 );
             }
@@ -202,11 +195,16 @@ impl ChordboardView {
                 MUTED,
             );
             let label = chord.map_or_else(|| "+".into(), harmony::chord_name);
+            let label = if label.chars().count() > 5 {
+                format!("{}…", label.chars().take(4).collect::<String>())
+            } else {
+                label
+            };
             d.text_centered(
                 r.0 + r.2 / 2.0,
                 r.1 + 35.0,
                 &label,
-                TEXT_LABEL,
+                TEXT_SMALL,
                 if source {
                     MUTED
                 } else if chord.is_some() {
@@ -214,6 +212,13 @@ impl ChordboardView {
                 } else {
                     MUTED
                 },
+            );
+            d.text_right(
+                r.0 + r.2 - 4.0,
+                r.1 + r.3 - 4.0,
+                MEMORY_HINTS[i],
+                TEXT_SMALL,
+                MUTED,
             );
             if chord.is_some() && hovered == Some(i) && drag.is_none() {
                 let close = memory_delete_rect(i);
@@ -267,14 +272,18 @@ mod tests {
     }
     #[test]
     fn click_jitter_recalls_but_drag_back_or_outside_cancels() {
-        let mut drag = MemoryDrag::new(0, chord(60), 50.0, 530.0);
-        drag.update(52.0, 531.0);
+        let first = memory_rect(0);
+        let second = memory_rect(1);
+        let x = first.0 + first.2 / 2.0;
+        let y = first.1 + first.3 / 2.0;
+        let mut drag = MemoryDrag::new(0, chord(60), x, y);
+        drag.update(x + 2.0, y + 1.0);
         assert_eq!(drag.action(), Some(MemoryAction::Recall));
-        drag.update(120.0, 530.0);
+        drag.update(second.0 + second.2 / 2.0, y);
         assert_eq!(drag.action(), Some(MemoryAction::Move(1)));
-        drag.update(50.0, 530.0);
+        drag.update(x, y);
         assert_eq!(drag.action(), None);
-        drag.update(590.0, 530.0);
+        drag.update(590.0, y);
         assert_eq!(drag.action(), None);
     }
     #[test]

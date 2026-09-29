@@ -1,9 +1,14 @@
 //! RMS detector ported from `09_audio_processing_chain.jsfx-inc`.
 
-use super::core_math::linear_to_db;
 use super::constants::{MAX_DETECTOR_DB, MAX_DETECTOR_LINEAR, MIN_DETECTOR_LEVEL};
+use super::core_math::linear_to_db;
 use super::dsp_utils::flush_denormal;
 use super::envelope::rms_params::{smooth_rms_coefficient, update_rms_coefficient};
+
+fn normalization_decay_coefficient(srate: f64) -> f64 {
+    // Preserve the original ~208 ms time constant at 48 kHz at every sample rate.
+    0.9999_f64.powf(48000.0 / srate)
+}
 
 #[derive(Debug, Clone)]
 pub struct RmsDetector {
@@ -13,6 +18,7 @@ pub struct RmsDetector {
     target_coeff: f64,
     target_one_minus: f64,
     rms_max: f64,
+    normalization_decay_coeff: f64,
     peak_for_normalize_smooth: f64,
     rms_size_ms: f64,
     srate: f64,
@@ -28,6 +34,7 @@ impl RmsDetector {
             target_coeff,
             target_one_minus,
             rms_max: 0.5,
+            normalization_decay_coeff: normalization_decay_coefficient(srate),
             peak_for_normalize_smooth: 0.0,
             rms_size_ms: 0.0,
             srate,
@@ -36,6 +43,7 @@ impl RmsDetector {
 
     pub fn set_sample_rate(&mut self, srate: f64) {
         self.srate = srate;
+        self.normalization_decay_coeff = normalization_decay_coefficient(srate);
         self.update_rms_targets(self.rms_size_ms);
     }
 
@@ -86,7 +94,7 @@ impl RmsDetector {
             self.rms_max = if rms_level > self.rms_max {
                 rms_level
             } else {
-                self.rms_max * 0.9999
+                self.rms_max * self.normalization_decay_coeff
             };
             let normalized_rms = rms_level / (self.rms_max + 1e-30);
             let peak_level = detect_l.abs().max(detect_r.abs());
@@ -96,8 +104,8 @@ impl RmsDetector {
                 (-1.0 / (0.02 * self.srate)).exp()
             };
             let norm_peak_1m = 1.0 - norm_peak_c;
-            self.peak_for_normalize_smooth = self.peak_for_normalize_smooth * norm_peak_c
-                + peak_level * norm_peak_1m;
+            self.peak_for_normalize_smooth =
+                self.peak_for_normalize_smooth * norm_peak_c + peak_level * norm_peak_1m;
             normalized_rms * self.peak_for_normalize_smooth
         } else if self.rms_size_ms > 0.0 {
             rms_level
@@ -106,10 +114,8 @@ impl RmsDetector {
         };
 
         let detector_level = detector_level.min(MAX_DETECTOR_LINEAR);
-        let detector_level_db = linear_to_db(detector_level.max(MIN_DETECTOR_LEVEL)).clamp(
-            super::constants::MIN_DETECTOR_DB_FLOOR,
-            MAX_DETECTOR_DB,
-        );
+        let detector_level_db = linear_to_db(detector_level.max(MIN_DETECTOR_LEVEL))
+            .clamp(super::constants::MIN_DETECTOR_DB_FLOOR, MAX_DETECTOR_DB);
 
         (detector_level, detector_level_db)
     }
@@ -150,5 +156,56 @@ mod tests {
             det.detect_level(1.0, 1.0, false);
         }
         assert!(det.smoothed_squared > 0.9);
+    }
+
+    #[test]
+    fn normalization_max_decay_matches_elapsed_time() {
+        let expected = 0.5 * 0.9999_f64.powf(48000.0 * 0.1);
+        for srate in [44100.0, 48000.0, 96000.0, 192000.0] {
+            let mut det = RmsDetector::new(srate);
+            for _ in 0..(srate * 0.1) as usize {
+                det.detect_level(0.0, 0.0, true);
+            }
+            assert!(
+                (det.rms_max - expected).abs() < 1e-10,
+                "srate={srate}, rms_max={}, expected={expected}",
+                det.rms_max
+            );
+        }
+    }
+
+    #[test]
+    fn normalization_decay_updates_with_sample_rate() {
+        let mut det = RmsDetector::new(48000.0);
+        det.detect_level(1.0, 1.0, true);
+        det.set_sample_rate(96000.0);
+        for _ in 0..9600 {
+            det.detect_level(0.0, 0.0, true);
+        }
+        let expected = 0.9999_f64.powf(4800.0);
+        assert!((det.rms_max - expected).abs() < 1e-10);
+    }
+
+    #[test]
+    fn normalized_detector_matches_elapsed_time() {
+        for rms_ms in [0.0, 10.0, 100.0] {
+            let mut reference: Option<f64> = None;
+            for srate in [44100.0, 48000.0, 96000.0, 192000.0] {
+                let mut det = RmsDetector::new(srate);
+                det.update_rms_targets(rms_ms);
+                let mut level = 0.0;
+                for _ in 0..(srate * 0.1) as usize {
+                    level = det.detect_level(0.05, 0.05, true).0;
+                }
+                if let Some(expected) = reference {
+                    assert!(
+                        (level - expected).abs() < 1e-10,
+                        "rms_ms={rms_ms}, srate={srate}, level={level}, expected={expected}"
+                    );
+                } else {
+                    reference = Some(level);
+                }
+            }
+        }
     }
 }

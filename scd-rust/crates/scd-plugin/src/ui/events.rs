@@ -50,7 +50,7 @@ impl ScdEditorView {
                         if let Some(edit) = self.note_edit.as_mut() {
                             insert_note_digit(edit, *ch);
                         }
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, window_event, meta);
                         cx.needs_redraw();
                         return;
                     }
@@ -70,7 +70,7 @@ impl ScdEditorView {
                                 }
                             }
                         }
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, window_event, meta);
                         cx.needs_redraw();
                         return;
                     }
@@ -83,7 +83,7 @@ impl ScdEditorView {
                             if let Some(edit) = self.note_edit.as_mut() {
                                 edit.handle_mouse_down(mouse_x);
                             }
-                            meta.consume();
+                            nih_plug_vizia::consume_window_event(cx, window_event, meta);
                             cx.needs_redraw();
                             return;
                         }
@@ -97,7 +97,7 @@ impl ScdEditorView {
                             if let Some(edit) = self.note_edit.as_mut() {
                                 edit.select_all();
                             }
-                            meta.consume();
+                            nih_plug_vizia::consume_window_event(cx, window_event, meta);
                             cx.needs_redraw();
                             return;
                         }
@@ -126,14 +126,14 @@ impl ScdEditorView {
                                 if Self::hit(x, y, r.0, r.1, r.2, r.3) {
                                     self.add_scope.toggle(i);
                                     cx.needs_redraw();
-                                    meta.consume();
+                                    nih_plug_vizia::consume_window_event(cx, window_event, meta);
                                     return;
                                 }
                             }
                             let save = Self::add_save_rect((mx, my, mw, mh));
                             if Self::hit(x, y, save.0, save.1, save.2, save.3) {
                                 self.save_user_preset(cx);
-                                meta.consume();
+                                nih_plug_vizia::consume_window_event(cx, window_event, meta);
                                 return;
                             }
                             let cancel = Self::add_cancel_rect((mx, my, mw, mh));
@@ -141,16 +141,16 @@ impl ScdEditorView {
                                 self.add_preset_open = false;
                                 self.add_name_focus = false;
                                 cx.needs_redraw();
-                                meta.consume();
+                                nih_plug_vizia::consume_window_event(cx, window_event, meta);
                                 return;
                             }
-                            meta.consume();
+                            nih_plug_vizia::consume_window_event(cx, window_event, meta);
                             return;
                         } else {
                             self.add_preset_open = false;
                             self.add_name_focus = false;
                             cx.needs_redraw();
-                            meta.consume();
+                            nih_plug_vizia::consume_window_event(cx, window_event, meta);
                             return;
                         }
                     }
@@ -163,7 +163,7 @@ impl ScdEditorView {
                             }
                             self.cc_menu_open = false;
                             cx.needs_redraw();
-                            meta.consume();
+                            nih_plug_vizia::consume_window_event(cx, window_event, meta);
                             return;
                         }
                         self.cc_menu_open = false;
@@ -180,11 +180,11 @@ impl ScdEditorView {
                                         self.apply_preset(cx, *preset);
                                         self.close_preset_menus();
                                         cx.needs_redraw();
-                                        meta.consume();
+                                        nih_plug_vizia::consume_window_event(cx, window_event, meta);
                                         return;
                                     }
                                 }
-                                meta.consume();
+                                nih_plug_vizia::consume_window_event(cx, window_event, meta);
                                 return;
                             }
                         }
@@ -216,7 +216,7 @@ impl ScdEditorView {
                                 }
                                 PresetRow::Rule => {}
                             }
-                            meta.consume();
+                            nih_plug_vizia::consume_window_event(cx, window_event, meta);
                             return;
                         }
                     }
@@ -235,7 +235,7 @@ impl ScdEditorView {
                                         },
                                     );
                                     cx.needs_redraw();
-                                    meta.consume();
+                                    nih_plug_vizia::consume_window_event(cx, window_event, meta);
                                     return;
                                 }
                             }
@@ -244,13 +244,13 @@ impl ScdEditorView {
                                 self.commit_note_edit();
                                 self.open_vel_map(*kit_piece);
                                 cx.needs_redraw();
-                                meta.consume();
+                                nih_plug_vizia::consume_window_event(cx, window_event, meta);
                                 return;
                             }
                         }
                         let (mx, my, mw, mh) = Self::mapping_menu_rect();
                         if Self::hit(x, y, mx, my, mw, mh) {
-                            meta.consume();
+                            nih_plug_vizia::consume_window_event(cx, window_event, meta);
                             return;
                         }
                     }
@@ -262,7 +262,7 @@ impl ScdEditorView {
                         self.samples_open = false;
                         self.cc_menu_open = false;
                         cx.needs_redraw();
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, window_event, meta);
                         return;
                     } else if self.preset_open {
                         self.close_preset_menus();
@@ -275,7 +275,7 @@ impl ScdEditorView {
                         self.close_preset_menus();
                         self.cc_menu_open = false;
                         cx.needs_redraw();
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, window_event, meta);
                         return;
                     } else if self.samples_open {
                         self.commit_note_edit();
@@ -289,7 +289,7 @@ impl ScdEditorView {
                         self.samples_open = false;
                         self.press_invert = true;
                         cx.needs_redraw();
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, window_event, meta);
                         return;
                     }
 
@@ -298,7 +298,7 @@ impl ScdEditorView {
                         self.close_preset_menus();
                         self.samples_open = false;
                         cx.needs_redraw();
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, window_event, meta);
                         return;
                     }
 
@@ -309,7 +309,7 @@ impl ScdEditorView {
                             self.active_sof = Some(mic);
                         }
                         cx.needs_redraw();
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, window_event, meta);
                         return;
                     }
 
@@ -320,13 +320,13 @@ impl ScdEditorView {
                             self.blur_dirty.set(true);
                         }
                         cx.needs_redraw();
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, window_event, meta);
                         return;
                     }
 
                     if cx.modifiers().alt() && self.reset_control_at(cx, x, y) {
                         cx.needs_redraw();
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, window_event, meta);
                         return;
                     }
 
@@ -339,7 +339,7 @@ impl ScdEditorView {
                             if !cur { 1.0 } else { 0.0 },
                         );
                         cx.needs_redraw();
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, window_event, meta);
                         return;
                     }
 
@@ -370,14 +370,14 @@ impl ScdEditorView {
                                     });
                                     self.begin_one(cx, ptr);
                                     cx.capture();
-                                    meta.consume();
+                                    nih_plug_vizia::consume_window_event(cx, window_event, meta);
                                     return;
                                 }
                             }
                         } else {
                             self.sub_kick_open = false;
                             cx.needs_redraw();
-                            meta.consume();
+                            nih_plug_vizia::consume_window_event(cx, window_event, meta);
                             return;
                         }
                     }
@@ -391,7 +391,7 @@ impl ScdEditorView {
                                     self.vel_art_menu_open = !self.vel_art_menu_open;
                                     self.vel_ignore_up = true;
                                     cx.needs_redraw();
-                                    meta.consume();
+                                    nih_plug_vizia::consume_window_event(cx, window_event, meta);
                                     return;
                                 }
                                 if self.vel_art_menu_open {
@@ -408,7 +408,7 @@ impl ScdEditorView {
                                     self.vel_art_menu_open = false;
                                     self.vel_ignore_up = true;
                                     cx.needs_redraw();
-                                    meta.consume();
+                                    nih_plug_vizia::consume_window_event(cx, window_event, meta);
                                     return;
                                 }
                             }
@@ -421,7 +421,7 @@ impl ScdEditorView {
                                         self.commit_vel_curve(curve);
                                     }
                                     cx.needs_redraw();
-                                    meta.consume();
+                                    nih_plug_vizia::consume_window_event(cx, window_event, meta);
                                     return;
                                 }
                                 if let Some((i, is_out)) = self.hit_vel_handle(&curve, x, y) {
@@ -433,7 +433,7 @@ impl ScdEditorView {
                                     self.vel_selected_node = Some(i);
                                     self.vel_just_inserted = false;
                                     cx.capture();
-                                    meta.consume();
+                                    nih_plug_vizia::consume_window_event(cx, window_event, meta);
                                     return;
                                 }
                                 if let Some(i) = self.hit_vel_node(&curve, x, y) {
@@ -441,19 +441,19 @@ impl ScdEditorView {
                                     self.vel_selected_node = Some(i);
                                     self.vel_just_inserted = false;
                                     cx.capture();
-                                    meta.consume();
+                                    nih_plug_vizia::consume_window_event(cx, window_event, meta);
                                     return;
                                 }
                             }
                             self.commit_note_edit();
-                            meta.consume();
+                            nih_plug_vizia::consume_window_event(cx, window_event, meta);
                             return;
                         } else {
                             self.commit_note_edit();
                             self.vel_map_open = None;
                             self.vel_selected_node = None;
                             cx.needs_redraw();
-                            meta.consume();
+                            nih_plug_vizia::consume_window_event(cx, window_event, meta);
                             return;
                         }
                     }
@@ -470,7 +470,7 @@ impl ScdEditorView {
                             self.begin_one(cx, ptr);
                             self.set_live(cx, ptr, Self::slider_norm_at(x, sx));
                             cx.capture();
-                            meta.consume();
+                            nih_plug_vizia::consume_window_event(cx, window_event, meta);
                             return;
                         }
                         if (PAN_Y..=PAN_Y + SLIDER_H).contains(&y) {
@@ -479,19 +479,19 @@ impl ScdEditorView {
                             self.begin_one(cx, ptr);
                             self.set_live(cx, ptr, Self::slider_norm_at(x, sx));
                             cx.capture();
-                            meta.consume();
+                            nih_plug_vizia::consume_window_event(cx, window_event, meta);
                             return;
                         }
                         if (FADER_Y..=FADER_Y + FADER_H).contains(&y) {
                             if self.omitted(kit_piece) {
-                                meta.consume();
+                                nih_plug_vizia::consume_window_event(cx, window_event, meta);
                                 return;
                             }
                             self.drag = Some(DragTarget::Fader(kit_piece));
                             self.begin_fader_gesture(cx, kit_piece);
                             self.apply_fader(cx, kit_piece, Self::fader_pos_at(y));
                             cx.capture();
-                            meta.consume();
+                            nih_plug_vizia::consume_window_event(cx, window_event, meta);
                             return;
                         }
                         if (PUNCH_Y..=PUNCH_Y + PUNCH_SIZE).contains(&y) {
@@ -499,7 +499,7 @@ impl ScdEditorView {
                             self.drag = Some(DragTarget::Punch(kit_piece));
                             self.begin_one(cx, ptr);
                             cx.capture();
-                            meta.consume();
+                            nih_plug_vizia::consume_window_event(cx, window_event, meta);
                             return;
                         }
                     }
@@ -521,11 +521,11 @@ impl ScdEditorView {
                             cx.emit(ParamEvent::EndSetParameter(&self.params.invert_cc).upcast());
                         }
                         cx.needs_redraw();
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, window_event, meta);
                     }
                     if self.press_note.take().is_some() {
                         cx.needs_redraw();
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, window_event, meta);
                     }
                     let was_vel_drag = matches!(
                         self.drag,
@@ -540,7 +540,7 @@ impl ScdEditorView {
                         self.end_gesture(cx);
                         cx.release();
                         cx.needs_redraw();
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, window_event, meta);
                     }
                     if self.vel_ignore_up {
                         self.vel_ignore_up = false;
@@ -555,7 +555,7 @@ impl ScdEditorView {
                                         self.vel_just_inserted = true;
                                         self.commit_vel_curve(curve);
                                         cx.needs_redraw();
-                                        meta.consume();
+                                        nih_plug_vizia::consume_window_event(cx, window_event, meta);
                                     }
                                 }
                             }
@@ -565,14 +565,14 @@ impl ScdEditorView {
                 WindowEvent::MouseDoubleClick(MouseButton::Left) => {
                     if self.reset_control_at(cx, mouse_x, mouse_y) {
                         cx.needs_redraw();
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, window_event, meta);
                         return;
                     }
                     if self.vel_map_open.is_some() {
                         let (modal_x, modal_y, modal_w, modal_h) = Self::vel_map_modal();
                         let (gx, gy, gw, gh) = Self::vel_map_graph();
                         if self.vel_art_menu_open || !Self::hit(mouse_x, mouse_y, gx, gy, gw, gh) {
-                            meta.consume();
+                            nih_plug_vizia::consume_window_event(cx, window_event, meta);
                             return;
                         }
                         if Self::hit(mouse_x, mouse_y, modal_x, modal_y, modal_w, modal_h) {
@@ -596,7 +596,7 @@ impl ScdEditorView {
                             self.vel_ignore_up = true;
                             self.drag = None;
                             cx.needs_redraw();
-                            meta.consume();
+                            nih_plug_vizia::consume_window_event(cx, window_event, meta);
                         }
                     }
                 }
@@ -700,7 +700,7 @@ impl ScdEditorView {
                             }
                         }
                         cx.needs_redraw();
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, window_event, meta);
                     } else {
                         self.update_hover(cx);
                     }
@@ -732,7 +732,7 @@ impl ScdEditorView {
                     let delta = if *dy > 0.0 { 1 } else { -1 };
                     self.set_cc_number(cx, self.params.cc_number.value() + delta);
                     cx.needs_redraw();
-                    meta.consume();
+                    nih_plug_vizia::consume_window_event(cx, window_event, meta);
                 }
                 WindowEvent::CharInput(ch)
                     if self.add_preset_open && self.add_name_focus && !ch.is_control() =>
@@ -741,7 +741,7 @@ impl ScdEditorView {
                         self.add_name.push(*ch);
                         cx.needs_redraw();
                     }
-                    meta.consume();
+                    nih_plug_vizia::consume_window_event(cx, window_event, meta);
                 }
                 WindowEvent::KeyDown(code, _) if self.add_preset_open => {
                     match *code {
@@ -757,7 +757,7 @@ impl ScdEditorView {
                         }
                         _ => {}
                     }
-                    meta.consume();
+                    nih_plug_vizia::consume_window_event(cx, window_event, meta);
                 }
                 _ => {}
             }

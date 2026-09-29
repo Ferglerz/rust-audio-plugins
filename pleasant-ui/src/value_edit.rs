@@ -132,6 +132,15 @@ impl<T> ValueEdit<T> {
     }
 }
 
+/// Meter threshold readouts are the reference: underline 7px below the baseline.
+pub const VALUE_UNDERLINE_OFFSET: f32 = 7.0;
+/// Extra room between a readout underline and a horizontal slider track.
+pub const SLIDER_SPACING_EXTRA: f32 = 4.0;
+
+pub fn value_underline_y(baseline: f32) -> f32 {
+    baseline + VALUE_UNDERLINE_OFFSET
+}
+
 pub fn slider_value_rect(r: (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
     (r.0 + r.2 - 80.0, r.1 + 4.0, 72.0, 20.0)
 }

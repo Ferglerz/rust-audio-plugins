@@ -51,12 +51,14 @@ pub struct ResolvedNote {
     pub kit_piece: Option<KitPieceId>,
     pub art: usize,
     pub silenced: bool,
+    pub explicit: bool,
 }
 
 pub struct NoteMapState {
     bank: Mutex<NoteMapBank>,
     pack_of: [AtomicU8; 128],
     silenced: [AtomicU8; 128],
+    explicit: [AtomicU8; 128],
     art_of: [AtomicU16; 128],
     learn_armed: AtomicU8,
     learn_note: AtomicU8,
@@ -68,6 +70,7 @@ impl NoteMapState {
             bank: Mutex::new(NoteMapBank::default()),
             pack_of: std::array::from_fn(|i| AtomicU8::new(i as u8)),
             silenced: std::array::from_fn(|_| AtomicU8::new(0)),
+            explicit: std::array::from_fn(|_| AtomicU8::new(0)),
             art_of: std::array::from_fn(|_| AtomicU16::new(ART_NONE)),
             learn_armed: AtomicU8::new(0),
             learn_note: AtomicU8::new(255),
@@ -113,6 +116,7 @@ impl NoteMapState {
             kit_piece,
             art,
             silenced: self.silenced[i].load(Ordering::Relaxed) != 0,
+            explicit: self.explicit[i].load(Ordering::Relaxed) != 0,
         }
     }
 
@@ -190,62 +194,76 @@ impl NoteMapState {
         let bank = self.lock().clone();
         let mut pack_of: [u8; 128] = std::array::from_fn(|i| i as u8);
         let mut silenced = [0u8; 128];
+        let mut explicit = [0u8; 128];
         let mut art_of = [ART_NONE; 128];
         let mut claimed = [false; 128];
         let mut vacated = [false; 128];
 
-        for kit_piece in KitPieceId::ALL {
-            for (ai, art) in kit.arts(kit_piece).iter().enumerate().take(MAX_ARTS) {
-                let over = bank.notes[kit_piece as usize][ai];
-                let n1 = over.n1.unwrap_or(art.note1);
-                claim(
-                    &mut pack_of,
-                    &mut art_of,
-                    &mut claimed,
-                    n1,
-                    art.note1,
-                    kit_piece,
-                    ai,
-                );
-                if n1 != art.note1 {
-                    vacated[art.note1 as usize] = true;
-                }
-                let n2 = if over.n2_off {
-                    None
-                } else {
-                    over.n2.or(art.note2)
-                };
-                match (n2, art.note2) {
-                    (Some(n), Some(d)) => {
-                        let pack = d;
+        // Explicit assignments win collisions with factory notes, regardless
+        // of the kit-piece iteration order.
+        for explicit_pass in [false, true] {
+            for kit_piece in KitPieceId::ALL {
+                for (ai, art) in kit.arts(kit_piece).iter().enumerate().take(MAX_ARTS) {
+                    let over = bank.notes[kit_piece as usize][ai];
+                    let n1 = over.n1.unwrap_or(art.note1);
+                    if over.n1.is_some() == explicit_pass && n1 < 128 {
                         claim(
                             &mut pack_of,
                             &mut art_of,
                             &mut claimed,
-                            n,
-                            pack,
-                            kit_piece,
-                            ai,
-                        );
-                        if n != d {
-                            vacated[d as usize] = true;
-                        }
-                    }
-                    (Some(n), None) => {
-                        claim(
-                            &mut pack_of,
-                            &mut art_of,
-                            &mut claimed,
-                            n,
+                            n1,
                             art.note1,
                             kit_piece,
                             ai,
                         );
+                        explicit[n1 as usize] = u8::from(explicit_pass);
                     }
-                    (None, Some(d)) => {
-                        vacated[d as usize] = true;
+                    if n1 != art.note1 {
+                        vacated[art.note1 as usize] = true;
                     }
-                    (None, None) => {}
+                    let n2 = if over.n2_off {
+                        None
+                    } else {
+                        over.n2.or(art.note2)
+                    };
+                    match (n2, art.note2) {
+                        (Some(n), Some(d)) => {
+                            let pack = d;
+                            if over.n2.is_some() == explicit_pass && n < 128 {
+                                claim(
+                                    &mut pack_of,
+                                    &mut art_of,
+                                    &mut claimed,
+                                    n,
+                                    pack,
+                                    kit_piece,
+                                    ai,
+                                );
+                                explicit[n as usize] = u8::from(explicit_pass);
+                            }
+                            if n != d {
+                                vacated[d as usize] = true;
+                            }
+                        }
+                        (Some(n), None) => {
+                            if over.n2.is_some() == explicit_pass && n < 128 {
+                                claim(
+                                    &mut pack_of,
+                                    &mut art_of,
+                                    &mut claimed,
+                                    n,
+                                    art.note1,
+                                    kit_piece,
+                                    ai,
+                                );
+                                explicit[n as usize] = u8::from(explicit_pass);
+                            }
+                        }
+                        (None, Some(d)) => {
+                            vacated[d as usize] = true;
+                        }
+                        (None, None) => {}
+                    }
                 }
             }
         }
@@ -260,6 +278,7 @@ impl NoteMapState {
             self.pack_of[i].store(pack_of[i], Ordering::Relaxed);
             self.silenced[i].store(silenced[i], Ordering::Relaxed);
             self.art_of[i].store(art_of[i], Ordering::Relaxed);
+            self.explicit[i].store(explicit[i], Ordering::Relaxed);
         }
         let _ = (UNMAPPED, N2_OFF, DEFAULT_SLOT);
     }

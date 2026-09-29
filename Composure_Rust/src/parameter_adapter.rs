@@ -4,7 +4,7 @@ use crate::dsp::core_math::db_to_linear;
 use crate::dsp::envelope::{EnvelopeParams, ReleaseMode};
 use crate::dsp::harmonics::HarmonicParams;
 use crate::dsp::param_sync::BlockParamState;
-use crate::params::{ComposureParams, DetectionMode, HarmonicType, ProgramReleaseMode};
+use crate::params::{ComposureParams, DetectionMode, HarmonicType};
 
 pub(crate) fn capture_block_state(params: &ComposureParams) -> BlockParamState {
     BlockParamState {
@@ -28,10 +28,11 @@ pub(crate) fn capture_block_state(params: &ComposureParams) -> BlockParamState {
 }
 
 fn capture_envelope(params: &ComposureParams) -> EnvelopeParams {
-    let prog_release_mode = match params.prog_release_mode.value() {
-        ProgramReleaseMode::InputDependent => ReleaseMode::InputDependent,
-        ProgramReleaseMode::GrDependent => ReleaseMode::GrDependent,
-        ProgramReleaseMode::RateOfChange => ReleaseMode::RateOfChange,
+    let prog_release_mode = match (params.program_input_enabled(), params.program_gr_enabled()) {
+        (true, true) => ReleaseMode::InputAndGr,
+        (true, false) => ReleaseMode::InputDependent,
+        (false, true) => ReleaseMode::GrDependent,
+        (false, false) => ReleaseMode::Disabled,
     };
     EnvelopeParams {
         attack: params.attack.value() as f64,
@@ -43,6 +44,7 @@ fn capture_envelope(params: &ComposureParams) -> EnvelopeParams {
         prog_release_mode,
         prog_release_inverse: params.prog_release_inverse.value(),
         prog_release_blend: params.prog_release_blend.value() as f64,
+        input_rate_amount: params.input_rate_amount.value() as f64,
         input_level_threshold_db: params.input_level_threshold_db.value() as f64,
         input_level_threshold_2_db: params.input_level_threshold_2_db.value() as f64,
         gr_blend_threshold_reduction_db: params.gr_blend_threshold_reduction_db.value() as f64,
@@ -73,6 +75,7 @@ fn capture_harmonics(params: &ComposureParams) -> HarmonicParams {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nih_plug::prelude::Param;
 
     #[test]
     fn default_host_values_capture_plain_settings() {
@@ -85,5 +88,22 @@ mod tests {
         assert_eq!(captured.harmonic_params.harmonic_type, 0);
         assert!(captured.harmonics_on);
         assert!(captured.target_makeup_gain_linear.is_finite());
+        assert_eq!(params.rms_normalization.name(), "Adaptive");
+    }
+
+    #[test]
+    fn program_enables_are_independent_booleans() {
+        use nih_plug::prelude::BoolParam;
+        for (input, gr, expected) in [
+            (true, true, ReleaseMode::InputAndGr),
+            (false, false, ReleaseMode::Disabled),
+            (true, false, ReleaseMode::InputDependent),
+            (false, true, ReleaseMode::GrDependent),
+        ] {
+            let mut params = ComposureParams::default();
+            params.program_input_enable = BoolParam::new("Program Input", input);
+            params.program_gr_enable = BoolParam::new("Program GR", gr);
+            assert_eq!(capture_envelope(&params).prog_release_mode, expected);
+        }
     }
 }

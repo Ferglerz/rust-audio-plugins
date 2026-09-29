@@ -20,25 +20,20 @@ mod graph_pages;
 mod graph_view;
 #[path = "graph/graph_view_draw.rs"]
 mod graph_view_draw;
-mod image_draw;
 #[path = "controls/image_knob.rs"]
 mod image_knob;
 #[path = "controls/image_switch.rs"]
 mod image_switch;
 mod layout;
-#[path = "controls/parallax_slider.rs"]
-mod parallax_slider;
+#[path = "controls/param_button.rs"]
+mod param_button;
 #[path = "controls/param_widget_ext.rs"]
 mod param_widget_ext;
-#[path = "controls/readout_controls.rs"]
-mod readout_controls;
 #[path = "controls/step_points.rs"]
 mod step_points;
-mod texture_cache;
 mod theme;
 #[path = "graph/threshold_lines.rs"]
 mod threshold_lines;
-mod ui_assets;
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -49,32 +44,42 @@ use nih_plug_vizia::vizia::prelude::*;
 use nih_plug_vizia::widgets::ResizeHandle;
 use nih_plug_vizia::{create_vizia_editor, ViziaState, ViziaTheming};
 
-/// Scaled from `../Composure/Images/BG.png` at 32% (1182×504).
-const EDITOR_BG_IMAGE: &str = "composure_bg.png";
-
 use crate::params::ComposureParams;
 
+pub use appearance::{
+    PLEASANT_EDITOR_HEIGHT as EDITOR_HEIGHT, PLEASANT_EDITOR_WIDTH as EDITOR_WIDTH,
+};
 pub use display::UiDisplay;
-pub use theme::{EDITOR_HEIGHT, EDITOR_WIDTH};
 
 #[derive(Lens, Clone)]
 pub struct EditorData {
     pub params: Arc<ComposureParams>,
     pub display: Arc<UiDisplay>,
     pub appearance: u8,
+    pub appearance_choice: pleasant_ui::preferences::Appearance,
     pub font: Arc<std::sync::OnceLock<nih_plug_vizia::vizia::vg::FontId>>,
 }
 
 impl Model for EditorData {
     fn event(&mut self, cx: &mut EventContext, event: &mut Event) {
         event.map(|mode: &appearance::SetAppearance, _| {
-            self.appearance = mode.0;
-            appearance::decode(mode.0).write("Composure");
+            self.appearance_choice = appearance::decode(mode.0);
+            self.appearance_choice.write("Composure");
+            self.appearance = appearance::encode(self.appearance_choice.resolved());
             self.params
                 .editor_width
-                .store(appearance::editor_width(mode.0), Ordering::Relaxed);
+                .store(appearance::editor_width(self.appearance), Ordering::Relaxed);
             cx.emit(nih_plug_vizia::widgets::GuiContextEvent::Resize);
             cx.needs_redraw();
+        });
+        event.map(|_: &appearance::RefreshAppearance, _| {
+            if self.appearance_choice == pleasant_ui::preferences::Appearance::Auto {
+                let resolved = appearance::encode(self.appearance_choice.resolved());
+                if self.appearance != resolved {
+                    self.appearance = resolved;
+                    cx.needs_redraw();
+                }
+            }
         });
     }
 }
@@ -82,7 +87,6 @@ impl Model for EditorData {
 fn place_gr_meter<L, R, P, X>(
     cx: &mut Context,
     x: X,
-    second: bool,
     gr_db: L,
     range_db: R,
     params: P,
@@ -97,39 +101,19 @@ fn place_gr_meter<L, R, P, X>(
         .position_type(PositionType::SelfDirected)
         .left(x)
         .top(EditorData::appearance.map(|mode| Pixels(appearance::graph_y(*mode))))
-        .width(EditorData::appearance.map(move |mode| {
-            Pixels(if *mode == 2 || second {
-                theme::METER_W
-            } else {
-                appearance::PLEASANT_METERS_W
-            })
-        }))
-        .height(EditorData::appearance.map(|mode| {
-            Pixels(if *mode == 2 {
-                appearance::graph_size(*mode)
-            } else {
-                appearance::PLEASANT_METER_HEIGHT
-            })
-        }))
-        .display(EditorData::appearance.map(move |mode| {
-            if second && *mode != 2 {
-                Display::None
-            } else {
-                Display::Flex
-            }
-        }));
+        .width(Pixels(appearance::PLEASANT_METERS_W))
+        .height(Pixels(appearance::PLEASANT_METER_HEIGHT));
 }
 
 pub fn preferred_editor_width() -> u32 {
-    let mode = appearance::encode(pleasant_ui::preferences::Appearance::read("Composure"));
+    let mode = appearance::encode(appearance::read_choice());
     appearance::editor_width(mode)
 }
 
 pub fn default_editor_state(width: Arc<std::sync::atomic::AtomicU32>) -> Arc<ViziaState> {
     ViziaState::new_screen_sized("Composure", move || {
         let width = width.load(Ordering::Relaxed);
-        let mode = if width == EDITOR_WIDTH { 2 } else { 0 };
-        (width, appearance::editor_height(mode))
+        (width, EDITOR_HEIGHT)
     })
 }
 
@@ -152,34 +136,17 @@ fn build_editor_contents(cx: &mut Context, params: Arc<ComposureParams>, display
         nih_error!("Failed to load stylesheet: {err:?}");
     }
 
-    ui_assets::register_editor_images(cx);
-    texture_cache::clear_gpu_textures();
-
     EditorData {
         params: params.clone(),
         display: display.clone(),
-        appearance: appearance::encode(pleasant_ui::preferences::Appearance::read("Composure")),
+        appearance: appearance::encode(appearance::read_choice().resolved()),
+        appearance_choice: appearance::read_choice(),
         font: Arc::new(std::sync::OnceLock::new()),
     }
     .build(cx);
     graph_pages::build_model(cx);
 
     ZStack::new(cx, |cx| {
-        Element::new(cx)
-            .class("editor-bg")
-            .display(EditorData::appearance.map(|m| {
-                if *m == 2 {
-                    Display::Flex
-                } else {
-                    Display::None
-                }
-            }))
-            .position_type(PositionType::SelfDirected)
-            .left(Pixels(0.0))
-            .top(Pixels(0.0))
-            .width(Pixels(EDITOR_WIDTH as f32))
-            .height(Pixels(EDITOR_HEIGHT as f32));
-
         appearance::Background::new(cx)
             .position_type(PositionType::SelfDirected)
             .width(Stretch(1.0))
@@ -197,23 +164,12 @@ fn build_editor_contents(cx: &mut Context, params: Arc<ComposureParams>, display
             let range_lens =
                 EditorData::params.map(|p| p.graph_range_mode.value().range_db() as f32);
             graph_pages::build(cx, params.clone(), display.clone());
-            graph_chrome::build_analog_readout(cx, EditorData::display);
 
             place_gr_meter(
                 cx,
                 EditorData::appearance.map(|mode| Pixels(appearance::meter_x(*mode).0)),
-                false,
                 gr_lens.clone(),
                 range_lens.clone(),
-                EditorData::params,
-                display.clone(),
-            );
-            place_gr_meter(
-                cx,
-                EditorData::appearance.map(|mode| Pixels(appearance::meter_x(*mode).1)),
-                true,
-                gr_lens,
-                range_lens,
                 EditorData::params,
                 display.clone(),
             );
@@ -227,7 +183,7 @@ fn build_editor_contents(cx: &mut Context, params: Arc<ComposureParams>, display
     })
     .id("root")
     .class("composure")
-    .toggle_class("pleasant", EditorData::appearance.map(|m| *m != 2))
+    .class("pleasant")
     .toggle_class("light", EditorData::appearance.map(|m| *m == 1))
     .width(Stretch(1.0))
     .height(Stretch(1.0));
@@ -238,4 +194,28 @@ fn build_editor_contents(cx: &mut Context, params: Arc<ComposureParams>, display
         .bottom(Pixels(0.0))
         .width(Pixels(16.0))
         .height(Pixels(16.0));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn editor_construction_finishes_without_hanging() {
+        let (finished, result) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let mut cx = Context::new(WindowSize::new(1182, 504), 1.0);
+            build_editor_contents(
+                &mut cx,
+                Arc::new(ComposureParams::default()),
+                Arc::new(UiDisplay::default()),
+            );
+            finished.send(()).unwrap();
+        });
+
+        result
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("Composure editor construction must finish within five seconds");
+        worker.join().unwrap();
+    }
 }

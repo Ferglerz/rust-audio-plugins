@@ -347,11 +347,7 @@ impl StripView {
         }
     }
     pub(super) fn knob_value_rect(r: (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
-        if r.2 <= 64.0 && r.3 <= 96.0 {
-            (r.0 + 6.0, r.1 + 63.0, r.2 - 12.0, 19.0)
-        } else {
-            (r.0 + 8.0, r.1 + r.3 - 28.0, r.2 - 16.0, 22.0)
-        }
+        pleasant_ui::draw::KnobLayout::new(r).value_rect(r.0 + 8.0, r.2 - 16.0)
     }
     pub(super) fn global_value_rect(&self, i: usize) -> (f32, f32, f32, f32) {
         if self.dyn_page.get() == DynPage::Main && matches!(i, 0 | 14) {
@@ -435,6 +431,31 @@ impl StripView {
         fields.push((ValueTarget::Global(15), output_gain_value_rect()));
         fields
     }
+    pub(super) fn value_baseline(&self, target: ValueTarget) -> f32 {
+        match target {
+            ValueTarget::Band(_) | ValueTarget::Lift(0..=2) => hud_control_text_y(),
+            ValueTarget::Lift(i) => band_rect_at(i - 3, self.gx(), self.gw()).1 + 18.0,
+            ValueTarget::Global(15) => output_gain_rect().1 + 13.0,
+            ValueTarget::Global(i) => {
+                if (matches!(i, 0 | 14) && self.dyn_page.get() == DynPage::Main)
+                    || (i == 1 && self.pse_page.get() == PsePage::Main)
+                    || (i == 18 && self.wall_page.get() == WallPage::Main)
+                {
+                    meter_value_y()
+                } else {
+                    let r = if self.pse_controls().contains(&i) {
+                        self.pse_knob_rect(i)
+                    } else if self.wall_controls().contains(&i) {
+                        self.wall_knob_rect(i)
+                    } else {
+                        self.global_rect(i)
+                    };
+                    pleasant_ui::draw::KnobLayout::new(r).value_y
+                }
+            }
+        }
+    }
+
     pub(super) fn value_color(&self, target: ValueTarget) -> C {
         match target {
             ValueTarget::Global(1 | 7 | 8 | 9 | 10) => PSE_BLUE,

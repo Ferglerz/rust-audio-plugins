@@ -1,5 +1,24 @@
 use super::*;
 impl Engine {
+    /// Infer MPE only from expression on an occupied member channel while
+    /// multiple member channels each hold a single note. Notes alone are not evidence.
+    pub fn member_expression_is_mpe(&self, channel: u8) -> bool {
+        if channel >= 16 || !self.is_member(channel) {
+            return false;
+        }
+        let held = |ch: u8| {
+            self.down[ch as usize * 128..(ch as usize + 1) * 128]
+                .iter()
+                .filter(|&&v| v)
+                .count()
+        };
+        held(channel) == 1
+            && (0..16)
+                .filter(|&ch| self.is_member(ch) && held(ch) == 1)
+                .count()
+                >= 2
+    }
+
     pub fn midi_note(
         &mut self,
         on: bool,
@@ -59,7 +78,7 @@ impl Engine {
         if channel >= 16 || !value.is_finite() {
             return;
         }
-        if self.learn > 0 && self.learn <= 3 && !self.is_member(channel) {
+        if self.learn > 0 && self.learn <= 2 && !self.is_member(channel) {
             self.learned = Some((
                 (self.learn - 1) as usize,
                 Mapping {
@@ -71,10 +90,10 @@ impl Engine {
             self.learn = 0;
             return;
         }
-        for axis in 0..3 {
+        for axis in 0..2 {
             let m = self.config.mappings[axis];
             if m.kind == 3 && m.channel == channel && !self.is_member(channel) {
-                self.mapped(axis, value, out);
+                self.position(value, axis, out);
                 return;
             }
         }
@@ -150,29 +169,26 @@ impl Engine {
             }
             _ => {}
         }
-        // Never learn or intercept Osmose's member timbre dimension.
-        if self.learn > 0 && self.learn <= 3 && !(cc == 74 && self.is_member(channel)) {
+        // Do not automatically learn Osmose's member timbre dimension.
+        if self.learn > 0 && self.learn <= 2 && !(cc == 74 && self.is_member(channel)) {
             self.learned = Some(((self.learn - 1) as usize, Mapping::cc(cc, channel)));
             self.learn = 0;
             return;
         }
-        for axis in 0..3 {
+        for axis in 0..2 {
             let m = self.config.mappings[axis];
             if m.channel != 16 && m.channel != channel {
                 continue;
             }
-            if cc == 74 && self.is_member(channel) {
-                continue;
-            }
             if m.kind == 1 && cc == m.number {
-                self.mapped(axis, value, out);
+                self.position(value, axis, out);
                 return;
             }
             if m.kind == 2 && m.number < 32 && (cc == m.number || cc == m.number + 32) {
                 let data = &self.cc[channel as usize];
                 let val =
                     ((data[m.number as usize] as u16) << 7) | data[m.number as usize + 32] as u16;
-                self.mapped(axis, val as f32 / 16383.0, out);
+                self.position(val as f32 / 16383.0, axis, out);
                 return;
             }
         }
@@ -188,14 +204,6 @@ impl Engine {
             }
         } else if !self.is_member(channel) {
             out(Out::Cc(self.master(), cc, value));
-        }
-    }
-    fn mapped(&mut self, axis: usize, value: f32, out: &mut impl FnMut(Out)) {
-        if axis == 2 {
-            self.gate_open = value >= 0.5;
-            self.x_primed = false;
-        } else {
-            self.position(value, axis, out);
         }
     }
     fn input_master(&self) -> u8 {

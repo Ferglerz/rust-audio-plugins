@@ -1,4 +1,8 @@
-use std::{path::PathBuf, sync::Mutex};
+use std::{
+    path::PathBuf,
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
 pub fn app_appearance_path(app_name: &str) -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
@@ -27,46 +31,70 @@ pub fn write_appearance(app_name: &str, light: bool) {
     }
 }
 
+/// UI-only appearance preference, separate from host/preset state.
 pub struct AppearanceStore {
     app_name: &'static str,
-    light: Mutex<bool>,
+    appearance: Mutex<Appearance>,
 }
 
 impl AppearanceStore {
     pub fn new(app_name: &'static str) -> Self {
-        let is_light = read_appearance(app_name);
         Self {
             app_name,
-            light: Mutex::new(is_light),
+            appearance: Mutex::new(Appearance::read(app_name)),
         }
     }
 
+    pub fn mode(&self) -> Appearance {
+        *self.appearance.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn label(&self) -> &'static str {
+        self.mode().label()
+    }
+
+    /// Call from the editor thread, never from audio processing.
     pub fn light(&self) -> bool {
-        match self.light.lock() {
-            Ok(guard) => *guard,
-            Err(poisoned) => *poisoned.into_inner(),
-        }
+        self.mode().resolved() == Appearance::Light
     }
 
     pub fn toggle(&self) -> bool {
-        let mut light = match self.light.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
+        let mut mode = self.appearance.lock().unwrap_or_else(|e| e.into_inner());
+        *mode = match *mode {
+            Appearance::Dark => Appearance::Light,
+            Appearance::Light => Appearance::Auto,
+            _ => Appearance::Dark,
         };
-        *light = !*light;
-        write_appearance(self.app_name, *light);
-        *light
+        mode.write(self.app_name);
+        mode.resolved() == Appearance::Light
     }
 }
 
-/// Optional third skin for plugins that provide an image-based interface.
-/// Existing two-state callers keep using `AppearanceStore` unchanged.
+/// Cache system reads across editors; no worker survives a plugin unload.
+/// Editors repaint regularly, so Auto follows changes within about a second.
+fn system_appearance() -> Appearance {
+    static CACHE: Mutex<Option<(Instant, Appearance)>> = Mutex::new(None);
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((checked, mode)) = *cache {
+        if checked.elapsed() < Duration::from_secs(1) {
+            return mode;
+        }
+    }
+    let mode = match dark_light::detect() {
+        Ok(dark_light::Mode::Light) => Appearance::Light,
+        _ => Appearance::Dark,
+    };
+    *cache = Some((Instant::now(), mode));
+    mode
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Appearance {
     #[default]
     Dark,
     Light,
     Analog,
+    Auto,
 }
 
 impl Appearance {
@@ -74,7 +102,26 @@ impl Appearance {
         match self {
             Self::Dark => Self::Light,
             Self::Light => Self::Analog,
-            Self::Analog => Self::Dark,
+            Self::Analog => Self::Auto,
+            Self::Auto => Self::Dark,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Dark => "DARK",
+            Self::Light => "LIGHT",
+            Self::Analog => "ANALOG",
+            Self::Auto => "AUTO",
+        }
+    }
+
+    /// Resolve Auto on the editor thread while keeping the saved choice intact.
+    pub fn resolved(self) -> Self {
+        if self == Self::Auto {
+            system_appearance()
+        } else {
+            self
         }
     }
 
@@ -87,6 +134,7 @@ impl Appearance {
         match value.trim() {
             "light" => Self::Light,
             "analog" => Self::Analog,
+            "auto" => Self::Auto,
             _ => Self::Dark,
         }
     }
@@ -96,6 +144,7 @@ impl Appearance {
             Self::Dark => "dark",
             Self::Light => "light",
             Self::Analog => "analog",
+            Self::Auto => "auto",
         }
     }
 
@@ -114,9 +163,14 @@ mod appearance_tests {
     use super::Appearance;
 
     #[test]
-    fn three_state_cycle_and_persistence_compatibility() {
+    fn appearance_cycle_and_persistence_compatibility() {
         let mut mode = Appearance::Dark;
-        for expected in [Appearance::Light, Appearance::Analog, Appearance::Dark] {
+        for expected in [
+            Appearance::Light,
+            Appearance::Analog,
+            Appearance::Auto,
+            Appearance::Dark,
+        ] {
             mode = mode.next();
             assert_eq!(mode, expected);
             assert_eq!(Appearance::parse(&format!("{}\n", mode.as_str())), mode);

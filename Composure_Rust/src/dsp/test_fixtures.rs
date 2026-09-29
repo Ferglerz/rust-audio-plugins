@@ -68,12 +68,7 @@ pub fn below_floor_unity_graph() -> CompressionGraph {
     g
 }
 
-pub fn gr_at(
-    lut: &CompressionLUT,
-    detector_db: f64,
-    offset_db: f64,
-    strength: f64,
-) -> (f64, bool) {
+pub fn gr_at(lut: &CompressionLUT, detector_db: f64, offset_db: f64, strength: f64) -> (f64, bool) {
     let result = calculate_gain_reduction_from_db(lut, detector_db, offset_db, strength);
     (result.target_gr_db, result.skipped)
 }

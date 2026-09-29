@@ -317,15 +317,11 @@ fn hover_preview_band_curve_and_fading_ranges() {
 }
 
 #[test]
-fn shift_drag_raises_q_downward_and_cmd_range_uses_graph_axis() {
+fn shift_drag_raises_q_downward_and_threshold_tracks_drag() {
     let q = q_from_shift_drag(1.0, -40.0);
     assert!(q > 1.0, "drag down raises Q, got {q}");
     let q_up = q_from_shift_drag(1.0, 40.0);
     assert!(q_up < 1.0, "drag up lowers Q, got {q_up}");
-    assert_eq!(default_dyn_range(24.0), 18.0);
-    assert_eq!(default_dyn_range(12.0), 9.0);
-    assert_eq!(default_dyn_range(6.0), 5.0);
-    assert_eq!(default_dyn_range(72.0), 24.0);
     assert!(threshold_from_drag(-24.0, 20.0) > -24.0);
     assert!(threshold_from_drag(-24.0, -20.0) < -24.0);
 }
@@ -694,25 +690,37 @@ fn curved_range_grips_are_grabbable_at_high_q() {
         dynamic: false,
         ..b
     };
-    assert!(!range_grip_hit(&off, lines[0][16].0, lines[0][16].1, graph, rates));
+    assert!(!range_grip_hit(
+        &off,
+        lines[0][16].0,
+        lines[0][16].1,
+        graph,
+        rates
+    ));
 }
 
 #[test]
-fn narrow_q_meter_clears_response_edges() {
-    let b = Band {
-        dynamic: true,
-        gain: 18.0,
-        range: 4.0,
-        q: 18.0,
-        ..Band::default()
-    };
-    let geom = dyn_meter_geom(&b, 24.0, GX, GW);
-    let (_, bottom) = meter_curve_extents(&b, 24.0, GX, GW, geom.rule_half_w);
-    assert!(!geom.inline && !geom.detached_above);
-    assert!(geom.y0 >= bottom + DYN_METER_PAD);
-    let wide = Band { q: 0.5, ..b };
-    let wide_geom = dyn_meter_geom(&wide, 24.0, GX, GW);
-    assert!(geom.y0 > wide_geom.y0);
+fn band_meter_keeps_fixed_node_edge_padding_for_all_shapes_and_ranges() {
+    for shape in [Shape::Bell, Shape::LowShelf, Shape::HighShelf] {
+        for q in [0.5, 3.0, 18.0] {
+            for gain in [-22.0, -18.0, 0.0, 18.0, 22.0] {
+                for range in [-44.0, -12.0, -1.0, 0.0, 1.0, 12.0, 44.0] {
+                    let b = Band {
+                        shape,
+                        q,
+                        gain,
+                        range,
+                        dynamic: true,
+                        ..Band::default()
+                    };
+                    let geom = dyn_meter_geom(&b, 24.0, GX, GW);
+                    let gap = (geom.y0 - geom.node_y).abs() - DYN_PILL_R;
+                    assert!((gap - DYN_METER_PAD).abs() < 0.01,
+                        "node edge gap changed: {shape:?}, Q={q}, gain={gain}, range={range}, gap={gap}");
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -789,5 +797,35 @@ fn range_grip_endpoints_follow_response_normals() {
                 }
             }
         }
+    }
+}
+
+#[test]
+fn band_meter_padding_clears_inline_nodes_and_matches_detached_edges() {
+    for (gain, range) in [(22.0, 44.0), (-22.0, -44.0)] {
+        let b = Band {
+            dynamic: true,
+            gain,
+            range,
+            threshold: -24.0,
+            ..Band::default()
+        };
+        let geom = dyn_meter_geom(&b, 24.0, GX, GW);
+        assert!(geom.inline, "large range should contain its meter");
+        assert!(((geom.y0 - geom.node_y).abs() - DYN_INLINE_NODE_PAD).abs() < 0.01);
+        assert!(((geom.y60 - geom.range_y).abs() - DYN_METER_PAD).abs() < 0.01);
+        assert!((geom.y_to_threshold(geom.thresh_y) - b.threshold).abs() < 0.001);
+    }
+    for gain in [-18.0, 18.0] {
+        let b = Band {
+            dynamic: true,
+            gain,
+            range: 1.0,
+            ..Band::default()
+        };
+        let geom = dyn_meter_geom(&b, 24.0, GX, GW);
+        assert!(!geom.inline);
+        let gap = (geom.y0 - geom.node_y).abs() - DYN_PILL_R;
+        assert!((gap - DYN_METER_PAD).abs() < 0.01);
     }
 }

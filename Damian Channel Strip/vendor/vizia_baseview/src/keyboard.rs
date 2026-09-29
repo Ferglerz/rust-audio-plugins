@@ -5,16 +5,24 @@ use baseview::{Event, EventStatus};
 use vizia_core::{backend::BackendContext, prelude::*};
 use vizia_input::{Code, Key, KeyState, KeyboardModifiers};
 
+/// Report a keyboard event that a custom Vizia view consumed.
+#[derive(Clone, Copy, Debug)]
+pub struct KeyboardEventCaptured;
+
 pub(crate) struct TextInputKeyboard {
+    handled: Rc<Cell<bool>>,
     editor: Rc<Cell<Option<Entity>>>,
     captured: HashSet<Code>,
 }
 
 impl TextInputKeyboard {
     pub(crate) fn new(cx: &mut Context) -> Self {
+        let handled = Rc::new(Cell::new(false));
+        let listener_handled = handled.clone();
         let editor = Rc::new(Cell::new(None));
         let listener_editor = editor.clone();
         cx.add_global_listener(move |_, event| {
+            event.map(|_: &KeyboardEventCaptured, _| listener_handled.set(true));
             event.map(|event: &TextEvent, meta| {
                 match event {
                     TextEvent::StartEdit => listener_editor.set(Some(meta.target)),
@@ -25,7 +33,23 @@ impl TextInputKeyboard {
                 }
             });
         });
-        Self { editor, captured: HashSet::new() }
+        Self { handled, editor, captured: HashSet::new() }
+    }
+
+    pub(crate) fn begin_event(&self) {
+        self.handled.set(false);
+    }
+
+    pub(crate) fn finish_event(&mut self, event: &Event, status: EventStatus) -> EventStatus {
+        if cfg!(target_os = "macos") && self.handled.get() {
+            if let Event::Keyboard(key) = event {
+                if key.state == KeyState::Down {
+                    self.captured.insert(key.code);
+                }
+                return EventStatus::Captured;
+            }
+        }
+        status
     }
 
     pub(crate) fn status(&mut self, cx: &mut Context, event: &Event) -> EventStatus {

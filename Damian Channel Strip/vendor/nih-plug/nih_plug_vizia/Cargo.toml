@@ -12,6 +12,7 @@ nih_plug = { path = "..", default-features = false }
 nih_plug_assets = { git = "https://github.com/robbert-vdh/nih_plug_assets.git" }
 
 baseview = { path = "../../baseview" }
+vizia_baseview = { path = "../../vizia_baseview" }
 # This contains an as of writing not yet merged patch for rounding errors when
 # resizing, and a workaround for certain events not firing when resizing
 vizia = { git = "https://github.com/robbert-vdh/vizia.git", tag = "patched-2024-05-06", default-features = false, features = ["baseview", "clipboard", "x11"] }

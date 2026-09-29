@@ -82,7 +82,10 @@ fn hud_axis_row_sits_on_freq_axis_and_keeps_values_in_strip() {
     assert_eq!(HUD_Q_W, 84.0);
     assert_eq!(HUD_SHAPE_W, 172.0);
     assert_eq!(HUD_FREQ_W, 160.0);
-    assert_eq!(HUD_DYN_FIELD_H, 34.0);
+    assert_eq!(
+        HUD_DYN_FIELD_H,
+        34.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA
+    );
     assert_eq!(MODULE_TITLE_SIZE, 15.0);
     assert_eq!(HUD_LABEL_SIZE, MODULE_TITLE_SIZE);
     assert_eq!(HUD_VALUE_SIZE, HUD_LABEL_SIZE);
@@ -110,7 +113,7 @@ fn hud_axis_row_sits_on_freq_axis_and_keeps_values_in_strip() {
         );
         if i != 1 {
             assert!((field.1 + 16.0 - meter_value_y()).abs() < 0.01);
-            assert!(field.1 + field.3 <= MODULE_Y + MODULE_H - 10.0);
+            assert!(field.1 + field.3 <= MODULE_Y + MODULE_H - 6.0);
         }
         let value = hud_dyn_value_rect_at(&wide, 24.0, i, GX, GW);
         assert!(inside(value.0, value.1, field));
@@ -490,7 +493,15 @@ fn dynamics_routing_and_layout_geometry() {
     assert_eq!(HEADER_H, 82.0);
 
     let out_r = output_gain_rect();
-    assert_eq!(out_r, (UI_W - MARGIN - WALL_W, FOOTER_BTN_Y, WALL_W, 28.0));
+    assert_eq!(
+        out_r,
+        (
+            UI_W - MARGIN - WALL_W,
+            FOOTER_BTN_Y,
+            WALL_W,
+            28.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA
+        )
+    );
     assert_eq!(THEME_BUTTON, (32.0, FOOTER_BTN_Y, 88.0, 28.0));
     assert_eq!(PROCESS_BUTTON.0, 128.0);
     let thresh_val = view.global_value_rect(0);
@@ -721,4 +732,78 @@ fn lift_dock_is_above_the_graph_and_pse_controls_stack() {
     assert!(mode.1 + mode.3 <= voice.1);
     assert!(voice.1 + voice.3 <= meter.1);
     assert!(meter.1 + meter.3 + 18.0 < MODULE_Y + MODULE_H);
+}
+
+#[test]
+fn readout_underlines_follow_text_and_slider_tracks_leave_clearance() {
+    let view = test_view();
+    for page in [PsePage::Controls] {
+        view.pse_page.set(page);
+        for &i in view.pse_controls() {
+            let r = view.pse_knob_rect(i);
+            let text = pleasant_ui::draw::KnobLayout::new(r).value_y;
+            assert_eq!(view.value_baseline(ValueTarget::Global(i)), text);
+            assert!(pleasant_ui::value_edit::value_underline_y(text) + 0.5 < r.1 + r.3);
+        }
+    }
+    view.dyn_page.set(DynPage::Controls);
+    for &i in view.global_controls() {
+        let r = view.global_rect(i);
+        let text = pleasant_ui::draw::KnobLayout::new(r).value_y;
+        assert_eq!(view.value_baseline(ValueTarget::Global(i)), text);
+        assert!(pleasant_ui::value_edit::value_underline_y(text) + 0.5 < r.1 + r.3);
+    }
+    let b = Band {
+        dynamic: true,
+        ..Band::default()
+    };
+    for i in 2..5 {
+        let r = hud_dyn_field_rect_at(&b, 24.0, i, GX, GW);
+        let underline = pleasant_ui::value_edit::value_underline_y(hud_control_text_y());
+        let track_y = r.1 + 24.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA;
+        assert!(track_y - underline >= 3.0);
+        assert!(track_y + 5.0 < r.1 + r.3);
+    }
+}
+
+#[test]
+fn command_node_drag_moves_range_endpoint_and_preserves_gain_and_ratio() {
+    for dynamic in [false, true] {
+        for direction in [-1.0, 1.0] {
+            let mut view = test_view();
+            let band = Band {
+                id: 1,
+                gain: 6.0,
+                range: 8.0,
+                dynamic,
+                ratio: 4.0,
+                ..Band::default()
+            };
+            *view.params.bands.lock().unwrap() = vec![band.clone()];
+            view.select(Some(1));
+            let x = view.freq_x(band.freq);
+            let y = db_y(band.gain, view.graph_db);
+            view.drag = Some(Target::Node(1));
+            view.last_drag = (x, y);
+            let mut context = Context::default();
+            let mut cx = EventContext::new(&mut context);
+            let dy = GH * 0.1 * direction;
+            view.apply_drag(&mut cx, x + 20.0, y + dy, false, true, false);
+            let changed = view.find_band(1).unwrap();
+            let initial_endpoint = if dynamic {
+                band.gain - band.range
+            } else {
+                band.gain
+            };
+            let endpoint_delta = -(dy as f64) * 2.0 * view.graph_db / GH as f64;
+            assert!(
+                (changed.gain - changed.range - initial_endpoint - endpoint_delta).abs() < 1e-5
+            );
+            assert!(changed.dynamic);
+            assert_eq!(changed.gain, band.gain);
+            assert_eq!(changed.freq, band.freq);
+            assert_eq!(changed.ratio, band.ratio);
+            assert_eq!(changed.threshold, band.threshold);
+        }
+    }
 }

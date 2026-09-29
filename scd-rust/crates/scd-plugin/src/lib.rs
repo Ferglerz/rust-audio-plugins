@@ -193,14 +193,24 @@ impl Plugin for ScdPlugin {
 }
 
 impl ScdPlugin {
+    fn resolve_note(&self, note: u8) -> note_map::ResolvedNote {
+        let mapped = self.params.note_maps.resolve(note);
+        if mapped.explicit || mapped.silenced {
+            mapped
+        } else {
+            self.params
+                .note_maps
+                .resolve(self.hihat_tracker.translate_note(note))
+        }
+    }
+
     fn handle_midi(&mut self, event: NoteEvent<()>) {
         match event {
             NoteEvent::NoteOn { note, velocity, .. } => {
                 self.params.note_maps.offer_learn(note);
                 let vel_u8 = (velocity * 127.0).clamp(1.0, 127.0) as u8;
 
-                let play_note = self.hihat_tracker.translate_note(note);
-                let resolved = self.params.note_maps.resolve(play_note);
+                let resolved = self.resolve_note(note);
                 let pack_note = if resolved.silenced {
                     return;
                 } else {
@@ -304,3 +314,70 @@ impl Vst3Plugin for ScdPlugin {
 
 nih_export_clap!(ScdPlugin);
 nih_export_vst3!(ScdPlugin);
+
+#[cfg(test)]
+mod note_resolution_tests {
+    use super::*;
+
+    #[test]
+    fn explicit_hihat_trigger_mappings_take_precedence() {
+        let mut plugin = ScdPlugin::default();
+        for note in [42, 46, 22, 26] {
+            plugin.params.note_maps.reset_all();
+            plugin
+                .params
+                .note_maps
+                .set_n1(KitPieceId::Kick, 1, Some(note));
+            for cc in [0, 50, 127] {
+                plugin.hihat_tracker.set_cc(cc);
+                let resolved = plugin.resolve_note(note);
+                assert_eq!(resolved.pack_note, 36, "note {note}, CC {cc}");
+                assert_eq!(resolved.kit_piece, Some(KitPieceId::Kick));
+                assert!(resolved.explicit);
+                assert!(!resolved.silenced);
+            }
+        }
+    }
+
+    #[test]
+    fn factory_hihat_triggers_still_follow_cc() {
+        let mut plugin = ScdPlugin::default();
+        for (cc, tip, shoulder) in [(0, 66, 60), (50, 68, 62), (127, 70, 64)] {
+            plugin.hihat_tracker.set_cc(cc);
+            for (note, expected) in [(42, tip), (46, tip), (22, shoulder), (26, shoulder)] {
+                let resolved = plugin.resolve_note(note);
+                assert_eq!(resolved.pack_note, expected, "note {note}, CC {cc}");
+                assert!(!resolved.silenced);
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_factory_hihat_note_bypasses_cc_translation() {
+        let mut plugin = ScdPlugin::default();
+        plugin
+            .params
+            .note_maps
+            .set_n1(KitPieceId::Hihat, 7, Some(42));
+        plugin.hihat_tracker.set_cc(127);
+        assert_eq!(plugin.resolve_note(42).pack_note, 42);
+        plugin
+            .params
+            .note_maps
+            .reset_slot(KitPieceId::Hihat, 7, false);
+        assert_eq!(plugin.resolve_note(42).pack_note, 70);
+    }
+
+    #[test]
+    fn moving_factory_hihat_trigger_keeps_old_note_silent() {
+        let plugin = ScdPlugin::default();
+        plugin
+            .params
+            .note_maps
+            .set_n1(KitPieceId::Hihat, 7, Some(5));
+        assert!(plugin.resolve_note(42).silenced);
+        let mapped = plugin.resolve_note(5);
+        assert!(!mapped.silenced);
+        assert_eq!(mapped.pack_note, 42);
+    }
+}

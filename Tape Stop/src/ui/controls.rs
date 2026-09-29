@@ -7,12 +7,8 @@ const THEME_BUTTON_W: f32 = 72.0;
 /// Right edge of the auto-trigger module (theme button aligns here).
 pub(super) const MODULE_RIGHT: f32 =
     GRAPH_X + GRAPH_W + DROP_SLIDER_GAP + DROP_SLIDER_W + TRIGGER_GAP + TRIGGER_W;
-pub(super) const THEME_BUTTON: (f32, f32, f32, f32) = (
-    MODULE_RIGHT - THEME_BUTTON_W,
-    22.0,
-    THEME_BUTTON_W,
-    26.0,
-);
+pub(super) const THEME_BUTTON: (f32, f32, f32, f32) =
+    (MODULE_RIGHT - THEME_BUTTON_W, 22.0, THEME_BUTTON_W, 26.0);
 
 pub(super) const DROP_SLIDER_GAP: f32 = 10.0;
 pub(super) const DROP_SLIDER_W: f32 = 40.0;
@@ -72,12 +68,7 @@ pub(super) fn trigger_title_rect() -> (f32, f32, f32, f32) {
 pub(super) fn trigger_chrome_rect() -> (f32, f32, f32, f32) {
     let column = trigger_column();
     let value = trigger_value_rect();
-    (
-        column.0,
-        column.1,
-        TRIGGER_W,
-        value.1 + value.3 - column.1,
-    )
+    (column.0, column.1, TRIGGER_W, value.1 + value.3 - column.1)
 }
 
 pub(super) fn trigger_bypass_rect() -> (f32, f32, f32, f32) {
@@ -178,19 +169,29 @@ impl TapeStopView {
     }
 
     pub(super) fn readout_at(&self, x: f32, y: f32) -> Option<KnobId> {
-        if Self::inside(x, y, DROP_TIME_READOUT) { return Some(KnobId::DropTime); }
-        if self.knob_enabled(KnobId::RestartThresh) && Self::inside(x, y, trigger_value_rect()) { return Some(KnobId::RestartThresh); }
+        if Self::inside(x, y, DROP_TIME_READOUT) {
+            return Some(KnobId::DropTime);
+        }
+        if self.knob_enabled(KnobId::RestartThresh) && Self::inside(x, y, trigger_value_rect()) {
+            return Some(KnobId::RestartThresh);
+        }
         if self.show_axis_controls {
-            if Self::inside(x, y, midi_value_rect()) { return Some(self.midi_number_id()); }
-            return [KnobId::Return, KnobId::Xfade, KnobId::StereoDiv].into_iter()
+            if Self::inside(x, y, midi_value_rect()) {
+                return Some(self.midi_number_id());
+            }
+            return [KnobId::Return, KnobId::Xfade, KnobId::StereoDiv]
+                .into_iter()
                 .find(|id| Self::inside(x, y, axis_value_rect(Self::slider_rect(*id))));
         }
         None
     }
 
     pub(super) fn press_value(
-        &mut self, cx: &mut EventContext, target: KnobId,
-        rect: (f32, f32, f32, f32), origin: (f32, f32),
+        &mut self,
+        cx: &mut EventContext,
+        target: KnobId,
+        rect: (f32, f32, f32, f32),
+        origin: (f32, f32),
     ) {
         self.value_press = Some(pleasant_ui::pointer::ValuePress::new(target, rect, origin));
         cx.focus();
@@ -436,7 +437,7 @@ impl TapeStopView {
         if self.edit.is_none() {
             if let Some((hx, hy)) = self.idle_hover() {
                 if Self::inside(hx, hy, readout) {
-                    d.value_underline(readout, color);
+                    d.value_underline(readout, readout.1 + DROP_READOUT_TEXT_Y, color);
                 }
             }
         }
@@ -512,7 +513,7 @@ impl TapeStopView {
             if auto_on && self.edit.is_none() {
                 if let Some((hx, hy)) = self.idle_hover() {
                     if Self::inside(hx, hy, val_r) {
-                        d.value_underline(val_r, t_color);
+                        d.value_underline(val_r, val_r.1 + val_r.3 * 0.5 + 4.0, t_color);
                     }
                 }
             }
@@ -550,7 +551,7 @@ impl TapeStopView {
             if self.edit.is_none() {
                 if let Some((hx, hy)) = self.idle_hover() {
                     if Self::inside(hx, hy, val_r) {
-                        d.value_underline(val_r, midi_color);
+                        d.value_underline(val_r, val_r.1 + val_r.3 * 0.5 + 4.0, midi_color);
                     }
                 }
             }
@@ -619,7 +620,7 @@ impl TapeStopView {
             if self.edit.is_none() {
                 if let Some((hx, hy)) = self.idle_hover() {
                     if Self::inside(hx, hy, val_r) {
-                        d.value_underline(val_r, color);
+                        d.value_underline(val_r, val_r.1 + val_r.3 * 0.5 + 4.0, color);
                     }
                 }
             }

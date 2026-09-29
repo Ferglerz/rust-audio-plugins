@@ -29,7 +29,7 @@ const MENU_ROW_H: f32 = 26.0;
 const SHAPE_MENU: (f32, f32, f32, f32) = (
     SHAPE_RECT.0,
     ACTIONS_Y - MENU_ROW_H * DetectorShape::ALL.len() as f32 - 4.0,
-    SHAPE_RECT.2,
+    160.0,
     MENU_ROW_H * DetectorShape::ALL.len() as f32,
 );
 fn menu_shape(point: (f32, f32)) -> Option<DetectorShape> {
@@ -163,6 +163,9 @@ impl DetectorEqView {
         .build(cx, |cx| {
             let timer = cx.add_timer(std::time::Duration::from_millis(16), None, |cx, action| {
                 if matches!(action, TimerAction::Tick(_)) {
+                    // Reuse this timer: the pinned Vizia can spin when starting a second
+                    // timer during construction. Auto's system reads are cached for a second.
+                    cx.emit(super::appearance::RefreshAppearance);
                     cx.needs_redraw();
                 }
             });
@@ -585,8 +588,13 @@ impl View for DetectorEqView {
                     if selected || self.hover.is_some_and(|p| menu_shape(p) == Some(*shape)) {
                         d.rect(SHAPE_MENU.0, y, SHAPE_MENU.2, MENU_ROW_H, LINE);
                     }
+                    d.filter_curve(
+                        shape.eq_shape().biquad_kind(),
+                        (SHAPE_MENU.0 + 10.0, y + 5.0, 30.0, 16.0),
+                        if selected { GOLD } else { TEXT },
+                    );
                     d.text(
-                        SHAPE_MENU.0 + 10.0,
+                        SHAPE_MENU.0 + 50.0,
                         y + MENU_ROW_H * 0.5 + 13.0 * 0.32,
                         shape.label(),
                         13.0,
@@ -618,18 +626,18 @@ impl View for DetectorEqView {
                             set_once(cx, param, param.preview_normalized(shape));
                         }
                         self.close_menu(cx);
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, e, meta);
                         return;
                     }
                     if let Some(edit) = self.edit.as_mut() {
                         if contains(edit.rect, point) {
                             edit.handle_mouse_down(point.0);
                             cx.needs_redraw();
-                            meta.consume();
+                            nih_plug_vizia::consume_window_event(cx, e, meta);
                             return;
                         }
                         if !self.commit_edit(cx) {
-                            meta.consume();
+                            nih_plug_vizia::consume_window_event(cx, e, meta);
                             return;
                         }
                     }
@@ -641,7 +649,7 @@ impl View for DetectorEqView {
                         };
                         set_once(cx, param, if param.value() { 0.0 } else { 1.0 });
                         cx.needs_redraw();
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, e, meta);
                         return;
                     }
                     if let Some(target) = self.value_hit(point) {
@@ -683,7 +691,7 @@ impl View for DetectorEqView {
                         self.selected = None;
                     }
                     cx.needs_redraw();
-                    meta.consume();
+                    nih_plug_vizia::consume_window_event(cx, e, meta);
                 }
                 WindowEvent::MouseMove(_, _) => {
                     self.hover = Some(point);
@@ -736,7 +744,7 @@ impl View for DetectorEqView {
                                 ));
                             }
                         }
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, e, meta);
                     }
                     if let Some(mut press) = self.press.take() {
                         if press.press.update(point.0, point.1) {
@@ -757,7 +765,7 @@ impl View for DetectorEqView {
                             ));
                         }
                         self.press = Some(press);
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, e, meta);
                     }
                     cx.needs_redraw();
                 }
@@ -780,11 +788,11 @@ impl View for DetectorEqView {
                         ));
                     }
                     cx.needs_redraw();
-                    meta.consume();
+                    nih_plug_vizia::consume_window_event(cx, e, meta);
                 }
                 WindowEvent::MouseScroll(_, dy) => {
                     if self.shape_menu {
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, e, meta);
                         return;
                     }
                     if self.drag.is_none() && self.press.is_none() {
@@ -801,20 +809,20 @@ impl View for DetectorEqView {
                         if let Some(target) = target {
                             self.scroll(cx, target, *dy);
                             cx.needs_redraw();
-                            meta.consume();
+                            nih_plug_vizia::consume_window_event(cx, e, meta);
                         }
                     }
                 }
                 WindowEvent::MouseDown(MouseButton::Right) => {
                     if self.shape_menu {
                         self.close_menu(cx);
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, e, meta);
                         return;
                     }
                     if let Some(node) = self.hit(point) {
                         self.remove(cx, node);
                         cx.needs_redraw();
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, e, meta);
                     }
                 }
                 WindowEvent::KeyDown(code, key) => {
@@ -822,7 +830,7 @@ impl View for DetectorEqView {
                         if *code == Code::Escape {
                             self.close_menu(cx);
                         }
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, e, meta);
                         return;
                     }
                     if self.edit.is_some() {
@@ -846,12 +854,12 @@ impl View for DetectorEqView {
                             }
                         }
                         cx.needs_redraw();
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, e, meta);
                     } else if matches!(code, Code::Delete | Code::Backspace) {
                         if let Some(node) = self.selected {
                             self.remove(cx, node);
                             cx.needs_redraw();
-                            meta.consume();
+                            nih_plug_vizia::consume_window_event(cx, e, meta);
                         }
                     }
                 }
@@ -861,7 +869,7 @@ impl View for DetectorEqView {
                             edit.insert(&c.to_string());
                         }
                         cx.needs_redraw();
-                        meta.consume();
+                        nih_plug_vizia::consume_window_event(cx, e, meta);
                     }
                 }
                 WindowEvent::MouseLeave => {

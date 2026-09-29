@@ -27,7 +27,6 @@ pub struct Engine {
     pub x: f32,
     pub y: f32,
     pub y_active: bool,
-    pub gate_open: bool,
     pub x_primed: bool,
     pub last_string: i16,
     pub strikes: [u32; 12],
@@ -72,7 +71,6 @@ impl Default for Engine {
             x: 0.0,
             y: 0.8,
             y_active: false,
-            gate_open: true,
             x_primed: false,
             last_string: -1,
             strikes: [0; 12],
@@ -147,14 +145,13 @@ impl Engine {
         }
         if old.mappings != config.mappings {
             self.x_primed = false;
-            self.gate_open = config.mappings[2].kind == 0;
         }
         let revoice = old.quality != config.quality
             || old.inversion != config.inversion
             || old.transpose != config.transpose
             || old.spread != config.spread
             || old.filter != config.filter;
-        if revoice {
+        if revoice || mode {
             self.rebuild(out);
         } else if route || mode {
             self.start_mode(out);
@@ -308,18 +305,20 @@ impl Engine {
                 self.position(y, 1, out);
                 self.x_primed = false;
                 self.position(x, 0, out);
-                if self.config.mode == MANUAL && self.gate_open {
+                if self.config.mode == MANUAL {
                     self.pluck_string(self.last_string.max(0) as usize, out);
                 }
             }
             Command::Panic => self.panic(out),
-            Command::Learn(target) => self.learn = target,
+            Command::Learn(target) => {
+                self.learn = if matches!(target, 0..=2 | 4) {
+                    target
+                } else {
+                    0
+                }
+            }
             Command::X(x) => self.position(x, 0, out),
             Command::Y(y) => self.position(y, 1, out),
-            Command::Gate(g) => {
-                self.gate_open = g;
-                self.x_primed = false;
-            }
             Command::EndGesture => {
                 self.y_active = false;
                 self.fan_expression(out);
@@ -363,7 +362,11 @@ impl Engine {
             second,
             self.config.transpose,
             self.inversion,
-            self.config.spread,
+            if self.config.mode == CHORD {
+                0
+            } else {
+                self.config.spread
+            },
         );
         self.notes = harmony::filter_notes(self.full_notes, self.config.filter);
         self.memory = Some(harmony::SavedChord {
@@ -410,7 +413,7 @@ impl Engine {
                     let idx = if reverse { self.notes.len - 1 - i } else { i };
                     let ratio = i as f32 / (self.notes.len - 1).max(1) as f32;
                     self.schedule(Scheduled {
-                        at: self.now + self.ms(self.config.strum_ms * ratio),
+                        at: self.now + self.ms(self.sweep_ms() * ratio),
                         note: self.notes.values[idx],
                         velocity: (self.strike_velocity()
                             * (1.0 + self.config.contour * (ratio - 0.5)))
@@ -465,6 +468,15 @@ impl Engine {
             strikes: self.strikes,
             voices: self.voices.iter().flatten().count() as u8,
             learning: self.learn,
+            output_mpe: self.config.mpe,
+            tempo: self.tempo as f32,
+        }
+    }
+    fn sweep_ms(&self) -> f32 {
+        if self.config.strum_sync {
+            self.config.strum_beats * 60_000.0 / self.tempo as f32
+        } else {
+            self.config.strum_ms
         }
     }
     fn ms(&self, ms: f32) -> u64 {

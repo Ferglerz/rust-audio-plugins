@@ -1,10 +1,8 @@
 //! Attack coefficient calculation ported from `Envelope/01_envelope_attack.jsfx-inc`.
 
-use super::super::core_math::{db_per_sec_to_ms, ms_to_coeff};
 use super::super::constants::EPS;
-use super::utils::{
-    calculate_distance_curve_shaped_coeff, curve_cached_coeffs,
-};
+use super::super::core_math::{db_per_sec_to_ms, ms_to_coeff};
+use super::utils::{calculate_distance_curve_shaped_coeff, curve_cached_coeffs};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AttackCoeffs {

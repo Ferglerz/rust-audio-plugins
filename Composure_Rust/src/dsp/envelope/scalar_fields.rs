@@ -12,6 +12,7 @@ macro_rules! envelope_scalar_fields {
         $mac!(hold_ms);
         $mac!(strength);
         $mac!(prog_release_blend);
+        $mac!(input_rate_amount);
         $mac!(input_level_threshold_db);
         $mac!(input_level_threshold_2_db);
         $mac!(gr_blend_threshold_reduction_db);
@@ -29,6 +30,7 @@ macro_rules! envelope_scalar_fields {
         $mac!($($args),+, hold_ms);
         $mac!($($args),+, strength);
         $mac!($($args),+, prog_release_blend);
+        $mac!($($args),+, input_rate_amount);
         $mac!($($args),+, input_level_threshold_db);
         $mac!($($args),+, input_level_threshold_2_db);
         $mac!($($args),+, gr_blend_threshold_reduction_db);

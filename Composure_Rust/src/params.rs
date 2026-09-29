@@ -12,6 +12,25 @@ use crate::detector_eq::{DetectorBandParams, EQ_BANDS};
 use crate::dsp::envelope::defaults as env_defaults;
 use crate::graph_store::GraphStore;
 
+pub(crate) fn quantize_lookahead_ms(ms: f32) -> f32 {
+    let ms = ms.clamp(0.0, 2000.0);
+    if ms < 1.0 {
+        // Tolerate only float round-trip noise at an exact decimal boundary.
+        ((ms * 10.0 + 0.00001).floor() / 10.0).min(0.9)
+    } else {
+        ms.round()
+    }
+}
+
+fn format_lookahead_ms(ms: f32) -> String {
+    let ms = quantize_lookahead_ms(ms);
+    if ms < 1.0 {
+        format!("{ms:.1}")
+    } else {
+        format!("{ms:.0}")
+    }
+}
+
 fn format_envelope_curve(value: f32) -> String {
     format!("{:.1}", value * 50.0)
         .trim_end_matches('0')
@@ -87,44 +106,6 @@ pub enum HarmonicType {
     Tube,
     #[name = "Transformer"]
     Transformer,
-}
-
-/// Program-dependent release mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
-pub enum ProgramReleaseMode {
-    #[name = "Input-Dependent"]
-    InputDependent,
-    #[name = "GR Dependent"]
-    GrDependent,
-    #[name = "Rate-of-Change"]
-    RateOfChange,
-}
-
-impl ProgramReleaseMode {
-    pub fn is_input_dependent(self) -> bool {
-        matches!(self, Self::InputDependent)
-    }
-
-    pub fn is_gr_dependent(self) -> bool {
-        matches!(self, Self::GrDependent)
-    }
-
-    pub fn is_rate_of_change(self) -> bool {
-        matches!(self, Self::RateOfChange)
-    }
-
-    /// UI switch art: off only for input-dependent mode.
-    pub fn switch_on(self) -> bool {
-        !self.is_input_dependent()
-    }
-
-    pub fn short_label(self) -> &'static str {
-        match self {
-            Self::InputDependent => "In Dep",
-            Self::GrDependent => "GR Dep",
-            Self::RateOfChange => "Rate",
-        }
-    }
 }
 
 fn gr_blend_threshold_param(name: &str, default: f32, min: f32, max: f32) -> FloatParam {
@@ -269,7 +250,7 @@ pub struct ComposureParams {
     #[id = "rms_size_ms"]
     pub rms_size_ms: FloatParam,
 
-    /// RMS normalization on/off.
+    /// Adaptive RMS detection on/off.
     #[id = "rms_normalization"]
     pub rms_normalization: BoolParam,
 
@@ -338,9 +319,13 @@ pub struct ComposureParams {
     // =========================================================================
     // GROUP 3: PROGRAM RELEASE & SETTINGS (JSFX sliders 22–27)
     // =========================================================================
-    /// Program-dependent release mode.
-    #[id = "prog_release_mode"]
-    pub prog_release_mode: EnumParam<ProgramReleaseMode>,
+    /// Enable input-level program dependence.
+    #[id = "program_input_enable"]
+    pub program_input_enable: BoolParam,
+
+    /// Enable gain-reduction program dependence.
+    #[id = "program_gr_enable"]
+    pub program_gr_enable: BoolParam,
 
     /// Inverse program release behavior.
     #[id = "prog_release_inverse"]
@@ -349,6 +334,10 @@ pub struct ComposureParams {
     /// Program release blend (0=fixed, 100=fully program-dependent).
     #[id = "prog_release_blend"]
     pub prog_release_blend: FloatParam,
+
+    /// Detector-rate influence scaled by program Blend; negative amounts invert its response.
+    #[id = "input_rate_amount"]
+    pub input_rate_amount: FloatParam,
 
     /// Harmonic modulation amount (0.0–1.0).
     #[id = "harmonic_amount"]
@@ -412,6 +401,16 @@ pub struct ComposureParams {
     pub graph_store: GraphStore,
 }
 
+impl ComposureParams {
+    pub fn program_input_enabled(&self) -> bool {
+        self.program_input_enable.value()
+    }
+
+    pub fn program_gr_enabled(&self) -> bool {
+        self.program_gr_enable.value()
+    }
+}
+
 impl Default for ComposureParams {
     fn default() -> Self {
         let editor_width = Arc::new(AtomicU32::new(crate::ui::preferred_editor_width()));
@@ -428,7 +427,6 @@ impl Default for ComposureParams {
                     factor: FloatRange::skew_factor(-2.5),
                 },
             )
-            .with_step_size(1.0)
             .with_value_to_string(Arc::new(format_envelope_time))
             .with_string_to_value(Arc::new(parse_envelope_time)),
 
@@ -454,7 +452,6 @@ impl Default for ComposureParams {
                     factor: FloatRange::skew_factor(-1.0),
                 },
             )
-            .with_step_size(1.0)
             .with_value_to_string(Arc::new(format_envelope_time))
             .with_string_to_value(Arc::new(parse_envelope_time)),
 
@@ -505,7 +502,7 @@ impl Default for ComposureParams {
             .with_unit(" ms")
             .with_step_size(1.0),
 
-            rms_normalization: BoolParam::new("Normalize", false),
+            rms_normalization: BoolParam::new("Adaptive", false),
 
             detection_mode: EnumParam::new("Detection Mode", DetectionMode::Feedforward),
 
@@ -518,7 +515,7 @@ impl Default for ComposureParams {
                 },
             )
             .with_unit(" ms")
-            .with_step_size(1.0),
+            .with_value_to_string(Arc::new(format_lookahead_ms)),
 
             use_sidechain: BoolParam::new("SC", false),
 
@@ -616,10 +613,8 @@ impl Default for ComposureParams {
             .with_step_size(0.1),
 
             // === PROGRAM RELEASE ===
-            prog_release_mode: EnumParam::new(
-                "Program Release Mode",
-                ProgramReleaseMode::InputDependent,
-            ),
+            program_input_enable: BoolParam::new("Program Input", true),
+            program_gr_enable: BoolParam::new("Program GR", false),
 
             prog_release_inverse: BoolParam::new("Program Release Inverse", false),
 
@@ -632,6 +627,17 @@ impl Default for ComposureParams {
                 },
             )
             .with_step_size(1.0),
+
+            input_rate_amount: FloatParam::new(
+                "Input Rate",
+                0.0,
+                FloatRange::Linear {
+                    min: -5.0,
+                    max: 5.0,
+                },
+            )
+            .with_unit("x")
+            .with_step_size(0.1),
 
             harmonic_amount: FloatParam::new(
                 "Harmonic Amount",
@@ -720,6 +726,37 @@ impl Default for ComposureParams {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lookahead_uses_integers_above_one_and_truncated_tenths_below() {
+        for (ms, value, text) in [
+            (0.19, 0.1, "0.1"),
+            (0.99, 0.9, "0.9"),
+            (0.9999999, 0.9, "0.9"),
+            (1.0, 1.0, "1"),
+            (10.6, 11.0, "11"),
+            (2001.0, 2000.0, "2000"),
+        ] {
+            assert_eq!(quantize_lookahead_ms(ms), value);
+            assert_eq!(format_lookahead_ms(ms), text);
+        }
+        let params = ComposureParams::default();
+        for ms in [0.1, 0.3, 0.7, 0.9] {
+            let round_trip = params
+                .lookahead_ms
+                .preview_plain(params.lookahead_ms.preview_normalized(ms));
+            assert_eq!(quantize_lookahead_ms(round_trip), ms);
+        }
+    }
+
+    #[test]
+    fn lookahead_preserves_fractional_milliseconds_for_linear_graph_dragging() {
+        let params = ComposureParams::default();
+        for ms in [0.1, 0.5, 10.25, 999.75, 2000.0] {
+            let norm = params.lookahead_ms.preview_normalized(ms);
+            assert!((params.lookahead_ms.preview_plain(norm) - ms).abs() < 0.001);
+        }
+    }
 
     #[test]
     fn envelope_curve_percentages_round_trip_without_changing_dsp_values() {

@@ -79,7 +79,13 @@ fn lookahead_latency_matches_2000ms_at_48k() {
 fn debug_overlay_shows_runtime_fields() {
     let display = composure::ui::UiDisplay::default();
     display.toggle_debug();
-    display.update_block(-14.0, -3.5);
+    display.update_block(-14.0, -3.5, -26.0);
+    assert_eq!(
+        display
+            .input_meter_db
+            .load(std::sync::atomic::Ordering::Relaxed),
+        -26.0
+    );
     display.update_debug_telemetry(-14.0, -3.5, -6.0, -18.5, 96000);
     let text = display.debug_overlay_text(-14.0, -3.5);
     assert!(text.contains("det"));
@@ -90,7 +96,9 @@ fn debug_overlay_shows_runtime_fields() {
 #[test]
 fn graph_range_mode_param_matches_store_after_sync() {
     let params = ComposureParams::default();
-    params.graph_store.sync_range_if_needed(GraphRangeMode::Range40.range_db());
+    params
+        .graph_store
+        .sync_range_if_needed(GraphRangeMode::Range40.range_db());
     let graph = params.graph_store.load();
     assert!((graph.graph.range_db - 40.0).abs() < 0.01);
 }

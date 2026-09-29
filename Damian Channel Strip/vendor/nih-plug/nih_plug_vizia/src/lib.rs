@@ -15,6 +15,26 @@ use vizia::prelude::*;
 // Re-export for convenience
 pub use vizia;
 
+/// Consume a custom view event and report handled keys to the native backend.
+pub fn consume_window_event(
+    cx: &mut vizia::prelude::EventContext,
+    event: &vizia::prelude::WindowEvent,
+    meta: &mut vizia::events::EventMeta,
+) {
+    meta.consume();
+    report_handled_key(cx, event);
+}
+
+/// Report a key handled by a custom widget that returns a boolean to its view.
+pub fn report_handled_key(cx: &mut vizia::prelude::EventContext, event: &vizia::prelude::WindowEvent) {
+    use vizia::prelude::WindowEvent;
+    if cfg!(target_os = "macos")
+        && matches!(event, WindowEvent::KeyDown(..) | WindowEvent::KeyUp(..) | WindowEvent::CharInput(_))
+    {
+        cx.emit(vizia_baseview::KeyboardEventCaptured);
+    }
+}
+
 pub mod assets;
 mod editor;
 mod editor_scale;

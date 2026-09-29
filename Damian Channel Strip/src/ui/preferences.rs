@@ -15,3 +15,7 @@ pub fn light() -> bool {
 pub fn toggle() {
     store().toggle();
 }
+
+pub fn label() -> &'static str {
+    store().label()
+}

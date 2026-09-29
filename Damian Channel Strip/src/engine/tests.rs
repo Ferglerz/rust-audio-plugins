@@ -11,7 +11,297 @@ fn isolated_shared() -> Arc<Shared> {
         worker.join().unwrap();
     }
     while shared.pending.pop().is_some() {}
+    while shared.pending_aux.pop().is_some() {}
     shared
+}
+
+#[test]
+fn wall_clips_with_zero_harmonics_in_the_audio_path() {
+    let mut engine = Engine::new(isolated_shared(), 48000.0);
+    let settings = CompSettings {
+        wall: crate::dsp::WallSettings {
+            threshold: -12.0,
+            ..Default::default()
+        },
+        ..CompSettings::default()
+    };
+    let ceiling = 10.0_f64.powf(-12.0 / 20.0);
+    for input in [[0.8, -0.4], [-2.0, 2.0], [0.0, 0.0]] {
+        let output = engine.tick(
+            input, settings, false, false, false, false, false, false, false,
+        );
+        for channel in 0..2 {
+            let expected = ceiling * (input[channel] / ceiling).tanh();
+            assert!((output[channel] - expected).abs() < 1.0e-12);
+        }
+    }
+}
+
+#[test]
+fn linear_independent_bank_bypasses_match_single_bank_filters() {
+    use crate::processing::{EqPath, Resolution};
+    let sr = 44100.0;
+    let config = Config {
+        mode: ProcessingMode::LinearPhase,
+        resolution: Resolution::Low,
+    };
+    let first = Band {
+        id: 1,
+        gain: 9.0,
+        freq: 1000.0,
+        dynamic: true,
+        ..Band::default()
+    };
+    let second = Band {
+        id: 2,
+        gain: -6.0,
+        freq: 3000.0,
+        ..Band::default()
+    };
+    for (eq1, eq2) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut bank = Bank::new(
+            std::slice::from_ref(&first),
+            std::slice::from_ref(&second),
+            sr,
+            config,
+        );
+        let mut enabled = Vec::new();
+        if eq1 {
+            enabled.push(first.clone());
+        }
+        if eq2 {
+            enabled.push(second.clone());
+        }
+        let mut reference = EqPath::new(&enabled, sr, config);
+        for i in 0..12000 {
+            let input = [(i as f64 * 0.13).sin(), (i as f64 * 0.07).cos()];
+            let (actual, _) = bank.tick(input, f64::from(eq1), f64::from(eq2));
+            let expected = reference.tick(input, &mut [], sr);
+            for ch in 0..2 {
+                assert!(
+                    (actual[ch] - expected[ch]).abs() < 1e-10,
+                    "EQ1={eq1}, EQ2={eq2}, sample={i}: {actual:?} != {expected:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn linear_bank_bypass_ramps_keep_declared_latency() {
+    use crate::processing::Resolution;
+    let shared = isolated_shared();
+    let config = Config {
+        mode: ProcessingMode::LinearPhase,
+        resolution: Resolution::Low,
+    };
+    shared
+        .requested_config
+        .store(config.encode(), Ordering::Relaxed);
+    let mut engine = Engine::new(shared.clone(), 44100.0);
+    let latency = engine.latency() as usize;
+    for i in 0..25000 {
+        if i == 8000 {
+            assert!(shared
+                .pending
+                .push(Box::new(Bank::new(
+                    &[Band {
+                        id: 1,
+                        ..Band::default()
+                    }],
+                    &[Band {
+                        id: 2,
+                        ..Band::default()
+                    }],
+                    44100.0,
+                    config,
+                )))
+                .is_ok());
+            engine.sync();
+        }
+        let eq1 = i < 5000;
+        let eq2 = i < 3000;
+        let input = (i as f64 * 0.17).sin() * 0.1;
+        let actual = engine.tick(
+            [input, -input],
+            CompSettings {
+                wall: crate::dsp::WallSettings {
+                    on: false,
+                    ..Default::default()
+                },
+                ..CompSettings::default()
+            },
+            eq1,
+            eq2,
+            false,
+            false,
+            false,
+            false,
+            false,
+        );
+        let expected = if i >= latency {
+            ((i - latency) as f64 * 0.17).sin() * 0.1
+        } else {
+            0.0
+        };
+        assert!(
+            (actual[0] - expected).abs() < 1e-10,
+            "sample {i}: {actual:?}, expected {expected}"
+        );
+        assert!((actual[1] + expected).abs() < 1e-10);
+        assert_eq!(engine.latency() as usize, latency);
+    }
+    assert_eq!(engine.eq1_mix, 0.0);
+    assert_eq!(engine.eq2_mix, 0.0);
+}
+
+#[test]
+fn recycled_callback_buffers_keep_reserved_capacity() {
+    let shared = isolated_shared();
+    let mut engine = Engine::new(shared.clone(), 48000.0);
+    for count in [1, 0, 32, 1, 64, 0] {
+        *shared.lift_bands.lock().unwrap() = (0..count)
+            .map(|i| LiftBand {
+                id: LIFT_ID_BASE + i as u64,
+                ..LiftBand::default()
+            })
+            .collect();
+        *shared.sc_eq_bands.lock().unwrap() = (0..count)
+            .map(|i| Band {
+                id: i as u64 + 1,
+                ..Band::default()
+            })
+            .collect();
+        engine.sync();
+        assert_eq!(engine.lift_bands.len(), count);
+        assert_eq!(engine.sc_eq_bands.len(), count);
+        for capacity in [
+            engine.lift_bands.capacity(),
+            engine.lift_scratch.capacity(),
+            engine.sc_eq_bands.capacity(),
+            engine.sc_eq_scratch.capacity(),
+        ] {
+            assert!(capacity >= AUX_BAND_RESERVE);
+        }
+    }
+    let count = AUX_BAND_RESERVE + 1;
+    let lift: Vec<_> = (0..count)
+        .map(|i| LiftBand {
+            id: LIFT_ID_BASE + i as u64,
+            ..LiftBand::default()
+        })
+        .collect();
+    let sc: Vec<_> = (0..count)
+        .map(|i| Band {
+            id: i as u64 + 1,
+            ..Band::default()
+        })
+        .collect();
+    *shared.lift_bands.lock().unwrap() = lift.clone();
+    *shared.sc_eq_bands.lock().unwrap() = sc.clone();
+    engine.sync();
+    assert!(engine.lift_bands.is_empty());
+    assert!(engine.sc_eq_bands.is_empty());
+    assert!(shared
+        .pending_aux
+        .push(Box::new(AuxBuffers::new(&lift, &sc, 48000.0, 0)))
+        .is_ok());
+    engine.sync();
+    assert_eq!(engine.lift_bands.len(), count);
+    assert_eq!(engine.sc_eq_bands.len(), count);
+    assert!(engine.lift_scratch.capacity() >= count);
+    assert!(engine.sc_eq_scratch.capacity() >= count);
+
+    engine.bank = Box::new(Bank::new(
+        &(1..=300)
+            .map(|id| Band {
+                id,
+                dynamic: true,
+                ..Band::default()
+            })
+            .collect::<Vec<_>>(),
+        &[],
+        48000.0,
+        Config::default(),
+    ));
+    let capacities = [
+        engine.dyn_gr_scratch.capacity(),
+        engine.dyn_input_scratch.capacity(),
+        shared.dyn_gr_uncapped.lock().unwrap().capacity(),
+        shared.dyn_band_input.lock().unwrap().capacity(),
+    ];
+    for _ in 0..4096 {
+        engine.tick(
+            [0.0; 2],
+            CompSettings::default(),
+            true,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+        );
+    }
+    assert_eq!(
+        [
+            engine.dyn_gr_scratch.capacity(),
+            engine.dyn_input_scratch.capacity(),
+            shared.dyn_gr_uncapped.lock().unwrap().capacity(),
+            shared.dyn_band_input.lock().unwrap().capacity()
+        ],
+        capacities
+    );
+    assert_eq!(
+        shared.dyn_gr_uncapped.lock().unwrap().len(),
+        DYNAMIC_BAND_METER_RESERVE
+    );
+    assert_eq!(
+        shared.dyn_band_input.lock().unwrap().len(),
+        DYNAMIC_BAND_METER_RESERVE
+    );
+    assert!(shared
+        .pending_aux
+        .push(Box::new(AuxBuffers::new(&lift, &sc, 48000.0, 300)))
+        .is_ok());
+    let locked_meter = shared.dyn_gr_uncapped.lock().unwrap();
+    engine.sync();
+    assert!(engine.pending_aux.is_some());
+    assert_eq!(engine.dyn_gr_scratch.capacity(), DYNAMIC_BAND_METER_RESERVE);
+    drop(locked_meter);
+    engine.sync();
+    assert!(engine.pending_aux.is_none());
+    let grown_capacities = [
+        engine.dyn_gr_scratch.capacity(),
+        engine.dyn_input_scratch.capacity(),
+        shared.dyn_gr_uncapped.lock().unwrap().capacity(),
+        shared.dyn_band_input.lock().unwrap().capacity(),
+    ];
+    assert!(grown_capacities.iter().all(|capacity| *capacity >= 300));
+    for _ in 0..4096 {
+        engine.tick(
+            [0.0; 2],
+            CompSettings::default(),
+            true,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+        );
+    }
+    assert_eq!(
+        [
+            engine.dyn_gr_scratch.capacity(),
+            engine.dyn_input_scratch.capacity(),
+            shared.dyn_gr_uncapped.lock().unwrap().capacity(),
+            shared.dyn_band_input.lock().unwrap().capacity()
+        ],
+        grown_capacities
+    );
+    assert_eq!(shared.dyn_gr_uncapped.lock().unwrap().len(), 300);
+    assert_eq!(shared.dyn_band_input.lock().unwrap().len(), 300);
 }
 #[test]
 fn bypass_paths_stay_latency_aligned_during_band_updates() {
@@ -31,7 +321,13 @@ fn bypass_paths_stay_latency_aligned_during_band_updates() {
             engine.eq2_mix = if global_bypass { 1.0 } else { 0.0 };
             engine.bypass_mix = if global_bypass { 1.0 } else { 0.0 };
             let latency = engine.latency() as usize;
-            let settings = CompSettings::default();
+            let settings = CompSettings {
+                wall: crate::dsp::WallSettings {
+                    on: false,
+                    ..Default::default()
+                },
+                ..CompSettings::default()
+            };
             for i in 0..20000 {
                 if i == 8000 {
                     let next = Box::new(Bank::new(
@@ -140,6 +436,10 @@ fn unlimited_band_state_and_neutral_audio() {
     let mut engine = Engine::new(shared, 48000.0);
     assert_eq!(engine.bank.bands.len(), 200);
     let settings = CompSettings {
+        wall: crate::dsp::WallSettings {
+            on: false,
+            ..Default::default()
+        },
         threshold: 0.0,
         gate: -80.0,
         dry: 0.0,
@@ -591,6 +891,10 @@ fn sidechain_eq_filters_detector_and_listen_path() {
     );
     let mut engine = Engine::new(shared.clone(), 48000.0);
     let settings = CompSettings {
+        wall: crate::dsp::WallSettings {
+            on: false,
+            ..Default::default()
+        },
         threshold: -20.0,
         ratio: 4.0,
         attack: 0.5,

@@ -168,7 +168,7 @@ fn modwheel_is_premapped_only_manual_and_does_not_change_mode() {
     assert_eq!(notes(&out).len(), 7);
 }
 #[test]
-fn jitter_and_gate_do_not_create_phantom_strikes() {
+fn jitter_does_not_create_phantom_strikes() {
     let mut e = Engine::default();
     configure(
         &mut e,
@@ -183,10 +183,6 @@ fn jitter_and_gate_do_not_create_phantom_strikes() {
     for x in [0.07, 0.075, 0.08, 0.073] {
         assert!(notes(&send(&mut e, Command::X(x))).is_empty());
     }
-    send(&mut e, Command::Gate(false));
-    assert!(notes(&send(&mut e, Command::X(1.0))).is_empty());
-    send(&mut e, Command::Gate(true));
-    assert!(notes(&send(&mut e, Command::X(0.5))).is_empty());
 }
 #[test]
 fn auto_strum_uses_sample_clock_and_releases_notes() {
@@ -589,4 +585,178 @@ fn extended_ignored_keys_have_distinct_snapshot_bits() {
     assert_eq!(e.snapshot().ignored, 1_u64 << 35);
     send(&mut e, Command::ReleaseKeyboard);
     assert_eq!(e.snapshot().ignored, 0);
+}
+
+#[test]
+fn signed_swing_reverses_step_durations_without_changing_pair_length() {
+    for (swing, expected) in [
+        (-0.5, [0, 125, 500]),
+        (0.0, [0, 250, 500]),
+        (0.5, [0, 375, 500]),
+    ] {
+        let mut e = Engine {
+            sample_rate: 1000.0,
+            ..Engine::default()
+        };
+        configure(
+            &mut e,
+            Config {
+                mode: 3,
+                rate: 0.5,
+                swing,
+                humanize: 0.0,
+                ..Config::default()
+            },
+        );
+        on(&mut e, 60, 0);
+        let mut strikes = Vec::new();
+        for sample in 0..=500 {
+            e.tick(&mut |event| {
+                if matches!(event, Out::On(_, _, _)) {
+                    strikes.push(sample);
+                }
+            });
+        }
+        assert_eq!(strikes, expected, "swing {swing}");
+    }
+}
+
+#[test]
+fn synced_sweep_uses_beats_while_free_sweep_keeps_milliseconds() {
+    for (tempo, sync, expected) in [(120.0, true, 250), (60.0, true, 500), (60.0, false, 120)] {
+        let mut e = Engine {
+            sample_rate: 1000.0,
+            ..Engine::default()
+        };
+        e.transport(false, tempo, false, &mut |_| {});
+        configure(
+            &mut e,
+            Config {
+                mode: 1,
+                strum_sync: sync,
+                strum_beats: 0.5,
+                strum_ms: 120.0,
+                ..Config::default()
+            },
+        );
+        on(&mut e, 60, 0);
+        let last = e.scheduled.iter().flatten().map(|note| note.at).max();
+        assert_eq!(last, Some(expected), "tempo {tempo}, sync {sync}");
+    }
+}
+
+#[test]
+fn playback_spread_leaves_chord_mode_close_and_revoices_on_mode_change() {
+    let mut e = Engine::default();
+    on(&mut e, 60, 1);
+    let close = e.notes;
+    let c = Config {
+        spread: 2,
+        ..e.config
+    };
+    configure(&mut e, c);
+    assert_eq!(e.notes.as_slice(), close.as_slice());
+    configure(&mut e, Config { mode: MANUAL, ..c });
+    assert_ne!(e.notes.as_slice(), close.as_slice());
+    configure(&mut e, c);
+    assert_eq!(e.notes.as_slice(), close.as_slice());
+}
+
+#[test]
+fn strum_range_automation_keeps_a_usable_span() {
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            mode: MANUAL,
+            x_min: 0.99,
+            x_max: 0.01,
+            ..Config::default()
+        },
+    );
+    send(&mut e, Command::X(0.875));
+    assert!((e.x - 0.5).abs() < 0.00001);
+}
+
+#[test]
+fn xy_cc_mappings_accept_all_channels_and_learning_locks_the_channel() {
+    for axis in 0..2 {
+        for kind in [1, 2] {
+            let mut e = Engine::default();
+            let mut config = Config::default();
+            config.mappings = [Mapping::default(); 2];
+            config.mappings[axis] = Mapping {
+                kind,
+                number: 7,
+                channel: 16,
+            };
+            configure(&mut e, config);
+            for channel in 0..16 {
+                if axis == 0 {
+                    e.x = 0.0;
+                } else {
+                    e.y = 0.0;
+                }
+                e.control(channel, 7, 64.0 / 127.0, &mut |_| {});
+                if kind == 2 {
+                    e.control(channel, 39, 1.0 / 127.0, &mut |_| {});
+                }
+                let value = if axis == 0 { e.x } else { e.y };
+                let expected = if kind == 2 {
+                    8193.0 / 16383.0
+                } else {
+                    64.0 / 127.0
+                };
+                assert!(
+                    (value - expected).abs() < 0.0001,
+                    "axis {axis} ignored CC on channel {channel}"
+                );
+            }
+            send(&mut e, Command::Learn(axis as u8 + 1));
+            e.control(5, 11, 0.75, &mut |_| {});
+            let (learned_axis, mapping) = e.learned.take().unwrap();
+            assert_eq!(learned_axis, axis);
+            assert_eq!(mapping, Mapping::cc(11, 5));
+            config.mappings[axis] = mapping;
+            configure(&mut e, config);
+            if axis == 0 {
+                e.x = 0.0;
+            } else {
+                e.y = 0.0;
+            }
+            e.control(4, 11, 0.75, &mut |_| {});
+            assert_eq!(if axis == 0 { e.x } else { e.y }, 0.0);
+            e.control(5, 11, 0.75, &mut |_| {});
+            assert_eq!(if axis == 0 { e.x } else { e.y }, 0.75);
+        }
+    }
+}
+
+#[test]
+fn removed_gate_learn_target_cannot_capture_a_controller() {
+    let mut e = Engine::default();
+    send(&mut e, Command::Learn(3));
+    assert_eq!(e.learn, 0);
+    e.control(7, 12, 0.75, &mut |_| {});
+    assert!(e.learned.is_none());
+}
+
+#[test]
+fn manual_xy_cc74_assignment_accepts_member_channels() {
+    for axis in 0..2 {
+        let mut e = Engine::default();
+        let mut config = Config::default();
+        config.mappings = [Mapping::default(); 2];
+        config.mappings[axis] = Mapping::cc(74, 16);
+        configure(&mut e, config);
+        for channel in 0..16 {
+            if axis == 0 {
+                e.x = 0.0;
+            } else {
+                e.y = 0.0;
+            }
+            e.control(channel, 74, 0.75, &mut |_| {});
+            assert_eq!(if axis == 0 { e.x } else { e.y }, 0.75);
+        }
+    }
 }

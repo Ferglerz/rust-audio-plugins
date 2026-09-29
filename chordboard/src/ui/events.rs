@@ -1,5 +1,34 @@
 use super::*;
 impl ChordboardView {
+    fn press_control(&mut self, cx: &mut EventContext, x: f32, y: f32) {
+        for (c, r) in self.placed_controls() {
+            if !hit(r, x, y) {
+                continue;
+            }
+            if c.id == "spread" {
+                Self::emit(
+                    cx,
+                    c.ptr,
+                    self.params
+                        .spread
+                        .preview_normalized((self.params.spread.value() + 1) % 3),
+                );
+            } else if c.toggle {
+                Self::emit(cx, c.ptr, if c.norm >= 0.5 { 0.0 } else { 1.0 });
+            } else {
+                let value = pleasant_ui::slider_value_rect(r);
+                self.drag = Some(Drag::Control(ControlDrag {
+                    press: pleasant_ui::pointer::ValuePress::new(c.id, value, (x, y)),
+                    ptr: c.ptr,
+                    norm: c.norm,
+                    editable: hit(value, x, y),
+                    started: false,
+                }));
+                cx.capture();
+            }
+            return;
+        }
+    }
     pub(super) fn window_event(&mut self, cx: &mut EventContext, event: &WindowEvent) -> bool {
         let bounds = cx.bounds();
         let Some((x, y)) = pleasant_ui::local_xy(
@@ -12,14 +41,24 @@ impl ChordboardView {
         ) else {
             return false;
         };
+        // Vizia substitutes double/triple clicks for mouse-down. Every press
+        // uses the same drag threshold and opens text only on value release.
+        if matches!(
+            event,
+            WindowEvent::MouseDoubleClick(MouseButton::Left)
+                | WindowEvent::MouseTripleClick(MouseButton::Left)
+        ) {
+            return self.window_event(cx, &WindowEvent::MouseDown(MouseButton::Left));
+        }
         if matches!(event, WindowEvent::FocusOut) {
             self.focused = false;
+            self.memory_held.fill(false);
             self.pointer = None;
             cx.needs_redraw();
             self.end_drag(cx);
             self.release_keys();
             self.edit = None;
-            self.menu = None;
+            self.set_panel(None);
             return false;
         }
         if matches!(event, WindowEvent::MouseLeave) {
@@ -32,12 +71,12 @@ impl ChordboardView {
             self.pointer = Some((x, y));
             cx.needs_redraw();
         }
-        if matches!(event, WindowEvent::KeyDown(Code::Escape, _))
-            && matches!(self.drag, Some(Drag::Memory(_)))
-        {
-            self.end_drag(cx);
-            self.status = "Memory drag cancelled".into();
-            return true;
+        // Escape belongs to the host; it is not a Chordboard shortcut.
+        if matches!(
+            event,
+            WindowEvent::KeyDown(Code::Escape, _) | WindowEvent::KeyUp(Code::Escape, _)
+        ) {
+            return false;
         }
         if self.edit.is_some() {
             match event {
@@ -52,7 +91,6 @@ impl ChordboardView {
                 WindowEvent::KeyDown(code, _) => {
                     match code {
                         Code::Enter | Code::NumpadEnter => self.commit_edit(cx),
-                        Code::Escape => self.edit = None,
                         _ => {
                             if let Some(edit) = self.edit.as_mut() {
                                 edit.handle_key(cx, *code);
@@ -75,7 +113,6 @@ impl ChordboardView {
             match event {
                 WindowEvent::KeyDown(code, _) => {
                     match code {
-                        Code::Escape => self.menu = None,
                         Code::Enter | Code::NumpadEnter => {
                             self.select_menu(cx, menu, self.menu_cursor);
                         }
@@ -112,13 +149,44 @@ impl ChordboardView {
                         return true;
                     }
                 }
+                WindowEvent::MouseDoubleClick(_) | WindowEvent::MouseScroll(_, _) => return true,
                 _ => {}
             }
+        }
+        if self.panel.is_some()
+            && matches!(
+                event,
+                WindowEvent::KeyDown(_, _) | WindowEvent::CharInput(_)
+            )
+        {
+            return true;
+        }
+        if self.panel.is_none()
+            && self.page_elapsed < pleasant_ui::page_slide::DURATION
+            && hit((PAD.0, PAD.1, PAD.2, 360.0), x, y)
+            && matches!(
+                event,
+                WindowEvent::MouseDown(_) | WindowEvent::MouseScroll(_, _)
+            )
+        {
+            return true;
         }
         match event {
             WindowEvent::KeyDown(code, _)
                 if self.params.keyboard.value() && self.focused && !cx.modifiers().command() =>
             {
+                if let Some(slot) = MEMORY_CODES.iter().position(|c| c == code) {
+                    if !self.memory_held[slot] {
+                        self.memory_held[slot] = true;
+                        if cx.modifiers().shift() {
+                            self.bridge.send(Command::Capture(slot));
+                            self.status = format!("Captured chord in slot {}", slot + 1);
+                        } else {
+                            self.recall_memory(cx, slot);
+                        }
+                    }
+                    return true;
+                }
                 if let Some(key) = CODES.iter().position(|c| c == code) {
                     self.play_key(key);
                     return true;
@@ -139,13 +207,13 @@ impl ChordboardView {
                     }
                     return true;
                 }
-                if *code == Code::Escape {
-                    self.bridge.panic.store(true, Ordering::Release);
-                    self.release_keys();
-                    return true;
-                }
             }
             WindowEvent::KeyUp(code, _) => {
+                if let Some(slot) = MEMORY_CODES.iter().position(|c| c == code) {
+                    let held = self.memory_held[slot];
+                    self.memory_held[slot] = false;
+                    return held;
+                }
                 if let Some(key) = CODES.iter().position(|c| c == code) {
                     if self.pressed[key] {
                         self.pressed[key] = false;
@@ -167,11 +235,132 @@ impl ChordboardView {
             WindowEvent::MouseDown(MouseButton::Left) => {
                 cx.focus();
                 self.focused = true;
-                if hit((936.0, 24.0, 70.0, 30.0), x, y) {
+                if hit(MPE, x, y) {
+                    Self::emit(
+                        cx,
+                        self.params.output_mode.as_ptr(),
+                        self.params
+                            .output_mode
+                            .preview_normalized((self.params.output_mode.value() + 1) % 3),
+                    );
+                    return true;
+                }
+                for (r, panel) in [(OUTPUT, Panel::Output)] {
+                    if hit(r, x, y) {
+                        self.set_panel(if self.panel == Some(panel) {
+                            None
+                        } else {
+                            Some(panel)
+                        });
+                        return true;
+                    }
+                }
+                for axis in 0..2 {
+                    if hit(mapping_summary_rect(axis), x, y) {
+                        let close = self.panel == Some(Panel::Mapping) && self.mapping_axis == axis;
+                        self.set_panel(if close { None } else { Some(Panel::Mapping) });
+                        self.mapping_axis = axis;
+                        return true;
+                    }
+                }
+                if let Some(panel) = self.panel {
+                    if !hit(panel.rect(), x, y) {
+                        self.set_panel(None);
+                    } else {
+                        if panel == Panel::Mapping {
+                            if self.mapping_axis == 1 && hit(Menu::YTarget.trigger_rect(), x, y) {
+                                self.open_menu(Menu::YTarget);
+                                return true;
+                            }
+                            if hit(LEARN, x, y) {
+                                self.request_learn(
+                                    if self.learning() == self.mapping_axis as u8 + 1 {
+                                        0
+                                    } else {
+                                        self.mapping_axis as u8 + 1
+                                    },
+                                );
+                                return true;
+                            }
+                            for menu in [
+                                Menu::MappingKind,
+                                Menu::MappingChannel(self.mapping().kind == 3),
+                                Menu::MappingCc(self.mapping().kind == 2),
+                            ] {
+                                if matches!(menu, Menu::MappingChannel(_))
+                                    && self.mapping_axis < 2
+                                    && self.mapping().kind != 3
+                                {
+                                    continue;
+                                }
+                                if hit(menu.trigger_rect(), x, y) {
+                                    if !matches!(menu, Menu::MappingCc(_))
+                                        || matches!(self.mapping().kind, 1 | 2)
+                                    {
+                                        self.open_menu(menu);
+                                    }
+                                    return true;
+                                }
+                            }
+                        }
+                        self.press_control(cx, x, y);
+                        return true;
+                    }
+                }
+                if hit(TEMPO_SYNC, x, y) {
+                    self.set(
+                        cx,
+                        "tempo_sync",
+                        if self.params.tempo_sync.value() {
+                            0.0
+                        } else {
+                            1.0
+                        },
+                    );
+                    return true;
+                }
+                if self.params.mode.value() == 1 {
+                    if hit(STRUM_SYNC, x, y) {
+                        self.set(
+                            cx,
+                            "strum_sync",
+                            if self.params.strum_sync.value() {
+                                0.0
+                            } else {
+                                1.0
+                            },
+                        );
+                        return true;
+                    }
+                    if self.params.strum_sync.value() && hit(Menu::StrumRate.trigger_rect(), x, y) {
+                        self.open_menu(Menu::StrumRate);
+                        return true;
+                    }
+                }
+                if hit(LEARN_OCTAVE, x, y) {
+                    self.request_learn(if self.learning() == 4 { 0 } else { 4 });
+                    return true;
+                }
+                for (i, step) in TRANSPOSE_STEPS.iter().enumerate() {
+                    if hit(transpose_rect(i), x, y) {
+                        let value = if *step == 0 {
+                            0
+                        } else {
+                            (self.params.transpose.value() + step).clamp(-24, 24)
+                        };
+                        Self::emit(
+                            cx,
+                            self.params.transpose.as_ptr(),
+                            self.params.transpose.preview_normalized(value),
+                        );
+                        return true;
+                    }
+                }
+                if hit(APPEARANCE, x, y) {
                     prefs().toggle();
                     return true;
                 }
-                if hit((814.0, 24.0, 112.0, 30.0), x, y) {
+                if hit(QWERTY, x, y) {
                     self.set(
                         cx,
                         "keyboard",
@@ -186,28 +375,17 @@ impl ChordboardView {
                     }
                     return true;
                 }
-                for i in 0..4 {
+                for i in 0..3 {
                     if hit(mode_rect(i as usize), x, y) {
                         Self::emit(
                             cx,
                             self.params.mode.as_ptr(),
-                            self.params.mode.preview_normalized(i),
+                            self.params.mode.preview_normalized(i + 1),
                         );
                         self.end_drag(cx);
-                        self.set_setup(false);
-                        self.group = if i == 1 || i == 2 { 1 } else { 0 };
-                        self.page = if i == 1 || i == 2 { 1 } else { 0 };
+                        self.set_panel(None);
                         return true;
                     }
-                }
-                if self.group == 6 && hit(LEARN_OCTAVE, x, y) {
-                    self.bridge
-                        .send(Command::Learn(if self.snapshot.learning == 4 {
-                            0
-                        } else {
-                            4
-                        }));
-                    return true;
                 }
                 if hit(LATCH, x, y) {
                     self.set(
@@ -227,9 +405,7 @@ impl ChordboardView {
                 }
                 for i in 0..KEY_COUNT {
                     if hit(key_rect(i), x, y) {
-                        if let Some(root) =
-                            harmony::keyboard_root(self.params.fifths.value(), i % KEY_COLUMNS)
-                        {
+                        if let Some(root) = self.keyboard_root(i % KEY_COLUMNS) {
                             self.bridge.send(Command::KeyDown(
                                 i as u8 + POINTER_KEY_OFFSET,
                                 (self.params.keyboard_octave.value() + root as i32).min(127) as u8,
@@ -249,22 +425,30 @@ impl ChordboardView {
                     self.open_menu(Menu::Scale);
                     return true;
                 }
-                if hit((434.0, 441.0, 130.0, 28.0), x, y) {
-                    self.set(
-                        cx,
-                        "highlight",
-                        if self.params.highlight.value() {
-                            0.0
-                        } else {
-                            1.0
-                        },
-                    );
-                    return true;
-                }
                 if self.memory_press(cx, x, y) {
                     return true;
                 }
-                if !self.arp_main() && hit(PLAY_PAD, x, y) {
+                if self.params.mode.value() == 2 {
+                    for y_axis in [false, true] {
+                        let (min, max) = if y_axis {
+                            expression_bounds(self.params.y_min.value(), self.params.y_max.value())
+                        } else {
+                            strum_bounds(self.params.x_min.value(), self.params.x_max.value())
+                        };
+                        for (right, value) in [(false, min), (true, max)] {
+                            let (ax, ay, pointer) = strum_bound_anchor(y_axis, value);
+                            if pleasant_ui::tag_contains(ax, ay, pointer, x, y) {
+                                self.drag = Some(Drag::StrumBound(y_axis, right));
+                                cx.capture();
+                                cx.emit(RawParamEvent::BeginSetParameter(
+                                    self.bound_param(y_axis, right).as_ptr(),
+                                ));
+                                return true;
+                            }
+                        }
+                    }
+                }
+                if self.params.mode.value() == 2 && hit(PLAY_PAD, x, y) {
                     self.drag = Some(Drag::Pad);
                     cx.capture();
                     let px = ((x - PLAY_PAD.0) / PLAY_PAD.2).clamp(0.0, 1.0);
@@ -291,75 +475,28 @@ impl ChordboardView {
                     self.inversion(cx, 1);
                     return true;
                 }
-                for axis in 0..3 {
-                    if hit(mapping_summary_rect(axis), x, y) {
-                        if self.mapping_axis != axis {
-                            self.bridge.send(Command::Learn(0));
+                if self.arp_main() {
+                    if hit(RATE_HEADER, x, y) {
+                        if let Some(c) = self.control("rate") {
+                            let r = (
+                                RATE_HEADER.0 + RATE_HEADER.2 - 176.0,
+                                RATE_HEADER.1,
+                                176.0,
+                                RATE_HEADER.3,
+                            );
+                            self.drag = Some(Drag::Control(ControlDrag {
+                                press: pleasant_ui::pointer::ValuePress::new(c.id, r, (x, y)),
+                                ptr: c.ptr,
+                                norm: c.norm,
+                                editable: hit(r, x, y),
+                                started: false,
+                            }));
+                            cx.capture();
                         }
-                        self.set_setup(true);
-                        self.mapping_axis = axis;
                         return true;
                     }
-                }
-                if self.group == 6 {
-                    for axis in 0..3 {
-                        if hit(axis_rect(axis), x, y) {
-                            if self.mapping_axis != axis
-                                && (1..=3).contains(&self.snapshot.learning)
-                            {
-                                self.bridge.send(Command::Learn(0));
-                            }
-                            self.mapping_axis = axis;
-                            return true;
-                        }
-                    }
-                    if hit(LEARN, x, y) {
-                        self.bridge.send(Command::Learn(
-                            if self.snapshot.learning == self.mapping_axis as u8 + 1 {
-                                0
-                            } else {
-                                self.mapping_axis as u8 + 1
-                            },
-                        ));
-                        return true;
-                    }
-                    for menu in [
-                        Menu::MappingKind,
-                        Menu::MappingChannel(self.mapping().kind == 3),
-                        Menu::MappingCc(self.mapping().kind == 2),
-                    ] {
-                        if hit(menu.trigger_rect(), x, y) {
-                            if matches!(menu, Menu::MappingCc(_))
-                                && !matches!(self.mapping().kind, 1 | 2)
-                            {
-                                return true;
-                            }
-                            self.open_menu(menu);
-                            return true;
-                        }
-                    }
-                }
-                if hit(SETUP, x, y) {
-                    self.set_setup(!self.setup_open);
-                    return true;
-                }
-                for (i, &(group, _)) in self.groups().iter().enumerate() {
-                    if hit(group_rect(i), x, y) {
-                        if self.group == 6 {
-                            self.bridge.send(Command::Learn(0));
-                        }
-                        self.group = group;
-                        self.page = 0;
-                        return true;
-                    }
-                }
-                if self.pages() > 1 && hit(PAGE, x, y) {
-                    self.page = (self.page + 1) % self.pages();
-                    return true;
-                }
-                if self.arp_visible() {
                     for i in 0..5 {
-                        if hit(pattern_rect(i, self.arp_main()), x, y) {
+                        if hit(pattern_rect(i), x, y) {
                             Self::emit(
                                 cx,
                                 self.params.arp_pattern.as_ptr(),
@@ -369,7 +506,7 @@ impl ChordboardView {
                         }
                     }
                     for (i, (_, beats)) in ARP_RATES.iter().enumerate() {
-                        if hit(rate_rect(i, self.arp_main()), x, y) {
+                        if hit(rate_rect(i), x, y) {
                             Self::emit(
                                 cx,
                                 self.params.rate.as_ptr(),
@@ -379,7 +516,7 @@ impl ChordboardView {
                         }
                     }
                     for i in 0..4 {
-                        if hit(octave_rect(i, self.arp_main()), x, y) {
+                        if hit(octave_rect(i), x, y) {
                             Self::emit(
                                 cx,
                                 self.params.octaves.as_ptr(),
@@ -389,59 +526,35 @@ impl ChordboardView {
                         }
                     }
                 }
-                for (c, r) in self.placed_controls() {
-                    if hit(r, x, y) {
-                        if c.toggle {
-                            Self::emit(cx, c.ptr, if c.norm >= 0.5 { 0.0 } else { 1.0 });
-                            return true;
-                        }
-                        // Leave value labels stable for double-click text entry.
-                        if y < r.1 + 22.0 {
-                            return true;
-                        }
-                        self.drag = Some(Drag::Control(c.ptr, r));
-                        cx.capture();
-                        cx.emit(RawParamEvent::BeginSetParameter(c.ptr));
-                        cx.emit(RawParamEvent::SetParameterNormalized(
-                            c.ptr,
-                            ((x - r.0 - 12.0) / (r.2 - 24.0)).clamp(0.0, 1.0),
-                        ));
-                        return true;
-                    }
-                }
+                self.press_control(cx, x, y);
                 return true;
-            }
-            WindowEvent::MouseDoubleClick(MouseButton::Left) => {
-                self.end_drag(cx);
-                if self.arp_visible() && hit(rate_header(self.arp_main()), x, y) {
-                    self.release_keys();
-                    let r = rate_header(self.arp_main());
-                    self.edit = Some(ValueEdit::new(
-                        "rate",
-                        (r.0 + r.2 - 176.0, r.1, 176.0, 24.0),
-                        format!("{}", self.params.rate.value()),
-                    ));
-                    return true;
-                }
-                for (c, r) in self.placed_controls() {
-                    if hit(r, x, y) {
-                        if c.toggle {
-                            return true;
-                        }
-                        self.release_keys();
-                        self.edit = Some(ValueEdit::new(
-                            c.id,
-                            (r.0 + 8.0, r.1 + 3.0, r.2 - 16.0, 24.0),
-                            c.value.clone(),
-                        ));
-                        return true;
-                    }
-                }
             }
             WindowEvent::MouseMove(_, _) => match self.drag {
                 Some(Drag::Memory(mut drag)) => {
                     drag.update(x, y);
                     self.drag = Some(Drag::Memory(drag));
+                    return true;
+                }
+                Some(Drag::StrumBound(y_axis, right)) => {
+                    let (min, max, span, value) = if y_axis {
+                        let (min, max) =
+                            expression_bounds(self.params.y_min.value(), self.params.y_max.value());
+                        (min, max, 0.01, 1.0 - (y - PLAY_PAD.1) / PLAY_PAD.3)
+                    } else {
+                        let (min, max) =
+                            strum_bounds(self.params.x_min.value(), self.params.x_max.value());
+                        (min, max, STRUM_MIN_SPAN, (x - PLAY_PAD.0) / PLAY_PAD.2)
+                    };
+                    let value = if right {
+                        value.clamp(min + span, 1.0)
+                    } else {
+                        value.clamp(0.0, max - span)
+                    };
+                    let param = self.bound_param(y_axis, right);
+                    cx.emit(RawParamEvent::SetParameterNormalized(
+                        param.as_ptr(),
+                        param.preview_normalized(value),
+                    ));
                     return true;
                 }
                 Some(Drag::Pad) => {
@@ -455,16 +568,39 @@ impl ChordboardView {
                     ));
                     return true;
                 }
-                Some(Drag::Control(ptr, r)) => {
-                    cx.emit(RawParamEvent::SetParameterNormalized(
-                        ptr,
-                        ((x - r.0 - 12.0) / (r.2 - 24.0)).clamp(0.0, 1.0),
-                    ));
+                Some(Drag::Control(mut drag)) => {
+                    if drag.press.update(x, y) {
+                        if !drag.started {
+                            cx.emit(RawParamEvent::BeginSetParameter(drag.ptr));
+                            drag.started = true;
+                        }
+                        let delta = pleasant_ui::pointer::readout_drag_delta(
+                            x - drag.press.origin.0,
+                            y - drag.press.origin.1,
+                            cx.modifiers().shift(),
+                        );
+                        cx.emit(RawParamEvent::SetParameterNormalized(
+                            drag.ptr,
+                            (drag.norm + delta).clamp(0.0, 1.0),
+                        ));
+                    }
+                    self.drag = Some(Drag::Control(drag));
                     return true;
                 }
                 _ => {}
             },
             WindowEvent::MouseUp(MouseButton::Left) => {
+                if let Some(Drag::Control(mut drag)) = self.drag {
+                    let edit = drag.editable && drag.press.released_as_click(x, y);
+                    self.end_drag(cx);
+                    if edit {
+                        self.release_keys();
+                        if let Some(c) = self.control(drag.press.target) {
+                            self.edit = Some(ValueEdit::new(c.id, drag.press.rect, c.value));
+                        }
+                    }
+                    return true;
+                }
                 if let Some(Drag::Memory(drag)) = self.drag {
                     self.end_drag(cx);
                     self.finish_memory_drag(cx, drag, x, y);

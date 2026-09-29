@@ -1,21 +1,22 @@
-//! Transfer and detector-EQ pages share Damian's quarter-second quintic slide.
+//! Expand Envelope into the curve space with a quarter-second quintic animation.
 use super::*;
 use std::time::{Duration, Instant};
 
 pub(super) const CURVE_HEADER_H: f32 = 32.0;
-fn header_height(mode: u8) -> f32 {
-    if mode == 2 {
-        0.0
-    } else {
+fn header_height(_mode: u8) -> f32 {
+    {
         CURVE_HEADER_H
     }
 }
 pub(super) const AXIS_W: f32 = 44.0;
 pub(super) const PAGE_W: f32 = appearance::PLEASANT_GRAPH_SIZE + AXIS_W;
+/// Only the module boundary moves; meters and all existing controls stay fixed.
+pub(super) const EXPANSION_W: f32 =
+    appearance::PLEASANT_GRAPH_X + appearance::PLEASANT_GRAPH_SIZE - appearance::TRANS_X;
 
 #[derive(Lens, Clone)]
 pub(super) struct GraphPages {
-    progress: f32,
+    pub(super) progress: f32,
     target: f32,
     start: f32,
     started: Instant,
@@ -50,13 +51,6 @@ impl Model for GraphPages {
                 cx.needs_redraw();
             }
         });
-        event.map(|mode: &appearance::SetAppearance, _| {
-            if mode.0 == 2 {
-                self.progress = 0.0;
-                self.target = 0.0;
-                cx.stop_timer(self.timer);
-            }
-        });
     }
 }
 
@@ -77,7 +71,7 @@ pub(super) fn build_model(cx: &mut Context) {
 }
 
 pub(super) fn detector_active(cx: &EventContext) -> bool {
-    EditorData::appearance.get(cx) != 2 && GraphPages::progress.get(cx) >= 1.0
+    GraphPages::progress.get(cx) >= 1.0
 }
 pub(super) fn transfer_active(cx: &EventContext) -> bool {
     GraphPages::progress.get(cx) <= 0.0
@@ -92,14 +86,7 @@ pub(super) fn build(cx: &mut Context, params: Arc<ComposureParams>, display: Arc
                 .left(Pixels(0.0))
                 .top(Pixels(0.0))
                 .width(Pixels(PAGE_W))
-                .height(Pixels(CURVE_HEADER_H))
-                .display(EditorData::appearance.map(|mode| {
-                    if *mode == 2 {
-                        Display::None
-                    } else {
-                        Display::Flex
-                    }
-                }));
+                .height(Pixels(CURVE_HEADER_H));
             ZStack::new(cx, |cx| {
                 graph_chrome::build(cx, EditorData::params, EditorData::display);
                 graph_view::GraphView::new(
@@ -127,14 +114,7 @@ pub(super) fn build(cx: &mut Context, params: Arc<ComposureParams>, display: Arc
                 .left(Pixels(AXIS_W + 12.0))
                 .top(Pixels(24.0))
                 .width(Pixels(96.0))
-                .height(Pixels(96.0))
-                .display(EditorData::appearance.map(|mode| {
-                    if *mode == 2 {
-                        Display::None
-                    } else {
-                        Display::Flex
-                    }
-                }));
+                .height(Pixels(96.0));
             })
             .position_type(PositionType::SelfDirected)
             .left(Pixels(0.0))
@@ -147,36 +127,20 @@ pub(super) fn build(cx: &mut Context, params: Arc<ComposureParams>, display: Arc
             );
         })
         .position_type(PositionType::SelfDirected)
-        .left(GraphPages::progress.map(|p| Pixels(-p * PAGE_W)))
+        .left(Pixels(0.0))
+        .display(GraphPages::progress.map(|p| {
+            if *p == 0.0 {
+                Display::Flex
+            } else {
+                Display::None
+            }
+        }))
         .top(Pixels(0.0))
         .width(Pixels(PAGE_W))
         .height(
             EditorData::appearance
                 .map(|mode| Pixels(appearance::graph_size(*mode) + 40.0 + header_height(*mode))),
         );
-        ZStack::new(cx, |cx| {
-            detector_eq_view::DetectorEqView::new(cx, params.clone(), display.clone())
-                .position_type(PositionType::SelfDirected)
-                .left(Pixels(0.0))
-                .top(Pixels(0.0))
-                .width(Pixels(PAGE_W))
-                .height(Pixels(appearance::PLEASANT_GRAPH_SIZE + CURVE_HEADER_H));
-        })
-        .position_type(PositionType::SelfDirected)
-        .left(GraphPages::progress.map(|p| Pixels((1.0 - p) * PAGE_W)))
-        .top(Pixels(0.0))
-        .width(Pixels(PAGE_W))
-        .height(
-            EditorData::appearance
-                .map(|mode| Pixels(appearance::graph_size(*mode) + 40.0 + header_height(*mode))),
-        )
-        .display(EditorData::appearance.map(|mode| {
-            if *mode == 2 {
-                Display::None
-            } else {
-                Display::Flex
-            }
-        }));
     })
     .position_type(PositionType::SelfDirected)
     .left(EditorData::appearance.map(|mode| Pixels(appearance::graph_x(*mode) - AXIS_W)))
@@ -184,11 +148,29 @@ pub(super) fn build(cx: &mut Context, params: Arc<ComposureParams>, display: Arc
         EditorData::appearance
             .map(|mode| Pixels(appearance::graph_y(*mode) - 12.0 - header_height(*mode))),
     )
-    .width(EditorData::appearance.map(|mode| Pixels(appearance::graph_size(*mode) + AXIS_W)))
+    .width(
+        EditorData::appearance
+            .map(|mode| Pixels(appearance::graph_size(*mode) + AXIS_W + { 12.0 })),
+    )
     .height(
         EditorData::appearance
             .map(|mode| Pixels(appearance::graph_size(*mode) + 40.0 + header_height(*mode))),
     )
+    .overflow(Overflow::Hidden);
+
+    ZStack::new(cx, |cx| {
+        detector_eq_view::DetectorEqView::new(cx, params, display)
+            .position_type(PositionType::SelfDirected)
+            .left(Pixels(0.0))
+            .top(Pixels(0.0))
+            .width(Pixels(PAGE_W))
+            .height(Pixels(appearance::PLEASANT_GRAPH_SIZE + CURVE_HEADER_H));
+    })
+    .position_type(PositionType::SelfDirected)
+    .left(Pixels(appearance::ENV_X + appearance::ENV_W))
+    .top(Pixels(appearance::ENV_Y))
+    .width(GraphPages::progress.map(|p| Pixels(p * EXPANSION_W)))
+    .height(Pixels(appearance::PLEASANT_GRAPH_SIZE + CURVE_HEADER_H))
     .overflow(Overflow::Hidden);
 }
 
@@ -223,7 +205,7 @@ impl View for EqToggle {
         appearance::button(
             &mut d,
             (0.0, 0.0, width, 28.0),
-            if selected { "DETECTOR EQ" } else { "TRANSFER" },
+            if selected { "SC EQ <" } else { "SC EQ >" },
             selected,
             pleasant_ui::GOLD,
         );
@@ -236,14 +218,7 @@ pub(super) fn build_toggle(cx: &mut Context, rect: (f32, f32, f32)) {
         .left(Pixels(rect.0))
         .top(Pixels(rect.1))
         .width(Pixels(rect.2))
-        .height(Pixels(28.0))
-        .display(EditorData::appearance.map(|mode| {
-            if *mode == 2 {
-                Display::None
-            } else {
-                Display::Flex
-            }
-        }));
+        .height(Pixels(28.0));
 }
 
 #[cfg(test)]

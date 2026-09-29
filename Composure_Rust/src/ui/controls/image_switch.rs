@@ -4,32 +4,9 @@ use nih_plug::prelude::Param;
 use nih_plug_vizia::vizia::prelude::*;
 use nih_plug_vizia::widgets::param_base::ParamWidgetBase;
 
-use crate::params::{ComposureParams, ProgramReleaseMode};
+use crate::params::ComposureParams;
 
 use super::param_widget_ext;
-use super::texture_cache::draw_tex;
-use super::theme;
-use super::ui_assets as assets;
-
-pub fn draw_switch(canvas: &mut Canvas, bounds: BoundingBox, on: bool, opacity: f32) {
-    let png = if on {
-        assets::SWITCH_UP
-    } else {
-        assets::SWITCH_DN
-    };
-    let key = if on { "switch_up" } else { "switch_dn" };
-    // Widget is placed at JSFX_x - SWITCH_LEFT_OVERHANG so the 83px art is not clipped.
-    draw_tex(
-        canvas,
-        key,
-        png,
-        bounds.x,
-        bounds.y,
-        theme::SWITCH_W,
-        theme::SWITCH_H,
-        opacity,
-    );
-}
 
 // ── Image switch ─────────────────────────────────────────────────────────────
 
@@ -66,80 +43,16 @@ impl View for ImageSwitch {
         ) {
             return;
         }
-        let on = param_widget_ext::bool_param_on(&self.param_base);
-        draw_switch(canvas, cx.bounds(), on, cx.opacity());
     }
 
     fn event(&mut self, cx: &mut EventContext, event: &mut Event) {
+        let params = super::EditorData::params.get(cx);
+        if super::appearance::harmonic_control_inactive(&params, self.param_base.name()) {
+            return;
+        }
         event.map(|window_event, meta| match window_event {
             WindowEvent::MouseDown(MouseButton::Left) => {
                 param_widget_ext::toggle_bool_param(cx, &self.param_base);
-                cx.needs_redraw();
-                meta.consume();
-            }
-            _ => {}
-        });
-    }
-}
-
-// ── Program release mode (3-state, click cycles) ─────────────────────────────
-
-pub struct ProgModeSwitch {
-    param_base: ParamWidgetBase,
-}
-
-impl ProgModeSwitch {
-    pub fn new<L, P, F>(cx: &mut Context, params: L, map: F) -> Handle<'_, ProgModeSwitch>
-    where
-        L: Lens<Target = Arc<ComposureParams>> + Clone + 'static,
-        P: Param + 'static,
-        F: Fn(&Arc<ComposureParams>) -> &P + Copy + 'static,
-    {
-        let mode_label = params
-            .map(|p: &Arc<ComposureParams>| p.prog_release_mode.value().short_label().to_string());
-
-        ProgModeSwitch {
-            param_base: ParamWidgetBase::new(cx, params, map),
-        }
-        .build(cx, |cx| {
-            Label::new(cx, mode_label)
-                .class("prog-mode-label")
-                .bottom(Pixels(2.0))
-                .left(Stretch(1.0))
-                .right(Stretch(1.0))
-                .height(Pixels(14.0));
-        })
-    }
-}
-
-impl View for ProgModeSwitch {
-    fn element(&self) -> Option<&'static str> {
-        Some("image-switch")
-    }
-
-    fn draw(&self, cx: &mut DrawContext, canvas: &mut Canvas) {
-        if super::appearance::draw_control(
-            cx,
-            canvas,
-            &self.param_base,
-            super::appearance::Control::Switch,
-            self.param_base.modulated_normalized_value(),
-        ) {
-            return;
-        }
-        let mode = match self.param_base.modulated_plain_value().round() as i32 {
-            0 => ProgramReleaseMode::InputDependent,
-            1 => ProgramReleaseMode::GrDependent,
-            _ => ProgramReleaseMode::RateOfChange,
-        };
-        let on = mode.switch_on();
-        draw_switch(canvas, cx.bounds(), on, cx.opacity());
-    }
-
-    fn event(&mut self, cx: &mut EventContext, event: &mut Event) {
-        event.map(|window_event, meta| match window_event {
-            WindowEvent::MouseDown(MouseButton::Left) => {
-                param_widget_ext::cycle_enum_param(cx, &self.param_base, 3);
                 cx.needs_redraw();
                 meta.consume();
             }
@@ -183,17 +96,6 @@ impl View for DetectionModeButton {
         ) {
             return;
         }
-        let bounds = cx.bounds();
-        let opacity = cx.opacity();
-        let feedforward = self.param_base.modulated_plain_value() >= 0.5;
-        let (key, png) = if feedforward {
-            ("feedfwrd_off", assets::FEEDFWRD_OFF)
-        } else {
-            ("feedback_on", assets::FEEDBACK_ON)
-        };
-        draw_tex(
-            canvas, key, png, bounds.x, bounds.y, bounds.w, bounds.h, opacity,
-        );
     }
 
     fn event(&mut self, cx: &mut EventContext, event: &mut Event) {
@@ -208,4 +110,64 @@ impl View for DetectionModeButton {
     }
 }
 
-pub type HarmonicTypeSwitch = ImageSwitch;
+pub struct ProgramEnableButton {
+    param: ParamWidgetBase,
+    input: bool,
+}
+
+impl ProgramEnableButton {
+    pub fn new(cx: &mut Context, input: bool) -> Handle<'_, Self> {
+        Self {
+            param: ParamWidgetBase::new(cx, super::EditorData::params, move |p| {
+                if input {
+                    &p.program_input_enable
+                } else {
+                    &p.program_gr_enable
+                }
+            }),
+            input,
+        }
+        .build(cx, |_| {})
+    }
+
+    fn enabled(&self, params: &ComposureParams) -> bool {
+        if self.input {
+            params.program_input_enabled()
+        } else {
+            params.program_gr_enabled()
+        }
+    }
+}
+
+impl View for ProgramEnableButton {
+    fn draw(&self, cx: &mut DrawContext, canvas: &mut Canvas) {
+        let params = super::EditorData::params.get(cx);
+        let width = cx.bounds().w / cx.scale_factor();
+        let mut d = super::appearance::painter(cx, canvas, width);
+        super::appearance::button(
+            &mut d,
+            (0.0, 0.0, width, 28.0),
+            if self.input { "INPUT DEP" } else { "GR DEP" },
+            self.enabled(&params),
+            if params.prog_release_blend.value() == 0.0 {
+                pleasant_ui::MUTED
+            } else {
+                pleasant_ui::TEAL
+            },
+        );
+    }
+
+    fn event(&mut self, cx: &mut EventContext, event: &mut Event) {
+        event.map(|e, meta| {
+            let params = super::EditorData::params.get(cx);
+            if params.prog_release_blend.value() == 0.0 {
+                return;
+            }
+            if matches!(e, WindowEvent::MouseDown(MouseButton::Left)) {
+                param_widget_ext::toggle_bool_param(cx, &self.param);
+                cx.needs_redraw();
+                meta.consume();
+            }
+        });
+    }
+}

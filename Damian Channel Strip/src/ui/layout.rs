@@ -115,7 +115,12 @@ pub(super) fn resolution_button_rect() -> (f32, f32, f32, f32) {
 }
 
 pub(super) fn output_gain_rect() -> (f32, f32, f32, f32) {
-    (UI_W - MARGIN - WALL_W, FOOTER_BTN_Y, WALL_W, 28.0)
+    (
+        UI_W - MARGIN - WALL_W,
+        FOOTER_BTN_Y,
+        WALL_W,
+        28.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA,
+    )
 }
 
 pub(super) fn output_gain_value_rect() -> (f32, f32, f32, f32) {

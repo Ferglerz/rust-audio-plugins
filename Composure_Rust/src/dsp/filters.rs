@@ -11,13 +11,7 @@ pub struct BiquadCoeffs {
     pub a2: f64,
 }
 
-crate::impl_lerp_f64!(BiquadCoeffs {
-    b0,
-    b1,
-    b2,
-    a1,
-    a2,
-});
+crate::impl_lerp_f64!(BiquadCoeffs { b0, b1, b2, a1, a2 });
 
 impl BiquadCoeffs {
     pub fn converged_to(self, target: Self, eps: f64) -> bool {

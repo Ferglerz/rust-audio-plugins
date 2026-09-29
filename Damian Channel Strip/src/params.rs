@@ -98,7 +98,7 @@ impl Default for StripParams {
             let display_unit = if unit.trim() == "dB" { "" } else { unit };
             FloatParam::new(name, v, FloatRange::Linear { min, max })
                 .with_unit(display_unit)
-                .with_value_to_string(Arc::new(move |v| format!("{:.1}{}", v, display_unit)))
+                .with_value_to_string(Arc::new(move |v| format!("{:.1}", v)))
                 .with_string_to_value(Arc::new(move |text| {
                     let text = text.trim();
                     let unit_trim = unit.trim();
@@ -160,7 +160,7 @@ impl Default for StripParams {
             .with_unit(" ms")
             .with_step_size(0.1)
             .with_smoother(SmoothingStyle::Linear(20.0))
-            .with_value_to_string(Arc::new(|v| format!("{:.1} ms", v)))
+            .with_value_to_string(Arc::new(|v| format!("{:.1}", v)))
             .with_string_to_value(Arc::new(|text| {
                 text.trim()
                     .trim_end_matches("ms")
@@ -292,8 +292,8 @@ impl Default for StripParams {
                     None
                 })),
             pse_listen: BoolParam::new("Listen sidechain", false),
-            pse_voice_det: param("PSE voice detection", 50.0, 0.0, 100.0, " %")
-                .with_step_size(1.0)
+            pse_voice_det: param("PSE voice detection", 0.0, 0.0, 100.0, " %")
+                .with_step_size(5.0)
                 .with_smoother(SmoothingStyle::Linear(20.0)),
             wall_on: BoolParam::new("WALL enabled", true),
             wall_even: param("WALL even", 0.0, 0.0, 100.0, " %")
@@ -468,5 +468,45 @@ mod tests {
             params.output_gain.string_to_normalized_value("-10"),
             Some(params.output_gain.preview_normalized(-10.0))
         );
+    }
+}
+
+#[cfg(test)]
+mod readout_regressions {
+    use super::*;
+
+    #[test]
+    fn attack_and_percent_readouts_include_the_suffix_once() {
+        let params = StripParams::default();
+        assert_eq!(
+            params
+                .comp_attack
+                .normalized_value_to_string(params.comp_attack.preview_normalized(11.9), true),
+            "11.9 ms"
+        );
+        assert_eq!(
+            params
+                .pse_voice_det
+                .normalized_value_to_string(params.pse_voice_det.preview_normalized(25.0), true),
+            "25.0 %"
+        );
+    }
+
+    #[test]
+    fn voice_detection_defaults_to_zero_and_snaps_to_five_percent() {
+        let param = StripParams::default().pse_voice_det;
+        assert_eq!(param.value(), 0.0);
+        for (input, expected) in [
+            (0.0, 0.0),
+            (2.0, 0.0),
+            (3.0, 5.0),
+            (11.0, 10.0),
+            (99.0, 100.0),
+        ] {
+            assert_eq!(
+                param.preview_plain(param.preview_normalized(input)),
+                expected
+            );
+        }
     }
 }

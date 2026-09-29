@@ -76,7 +76,10 @@ impl Plugin for Composure {
         context: &mut impl InitContext<Self>,
     ) -> bool {
         self.chain = ProcessingChain::new(buffer_config.sample_rate as f64);
-        self.ui_display.sample_rate.store(buffer_config.sample_rate, std::sync::atomic::Ordering::Relaxed);
+        self.ui_display.sample_rate.store(
+            buffer_config.sample_rate,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         let graph_range_mode = self.params.graph_range_mode.value();
         self.params.graph_store.select_range(graph_range_mode);
         self.chain.force_update_settings(
@@ -138,8 +141,34 @@ impl Plugin for Composure {
         if editor_open {
             let block_detector_max = self.chain.block_meter_detector_db() as f32;
             let block_gr_max = self.chain.block_meter_gr_db() as f32;
+            self.ui_display.update_block(
+                block_detector_max,
+                block_gr_max,
+                self.chain.block_meter_input_db() as f32,
+            );
+            let rate_activity = self.chain.block_meter_input_rate_activity() as f32;
+            self.ui_display.program_activity.store(
+                self.chain.meter_program_activity() as f32,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            let previous = self
+                .ui_display
+                .input_rate_activity
+                .load(std::sync::atomic::Ordering::Relaxed);
+            let duration = channels[0].len() as f32
+                / self
+                    .ui_display
+                    .sample_rate
+                    .load(std::sync::atomic::Ordering::Relaxed);
+            let faded = previous * (-duration / 0.12).exp();
+            let activity = if rate_activity * previous < 0.0 || rate_activity.abs() >= faded.abs() {
+                rate_activity
+            } else {
+                faded
+            };
             self.ui_display
-                .update_block(block_detector_max, block_gr_max);
+                .input_rate_activity
+                .store(activity, std::sync::atomic::Ordering::Relaxed);
             self.ui_display.update_debug_telemetry(
                 block_detector_max,
                 block_gr_max,

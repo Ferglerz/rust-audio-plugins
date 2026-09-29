@@ -78,6 +78,8 @@ pub struct ProcessingChain {
     final_prev_l: f64,
     final_prev_r: f64,
     block_detector_max_db: f64,
+    block_input_max_db: f64,
+    block_input_rate_activity: f64,
     block_gr_max_db: f64,
     curve_input_db: f64,
     listen_crossfade: f64,
@@ -120,6 +122,8 @@ impl ProcessingChain {
             final_prev_l: 0.0,
             final_prev_r: 0.0,
             block_detector_max_db: MIN_DETECTOR_DB,
+            block_input_max_db: MIN_DETECTOR_DB,
+            block_input_rate_activity: 0.0,
             block_gr_max_db: 0.0,
             curve_input_db: -20.0,
             listen_crossfade: 0.0,
@@ -205,11 +209,18 @@ impl ProcessingChain {
         self.param_smooth_counter -= 1;
 
         let om = self.param_smooth_one_minus;
+        // The master program Blend must reach zero exactly at the end of its ramp.
+        let program_blend = smooth_step(
+            self.smoothed_envelope_params.prog_release_blend,
+            self.target_envelope_params.prog_release_blend,
+            1.0 / (self.param_smooth_counter + 1) as f64,
+        );
         smooth_envelope_params(
             &mut self.smoothed_envelope_params,
             &self.target_envelope_params,
             om,
         );
+        self.smoothed_envelope_params.prog_release_blend = program_blend;
         self.envelope
             .update_runtime_params(&self.smoothed_envelope_params, self.srate, om);
         if !self.filters.coefficients_converged() {
@@ -294,11 +305,26 @@ impl ProcessingChain {
 
     pub fn begin_process_block(&mut self) {
         self.block_detector_max_db = MIN_DETECTOR_DB;
+        self.block_input_max_db = MIN_DETECTOR_DB;
+        self.block_input_rate_activity = 0.0;
         self.block_gr_max_db = 0.0;
     }
 
     pub fn block_meter_detector_db(&self) -> f64 {
         self.block_detector_max_db
+    }
+
+    /// Detector level after sidechain EQ and RMS detection, before input offset.
+    pub fn block_meter_input_db(&self) -> f64 {
+        self.block_input_max_db
+    }
+
+    pub fn block_meter_input_rate_activity(&self) -> f64 {
+        self.block_input_rate_activity
+    }
+
+    pub fn meter_program_activity(&self) -> f64 {
+        self.envelope.program_activity
     }
 
     pub fn block_meter_gr_db(&self) -> f64 {
@@ -345,6 +371,8 @@ impl ProcessingChain {
         self.final_prev_l = 0.0;
         self.final_prev_r = 0.0;
         self.block_detector_max_db = MIN_DETECTOR_DB;
+        self.block_input_max_db = MIN_DETECTOR_DB;
+        self.block_input_rate_activity = 0.0;
         self.block_gr_max_db = 0.0;
         self.denormal_quiet_i = 0;
         self.denormal_flush_done = false;
@@ -437,6 +465,7 @@ impl ProcessingChain {
         let curve_input_db = gr_result.curve_input_db;
         self.curve_input_db = curve_input_db;
         self.block_detector_max_db = self.block_detector_max_db.max(curve_input_db);
+        self.block_input_max_db = self.block_input_max_db.max(detector_level_db);
 
         let target_gr_db = gr_result.target_gr_db;
         self.last_target_gr_db = target_gr_db;
@@ -444,18 +473,23 @@ impl ProcessingChain {
         let can_skip_envelope =
             target_gr_db.abs() < 0.01 && self.envelope.global_smoothed_gain_db.abs() < 0.01;
         if can_skip_envelope {
+            self.envelope.input_rate_activity = 0.0;
+            self.envelope.program_activity = 0.0;
             self.envelope.global_smoothed_gain_db = 0.0;
             self.envelope.global_smoothed_gain_db_before_strength = 0.0;
         } else {
             self.envelope.process_envelope_following(
                 target_gr_db,
-                curve_input_db,
+                detector_level_db,
                 p.strength_multiplier,
                 p.hold_ms,
             );
         }
 
-        self.envelope.prev_detector_db = curve_input_db;
+        if self.envelope.input_rate_activity.abs() > self.block_input_rate_activity.abs() {
+            self.block_input_rate_activity = self.envelope.input_rate_activity;
+        }
+        self.envelope.prev_detector_db = detector_level_db;
 
         let current_gr_db = clamp_gr_db(self.envelope.global_smoothed_gain_db);
 
@@ -625,6 +659,27 @@ mod tests {
     use crate::dsp::envelope::EnvelopeParams;
     use crate::dsp::graph::CompressionGraph;
 
+    #[test]
+    fn shared_program_blend_reaches_bypass_after_automation_ramp() {
+        for srate in [44100.0, 48000.0, 96000.0, 192000.0] {
+            let mut chain = ProcessingChain::new(srate);
+            chain.set_envelope_params(EnvelopeParams {
+                prog_release_blend: 100.0,
+                input_rate_amount: 5.0,
+                ..EnvelopeParams::default()
+            });
+            chain.target_envelope_params.prog_release_blend = 0.0;
+            let samples = (PARAM_SMOOTH_MS * srate / 1000.0).ceil() as usize;
+            chain.param_smooth_counter = samples;
+            for _ in 0..samples {
+                chain.process_sample(0.1, 0.1, None);
+            }
+            assert_eq!(chain.smoothed_envelope_params.prog_release_blend, 0.0);
+            assert_eq!(chain.envelope.input_rate_activity, 0.0);
+            assert_eq!(chain.envelope.program_activity, 0.0);
+        }
+    }
+
     fn bent_chain(srate: f64) -> ProcessingChain {
         let mut chain = ProcessingChain::new(srate);
         let mut g = CompressionGraph::new();
@@ -761,6 +816,28 @@ mod tests {
         assert!(
             det <= -100.0,
             "silent input must not paint a full-scale graph histogram: {det}"
+        );
+    }
+
+    #[test]
+    fn input_meter_and_program_detector_remain_before_offset() {
+        let mut plain = ProcessingChain::new(48000.0);
+        let mut offset = ProcessingChain::new(48000.0);
+        offset.params.input_offset_db = 12.0;
+        plain.begin_process_block();
+        offset.begin_process_block();
+        for _ in 0..100 {
+            plain.detect_and_apply_gr(0.1, 0.1);
+            offset.detect_and_apply_gr(0.1, 0.1);
+        }
+        assert_eq!(plain.block_meter_input_db(), offset.block_meter_input_db());
+        assert_eq!(
+            plain.envelope.prev_detector_db,
+            offset.envelope.prev_detector_db
+        );
+        assert!(
+            (offset.block_meter_detector_db() - plain.block_meter_detector_db() - 12.0).abs()
+                < 1e-9
         );
     }
 }

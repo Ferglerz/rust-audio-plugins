@@ -21,7 +21,9 @@ where
         .width(Pixels(TOGGLE_SIZE))
         .height(Pixels(TOGGLE_SIZE));
 
+    // Telemetry is visual only; otherwise its invisible bounds cover Lookahead/RMS.
     DebugPanel::new(cx, display)
+        .hoverable(false)
         .position_type(PositionType::SelfDirected)
         .left(Pixels(8.0))
         .top(Pixels(390.0))

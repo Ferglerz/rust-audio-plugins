@@ -11,7 +11,6 @@ use crate::params::ComposureParams;
 use super::display::UiDisplay;
 use super::graph_display;
 use super::graph_pages::AXIS_W;
-use super::theme;
 
 const MAX_AXIS_LABELS: usize = 12;
 
@@ -63,39 +62,19 @@ where
         .height(Pixels(14.0));
 }
 
-pub fn build_analog_readout<D>(cx: &mut Context, display: D)
-where
-    D: Lens<Target = Arc<UiDisplay>> + Clone + 'static,
-{
-    let readout_lens = display.map(|d: &Arc<UiDisplay>| d.active_readout());
-    Label::new(cx, readout_lens)
-        .class("control-readout")
-        .display(super::EditorData::appearance.map(|mode| {
-            if *mode == 2 {
-                Display::Flex
-            } else {
-                Display::None
-            }
-        }))
-        .position_type(PositionType::SelfDirected)
-        .left(Pixels(194.0))
-        .top(Pixels(278.0))
-        .width(Pixels(280.0))
-        .height(Pixels(24.0));
-}
-
 fn build_axis_labels<P>(cx: &mut Context, params: P)
 where
     P: Lens<Target = Arc<ComposureParams>> + Clone + 'static,
 {
     for index in 1..=MAX_AXIS_LABELS {
-        for mode in [0_u8, 2_u8] {
+        {
+            let mode = 0;
             let top_lens = params.clone().map(move |p: &Arc<ComposureParams>| {
                 Pixels(axis_label_y(p, index, mode) - super::appearance::graph_y(mode) + 12.0)
             });
             let label_lens = params.map(move |p: &Arc<ComposureParams>| {
                 let labels = graph_display::axis_label_db_values(graph_range_db(p));
-                if mode != 2 && index == labels.len() {
+                if index == labels.len() {
                     String::new()
                 } else {
                     axis_label_text(p, index).unwrap_or_default()
@@ -103,15 +82,8 @@ where
             });
             Label::new(cx, label_lens)
                 .class("graph-axis-label")
-                .display(super::EditorData::appearance.map(move |current| {
-                    if (*current == 2) == (mode == 2) {
-                        Display::Flex
-                    } else {
-                        Display::None
-                    }
-                }))
                 .position_type(PositionType::SelfDirected)
-                .left(Pixels(AXIS_W - theme::sx(30.0)))
+                .left(Pixels(AXIS_W - 33.10345))
                 .top(top_lens)
                 .width(Pixels(26.0))
                 .height(Pixels(12.0));
@@ -165,18 +137,6 @@ impl View for RangeButton {
             }
         });
     }
-    fn draw(&self, cx: &mut DrawContext, canvas: &mut Canvas) {
-        let range = graph_range_db(&super::EditorData::params.get(cx));
-        let mut d = super::appearance::painter(cx, canvas, AXIS_W);
-        d.rect(0.0, 0.0, AXIS_W, 20.0, pleasant_ui::PANEL);
-        d.text_centered(
-            AXIS_W * 0.5,
-            14.0,
-            &format!("-{} ▾", range as i32),
-            11.0,
-            pleasant_ui::MUTED,
-        );
-    }
 }
 
 struct RangeMenu {
@@ -226,6 +186,16 @@ impl View for RangeMenu {
 fn build_range_selector(cx: &mut Context) {
     RangeButton
         .build(cx, |cx| {
+            // Use the axis label style so range text matches in both skins.
+            Label::new(
+                cx,
+                super::EditorData::params.map(|p| format!("-{} ▾", graph_range_db(p) as i32)),
+            )
+            .class("graph-axis-label")
+            .hoverable(false)
+            .width(Stretch(1.0))
+            .height(Stretch(1.0))
+            .text_align(TextAlign::Center);
             PopupData::default().build(cx);
             Popup::new(cx, PopupData::is_open, true, |cx| {
                 RangeMenu {
@@ -250,12 +220,5 @@ fn build_range_selector(cx: &mut Context) {
         .left(Pixels(0.0))
         .top(super::EditorData::params.map(|p| Pixels(range_button_y(p))))
         .width(Pixels(AXIS_W))
-        .height(Pixels(20.0))
-        .display(super::EditorData::appearance.map(|mode| {
-            if *mode == 2 {
-                Display::None
-            } else {
-                Display::Flex
-            }
-        }));
+        .height(Pixels(20.0));
 }

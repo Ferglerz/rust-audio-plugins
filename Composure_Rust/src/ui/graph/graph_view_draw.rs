@@ -36,24 +36,13 @@ pub fn draw_input_trail_dots(
     });
 }
 
-pub fn draw_graph_reflection(
-    canvas: &mut Canvas,
-    bounds: BoundingBox,
-    detector_db: f32,
-    range_db: f32,
-    opacity: f32,
-) {
-    let weight = draw_helpers::reflection_weight_from_level(detector_db, range_db);
-    let Some(alpha) = draw_helpers::reflection_alpha(weight, 0.12, opacity, 0.002) else {
-        return;
-    };
-    let ref_y = bounds.y + bounds.h + theme::METER_REFLECTION_GAP;
-    let strip_w = bounds.w + theme::METER_W * 2.0 + theme::METER_GAP + 24.0;
-    let strip_x = bounds.x - 10.0;
-    let levels = [0.35, 0.55, 0.75, 0.9, 0.75, 0.55, 0.35];
-    draw_helpers::draw_reflection_strip(
-        canvas, strip_x, ref_y, strip_w, 0.55, 0.75, 0.55, alpha, &levels,
-    );
+fn histogram_edge_fade(x: f32, width: f32, scale: f32) -> f32 {
+    if scale == 0.0 {
+        return (x / 100.0).clamp(0.0, 1.0);
+    }
+    let left = (x / (200.0 * scale)).clamp(0.0, 1.0);
+    let right = ((width - x) / (80.0 * scale)).clamp(0.0, 1.0);
+    left.min(right)
 }
 
 pub fn draw_histograms(
@@ -63,16 +52,20 @@ pub fn draw_histograms(
     min_db: f64,
     px_per_db: f32,
     opacity: f32,
+    extension_scale: f32,
 ) {
-    let w = bounds.w as usize;
+    let left_extension = 32.0 * extension_scale;
+    let right_extension = 12.0 * extension_scale;
+    let width = bounds.w + left_extension + right_extension;
+    let w = width.ceil() as usize;
     let display_min = graph_display::display_min_db(min_db);
     display.read_histograms(|gr_hist, input_hist| {
         for i in 0..w {
             let age = (w - 1 - i) * (HISTOGRAM_LEN - 1) / w.max(1);
-            let fade = if i < 100 { i as f32 / 100.0 } else { 1.0 };
+            let fade = histogram_edge_fade(i as f32, width, extension_scale);
 
             let gr = gr_hist.sample_at_age(age);
-            let x = bounds.x + i as f32;
+            let x = bounds.x - left_extension + i as f32;
             let bar_opacity = opacity * 0.6 * fade;
             let col_bounds = BoundingBox {
                 x,
@@ -132,65 +125,6 @@ pub fn draw_grid(
 }
 
 /// Fade the out-of-scope margin around the operational square (uniform on all sides).
-pub fn draw_out_of_scope_fade(
-    canvas: &mut Canvas,
-    bounds: BoundingBox,
-    min_db: f64,
-    max_db: f64,
-    range_db: f64,
-    opacity: f32,
-) {
-    let x0 = bounds.x;
-    let y0 = bounds.y;
-    let w = bounds.w;
-    let h = bounds.h;
-    let x_lo = x0 + (graph_display::db_to_norm(min_db, min_db, range_db) * w as f64) as f32;
-    let x_hi = x0 + (graph_display::db_to_norm(max_db, min_db, range_db) * w as f64) as f32;
-    let y_hi = y0 + h - (graph_display::db_to_norm(max_db, min_db, range_db) * h as f64) as f32;
-    let y_lo = y0 + h - (graph_display::db_to_norm(min_db, min_db, range_db) * h as f64) as f32;
-
-    let fade = Paint::color(VgColor::rgbaf(0.05, 0.05, 0.05, 0.5 * opacity));
-
-    // Partition margin into four non-overlapping bands (avoids corner double-darkening).
-    if y_lo < y0 + h {
-        let mut bottom = Path::new();
-        bottom.rect(x0, y_lo, w, y0 + h - y_lo);
-        canvas.fill_path(&bottom, &fade);
-    }
-    if x_lo > x0 {
-        let mut left = Path::new();
-        left.rect(x0, y_hi, x_lo - x0, y_lo - y_hi);
-        canvas.fill_path(&left, &fade);
-    }
-    if y_hi > y0 {
-        let mut top = Path::new();
-        top.rect(x0, y0, w, y_hi - y0);
-        canvas.fill_path(&top, &fade);
-    }
-    if x_hi < x0 + w {
-        let mut right = Path::new();
-        right.rect(x_hi, y_hi, x0 + w - x_hi, y_lo - y_hi);
-        canvas.fill_path(&right, &fade);
-    }
-
-    let mut edge_paint = Paint::color(vg_color(theme::GRAPH_GRID, opacity * 0.35));
-    edge_paint.set_line_width(1.0);
-
-    let mut ceiling = Path::new();
-    ceiling.move_to(x0, y_hi);
-    ceiling.line_to(x0 + w, y_hi);
-    canvas.stroke_path(&ceiling, &edge_paint);
-
-    let mut left_edge = Path::new();
-    left_edge.move_to(x_lo, y0);
-    left_edge.line_to(x_lo, y0 + h);
-    canvas.stroke_path(&left_edge, &edge_paint);
-
-    let mut right_edge = Path::new();
-    right_edge.move_to(x_hi, y0);
-    right_edge.line_to(x_hi, y0 + h);
-    canvas.stroke_path(&right_edge, &edge_paint);
-}
 
 /// Faded curve continuation from the anchor into the bottom-left margin (off-graph zone).
 pub fn draw_bl_margin_extension(

@@ -87,6 +87,8 @@ impl VelCurve {
     }
 
     pub fn sanitize(mut self) -> Self {
+        self.nodes
+            .retain(|node| node.x.is_finite() && node.y.is_finite());
         if self.nodes.len() < 2 {
             return Self::identity();
         }
@@ -98,9 +100,30 @@ impl VelCurve {
         for node in &mut self.nodes {
             node.x = node.x.clamp(0.0, 1.0);
             node.y = node.y.clamp(0.0, 1.0);
-            node.in_handle.y = node.in_handle.y.clamp(-1.0, 2.0);
-            node.out_handle.y = node.out_handle.y.clamp(-1.0, 2.0);
+            for handle in [&mut node.in_handle, &mut node.out_handle] {
+                if !handle.x.is_finite() {
+                    handle.x = node.x;
+                }
+                handle.y = if handle.y.is_finite() {
+                    handle.y.clamp(-1.0, 2.0)
+                } else {
+                    node.y
+                };
+            }
         }
+        // Keep both endpoints and discard interior knots without room to drag.
+        let mut index = 0;
+        let mut previous_x = 0.0;
+        self.nodes.retain(|node| {
+            let keep = index == 0
+                || index == last
+                || (node.x >= previous_x + MIN_GAP && node.x <= 1.0 - MIN_GAP);
+            index += 1;
+            if keep {
+                previous_x = node.x;
+            }
+            keep
+        });
         self.constrain_handles();
         self
     }
@@ -228,7 +251,7 @@ impl VelCurve {
     }
 
     pub fn move_node(&mut self, index: usize, x: f32, y: f32) {
-        if index >= self.nodes.len() {
+        if index >= self.nodes.len() || !x.is_finite() || !y.is_finite() {
             return;
         }
         let y = y.clamp(0.0, 1.0);
@@ -239,6 +262,9 @@ impl VelCurve {
         } else {
             let low = self.nodes[index - 1].x + MIN_GAP;
             let high = self.nodes[index + 1].x - MIN_GAP;
+            if !low.is_finite() || !high.is_finite() || low > high {
+                return;
+            }
             x.clamp(low, high)
         };
         let dx = x - self.nodes[index].x;
@@ -340,6 +366,69 @@ mod tests {
         assert!(points.len() >= 2);
         for pair in points.windows(2) {
             assert!(pair[1].0 + 1.0e-4 >= pair[0].0);
+        }
+    }
+
+    #[test]
+    fn restored_duplicate_and_crowded_nodes_remain_editable() {
+        let mut curve = VelCurve::identity();
+        curve.nodes = [0.0, 0.001, 0.5, 0.5, 0.5, 0.999, 1.0]
+            .map(|x| VelNode {
+                x,
+                y: x,
+                in_handle: VelHandle::new(x, x),
+                out_handle: VelHandle::new(x, x),
+            })
+            .to_vec();
+        let saved = serde_json::to_string(&curve).unwrap();
+        let mut restored = serde_json::from_str::<VelCurve>(&saved).unwrap().sanitize();
+        assert_eq!(restored.nodes.len(), 3);
+        for index in 0..restored.nodes.len() {
+            restored.move_node(index, 0.5, 0.7);
+        }
+        assert_eq!(restored.nodes.first().unwrap().x, 0.0);
+        assert_eq!(restored.nodes.last().unwrap().x, 1.0);
+        assert_parametric_x_monotonic(&restored);
+        assert!(restored.nodes.windows(2).all(|pair| pair[1].x > pair[0].x));
+    }
+
+    #[test]
+    fn moving_unvalidated_crowded_nodes_does_not_panic() {
+        let mut curve = VelCurve::identity();
+        curve.insert_at(0.5);
+        curve.nodes[0].x = 0.5;
+        curve.nodes[2].x = 0.5;
+        let before = curve.clone();
+        curve.move_node(1, 0.6, 0.7);
+        assert_eq!(curve, before);
+    }
+
+    #[test]
+    fn minimum_gap_edits_survive_sanitizing_and_restoration() {
+        for target in [0.25, 1.0] {
+            let mut curve = VelCurve::identity();
+            curve.insert_at(0.25);
+            curve.insert_at(0.5);
+            curve.move_node(2, target, 0.4);
+            let saved = serde_json::to_string(&curve).unwrap();
+            let restored = serde_json::from_str::<VelCurve>(&saved).unwrap().sanitize();
+            assert_eq!(restored, curve, "minimum gap near {target}");
+        }
+    }
+
+    #[test]
+    fn sanitize_removes_nonfinite_nodes_and_repairs_handles() {
+        let mut curve = VelCurve::identity();
+        curve.insert_at(0.5);
+        curve.nodes[1].x = f32::NAN;
+        curve.nodes[0].out_handle.x = f32::INFINITY;
+        curve.nodes[1].in_handle.y = f32::NEG_INFINITY;
+        curve.nodes[2].in_handle.y = f32::NAN;
+        let curve = curve.sanitize();
+        assert_eq!(curve.nodes.len(), 2);
+        assert_parametric_x_monotonic(&curve);
+        for index in 0..=126 {
+            assert!(curve.eval_y(index as f32 / 126.0).is_finite());
         }
     }
 

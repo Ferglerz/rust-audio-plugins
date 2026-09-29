@@ -74,7 +74,12 @@ pub enum KnobId {
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum DragState {
-    Value { id: KnobId, start_x: f32, start_y: f32, start_norm: f32 },
+    Value {
+        id: KnobId,
+        start_x: f32,
+        start_y: f32,
+        start_norm: f32,
+    },
     Slider {
         id: KnobId,
         start_x: f32,

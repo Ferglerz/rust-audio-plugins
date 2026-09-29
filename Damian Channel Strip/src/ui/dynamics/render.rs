@@ -151,14 +151,23 @@ impl StripView {
                     p1.normalized_value_to_string(p1.unmodulated_normalized_value(), true)
                 };
                 let pse_dragging_knee = matches!(self.drag, Some(Target::PseKnee { .. }));
-                if pse_dragging_knee {
+                let pse_dragging_depth = self.drag == Some(Target::Global(7));
+                if pse_dragging_knee || pse_dragging_depth {
+                    let readout = if pse_dragging_depth {
+                        format!(
+                            "MAX: {}",
+                            format_gr_meter_readout(self.params.pse_depth.value())
+                        )
+                    } else {
+                        format_knee_readout(self.params.pse_knee.value())
+                    };
                     let knee_x = (rect_center_x(self.pse_main_thresh_slider_rect())
                         + rect_center_x(self.pse_main_gr_meter_rect()))
                         * 0.5;
                     d.text_centered(
                         knee_x,
                         meter_value_y(),
-                        &format_knee_readout(self.params.pse_knee.value()),
+                        &readout,
                         HUD_VALUE_SIZE,
                         if pse_bypassed { MUTED } else { PSE_BLUE },
                     );
@@ -170,12 +179,8 @@ impl StripView {
                         HUD_VALUE_SIZE,
                         if pse_bypassed { MUTED } else { PSE_BLUE },
                     );
-                    let pse_dragging_depth = self.drag == Some(Target::Global(7));
-                    let pse_gr_text = format_gr_meter_readout(if pse_dragging_depth {
-                        self.params.pse_depth.value()
-                    } else {
-                        self.shared.pse_gr_peak.load(Ordering::Relaxed)
-                    });
+                    let pse_gr_text =
+                        format_gr_meter_readout(self.shared.pse_gr_peak.load(Ordering::Relaxed));
                     d.text_centered(
                         rect_center_x(self.pse_main_gr_meter_rect()),
                         meter_value_y(),
@@ -423,14 +428,23 @@ impl StripView {
                 let thresh_val_str =
                     p0.normalized_value_to_string(p0.unmodulated_normalized_value(), true);
                 let comp_dragging_knee = matches!(self.drag, Some(Target::CompKnee { .. }));
-                if comp_dragging_knee {
+                let comp_dragging_depth = self.drag == Some(Target::Global(14));
+                if comp_dragging_knee || comp_dragging_depth {
+                    let readout = if comp_dragging_depth {
+                        format!(
+                            "MAX: {}",
+                            format_gr_meter_readout(self.params.comp_depth.value())
+                        )
+                    } else {
+                        format_knee_readout(self.params.comp_knee.value())
+                    };
                     let knee_x = (rect_center_x(self.dyn_main_thresh_slider_rect())
                         + rect_center_x(self.dyn_main_gr_meter_rect()))
                         * 0.5;
                     d.text_centered(
                         knee_x,
                         meter_value_y(),
-                        &format_knee_readout(self.params.comp_knee.value()),
+                        &readout,
                         HUD_VALUE_SIZE,
                         if comp_bypassed { MUTED } else { GOLD },
                     );
@@ -442,12 +456,8 @@ impl StripView {
                         HUD_VALUE_SIZE,
                         if comp_bypassed { MUTED } else { GOLD },
                     );
-                    let comp_dragging_depth = self.drag == Some(Target::Global(14));
-                    let comp_gr_text = format_gr_meter_readout(if comp_dragging_depth {
-                        self.params.comp_depth.value()
-                    } else {
-                        self.shared.gr_peak.load(Ordering::Relaxed)
-                    });
+                    let comp_gr_text =
+                        format_gr_meter_readout(self.shared.gr_peak.load(Ordering::Relaxed));
                     d.text_centered(
                         rect_center_x(self.dyn_main_gr_meter_rect()),
                         meter_value_y(),

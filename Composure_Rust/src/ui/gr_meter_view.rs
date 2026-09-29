@@ -1,9 +1,9 @@
-//! Gain-reduction meters — thresholds, trails, reflection strip.
+//! Gain-reduction meters — thresholds and trails.
 
 use std::sync::{atomic::Ordering, Arc};
 
 use nih_plug_vizia::vizia::prelude::*;
-use nih_plug_vizia::vizia::vg::{Color as VgColor, Paint, Path};
+use nih_plug_vizia::vizia::vg::Color as VgColor;
 use nih_plug_vizia::widgets::param_base::ParamWidgetBase;
 use nih_plug_vizia::widgets::util::ModifiersExt;
 
@@ -11,7 +11,6 @@ use crate::params::ComposureParams;
 
 use super::display::{UiDisplay, METER_TRAIL_FADE_PEAK, TRAIL_MAX_AGE_SECS};
 use super::draw_helpers::{self, gr_vg_color};
-use super::theme;
 use super::threshold_lines::{self, ThresholdLine};
 
 pub struct GrMeterView<L, R, P> {
@@ -23,6 +22,7 @@ pub struct GrMeterView<L, R, P> {
     dragging_threshold: Option<ThresholdLine>,
     hovered_threshold: Option<ThresholdLine>,
     dragging_knee: bool,
+    knee_drag_from_top: bool,
     hovered_knee: bool,
     last_drag_y: f32,
     meter_captured: bool,
@@ -52,6 +52,7 @@ impl GrMeterView<(), (), ()> {
             dragging_threshold: None,
             hovered_threshold: None,
             dragging_knee: false,
+            knee_drag_from_top: false,
             hovered_knee: false,
             last_drag_y: 0.0,
             meter_captured: false,
@@ -68,9 +69,7 @@ where
 {
     fn meter_bounds(&self, cx: &EventContext) -> BoundingBox {
         let b = cx.bounds();
-        if super::EditorData::appearance.get(cx) == 2 {
-            b
-        } else {
+        {
             BoundingBox {
                 y: b.y + 8.0 * cx.scale_factor(),
                 h: b.h - 52.0 * cx.scale_factor(),
@@ -88,10 +87,7 @@ where
         range: f32,
     ) -> Option<(ThresholdLine, bool)> {
         let bounds = self.meter_bounds(cx);
-        if super::EditorData::appearance.get(cx) == 2 {
-            return threshold_lines::find_meter_threshold(params, x, y, bounds, range)
-                .map(|line| (line, cx.modifiers().command() && Self::is_gr_line(line)));
-        }
+
         let scale = cx.scale_factor();
         for (index, line, db, knee) in meter_thresholds(params) {
             let track = pleasant_track(bounds, scale, index);
@@ -132,6 +128,19 @@ where
     ) {
         self.dragging_threshold = Some(line);
         self.dragging_knee = knee_mode;
+        if knee_mode {
+            let bounds = self.meter_bounds(cx);
+            let scale = cx.scale_factor();
+            let params = self.params.get(cx);
+            let range = self.range_db.get(cx).max(1.0);
+            if let Some((index, _, db, _)) = meter_thresholds(&params)
+                .into_iter()
+                .find(|(_, candidate, _, _)| *candidate == line)
+            {
+                let track = { pleasant_track(bounds, scale, index) };
+                self.knee_drag_from_top = mouse_y < threshold_y(line, track, db, range);
+            }
+        }
         self.last_drag_y = mouse_y;
         self.meter_captured = true;
         self.handles.begin_drag(cx, line, knee_mode);
@@ -153,7 +162,7 @@ where
         let bounds = self.meter_bounds(cx);
         let range = self.range_db.get(cx).max(1.0);
         let knee_span = (range * 2.0).max(1.0);
-        let delta_db = -(dy / bounds.h.max(1.0)) * knee_span;
+        let delta_db = knee_drag_delta_db(dy, bounds.h, knee_span, self.knee_drag_from_top);
         self.handles.apply_knee_drag(cx, line, delta_db);
     }
 
@@ -201,11 +210,7 @@ where
                 let range = self.range_db.get(cx).max(1.0);
                 let params = self.params.get(cx);
                 if let Some(line) = self.dragging_threshold {
-                    let knee_now = if super::EditorData::appearance.get(cx) != 2 {
-                        self.dragging_knee
-                    } else {
-                        cx.modifiers().command() && Self::is_gr_line(line)
-                    };
+                    let knee_now = { self.dragging_knee };
                     if knee_now != self.dragging_knee && Self::is_gr_line(line) {
                         self.end_threshold_drag(cx);
                         self.begin_threshold_drag(cx, line, knee_now, cursor_y);
@@ -238,81 +243,28 @@ where
             return;
         }
 
-        let opacity = cx.opacity();
-        let gr = self.gr_db.get(cx);
-        let range = self.range_db.get(cx).max(1.0);
-        let meter_bounds = bounds;
-        let meter_h = meter_bounds.h;
-        let px_per_db = meter_h / range;
         let params = self.params.get(cx);
-        let center_y = meter_bounds.y + meter_h * 0.5;
         let active = self.active_threshold();
-
-        if super::EditorData::appearance.get(cx) != 2 {
-            draw_pleasant_meters(
-                cx,
-                canvas,
-                gr,
-                range,
-                &params,
-                &self.display,
-                active.map(|line| {
-                    (
-                        line,
-                        if self.dragging_threshold.is_some() {
-                            self.dragging_knee
-                        } else {
-                            self.hovered_knee
-                        },
-                    )
-                }),
-            );
-            return;
-        }
-
-        let mut bg = Path::new();
-        bg.rect(meter_bounds.x, meter_bounds.y, meter_bounds.w, meter_h);
-        let bg_paint = Paint::color(VgColor::rgbaf(0.12, 0.12, 0.12, 0.35 * opacity));
-        canvas.fill_path(&bg, &bg_paint);
-
-        draw_trail_lines(
+        draw_pleasant_meters(
+            cx,
             canvas,
-            meter_bounds,
+            self.gr_db.get(cx),
+            self.range_db.get(cx).max(1.0),
+            &params,
             &self.display,
-            px_per_db,
-            center_y,
-            opacity,
-            false,
+            active.map(|line| {
+                (
+                    line,
+                    if self.dragging_threshold.is_some() {
+                        self.dragging_knee
+                    } else {
+                        self.hovered_knee
+                    },
+                )
+            }),
         );
-
-        threshold_lines::draw_gr_blend_thresholds(
-            canvas,
-            meter_bounds,
-            &params,
-            range,
-            opacity,
-            active,
-            false,
-        );
-        threshold_lines::draw_rate_change_threshold(
-            canvas,
-            meter_bounds,
-            &params,
-            opacity,
-            active,
-            false,
-        );
-
-        if let Some((x, y, w, h)) = draw_helpers::gr_bar_rect(gr, meter_bounds, px_per_db) {
-            draw_helpers::gr_fill_bar(canvas, gr, x, y, w, h, opacity);
-        }
-
-        draw_meter_reflection(canvas, meter_bounds, gr, range, opacity);
     }
 }
-
-/// History lines never reach full meter opacity — keeps them below the live readout.
-const METER_REFLECTION_PEAK: f32 = 0.28125;
 
 fn pleasant_track(bounds: BoundingBox, scale: f32, index: usize) -> BoundingBox {
     use super::appearance::*;
@@ -325,6 +277,12 @@ fn pleasant_track(bounds: BoundingBox, scale: f32, index: usize) -> BoundingBox 
     }
 }
 
+// As in Damian, dragging away from the threshold grows the knee on either side.
+fn knee_drag_delta_db(dy: f32, height: f32, span: f32, from_top: bool) -> f32 {
+    let direction = if from_top { -1.0 } else { 1.0 };
+    direction * dy / height.max(1.0) * span
+}
+
 // Input release thresholds span -80..0 dB independently of the transfer graph zoom.
 const INPUT_RANGE_DB: f32 = 80.0;
 fn input_y(bounds: BoundingBox, db: f32) -> f32 {
@@ -334,9 +292,12 @@ fn input_db_from_y(bounds: BoundingBox, y: f32) -> f32 {
     (-INPUT_RANGE_DB * (y - bounds.y) / bounds.h.max(1.0)).clamp(-INPUT_RANGE_DB, 0.0)
 }
 fn meter_thresholds(params: &ComposureParams) -> Vec<(usize, ThresholdLine, f32, f32)> {
-    use crate::params::ProgramReleaseMode;
-    match params.prog_release_mode.value() {
-        ProgramReleaseMode::GrDependent => vec![
+    let mut thresholds = Vec::new();
+    if params.prog_release_blend.value() == 0.0 {
+        return thresholds;
+    }
+    if params.program_gr_enabled() {
+        thresholds.extend([
             (
                 1,
                 ThresholdLine::GrBlendReduction,
@@ -349,27 +310,22 @@ fn meter_thresholds(params: &ComposureParams) -> Vec<(usize, ThresholdLine, f32,
                 params.gr_blend_threshold_addition_db.value(),
                 params.gr_blend_threshold_addition_knee_db.value(),
             ),
-        ],
-        ProgramReleaseMode::RateOfChange => vec![(
-            1,
-            ThresholdLine::RateChangeModifier,
-            params.rate_change_threshold_modifier.value(),
-            0.0,
-        )],
-        ProgramReleaseMode::InputDependent => vec![(
+        ]);
+    }
+    if params.program_input_enabled() {
+        thresholds.push((
             0,
             ThresholdLine::InputLevel,
             params.input_level_threshold_db.value(),
             0.0,
-        )],
+        ));
     }
+    thresholds
 }
 
 fn threshold_y(line: ThresholdLine, bounds: BoundingBox, db: f32, range: f32) -> f32 {
     if line == ThresholdLine::InputLevel {
         input_y(bounds, db)
-    } else if line == ThresholdLine::RateChangeModifier {
-        threshold_lines::rate_modifier_y(bounds, db)
     } else {
         draw_helpers::gr_threshold_y(bounds, db, range, line == ThresholdLine::GrBlendReduction)
     }
@@ -391,6 +347,20 @@ fn visible_meter_height(db: f32, range: f32, height: f32) -> Option<f32> {
     (fill > 0.5).then_some(fill)
 }
 
+// Match the orange/blue GR graph palette, softened slightly for solid meter fills.
+fn pleasant_meter_accent(index: usize) -> VgColor {
+    if index == 0 {
+        return pleasant_ui::TEAL;
+    }
+    let color = gr_vg_color(if index == 1 { -1.0 } else { 1.0 }, 1.0);
+    VgColor {
+        r: color.r + (1.0 - color.r) * 0.14,
+        g: color.g + (1.0 - color.g) * 0.14,
+        b: color.b + (1.0 - color.b) * 0.14,
+        a: 1.0,
+    }
+}
+
 fn draw_pleasant_meters(
     cx: &mut DrawContext,
     canvas: &mut Canvas,
@@ -401,7 +371,7 @@ fn draw_pleasant_meters(
     active: Option<(ThresholdLine, bool)>,
 ) {
     use super::appearance::PLEASANT_METERS_W;
-    use pleasant_ui::{GOLD, LINE, MUTED, TEAL, TEXT};
+    use pleasant_ui::{LINE, MUTED, TEXT};
     let (active, active_knee) = (
         active.map(|(line, _)| line),
         active.is_some_and(|(_, knee)| knee),
@@ -414,14 +384,10 @@ fn draw_pleasant_meters(
         h: height - 52.0,
     };
     let mut d = super::appearance::painter(cx, canvas, PLEASANT_METERS_W);
-    let input = display.detector_db.load(Ordering::Relaxed);
+    let input = display.input_meter_db.load(Ordering::Relaxed);
     for index in 0..3 {
         let track = pleasant_track(bounds, 1.0, index);
-        let accent = match index {
-            0 => MUTED,
-            1 => GOLD,
-            _ => TEAL,
-        };
+        let accent = pleasant_meter_accent(index);
         d.rect(track.x, track.y, track.w, track.h, LINE);
         if index != 0 {
             display.read_trails(|lines| {
@@ -452,7 +418,7 @@ fn draw_pleasant_meters(
                         y.clamp(track.y, track.y + track.h - 2.0),
                         track.w,
                         2.0,
-                        VgColor { a: alpha, ..MUTED },
+                        VgColor { a: alpha, ..accent },
                     );
                 }
             });
@@ -475,30 +441,35 @@ fn draw_pleasant_meters(
             };
             d.rect(track.x, y, track.w, fill, accent);
         }
+        let knee_active = active_knee
+            && match index {
+                1 => active == Some(ThresholdLine::GrBlendReduction),
+                2 => active == Some(ThresholdLine::GrBlendAddition),
+                _ => false,
+            };
         d.text_centered(
             track.x + track.w * 0.5,
             height - 24.0,
             match index {
                 0 => "INPUT",
+                1 | 2 if knee_active => "KNEE",
                 1 => "CUT",
                 _ => "BOOST",
             },
             13.0,
-            MUTED,
+            if knee_active { accent } else { MUTED },
         );
         let threshold = meter_thresholds(params)
             .into_iter()
-            .find(|(i, line, _, _)| *i == index && active == Some(*line));
-        let readout = if let Some((_, line, db, knee)) = threshold {
+            .find(|(i, line, _, _)| *i == index && (index == 0 || active == Some(*line)));
+        let readout = if let Some((_, _, db, knee)) = threshold {
             if active_knee {
                 format!("{knee:.1}")
-            } else if line == ThresholdLine::RateChangeModifier {
-                format!("{db:.2}x")
             } else {
                 format!("{db:.1}")
             }
-        } else if index == 0 && (!value.is_finite() || value <= -INPUT_RANGE_DB) {
-            "−∞".to_owned()
+        } else if index == 0 {
+            String::new()
         } else {
             format!("{value:.1}")
         };
@@ -513,11 +484,7 @@ fn draw_pleasant_meters(
     for (index, line, db, knee) in meter_thresholds(params) {
         let track = pleasant_track(bounds, 1.0, index);
         let y = threshold_y(line, track, db, range);
-        let accent = match index {
-            0 => MUTED,
-            1 => GOLD,
-            _ => TEAL,
-        };
+        let accent = pleasant_meter_accent(index);
         let hover = active == Some(line);
         if matches!(
             line,
@@ -541,7 +508,7 @@ fn draw_pleasant_meters(
                 },
             );
             if hover && active_knee {
-                d.outline(zone, VgColor { a: 0.7, ..TEXT });
+                d.outline(zone, VgColor { a: 0.7, ..accent });
             }
         }
         d.grab_bar(
@@ -551,51 +518,11 @@ fn draw_pleasant_meters(
     }
 }
 
-fn draw_trail_lines(
-    canvas: &mut Canvas,
-    bounds: BoundingBox,
-    display: &UiDisplay,
-    px_per_db: f32,
-    center_y: f32,
-    opacity: f32,
-    pleasant: bool,
-) {
-    display.read_trails(|lines| {
-        for line in lines {
-            let alpha = super::display::fade_by_age(
-                line.age_secs,
-                TRAIL_MAX_AGE_SECS,
-                METER_TRAIL_FADE_PEAK,
-                true,
-            ) * opacity;
-            if alpha < 0.01 {
-                continue;
-            }
-            let Some(y) = draw_helpers::gr_trail_line_y(line.gr_db, bounds, px_per_db, center_y)
-            else {
-                continue;
-            };
-            let color = if pleasant {
-                VgColor {
-                    a: alpha * 0.4,
-                    ..pleasant_ui::MUTED
-                }
-            } else {
-                gr_vg_color(line.gr_db, alpha)
-            };
-            let mut path = Path::new();
-            path.rect(bounds.x, y - 1.0, bounds.w, 3.0);
-            canvas.fill_path(&path, &Paint::color(color));
-        }
-    });
-}
-
 struct MeterThresholdHandles {
     gr_cut: ParamWidgetBase,
     gr_boost: ParamWidgetBase,
     gr_cut_knee: ParamWidgetBase,
     gr_boost_knee: ParamWidgetBase,
-    rate_mod: ParamWidgetBase,
     input_level: ParamWidgetBase,
 }
 
@@ -612,9 +539,6 @@ impl MeterThresholdHandles {
             gr_boost: ParamWidgetBase::new(cx, params.clone(), |p| {
                 &p.gr_blend_threshold_addition_db
             }),
-            rate_mod: ParamWidgetBase::new(cx, params.clone(), |p| {
-                &p.rate_change_threshold_modifier
-            }),
             gr_cut_knee: ParamWidgetBase::new(cx, params.clone(), |p| {
                 &p.gr_blend_threshold_reduction_knee_db
             }),
@@ -629,7 +553,6 @@ impl MeterThresholdHandles {
             (ThresholdLine::InputLevel, false) => Some(&self.input_level),
             (ThresholdLine::GrBlendReduction, false) => Some(&self.gr_cut),
             (ThresholdLine::GrBlendAddition, false) => Some(&self.gr_boost),
-            (ThresholdLine::RateChangeModifier, false) => Some(&self.rate_mod),
             (ThresholdLine::GrBlendReduction, true) => Some(&self.gr_cut_knee),
             (ThresholdLine::GrBlendAddition, true) => Some(&self.gr_boost_knee),
             _ => None,
@@ -653,7 +576,7 @@ impl MeterThresholdHandles {
             return;
         };
         let current = base.unmodulated_plain_value();
-        let v = (current - delta_db).clamp(0.0, 12.0);
+        let v = (current + delta_db).clamp(0.0, 12.0);
         base.set_normalized_value(cx, base.preview_normalized(v));
     }
 
@@ -680,60 +603,20 @@ impl MeterThresholdHandles {
     }
 }
 
-fn draw_meter_reflection(
-    canvas: &mut Canvas,
-    meter_bounds: BoundingBox,
-    gr_db: f32,
-    range_db: f32,
-    opacity: f32,
-) {
-    let meter_weight = draw_helpers::reflection_weight_from_level(gr_db, range_db);
-    let Some(mut meter_alpha) =
-        draw_helpers::reflection_alpha(meter_weight, METER_REFLECTION_PEAK, opacity, 0.001)
-    else {
-        return;
-    };
-
-    let (r, g, b) = if gr_db < 0.0 {
-        let blue_weight = 1.0 - meter_weight * 0.7;
-        let orange_weight = 1.0 - blue_weight;
-        let blue_opacity = meter_alpha * blue_weight * 1.5;
-        let orange_opacity = meter_alpha * orange_weight;
-        let total = (blue_opacity + orange_opacity).max(0.001);
-        meter_alpha = blue_opacity + orange_opacity;
-        (
-            (1.0 * orange_opacity + 0.2 * blue_opacity) / total,
-            (0.5 * orange_opacity + 0.5 * blue_opacity) / total,
-            (0.0 * orange_opacity + 1.0 * blue_opacity) / total,
-        )
-    } else if gr_db > 0.0 {
-        (0.2, 0.5, 1.0)
-    } else {
-        return;
-    };
-
-    let r = r * 0.7 + 0.3;
-    let g = g * 0.7 + 0.3;
-    let b = b * 0.7 + 0.3;
-
-    let ref_y = meter_bounds.y + meter_bounds.h + theme::METER_REFLECTION_GAP;
-    let levels = [0.5, 0.75, 1.0, 1.0, 1.0, 0.75, 0.5];
-    draw_helpers::draw_reflection_strip(
-        canvas,
-        meter_bounds.x,
-        ref_y,
-        meter_bounds.w,
-        r,
-        g,
-        b,
-        meter_alpha,
-        &levels,
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn knee_drag_grows_away_from_threshold_and_shrinks_toward_it() {
+        for from_top in [true, false] {
+            let away = if from_top { -10.0 } else { 10.0 };
+            let delta = knee_drag_delta_db(away, 200.0, 24.0, from_top);
+            assert!((6.0 + delta - 7.2).abs() < 0.001);
+            let delta = knee_drag_delta_db(-away, 200.0, 24.0, from_top);
+            assert!((6.0 + delta - 4.8).abs() < 0.001);
+        }
+    }
 
     #[test]
     fn input_meter_threshold_round_trips_full_parameter_range() {

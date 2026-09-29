@@ -48,7 +48,7 @@ impl KnobLayout {
         self.value_y = self
             .value_y
             .max(self.cy + self.radius + value_size + 4.0)
-            .min(self.bottom - 6.0);
+            .min(self.bottom - crate::value_edit::VALUE_UNDERLINE_OFFSET - 1.0);
         self.radius = self.radius.min(self.value_y - self.cy - value_size - 4.0);
         self
     }
@@ -66,6 +66,11 @@ impl KnobLayout {
 impl Draw<'_> {
     pub fn button(&mut self, r: (f32, f32, f32, f32), label: &str, on: bool, color: Color) {
         self.button_aligned(r, label, on, color, true);
+    }
+
+    pub fn appearance_button(&mut self, r: (f32, f32, f32, f32), label: &str) {
+        self.button(r, label, false, MUTED);
+        self.palette_icon(r.0 - 16.0, r.1 + r.3 * 0.5, MUTED);
     }
 
     pub fn button_left(&mut self, r: (f32, f32, f32, f32), label: &str, on: bool, color: Color) {
@@ -242,6 +247,31 @@ impl Draw<'_> {
         color: Color,
         bypassed: bool,
     ) {
+        self.draw_knob_with_layout(layout, label, value, n, color, bypassed, false);
+    }
+
+    pub fn knob_with_layout_bipolar(
+        &mut self,
+        layout: &KnobLayout,
+        label: &str,
+        value: &str,
+        n: f32,
+        color: Color,
+        bypassed: bool,
+    ) {
+        self.draw_knob_with_layout(layout, label, value, n, color, bypassed, true);
+    }
+
+    fn draw_knob_with_layout(
+        &mut self,
+        layout: &KnobLayout,
+        label: &str,
+        value: &str,
+        n: f32,
+        color: Color,
+        bypassed: bool,
+        bipolar: bool,
+    ) {
         let KnobLayout {
             cx,
             cy,
@@ -273,11 +303,27 @@ impl Draw<'_> {
         }
         self.poly(&bg_pts, LINE, 2.5 * scale);
 
-        if !bypassed && n > 0.005 {
-            let steps = ((24.0 * n).ceil() as usize).max(2);
+        let value_start = if bipolar {
+            start_angle + total_sweep * 0.5
+        } else {
+            start_angle
+        };
+        let value_sweep = cur_angle - value_start;
+        let draw_value = if bipolar {
+            value_sweep.abs() > 0.001
+        } else {
+            n > 0.005
+        };
+        if !bypassed && draw_value {
+            let extent = if bipolar {
+                value_sweep.abs() / total_sweep
+            } else {
+                n
+            };
+            let steps = ((24.0 * extent).ceil() as usize).max(2);
             let mut val_pts = Vec::with_capacity(steps + 1);
             for i in 0..=steps {
-                let a = start_angle + (cur_angle - start_angle) * (i as f32 / steps as f32);
+                let a = value_start + value_sweep * (i as f32 / steps as f32);
                 val_pts.push((cx + rad * a.cos(), cy + rad * a.sin()));
             }
             self.poly(&val_pts, color, 2.5 * scale);
@@ -452,7 +498,7 @@ impl Draw<'_> {
             .map(|m| m.width() / self.s)
             .unwrap_or(70.0);
         self.text(r.0 + r.2 - 12.0 - width, r.1 + 18.0, value, 11.0, TEXT);
-        let y = r.1 + 28.0;
+        let y = r.1 + 28.0 + crate::value_edit::SLIDER_SPACING_EXTRA;
         let bx = r.0 + 12.0;
         let bw = r.2 - 24.0;
         let bh = 16.0;
@@ -475,12 +521,13 @@ impl Draw<'_> {
         }
     }
 
-    pub fn value_underline(&mut self, r: (f32, f32, f32, f32), color: Color) {
+    /// Position from the text baseline, independently of the click/edit bounds.
+    pub fn value_underline(&mut self, r: (f32, f32, f32, f32), baseline: f32, color: Color) {
         self.line(
             r.0 + 4.0,
-            r.1 + r.3 - 1.0,
+            crate::value_edit::value_underline_y(baseline),
             r.0 + r.2 - 4.0,
-            r.1 + r.3 - 1.0,
+            crate::value_edit::value_underline_y(baseline),
             color,
             1.0,
         );
@@ -542,6 +589,7 @@ mod knob_layout_tests {
                 assert!(layout.value_y - value_size >= layout.cy + layout.radius + 4.0);
                 let rect = layout.value_rect(0.0, w);
                 assert!(rect.1 + rect.3 <= h);
+                assert!(crate::value_edit::value_underline_y(layout.value_y) + 0.5 < h);
             }
         }
         assert_eq!(KnobLayout::new((0.0, 0.0, 64.00001, 96.00001)).cy, 45.0);

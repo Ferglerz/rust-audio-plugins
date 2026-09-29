@@ -15,12 +15,7 @@ pub fn blend_two_coefficients(coef1: f64, coef2: f64, blend_factor: f64) -> f64 
     coef1 * (1.0 - blend_factor) + coef2 * blend_factor
 }
 
-pub fn normalized_blend(
-    blend_fast: f64,
-    blend_slow: f64,
-    coef_fast: f64,
-    coef_slow: f64,
-) -> f64 {
+pub fn normalized_blend(blend_fast: f64, blend_slow: f64, coef_fast: f64, coef_slow: f64) -> f64 {
     let s = blend_fast + blend_slow;
     if s > EPS {
         (blend_fast * coef_fast + blend_slow * coef_slow) / s
@@ -34,11 +29,7 @@ pub fn apply_envelope_smoothing(coeff: f64, current: f64, target: f64) -> f64 {
     valid_coeff * current + (1.0 - valid_coeff) * target
 }
 
-pub fn apply_linear_envelope_smoothing(
-    db_per_sample: f64,
-    current: f64,
-    target: f64,
-) -> f64 {
+pub fn apply_linear_envelope_smoothing(db_per_sample: f64, current: f64, target: f64) -> f64 {
     let err = target - current;
     if err.abs() <= db_per_sample {
         target

@@ -3,6 +3,30 @@ use crate::theme::PANEL;
 use nih_plug_vizia::vizia::vg::{Color, Paint, Path};
 
 impl Draw<'_> {
+    /// Small response diagram for filter-shape choices, with a common 0 dB guide.
+    pub fn filter_curve(
+        &mut self,
+        kind: pleasant_dsp::filters::BiquadKind,
+        rect: (f32, f32, f32, f32),
+        color: Color,
+    ) {
+        let (x, y, w, h) = rect;
+        let coeff =
+            pleasant_dsp::filters::BiquadCoefficients::design(kind, 1000.0, 9.0, 0.707, 48000.0);
+        let ordinate = |db: f64| y + h * ((12.0 - db.clamp(-24.0, 12.0)) / 36.0) as f32;
+        let mut guide = color;
+        guide.a *= 0.25;
+        self.line(x, ordinate(0.0), x + w, ordinate(0.0), guide, 0.8);
+        let points: Vec<_> = (0..=32)
+            .map(|i| {
+                let t = i as f32 / 32.0;
+                let freq = 100.0 * 100.0_f64.powf(t as f64);
+                (x + w * t, ordinate(coeff.response_db(freq, 48000.0)))
+            })
+            .collect();
+        self.poly(&points, color, 1.4);
+    }
+
     pub fn power_icon_scaled(
         &mut self,
         cx: f32,
@@ -27,6 +51,32 @@ impl Draw<'_> {
 
     pub fn power_icon(&mut self, cx: f32, cy: f32, color: Color) {
         self.power_icon_scaled(cx, cy, color, 1.0, 1.4);
+    }
+
+    /// Outline painter's palette, drawn as geometry so it works with every font.
+    pub fn palette_icon(&mut self, cx: f32, cy: f32, color: Color) {
+        let points = [
+            (-1.0, -7.0),
+            (-5.0, -5.5),
+            (-7.0, -2.0),
+            (-7.0, 2.0),
+            (-4.5, 5.5),
+            (0.0, 7.0),
+            (4.5, 5.5),
+            (6.5, 2.5),
+            (6.0, 0.5),
+            (3.0, 0.5),
+            (1.5, -1.0),
+            (2.0, -3.0),
+            (5.0, -4.0),
+            (4.0, -6.0),
+            (-1.0, -7.0),
+        ];
+        let points: Vec<_> = points.iter().map(|&(x, y)| (cx + x, cy + y)).collect();
+        self.poly(&points, color, 1.2);
+        for (x, y) in [(-2.0, -4.0), (-4.0, -1.0), (-3.0, 3.0), (1.0, 4.0)] {
+            self.circle(cx + x, cy + y, 1.0, color, true);
+        }
     }
 
     pub fn close_icon(&mut self, cx: f32, cy: f32, color: Color) {

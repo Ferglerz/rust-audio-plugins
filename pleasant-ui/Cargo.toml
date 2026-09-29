@@ -11,3 +11,4 @@ pleasant-dsp = { path = "../pleasant-dsp" }
 nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" }
 nih_plug_vizia = { git = "https://github.com/robbert-vdh/nih-plug.git" }
 atomic_float = "1"
+dark-light = "3"

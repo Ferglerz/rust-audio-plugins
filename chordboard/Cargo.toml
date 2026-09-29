@@ -16,7 +16,7 @@ pleasant-ui = { path = "../pleasant-ui" }
 crossbeam-queue = "0.3"
 
 [features]
-ui-preview = []
+ui-preview = ["nih_plug/standalone"]
 
 [[bin]]
 name = "chordboard-preview"

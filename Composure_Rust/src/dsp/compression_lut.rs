@@ -17,13 +17,7 @@ pub struct ExtrapolationCaps {
 impl ExtrapolationCaps {
     #[inline]
     pub fn apply(&self, input_db: f64, output_db: f64) -> f64 {
-        apply_extrapolation_caps(
-            input_db,
-            output_db,
-            self.min_db,
-            self.max_db,
-            self.range_db,
-        )
+        apply_extrapolation_caps(input_db, output_db, self.min_db, self.max_db, self.range_db)
     }
 }
 

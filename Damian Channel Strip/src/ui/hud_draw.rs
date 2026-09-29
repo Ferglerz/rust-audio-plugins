@@ -148,7 +148,7 @@ fn draw_dyn_row(
         }
         let bar_x = r.0 + 8.0;
         let bar_w = r.2 - 16.0;
-        let bar_y = r.1 + 24.0;
+        let bar_y = r.1 + 24.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA;
         let bar_h = 5.0;
         d.rect(bar_x, bar_y, bar_w, bar_h, LINE);
         let n = n.clamp(0.0, 1.0);
