@@ -147,6 +147,10 @@ struct ChordboardView {
     page_start: f32,
     page_target: i32,
     page_elapsed: f32,
+    expand_progress: f32,
+    expand_start: f32,
+    expand_target: f32,
+    expand_elapsed: f32,
     controls_signature: Vec<f32>,
     slot_signature: [u64; 8],
     mapping_axis: usize,
@@ -197,6 +201,10 @@ impl ChordboardView {
             page_start: params.mode.value().max(1) as f32,
             page_target: params.mode.value().max(1),
             page_elapsed: pleasant_ui::page_slide::DURATION,
+            expand_progress: 0.0,
+            expand_start: 0.0,
+            expand_target: 0.0,
+            expand_elapsed: pleasant_ui::page_slide::DURATION,
             controls_signature: Vec::new(),
             slot_signature: [0; 8],
             mapping_axis: 0,
@@ -208,6 +216,35 @@ impl ChordboardView {
     }
     fn arp_main(&self) -> bool {
         self.params.mode.value() == 3
+    }
+    fn can_expand_strum(&self) -> bool {
+        matches!(self.params.mode.value().max(1), 1 | 2)
+    }
+    fn expand_t(&self) -> f32 {
+        self.expand_progress
+    }
+    fn pad(&self) -> Rect {
+        pad_rect(self.expand_t())
+    }
+    fn play_pad(&self) -> Rect {
+        play_pad_rect(self.expand_t())
+    }
+    fn field(&self, manual: bool) -> Rect {
+        field_rect(self.expand_t(), manual)
+    }
+    fn expand_button(&self) -> Rect {
+        expand_rect(self.expand_t())
+    }
+    fn toggle_expand(&mut self) {
+        if !self.can_expand_strum() && self.expand_target == 0.0 {
+            return;
+        }
+        self.expand_start = self.expand_progress;
+        self.expand_target = if self.expand_target > 0.5 { 0.0 } else { 1.0 };
+        self.expand_elapsed = 0.0;
+        self.menu = None;
+        self.panel = None;
+        self.edit = None;
     }
     fn set_panel(&mut self, panel: Option<Panel>) {
         self.release_keys();
@@ -285,6 +322,7 @@ impl ChordboardView {
             }
             Menu::MappingChannel(false) => (r.0 + 256.0, r.1 + 48.0, 116.0, 28.0),
             Menu::YTarget => (r.0 + 12.0, r.1 + 84.0, 172.0, 28.0),
+            Menu::StrumRate => strum_rate_rect(self.expand_t()),
             _ => menu.trigger_rect(),
         }
     }
@@ -557,6 +595,21 @@ impl ChordboardView {
             self.page_elapsed,
         );
         if was_sliding || self.page_elapsed < pleasant_ui::page_slide::DURATION {
+            cx.needs_redraw();
+        }
+        let was_expanding = self.expand_elapsed < pleasant_ui::page_slide::DURATION;
+        if !self.can_expand_strum() && self.expand_target != 0.0 {
+            self.expand_start = self.expand_progress;
+            self.expand_target = 0.0;
+            self.expand_elapsed = 0.0;
+        }
+        self.expand_elapsed = (self.expand_elapsed + dt).min(pleasant_ui::page_slide::DURATION);
+        self.expand_progress = pleasant_ui::page_slide::position(
+            self.expand_start,
+            self.expand_target,
+            self.expand_elapsed,
+        );
+        if was_expanding || self.expand_elapsed < pleasant_ui::page_slide::DURATION {
             cx.needs_redraw();
         }
         let old = self.snapshot;

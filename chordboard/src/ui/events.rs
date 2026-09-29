@@ -1,5 +1,70 @@
 use super::*;
 impl ChordboardView {
+    fn press_expanded_strum(&mut self, cx: &mut EventContext, x: f32, y: f32) -> bool {
+        if hit(self.expand_button(), x, y) {
+            self.toggle_expand();
+            return true;
+        }
+        if self.params.mode.value() == 1 {
+            if hit(strum_sync_rect(self.expand_t()), x, y) {
+                self.set(
+                    cx,
+                    "strum_sync",
+                    if self.params.strum_sync.value() {
+                        0.0
+                    } else {
+                        1.0
+                    },
+                );
+                return true;
+            }
+            if self.params.strum_sync.value() && hit(strum_rate_rect(self.expand_t()), x, y) {
+                self.open_menu(Menu::StrumRate);
+                return true;
+            }
+        }
+        if self.params.mode.value() == 2 {
+            let play = self.play_pad();
+            for y_axis in [false, true] {
+                let (min, max) = if y_axis {
+                    expression_bounds(self.params.y_min.value(), self.params.y_max.value())
+                } else {
+                    strum_bounds(self.params.x_min.value(), self.params.x_max.value())
+                };
+                for (right, value) in [(false, min), (true, max)] {
+                    let (ax, ay, pointer) = strum_bound_anchor_in(play, y_axis, value);
+                    if pleasant_ui::tag_contains(ax, ay, pointer, x, y) {
+                        self.drag = Some(Drag::StrumBound(y_axis, right));
+                        cx.capture();
+                        cx.emit(RawParamEvent::BeginSetParameter(
+                            self.bound_param(y_axis, right).as_ptr(),
+                        ));
+                        return true;
+                    }
+                }
+            }
+            if hit(play, x, y) {
+                self.drag = Some(Drag::Pad);
+                cx.capture();
+                let px = ((x - play.0) / play.2).clamp(0.0, 1.0);
+                let py = (1.0 - (y - play.1) / play.3).clamp(0.0, 1.0);
+                for ptr in [self.params.x.as_ptr(), self.params.y.as_ptr()] {
+                    cx.emit(RawParamEvent::BeginSetParameter(ptr));
+                }
+                cx.emit(RawParamEvent::SetParameterNormalized(
+                    self.params.x.as_ptr(),
+                    px,
+                ));
+                cx.emit(RawParamEvent::SetParameterNormalized(
+                    self.params.y.as_ptr(),
+                    py,
+                ));
+                self.bridge.send(Command::BeginGesture(px, py));
+                return true;
+            }
+        }
+        true
+    }
     fn press_control(&mut self, cx: &mut EventContext, x: f32, y: f32) {
         for (c, r) in self.placed_controls() {
             if !hit(r, x, y) {
@@ -175,7 +240,16 @@ impl ChordboardView {
         }
         if self.panel.is_none()
             && self.page_elapsed < pleasant_ui::page_slide::DURATION
-            && hit((PAD.0, PAD.1, PAD.2, 360.0), x, y)
+            && hit(
+                (
+                    self.pad().0,
+                    self.pad().1,
+                    self.pad().2,
+                    self.pad().3.max(360.0),
+                ),
+                x,
+                y,
+            )
             && matches!(
                 event,
                 WindowEvent::MouseDown(_) | WindowEvent::MouseScroll(_, _)
@@ -246,6 +320,13 @@ impl ChordboardView {
             WindowEvent::MouseDown(MouseButton::Left) => {
                 cx.focus();
                 self.focused = true;
+                if self.expand_t() > 0.0 && y >= HEADER_H {
+                    return self.press_expanded_strum(cx, x, y);
+                }
+                if self.can_expand_strum() && hit(self.expand_button(), x, y) {
+                    self.toggle_expand();
+                    return true;
+                }
                 if hit(MPE, x, y) {
                     self.open_menu(Menu::Protocol);
                     return true;
@@ -331,7 +412,7 @@ impl ChordboardView {
                     return true;
                 }
                 if self.params.mode.value() == 1 {
-                    if hit(STRUM_SYNC, x, y) {
+                    if hit(strum_sync_rect(self.expand_t()), x, y) {
                         self.set(
                             cx,
                             "strum_sync",
@@ -343,7 +424,8 @@ impl ChordboardView {
                         );
                         return true;
                     }
-                    if self.params.strum_sync.value() && hit(Menu::StrumRate.trigger_rect(), x, y) {
+                    if self.params.strum_sync.value() && hit(strum_rate_rect(self.expand_t()), x, y)
+                    {
                         self.open_menu(Menu::StrumRate);
                         return true;
                     }
@@ -461,7 +543,8 @@ impl ChordboardView {
                             strum_bounds(self.params.x_min.value(), self.params.x_max.value())
                         };
                         for (right, value) in [(false, min), (true, max)] {
-                            let (ax, ay, pointer) = strum_bound_anchor(y_axis, value);
+                            let (ax, ay, pointer) =
+                                strum_bound_anchor_in(self.play_pad(), y_axis, value);
                             if pleasant_ui::tag_contains(ax, ay, pointer, x, y) {
                                 self.drag = Some(Drag::StrumBound(y_axis, right));
                                 cx.capture();
@@ -473,11 +556,12 @@ impl ChordboardView {
                         }
                     }
                 }
-                if self.params.mode.value() == 2 && hit(PLAY_PAD, x, y) {
+                if self.params.mode.value() == 2 && hit(self.play_pad(), x, y) {
                     self.drag = Some(Drag::Pad);
                     cx.capture();
-                    let px = ((x - PLAY_PAD.0) / PLAY_PAD.2).clamp(0.0, 1.0);
-                    let py = (1.0 - (y - PLAY_PAD.1) / PLAY_PAD.3).clamp(0.0, 1.0);
+                    let play = self.play_pad();
+                    let px = ((x - play.0) / play.2).clamp(0.0, 1.0);
+                    let py = (1.0 - (y - play.1) / play.3).clamp(0.0, 1.0);
                     for ptr in [self.params.x.as_ptr(), self.params.y.as_ptr()] {
                         cx.emit(RawParamEvent::BeginSetParameter(ptr));
                     }
@@ -561,14 +645,15 @@ impl ChordboardView {
                     return true;
                 }
                 Some(Drag::StrumBound(y_axis, right)) => {
+                    let play = self.play_pad();
                     let (min, max, span, value) = if y_axis {
                         let (min, max) =
                             expression_bounds(self.params.y_min.value(), self.params.y_max.value());
-                        (min, max, 0.01, 1.0 - (y - PLAY_PAD.1) / PLAY_PAD.3)
+                        (min, max, 0.01, 1.0 - (y - play.1) / play.3)
                     } else {
                         let (min, max) =
                             strum_bounds(self.params.x_min.value(), self.params.x_max.value());
-                        (min, max, STRUM_MIN_SPAN, (x - PLAY_PAD.0) / PLAY_PAD.2)
+                        (min, max, STRUM_MIN_SPAN, (x - play.0) / play.2)
                     };
                     let value = if right {
                         value.clamp(min + span, 1.0)
@@ -583,13 +668,14 @@ impl ChordboardView {
                     return true;
                 }
                 Some(Drag::Pad) => {
+                    let play = self.play_pad();
                     cx.emit(RawParamEvent::SetParameterNormalized(
                         self.params.x.as_ptr(),
-                        ((x - PLAY_PAD.0) / PLAY_PAD.2).clamp(0.0, 1.0),
+                        ((x - play.0) / play.2).clamp(0.0, 1.0),
                     ));
                     cx.emit(RawParamEvent::SetParameterNormalized(
                         self.params.y.as_ptr(),
-                        (1.0 - (y - PLAY_PAD.1) / PLAY_PAD.3).clamp(0.0, 1.0),
+                        (1.0 - (y - play.1) / play.3).clamp(0.0, 1.0),
                     ));
                     return true;
                 }

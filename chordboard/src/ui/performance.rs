@@ -71,7 +71,8 @@ impl ChordboardView {
         }
     }
     pub(super) fn draw_arp(&self, d: &mut Draw) {
-        d.rounded_rect(PAD.0, PAD.1, PAD.2, PAD.3, 8.0, BG);
+        let pad = self.pad();
+        d.rounded_rect(pad.0, pad.1, pad.2, pad.3, 8.0, BG);
         d.font = self.bold_font.get();
         d.text(618.0, 183.0, "Arpeggiator", 14.0, GOLD);
         d.font = self.ui_font.get();
@@ -213,13 +214,10 @@ impl ChordboardView {
         }
     }
     pub(super) fn draw_pad(&self, d: &mut Draw, mode: i32) {
-        d.rounded_rect(PAD.0, PAD.1, PAD.2, PAD.3, 8.0, BG);
+        let pad = self.pad();
+        d.rounded_rect(pad.0, pad.1, pad.2, pad.3, 8.0, BG);
         let manual = mode == 2;
-        let field = if manual {
-            PLAY_PAD
-        } else {
-            (620.0, 203.0, 448.0, 115.0)
-        };
+        let field = self.field(manual);
         let (min, max) = if manual {
             strum_bounds(self.params.x_min.value(), self.params.x_max.value())
         } else {
@@ -273,23 +271,34 @@ impl ChordboardView {
             }
         }
         d.text(
-            PAD.0 + 18.0,
-            PAD.1 + 25.0,
+            pad.0 + 18.0,
+            pad.1 + 25.0,
             if manual { "STRUM FIELD" } else { "AUTO STRUM" },
             TEXT_LABEL,
             TEAL,
         );
-        if manual {
+        self.button(
+            d,
+            self.expand_button(),
+            if self.expand_target > 0.5 {
+                "COLLAPSE ◂"
+            } else {
+                "EXPAND ▸"
+            },
+            self.expand_target > 0.5,
+            TEAL,
+        );
+        if manual && self.expand_t() == 0.0 {
             d.text_right(
-                PAD.0 + PAD.2 - 18.0,
-                PAD.1 + 25.0,
+                pad.0 + pad.2 - 18.0,
+                pad.1 + 25.0,
                 "X STRUM · Y EXPRESSION",
                 TEXT_SMALL,
                 MUTED,
             );
-        } else {
+        } else if !manual {
             d.button(
-                STRUM_SYNC,
+                strum_sync_rect(self.expand_t()),
                 "SWEEP SYNC",
                 self.params.strum_sync.value(),
                 TEAL,
@@ -303,7 +312,7 @@ impl ChordboardView {
                         |(label, _)| label.to_string(),
                     );
                 d.button(
-                    Menu::StrumRate.trigger_rect(),
+                    strum_rate_rect(self.expand_t()),
                     &format!("Sweep: {label} ▾"),
                     self.menu == Some(Menu::StrumRate),
                     GOLD,
@@ -335,7 +344,7 @@ impl ChordboardView {
         }
         for (y_axis, low, high) in [(false, min, max), (true, y_min, y_max)] {
             for (maximum, value) in [(false, low), (true, high)] {
-                let (ax, ay, pointer) = strum_bound_anchor(y_axis, value);
+                let (ax, ay, pointer) = strum_bound_anchor_in(field, y_axis, value);
                 if y_axis {
                     d.line(field.0, ay, field.0 + field.2, ay, alpha(GOLD, 0.35), 1.0);
                 } else {

@@ -150,7 +150,7 @@ impl Menu {
             Self::Scale => (130.0, 190.0, 174.0, 28.0),
             Self::Quality => QUALITY,
             Self::Protocol => MPE,
-            Self::StrumRate => (852.0, 342.0, 220.0, 42.0),
+            Self::StrumRate => STRUM_RATE,
             Self::YTarget => (612.0, 472.0, 224.0, 30.0),
             Self::MappingKind => (616.0, 324.0, 200.0, 30.0),
             Self::MappingChannel(_) => (824.0, 324.0, 110.0, 30.0),
