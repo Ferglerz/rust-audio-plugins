@@ -2,6 +2,16 @@ use nih_plug::prelude::*;
 use nih_plug_vizia::ViziaState;
 use std::sync::Arc;
 
+#[derive(Enum, PartialEq, Eq, Clone, Copy, Debug)]
+pub enum CpuMode {
+    #[id = "fast"]
+    #[name = "Fast"]
+    Fast,
+    #[id = "heavy"]
+    #[name = "Heavy"]
+    Heavy,
+}
+
 #[derive(Params)]
 pub struct OpenWurliUiParams {
     #[persist = "editor-state"]
@@ -15,6 +25,9 @@ pub struct OpenWurliUiParams {
 
     #[id = "speaker"]
     pub speaker_character: FloatParam,
+
+    #[id = "cpu_mode"]
+    pub cpu_mode: EnumParam<CpuMode>,
 
     #[id = "mlp"]
     pub mlp_enabled: BoolParam,
@@ -51,6 +64,8 @@ impl Default for OpenWurliUiParams {
             // Current upstream (v0.7.0) defaults this off. Its README's older
             // parameter table still says on.
             mlp_enabled: BoolParam::new("MLP Corrections", false),
+            // Old presets omit this parameter and retain the previous Fast sound.
+            cpu_mode: EnumParam::new("CPU Mode", CpuMode::Fast),
             reed_decay: multiplier_param("Reed Decay"),
             hammer_hardness: multiplier_param("Hammer Hardness"),
             pickup_drive: multiplier_param("Pickup Drive"),
@@ -69,7 +84,7 @@ impl Default for OpenWurliUiParams {
             .with_string_to_value(Arc::new(|text| {
                 text.trim().trim_end_matches('×').parse().ok()
             })),
-            rail_sag: BoolParam::new("Sag", false),
+            rail_sag: BoolParam::new("Extra Sag", false),
         }
     }
 }

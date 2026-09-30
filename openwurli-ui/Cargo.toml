@@ -1,6 +1,6 @@
 [package]
 name = "openwurli-ui"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Fergler"]
 license = "GPL-3.0-or-later"
@@ -13,4 +13,4 @@ crate-type = ["cdylib", "lib"]
 nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" }
 nih_plug_vizia = { git = "https://github.com/robbert-vdh/nih-plug.git" }
 pleasant-ui = { path = "../pleasant-ui" }
-openwurli-dsp = { git = "https://github.com/Ferglerz/openwurli.git", rev = "fd4f603dd8deef7a57d4449826f2c9d5dd53757e" }
+openwurli-dsp = { git = "https://github.com/Ferglerz/openwurli", rev = "3103753a387424a34eb606a197ebefbe0d8f2e89", features = ["runtime-models"] }

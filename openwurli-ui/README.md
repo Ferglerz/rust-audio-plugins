@@ -47,3 +47,16 @@ On macOS, run `./openwurli-ui/scripts/install.sh` from the workspace root. It us
 ## License and attribution
 
 OpenWurli DSP is by hal0zer0 and is licensed under GPL-3.0-or-later. This wrapper and its Pleasant UI dependency are also GPL-3.0-or-later; the license text is in [LICENSE](LICENSE). Preserve upstream's license and source attribution when distributing binaries; the complete corresponding source includes the pinned OpenWurli revision and this wrapper.
+
+## Fast and Heavy circuit modes (0.1.1)
+
+The main-page **CPU: FAST / CPU: HEAVY** button selects and saves the circuit
+model. Fast remains the default for old presets. A live change settles the
+incoming circuit for 100 ms, then crossfades for 20 ms without retriggering notes.
+Heavy retains its physical amplifier rails; **Extra Sag** is the existing shared
+post-engine effect. The models can sound different.
+
+This release keeps the prior CPU optimizations. Additional CPU candidates are
+deferred pending timing qualification; the failing damper approximation is not
+included. See [runtime modes and study status](docs/runtime-modes.md) for the
+changes, completed checks, remaining validation and preserved research.

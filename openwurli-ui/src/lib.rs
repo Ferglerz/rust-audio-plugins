@@ -1,14 +1,14 @@
 //! OpenWurli UI: an independent nih-plug host shell for upstream OpenWurli DSP.
 
 use nih_plug::{midi::control_change, prelude::*};
-use openwurli_dsp::WurliEngine;
+use openwurli_dsp::{CircuitMode, WurliEngine};
 use std::sync::Arc;
 
+mod engine_info;
 pub mod params;
 pub mod ui;
-mod engine_info;
 
-use params::OpenWurliUiParams;
+use params::{CpuMode, OpenWurliUiParams};
 
 pub struct OpenWurliUi {
     params: Arc<OpenWurliUiParams>,
@@ -16,8 +16,8 @@ pub struct OpenWurliUi {
     finish: FastFinish,
 }
 
-/// Lightweight output effects for the controls that require the slow circuit
-/// solvers upstream. Keep these after the engine so its fast DSP stays intact.
+/// Existing post-engine hiss and extra sag, shared by both circuit modes.
+/// The Heavy circuit also includes its native physical rail behavior.
 struct FastFinish {
     noise_state: u32,
     sag_envelope: f32,
@@ -98,6 +98,11 @@ impl Default for OpenWurliUi {
 
 impl OpenWurliUi {
     fn sync_params(&mut self) {
+        self.engine
+            .set_circuit_mode(match self.params.cpu_mode.value() {
+                CpuMode::Fast => CircuitMode::Fast,
+                CpuMode::Heavy => CircuitMode::Heavy,
+            });
         self.engine.set_volume(self.params.volume.value() as f64);
         self.engine
             .set_tremolo_depth(self.params.tremolo_depth.value() as f64);
@@ -178,12 +183,28 @@ impl Plugin for OpenWurliUi {
         self.params.clone()
     }
 
+    fn filter_state(state: &mut PluginState) {
+        // Missing parameters retain their current value in NIH-plug. Explicitly
+        // restore the old Fast sound even when loading into a Heavy instance.
+        state
+            .params
+            .entry("cpu_mode".into())
+            .or_insert_with(|| nih_plug::wrapper::state::ParamValue::String("fast".into()));
+    }
+
     fn initialize(
         &mut self,
         _audio_io_layout: &AudioIOLayout,
         buffer_config: &BufferConfig,
         _context: &mut impl InitContext<Self>,
     ) -> bool {
+        // Restore the selected circuit before preparation so a saved Heavy
+        // session starts in Heavy without an initial transition from Fast.
+        self.engine
+            .set_circuit_mode(match self.params.cpu_mode.value() {
+                CpuMode::Fast => CircuitMode::Fast,
+                CpuMode::Heavy => CircuitMode::Heavy,
+            });
         self.engine
             .set_sample_rate(buffer_config.sample_rate as f64);
         self.finish.set_sample_rate(buffer_config.sample_rate);
@@ -299,6 +320,87 @@ mod tests {
         }
     }
 
+    struct TestInitContext;
+
+    impl InitContext<OpenWurliUi> for TestInitContext {
+        fn plugin_api(&self) -> PluginApi {
+            PluginApi::Clap
+        }
+        fn execute(&self, _: ()) {}
+        fn set_latency_samples(&self, _: u32) {}
+        fn set_current_voice_capacity(&self, _: u32) {}
+    }
+
+    fn restore_cpu_mode(plugin: &OpenWurliUi, state: &mut PluginState) {
+        OpenWurliUi::filter_state(state);
+        let nih_plug::wrapper::state::ParamValue::String(id) = &state.params["cpu_mode"] else {
+            panic!("CPU mode should use stable saved IDs");
+        };
+        let (_, ptr, _) = plugin
+            .params
+            .param_map()
+            .into_iter()
+            .find(|(id, _, _)| id == "cpu_mode")
+            .expect("saved CPU parameter");
+        let ParamPtr::EnumParam(ptr) = ptr else {
+            panic!("CPU mode must be an enum")
+        };
+        // Same enum-ID restoration used by NIH-plug. The plugin's Arc keeps
+        // this parameter alive throughout the call.
+        assert!(unsafe { (*ptr).set_from_id(id) });
+    }
+
+    #[test]
+    fn cpu_mode_restore_initializes_selected_audio_and_old_presets_use_fast() {
+        with_circuit_stack(|| {
+            let mut plugin = OpenWurliUi::default();
+            // Restore Heavy first, then load an old state into that instance.
+            // An absent cpu_mode must actively select Fast, not retain Heavy.
+            for (saved_id, expected) in [
+                (Some("heavy"), CircuitMode::Heavy),
+                (None, CircuitMode::Fast),
+            ] {
+                let mut state = PluginState {
+                    version: "0.1.0".into(),
+                    params: Default::default(),
+                    fields: Default::default(),
+                };
+                if let Some(id) = saved_id {
+                    state.params.insert(
+                        "cpu_mode".into(),
+                        nih_plug::wrapper::state::ParamValue::String(id.into()),
+                    );
+                }
+                restore_cpu_mode(&plugin, &mut state);
+                plugin.reset();
+                assert!(plugin.initialize(
+                    &OpenWurliUi::AUDIO_IO_LAYOUTS[0],
+                    &BufferConfig {
+                        sample_rate: 48_000.0,
+                        min_buffer_size: None,
+                        max_buffer_size: 256,
+                        process_mode: ProcessMode::Realtime,
+                    },
+                    &mut TestInitContext
+                ));
+                assert_eq!(plugin.engine.circuit_mode(), expected);
+                let mut reference = WurliEngine::new_with_circuit_mode(48_000.0, expected);
+                reference.warm_up();
+                plugin.engine.note_on(60, 0.8);
+                reference.note_on(60, 0.8);
+                let mut actual = [0.0; 256];
+                let mut wanted = [0.0; 256];
+                plugin.render_block(&mut actual, || None);
+                reference.render(&mut wanted);
+                assert_eq!(
+                    actual.map(f32::to_bits),
+                    wanted.map(f32::to_bits),
+                    "restored mode must already be settled before the first note"
+                );
+            }
+        });
+    }
+
     #[test]
     fn midi_event_is_applied_at_its_sample_boundary() {
         with_circuit_stack(|| {
@@ -370,6 +472,7 @@ mod tests {
                 "volume",
                 "trem_depth",
                 "speaker",
+                "cpu_mode",
                 "mlp",
                 "reed_decay",
                 "hammer_hardness",
@@ -384,6 +487,7 @@ mod tests {
         assert_eq!(params.tremolo_depth.default_plain_value(), 0.5);
         assert_eq!(params.speaker_character.default_plain_value(), 0.0);
         assert!(!params.mlp_enabled.default_plain_value());
+        assert_eq!(params.cpu_mode.default_plain_value(), CpuMode::Fast);
         assert_eq!(params.reed_decay.default_plain_value(), 1.0);
         assert_eq!(params.hammer_hardness.default_plain_value(), 1.0);
         assert_eq!(params.pickup_drive.default_plain_value(), 1.0);

@@ -26,6 +26,7 @@ const KNOB_H: f32 = 168.0;
 const KNOB_GAP: f32 = 18.0;
 const KNOB_X: f32 = 45.0;
 const MLP_BUTTON: (f32, f32, f32, f32) = (45.0, 284.0, 238.0, 36.0);
+const CPU_BUTTON: (f32, f32, f32, f32) = (307.0, 284.0, 172.0, 36.0);
 const THEME_BUTTON: (f32, f32, f32, f32) = (601.0, 21.0, 80.0, 30.0);
 const COG_BUTTON: (f32, f32, f32, f32) = (541.0, 21.0, 32.0, 30.0);
 const ENGINE_BUTTON: (f32, f32, f32, f32) = (426.0, 21.0, 94.0, 30.0);
@@ -230,6 +231,14 @@ impl View for OpenWurliView {
                         self.show_engine = false;
                     } else if self.show_engine {
                         // The information page has no sound controls.
+                    } else if !self.show_advanced && Self::hit(x, y, CPU_BUTTON) {
+                        self.end_drag(cx);
+                        let next = if self.params.cpu_mode.value() == crate::params::CpuMode::Fast {
+                            1.0
+                        } else {
+                            0.0
+                        };
+                        Self::emit_once(cx, self.params.cpu_mode.as_ptr(), next);
                     } else if !self.show_advanced && Self::hit(x, y, MLP_BUTTON) {
                         let next = if self.params.mlp_enabled.value() {
                             0.0
@@ -340,16 +349,16 @@ impl View for OpenWurliView {
         d.button(ENGINE_BUTTON, "ENGINE", self.show_engine, TEAL);
 
         if self.show_engine {
-            use crate::engine_info;
-            d.text(45.0, 103.0, engine_info::TITLE, 15.0, GOLD);
-            d.text(45.0, 125.0, engine_info::MODEL, 11.0, MUTED);
-            for (index, line) in engine_info::CHANGES.iter().enumerate() {
+            let info = crate::engine_info::for_mode(self.params.cpu_mode.value());
+            d.text(45.0, 103.0, info.title, 15.0, GOLD);
+            d.text(45.0, 125.0, info.model, 11.0, MUTED);
+            for (index, line) in info.changes.iter().enumerate() {
                 d.text(45.0, 157.0 + index as f32 * 21.0, line, 11.0, TEXT);
             }
             d.rect(45.0, 218.0, 630.0, 1.0, LINE);
-            d.text(45.0, 244.0, engine_info::CPU_RESULT, 12.0, TEAL);
-            d.text(45.0, 268.0, engine_info::AUDIO_RESULT, 12.0, GOLD);
-            d.text(45.0, 307.0, engine_info::CONDITIONS, 10.0, MUTED);
+            d.text(45.0, 244.0, info.cpu_result, 12.0, TEAL);
+            d.text(45.0, 268.0, info.audio_result, 12.0, GOLD);
+            d.text(45.0, 307.0, info.conditions, 10.0, MUTED);
         } else if self.show_advanced {
             for knob in Knob::ADVANCED {
                 self.draw_advanced_slider(&mut d, knob);
@@ -360,7 +369,7 @@ impl View for OpenWurliView {
                 self.params.noise_enabled.value(),
                 TEAL,
             );
-            d.button(SAG_BUTTON, "SAG", self.params.rail_sag.value(), GOLD);
+            d.button(SAG_BUTTON, "EXTRA SAG", self.params.rail_sag.value(), GOLD);
             d.text(
                 45.0,
                 318.0,
@@ -402,7 +411,14 @@ impl View for OpenWurliView {
                 self.params.mlp_enabled.value(),
                 TEAL,
             );
-            d.text(307.0, 307.0, "PHYSICAL MODEL  /  64 VOICES", 11.0, TEXT);
+            let heavy = self.params.cpu_mode.value() == crate::params::CpuMode::Heavy;
+            d.button(
+                CPU_BUTTON,
+                if heavy { "CPU: HEAVY" } else { "CPU: FAST" },
+                heavy,
+                GOLD,
+            );
+            d.text(509.0, 307.0, "64 VOICES", 11.0, TEXT);
         }
         d.text(
             45.0,
