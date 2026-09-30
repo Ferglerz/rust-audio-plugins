@@ -1,5 +1,6 @@
-//! Mode-specific descriptions. Figures are retained first-pass measurements,
-//! not a live CPU meter or a qualification of the runtime switching build.
+//! Mode-specific descriptions. Figures are retained measurements, not a live
+//! CPU meter. Sources: docs/cpu-optimization-results.md (first pass) and
+//! docs/runtime-modes.md (exact second pass against 0.1.1).
 
 use crate::params::CpuMode;
 
@@ -18,27 +19,28 @@ pub fn for_mode(mode: CpuMode) -> EngineInfo {
             title: "FAST ENGINE / PERFORMANCE",
             model: "Legacy preamp + behavioral amp / native equations / 64 voices",
             changes: [
-                "Reed modes run in pairs; stable coefficients are reused.",
+                "Reed modes run in pairs; stable coefficients and currents are reused.",
                 "Original circuit equations retained; lookup tables disabled.",
                 "Extra Sag is optional post-engine compression.",
             ],
-            // Apple M1 report: docs/cpu-optimization-results.md. This predates
-            // the runtime model selector and the second optimization pass.
-            cpu_result: "First pass: 64 voices / 15.7% less CPU vs original",
-            audio_result: "First pass: 1,542 cases / 85.9M samples bit-identical",
-            conditions: "M1 / 48 kHz / 256 samples. 3.8% vs prior SIMD; low polyphony similar.",
+            // First pass: Apple M1 against the original engine. Second pass:
+            // x86-64 VM against 0.1.1; the two percentages do not add.
+            cpu_result: "64 voices: 15.7% less CPU vs original; pass 2 up to 13% vs 0.1.1",
+            audio_result: "Bit-identical: 1,542 cases vs original, 1,651 cases vs 0.1.1",
+            conditions:
+                "48 kHz / 256 samples. Pass 1 on M1; pass 2 on x86-64, most with vibrato off.",
         },
         CpuMode::Heavy => EngineInfo {
             title: "HEAVY ENGINE / PERFORMANCE",
             model: "Full circuit preamp + 7-BJT power amp / native equations / 64 voices",
             changes: [
                 "Main and shadow preamp circuits; physical amp rail sag active.",
-                "Extra Sag adds the same optional compression as Fast mode.",
-                "Original circuit equations retained; lookup tables disabled.",
+                "Shared matrix rebuilds; transistor solves run in lockstep.",
+                "Original circuit equations retained; Extra Sag stays optional.",
             ],
-            cpu_result: "Full circuit model / no new CPU gain claimed",
-            audio_result: "Original analytical solver retained",
-            conditions: "Live mode changes: 100 ms circuit settling + 20 ms crossfade.",
+            cpu_result: "35-56% less CPU vs 0.1.1 (1 to 64 voices)",
+            audio_result: "1,651 cases / 95.0M samples bit-identical to 0.1.1",
+            conditions: "x86-64 / 48 kHz / 256 samples. Mode change: 100 ms settle + 20 ms fade.",
         },
     }
 }
