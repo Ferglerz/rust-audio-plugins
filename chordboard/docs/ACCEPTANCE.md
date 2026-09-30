@@ -4,6 +4,8 @@
 
 Run focused crate check, unit tests, Clippy and the install script. `scripts/verify-clap.py` additionally loads the real CLAP bundle as a tiny headless host and verifies passthrough, event timing, parameter automation, harmony, CC1 and MPE. It does not access a DAW, MIDI hardware or audio device.
 
+For the focused Hold chord regression, run `python3 chordboard/scripts/verify-clap.py ~/Library/Audio/Plug-Ins/CLAP/Chordboard.clap --held-chord` from the workspace root. It checks generated sus2 MIDI after simultaneous or adjacent-sample releases in either order, alteration-only release, and root re-triggering back to the base chord.
+
 The native `ui-preview` executable uses the real plugin, parameter updates and processing loop with a dummy backend by default. It supports interactive layout and control inspection without opening audio/MIDI devices. MIDI Learn requires an explicitly selected MIDI-capable backend. Preview and source checks do not establish DAW routing or hardware behavior; no DAW or hardware verification is claimed by the interface redesign.
 
 ## Interface acceptance checklist
@@ -16,6 +18,7 @@ The native `ui-preview` executable uses the real plugin, parameter updates and p
 - Check X Strum and Y Destination summaries and local controller editors. Preserve learned source/channel and range behavior, field calibration, strum rendering, trail and processing timing.
 - Check EXPAND / COLLAPSE on Auto and Manual Strum. The field should cover the body below the title header and return without changing strum calibration.
 - Check Manual Strum trackpad Latch: hover plays the field without a click, including when expanded; click-drag still captures, and MIN / MAX grips still calibrate.
+- Click and slightly move each Modulation source: no route or parameter should change. Drag to Strings or Spread: eligible controls highlight, the cable names the proposed link, and only a valid drop assigns it. Drop elsewhere, press Escape during the drag, and lose focus to cancel. Repeating a link must open its existing slot; replacing its source must preserve minimum, maximum and curve. Check linked-source hover highlights and both appearance modes.
 
 These checks cover the interface. The user-operated checks below remain necessary for host and hardware acceptance.
 
@@ -23,10 +26,10 @@ These checks cover the interface. The user-operated checks below remain necessar
 
 1. Connect only Osmose's external Play / Port 1 to the test track; choose its MPE configuration. Place Chordboard before an MPE destination instrument and confirm generated MIDI reaches it.
 2. Choose MPE in the protocol dropdown and select Manual Strum. Match the destination member bend ±48 and master ±2 ranges. Learn the physical bottom octave. Confirm selector keys are silent and latch the displayed quality.
-3. In Chord mode play C alone, then D, F and F# as the second input. Expect sus2, sus4 and C–E–F#. Press a third key: it must not enter until released/repressed with a free slot.
-4. Release the second input first: base chord returns. Repeat, releasing the root first: the original root remains until both accepted notes release. Confirm the second key never takes expression ownership.
+3. With Hold chord off, in Chord mode play C alone, then D, F and F# as the second input. Expect sus2, sus4 and C–E–F#. Press a third key: it waits while two inputs own the chord, then starts its own chord when it is the only held key. Check both release orders.
+4. With Hold chord off, release the second input first: base chord returns. Repeat, releasing the root first: the sole remaining key starts its own chord and takes expression ownership. Turn Hold chord on, play C+D and release both almost simultaneously in either order: Csus2 must remain. Release only D: Csus2 must also remain. Re-press C to reset; while C is held, press F to replace the alteration. Repeat in Auto Strum, Manual Strum and Arpeggiator, checking that releases do not restart playback.
 5. Apply initial pressure, deeper aftertouch and sideways motion to the first input. Every generated voice must follow pressure, CC74 and bend. Applying those gestures to the second input must not take over the chord.
-6. Hold the second input while releasing the first, then play another note that reuses its MPE channel. Confirm expression does not jump to that ignored note.
+6. Hold the second input while releasing the first, then play another note that reuses its MPE channel. Confirm expression stays with the promoted root rather than jumping to the reused channel.
 7. Switch to Manual Strum. Sweep the mod wheel both directions, slowly and quickly. Every crossed string should trigger in order; holding still and small jitter must not retrigger. The wheel must not change modes.
 8. Hold expressive pressure/bend while slowly strumming: later notes should begin with the existing expression, without a neutral-pitch attack. Test touch gate and a learned fader if available.
 9. Press Up/Down: inversion wraps after the number of chord tones, with no accumulating octave shift. Test changing three tones to four while inverted, and verify releases for replaced notes.

@@ -1,12 +1,12 @@
 use super::*;
 impl ChordboardView {
     fn press_expanded_strum(&mut self, cx: &mut EventContext, x: f32, y: f32) -> bool {
-        if hit(self.expand_button(), x, y) {
+        if self.can_expand_strum() && hit(self.expand_button(), x, y) {
             self.end_pad_hover(cx);
             self.toggle_expand();
             return true;
         }
-        if self.params.mode.value() == 1 {
+        if self.mode() == 1 {
             if hit(strum_sync_rect(self.expand_t()), x, y) {
                 self.set(
                     cx,
@@ -24,7 +24,7 @@ impl ChordboardView {
                 return true;
             }
         }
-        if self.params.mode.value() == 2 && hit(strum_latch_rect(self.expand_t()), x, y) {
+        if self.mode() == 2 && hit(strum_latch_rect(self.expand_t()), x, y) {
             self.set(
                 cx,
                 "strum_latch",
@@ -36,7 +36,7 @@ impl ChordboardView {
             );
             return true;
         }
-        if self.params.mode.value() == 2 {
+        if self.mode() == 2 {
             if let Some((y_axis, right)) = self.strum_bound_at(x, y) {
                 self.end_pad_hover(cx);
                 self.drag = Some(Drag::StrumBound(y_axis, right));
@@ -60,6 +60,14 @@ impl ChordboardView {
             }
             if c.id == "quality" {
                 self.open_menu(Menu::Quality);
+            } else if c.id == "voice_leading" {
+                Self::emit(
+                    cx,
+                    c.ptr,
+                    self.params
+                        .voice_leading
+                        .preview_normalized((self.params.voice_leading.value() + 1) % 3),
+                );
             } else if c.id == "spread" {
                 Self::emit(
                     cx,
@@ -131,12 +139,43 @@ impl ChordboardView {
             }
             cx.needs_redraw();
         }
-        // Escape belongs to the host; it is not a Chordboard shortcut.
+        // Cancel an in-progress route drag; otherwise Escape belongs to the host.
         if matches!(
             event,
             WindowEvent::KeyDown(Code::Escape, _) | WindowEvent::KeyUp(Code::Escape, _)
         ) {
+            if matches!(self.drag, Some(Drag::Route(_) | Drag::RouteNode(..))) {
+                self.end_drag(cx);
+                cx.needs_redraw();
+                return true;
+            }
             return false;
+        }
+        if let Some(Drag::Route(mut drag)) = self.drag {
+            match event {
+                WindowEvent::MouseMove(_, _) => {
+                    drag.update(x, y);
+                    if drag.active && self.panel == Some(Panel::Routes) {
+                        self.panel = None;
+                    }
+                    self.drag = Some(Drag::Route(drag));
+                    return true;
+                }
+                WindowEvent::MouseUp(MouseButton::Left) => {
+                    drag.update(x, y);
+                    if drag.active && self.panel == Some(Panel::Routes) {
+                        self.panel = None;
+                    }
+                    self.end_drag(cx);
+                    if drag.active {
+                        self.finish_route_drag(cx, drag.source, x, y);
+                    }
+                    cx.needs_redraw();
+                    return true;
+                }
+                WindowEvent::MouseScroll(_, _) | WindowEvent::MouseDown(_) => return true,
+                _ => {}
+            }
         }
         if self.edit.is_some() {
             match event {
@@ -311,15 +350,48 @@ impl ChordboardView {
                 cx.focus();
                 self.focused = true;
                 if self.strum_bound_at(x, y).is_some()
-                    || !(self.params.mode.value() == 2 && hit(self.play_pad(), x, y))
+                    || !(self.mode() == 2 && hit(self.play_pad(), x, y))
                 {
                     self.end_pad_hover(cx);
+                }
+                if hit(PIANO_SURFACE, x, y) {
+                    if self.panel.is_some() {
+                        self.set_panel(None);
+                    }
+                    return self.press_piano(cx, x, y);
                 }
                 if self.expand_t() > 0.0 && y >= HEADER_H {
                     return self.press_expanded_strum(cx, x, y);
                 }
                 if self.can_expand_strum() && hit(self.expand_button(), x, y) {
                     self.toggle_expand();
+                    return true;
+                }
+                if let Some(source) =
+                    (0..crate::engine::routing::SOURCE_COUNT).find(|&i| hit(meter_rect(i), x, y))
+                {
+                    self.end_drag(cx);
+                    self.drag = Some(Drag::Route(RouteDrag::new(source, x, y)));
+                    cx.capture();
+                    return true;
+                }
+                if hit(ROUTES_BUTTON, x, y) {
+                    self.set_panel(if self.panel == Some(Panel::Routes) {
+                        None
+                    } else {
+                        Some(Panel::Routes)
+                    });
+                    return true;
+                }
+                if self.panel == Some(Panel::Routes) && hit(self.panel_rect(Panel::Routes), x, y) {
+                    if hit(self.panel_close_rect(Panel::Routes), x, y) {
+                        self.set_panel(None);
+                        return true;
+                    }
+                    if self.press_routes(cx, x, y) {
+                        return true;
+                    }
+                    self.press_control(cx, x, y);
                     return true;
                 }
                 if hit(MPE, x, y) {
@@ -406,7 +478,7 @@ impl ChordboardView {
                     );
                     return true;
                 }
-                if self.params.mode.value() == 1 {
+                if self.mode() == 1 {
                     if hit(strum_sync_rect(self.expand_t()), x, y) {
                         self.set(
                             cx,
@@ -430,7 +502,7 @@ impl ChordboardView {
                     return true;
                 }
                 for i in 0..3 {
-                    if self.params.mode.value() == 1 && hit(direction_rect(i), x, y) {
+                    if self.mode() == 1 && hit(direction_rect(i), x, y) {
                         Self::emit(
                             cx,
                             self.params.direction.as_ptr(),
@@ -439,7 +511,7 @@ impl ChordboardView {
                         return true;
                     }
                 }
-                if self.params.mode.value() == 2 && hit(strum_latch_rect(self.expand_t()), x, y) {
+                if self.mode() == 2 && hit(strum_latch_rect(self.expand_t()), x, y) {
                     self.set(
                         cx,
                         "strum_latch",
@@ -542,7 +614,7 @@ impl ChordboardView {
                 if self.memory_press(cx, x, y) {
                     return true;
                 }
-                if self.params.mode.value() == 2 {
+                if self.mode() == 2 {
                     if let Some((y_axis, right)) = self.strum_bound_at(x, y) {
                         self.end_pad_hover(cx);
                         self.drag = Some(Drag::StrumBound(y_axis, right));
@@ -553,7 +625,7 @@ impl ChordboardView {
                         return true;
                     }
                 }
-                if self.params.mode.value() == 2 && hit(self.play_pad(), x, y) {
+                if self.mode() == 2 && hit(self.play_pad(), x, y) {
                     self.begin_pad(cx, x, y, true);
                     return true;
                 }
@@ -620,6 +692,16 @@ impl ChordboardView {
                 return true;
             }
             WindowEvent::MouseMove(_, _) => match self.drag {
+                Some(Drag::Split) => {
+                    self.move_split(cx, x, y);
+                    return true;
+                }
+                Some(Drag::RouteNode(node, ptr)) => {
+                    if let Some(value) = self.route_node_value(node, y) {
+                        cx.emit(RawParamEvent::SetParameterNormalized(ptr, value));
+                    }
+                    return true;
+                }
                 Some(Drag::Memory(mut drag)) => {
                     drag.update(x, y);
                     self.drag = Some(Drag::Memory(drag));

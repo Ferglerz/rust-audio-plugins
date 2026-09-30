@@ -1,3 +1,4 @@
+use crate::engine::routing::{Route, ROUTE_COUNT, SOURCES, TARGETS};
 use crate::engine::{Config, Mapping};
 use nih_plug::prelude::*;
 use nih_plug_vizia::ViziaState;
@@ -7,6 +8,18 @@ use std::sync::{
 };
 #[derive(Params)]
 pub struct ChordboardParams {
+    #[id = "always_bass"]
+    pub always_bass: BoolParam,
+    #[id = "always_chord"]
+    pub always_chord: BoolParam,
+    #[id = "key_split"]
+    pub key_split: BoolParam,
+    #[id = "split_note"]
+    pub split_note: IntParam,
+    #[id = "root_on_select"]
+    pub root_on_select: BoolParam,
+    #[nested(array, group = "Modulation")]
+    pub routes: [RouteParams; ROUTE_COUNT],
     #[persist = "editor-state"]
     pub editor_state: Arc<ViziaState>,
     #[persist = "schema-version"]
@@ -39,6 +52,8 @@ pub struct ChordboardParams {
     pub mode: IntParam,
     #[id = "quality"]
     pub quality: IntParam,
+    #[id = "voice_leading"]
+    pub voice_leading: IntParam,
     #[id = "inversion"]
     pub inversion: IntParam,
     #[id = "transpose"]
@@ -55,6 +70,8 @@ pub struct ChordboardParams {
     pub length_ms: FloatParam,
     #[id = "strings"]
     pub strings: IntParam,
+    #[id = "strings_played"]
+    pub strings_played: IntParam,
     #[id = "strum_ms"]
     pub strum_ms: FloatParam,
     #[id = "strum_sync"]
@@ -140,10 +157,30 @@ pub struct ChordboardParams {
     #[id = "upper_channel"]
     pub upper_channel: IntParam,
 }
+fn parse_split_note(text: &str) -> Option<i32> {
+    let text = text.split('(').next()?.trim().to_ascii_uppercase();
+    if let Ok(note) = text.parse::<i32>() {
+        return (0..=127).contains(&note).then_some(note);
+    }
+    crate::harmony::NOTE_NAMES.iter().enumerate().find_map(|(pitch, name)| {
+        let octave = text.strip_prefix(name)?.parse::<i32>().ok()?;
+        let note = octave.checked_add(1)?.checked_mul(12)?.checked_add(pitch as i32)?;
+        (0..=127).contains(&note).then_some(note)
+    })
+}
+
 impl Default for ChordboardParams {
     fn default() -> Self {
         Self {
-            editor_state: ViziaState::new_screen_sized("Chordboard", || (1120, 704)),
+            always_bass: BoolParam::new("Always play bass", false),
+            always_chord: BoolParam::new("Always play full chord", false),
+            key_split: BoolParam::new("Key split", false),
+            split_note: IntParam::new("First right-hand note", 60, IntRange::Linear { min: 0, max: 127 })
+                .with_value_to_string(Arc::new(|v| format!("{}{} ({v})", crate::harmony::NOTE_NAMES[v as usize % 12], v / 12 - 1)))
+                .with_string_to_value(Arc::new(parse_split_note)),
+            root_on_select: BoolParam::new("Root on select", false),
+            routes: std::array::from_fn(|_| RouteParams::default()),
+            editor_state: ViziaState::new_screen_sized("Chordboard", || (1120, 856)),
             schema_version: AtomicU32::new(1),
             selected_quality: AtomicU32::new(0),
             control_base: AtomicI32::new(-1),
@@ -167,6 +204,11 @@ impl Default for ChordboardParams {
                         "Major", "Minor", "7", "Maj7", "Min7", "Dim", "Aug", "6", "Min6", "Dim7",
                         "Half dim", "Power",
                     ][v as usize]
+                        .to_string()
+                })),
+            voice_leading: IntParam::new("Voice leading", 2, IntRange::Linear { min: 0, max: 2 })
+                .with_value_to_string(Arc::new(|v| {
+                    ["Nearest resolution", "Furthest dominant resolution", "Off"][v as usize]
                         .to_string()
                 })),
             inversion: IntParam::new("Inversion", 0, IntRange::Linear { min: 0, max: 5 }),
@@ -196,6 +238,11 @@ impl Default for ChordboardParams {
             )
             .with_value_to_string(Arc::new(|v| format!("{v:.2}"))),
             strings: IntParam::new("Strings", 8, IntRange::Linear { min: 3, max: 12 }),
+            strings_played: IntParam::new(
+                "Strings played",
+                12,
+                IntRange::Linear { min: 1, max: 12 },
+            ),
             strum_ms: FloatParam::new(
                 "Strum time ms",
                 0.0,
@@ -424,8 +471,15 @@ impl ChordboardParams {
     }
     pub fn config(&self) -> Config {
         Config {
+            always_bass: self.always_bass.value(),
+            always_chord: self.always_chord.value(),
+            key_split: self.key_split.value(),
+            split_note: self.split_note.value() as u8,
+            root_on_select: self.root_on_select.value(),
+            routes: std::array::from_fn(|i| self.routes[i].route()),
             mode: self.mode.value() as u8,
             quality: self.quality.value() as u8,
+            voice_leading: self.voice_leading.value() as u8,
             inversion: self.inversion.value() as u8,
             transpose: self.transpose.value() as i8,
             spread: self.spread.value() as u8,
@@ -433,6 +487,8 @@ impl ChordboardParams {
             velocity: self.velocity.value(),
             length_ms: self.length_ms.value(),
             strings: self.strings.value() as u8,
+            strings_played: self.strings_played.value() as u8,
+            routed_x: None,
             strum_ms: self.strum_ms.value(),
             strum_sync: self.strum_sync.value(),
             strum_beats: self.strum_beats.value(),
@@ -482,7 +538,9 @@ macro_rules! control_catalog {
     ($($builder:ident($field:ident, $group:literal)),* $(,)?) => {
         impl ChordboardParams {
             pub fn controls(&self) -> Vec<Control> {
-                vec![$($builder(stringify!($field), $group, &self.$field)),*]
+                let mut controls = vec![$($builder(stringify!($field), $group, &self.$field)),*];
+                for route in &self.routes { controls.extend(route.controls()); }
+                controls
             }
 
             pub fn control(&self, id: &str) -> Option<Control> {
@@ -496,16 +554,23 @@ macro_rules! control_catalog {
 }
 
 control_catalog! {
+    toggle(always_bass, 0),
+    toggle(always_chord, 0),
+    toggle(key_split, 0),
+    control(split_note, 0),
     control(mode, 0),
     control(quality, 0),
     control(inversion, 0),
+    control(voice_leading, 0),
     control(transpose, 0),
     control(spread, 0),
     toggle(latch, 0),
+    toggle(root_on_select, 0),
     toggle(strum_latch, 1),
     control(velocity, 0),
     control(length_ms, 0),
     control(strings, 1),
+    control(strings_played, 1),
     control(strum_ms, 1),
     toggle(strum_sync, 1),
     control(strum_beats, 1),
@@ -597,6 +662,18 @@ impl ChordboardParams {
 mod tests {
     use super::*;
     #[test]
+    fn split_note_readout_roundtrips_and_rejects_out_of_range_notes() {
+        for note in 0..=127 {
+            let label = format!("{}{} ({note})", crate::harmony::NOTE_NAMES[note as usize % 12], note / 12 - 1);
+            assert_eq!(parse_split_note(&label), Some(note));
+        }
+        assert_eq!(parse_split_note("C#4"), Some(61));
+        assert_eq!(parse_split_note("60"), Some(60));
+        assert_eq!(parse_split_note("128"), None);
+        assert_eq!(parse_split_note("C-2"), None);
+    }
+
+    #[test]
     fn main_buttons_resolve_their_parameters_without_settings_duplicates() {
         let params = ChordboardParams::default();
         let controls = params.controls();
@@ -650,5 +727,145 @@ mod tests {
         let ids: Vec<_> = params.param_map().into_iter().map(|p| p.0).collect();
         let unique: std::collections::BTreeSet<_> = ids.iter().collect();
         assert_eq!(ids.len(), unique.len());
+    }
+}
+
+#[derive(Params)]
+pub struct RouteParams {
+    #[id = "route_enabled"]
+    pub enabled: BoolParam,
+    #[id = "route_source"]
+    pub source: IntParam,
+    #[id = "route_target"]
+    pub target: IntParam,
+    #[id = "route_min"]
+    pub min: FloatParam,
+    #[id = "route_max"]
+    pub max: FloatParam,
+    #[id = "route_curve"]
+    pub curve: FloatParam,
+}
+impl Default for RouteParams {
+    fn default() -> Self {
+        Self {
+            enabled: BoolParam::new("Enabled", true),
+            source: IntParam::new(
+                "Source",
+                0,
+                IntRange::Linear {
+                    min: 0,
+                    max: (SOURCES.len() - 1) as i32,
+                },
+            )
+            .with_value_to_string(Arc::new(|v| SOURCES[v as usize].into())),
+            target: IntParam::new(
+                "Destination",
+                0,
+                IntRange::Linear {
+                    min: 0,
+                    max: (TARGETS.len() - 1) as i32,
+                },
+            )
+            .with_value_to_string(Arc::new(|v| TARGETS[v as usize].name.into())),
+            min: FloatParam::new("Minimum", 0.0, FloatRange::Linear { min: 0.0, max: 1.0 })
+                .with_value_to_string(Arc::new(|v| format!("{:.0}%", v * 100.0)))
+                .with_string_to_value(Arc::new(|s| {
+                    s.trim()
+                        .trim_end_matches('%')
+                        .trim()
+                        .parse::<f32>()
+                        .ok()
+                        .map(|v| v / 100.0)
+                })),
+            max: FloatParam::new("Maximum", 1.0, FloatRange::Linear { min: 0.0, max: 1.0 })
+                .with_value_to_string(Arc::new(|v| format!("{:.0}%", v * 100.0)))
+                .with_string_to_value(Arc::new(|s| {
+                    s.trim()
+                        .trim_end_matches('%')
+                        .trim()
+                        .parse::<f32>()
+                        .ok()
+                        .map(|v| v / 100.0)
+                })),
+            curve: FloatParam::new(
+                "Curve",
+                0.0,
+                FloatRange::Linear {
+                    min: -1.0,
+                    max: 1.0,
+                },
+            )
+            .with_value_to_string(Arc::new(|v| {
+                if v.abs() < 0.005 {
+                    "Linear".into()
+                } else {
+                    format!("{v:+.2}")
+                }
+            }))
+            .with_string_to_value(Arc::new(|s| {
+                if s.trim().eq_ignore_ascii_case("linear") {
+                    Some(0.0)
+                } else {
+                    s.trim().parse().ok()
+                }
+            })),
+        }
+    }
+}
+impl RouteParams {
+    pub fn route(&self) -> Route {
+        Route {
+            enabled: self.enabled.value(),
+            source: self.source.value() as u8,
+            target: self.target.value() as u8,
+            min: self.min.value(),
+            max: self.max.value(),
+            curve: self.curve.value(),
+        }
+    }
+    pub fn controls(&self) -> Vec<Control> {
+        vec![
+            toggle("route_enabled", 6, &self.enabled),
+            control("route_source", 6, &self.source),
+            control("route_target", 6, &self.target),
+            control("route_min", 6, &self.min),
+            control("route_max", 6, &self.max),
+            control("route_curve", 6, &self.curve),
+        ]
+    }
+    pub fn control(&self, id: &str) -> Option<Control> {
+        self.controls().into_iter().find(|c| c.id == id)
+    }
+}
+
+#[cfg(test)]
+mod routing_state_tests {
+    use super::*;
+    #[test]
+    fn all_route_fields_have_stable_unique_host_ids_and_legacy_defaults_are_inert() {
+        let p = ChordboardParams::default();
+        let ids: Vec<_> = p.param_map().into_iter().map(|v| v.0).collect();
+        for field in [
+            "route_source",
+            "route_target",
+            "route_min",
+            "route_max",
+            "route_curve",
+            "route_enabled",
+        ] {
+            assert_eq!(
+                ids.iter().filter(|id| id.starts_with(field)).count(),
+                ROUTE_COUNT,
+                "{field}"
+            );
+        }
+        assert_eq!(
+            ids.iter().collect::<std::collections::BTreeSet<_>>().len(),
+            ids.len()
+        );
+        assert!(!p.config().root_on_select);
+        assert!(p.config().routes.iter().all(|r| !r.active()));
+        let range = &p.routes[0];
+        assert_eq!(range.min.normalized_value_to_string(0.5, true), "50%");
     }
 }

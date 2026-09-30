@@ -1,14 +1,14 @@
 // Shared geometry for rendering and event hit-testing.
 use super::KEY_COLUMNS;
 pub(super) const W: f32 = 1120.0;
-pub(super) const H: f32 = 704.0;
+pub(super) const H: f32 = 856.0;
 pub(super) type Rect = (f32, f32, f32, f32);
 pub(super) const HEADER_H: f32 = 76.0;
 pub(super) const PAD: Rect = (600.0, 158.0, 488.0, 310.0);
 // Keep drawing and pointer targets on the same performance surface.
 pub(super) const PLAY_PAD: Rect = (660.0, 233.0, 408.0, 205.0);
 pub(super) const AUTO_FIELD: Rect = (620.0, 203.0, 448.0, 115.0);
-pub(super) const CHORDS_SURFACE: Rect = (16.0, 92.0, 548.0, 424.0);
+pub(super) const CHORDS_SURFACE: Rect = (16.0, 92.0, 548.0, 436.0);
 pub(super) const VOICING_SURFACE: Rect = (16.0, 536.0, 548.0, 138.0);
 pub(super) const PERF_SURFACE: Rect = (584.0, 92.0, 520.0, 484.0);
 pub(super) const METERS_SURFACE: Rect = (584.0, 596.0, 520.0, 78.0);
@@ -37,6 +37,23 @@ pub(super) fn direction_rect(i: usize) -> Rect {
     (616.0 + i as f32 * 76.0, 366.0, 70.0, 28.0)
 }
 pub(super) fn output_controls(mode: i32) -> Vec<(&'static str, Rect)> {
+    if mode == 1 {
+        return ["velocity", "length_ms", "strings", "strings_played"]
+            .into_iter()
+            .enumerate()
+            .map(|(i, id)| {
+                (
+                    id,
+                    (
+                        600.0 + i as f32 * 124.0,
+                        482.0,
+                        116.0,
+                        36.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA,
+                    ),
+                )
+            })
+            .collect();
+    }
     if !matches!(mode, 1 | 2) {
         return vec![(
             "velocity",
@@ -150,10 +167,12 @@ pub(super) fn mapping_summary_rect(i: usize) -> Rect {
 pub(super) enum Panel {
     Mapping,
     Output,
+    Routes,
 }
 impl Panel {
     pub(super) fn rect(self) -> Rect {
         match self {
+            Self::Routes => (680.0, 218.0, 408.0, 300.0),
             Self::Mapping => (600.0, 276.0, 488.0, 242.0),
             Self::Output => (600.0, 122.0, 488.0, 224.0),
         }
@@ -196,14 +215,15 @@ pub(super) const TRANSPOSE_STEPS: [i32; 5] = [-12, -1, 0, 1, 12];
 pub(super) fn transpose_rect(i: usize) -> Rect {
     (326.0 + i as f32 * 45.0, 630.0, 42.0, 28.0)
 }
-pub(super) fn voicing_controls() -> [(&'static str, Rect); 2] {
+pub(super) fn voicing_controls() -> [(&'static str, Rect); 3] {
     [
         ("quality", QUALITY),
-        ("spread", (244.0, 541.0, 304.0, 55.0)),
+        ("spread", (400.0, 564.0, 148.0, 32.0)),
+        ("voice_leading", (218.0, 564.0, 166.0, 32.0)),
     ]
 }
 pub(super) fn meter_rect(i: usize) -> Rect {
-    (904.0 + i as f32 * 64.0, 600.0, 56.0, 70.0)
+    (600.0 + i as f32 * 54.0, 627.0, 48.0, 42.0)
 }
 pub(super) fn strum_controls() -> [(&'static str, Rect); 2] {
     [
@@ -341,4 +361,82 @@ pub(super) fn strum_bound_anchor_in(
             pleasant_ui::TagPointer::Down,
         )
     }
+}
+
+pub(super) const ROUTES_BUTTON: Rect = (956.0, 598.0, 132.0, 26.0);
+pub(super) const ROOT_ON_SELECT: Rect = (32.0, 488.0, 194.0, 24.0);
+pub(super) fn route_slot_rect(i: usize) -> Rect {
+    (
+        692.0 + (i % 8) as f32 * 48.0,
+        260.0 + (i / 8) as f32 * 26.0,
+        44.0,
+        24.0,
+    )
+}
+pub(super) const ROUTE_SOURCE: Rect = (692.0, 316.0, 172.0, 28.0);
+pub(super) const ROUTE_TARGET: Rect = (886.0, 316.0, 190.0, 28.0);
+pub(super) const ROUTE_ENABLED: Rect = (906.0, 226.0, 126.0, 26.0);
+pub(super) const ROUTE_CLEAR: Rect = (828.0, 226.0, 68.0, 26.0);
+pub(super) const ROUTE_GRAPH: Rect = (704.0, 366.0, 360.0, 98.0);
+pub(super) const ROUTE_LINEAR: Rect = (984.0, 474.0, 92.0, 24.0);
+pub(super) fn route_control_rect(_id: &str) -> Rect {
+    ROUTE_ENABLED
+}
+
+pub(super) const PIANO_SURFACE: Rect = (16.0, 688.0, 1088.0, 140.0);
+pub(super) const ALWAYS_BASS: Rect = (32.0, 698.0, 168.0, 28.0);
+pub(super) const ALWAYS_CHORD: Rect = (208.0, 698.0, 212.0, 28.0);
+pub(super) const KEY_SPLIT: Rect = (440.0, 698.0, 100.0, 28.0);
+pub(super) const SPLIT_NOTE: Rect = (548.0, 698.0, 162.0, 28.0);
+pub(super) const PIANO_KEYS: Rect = (32.0, 766.0, 1056.0, 52.0);
+pub(super) const PIANO_LEADING: Rect = (32.0, 730.0, 1056.0, 28.0);
+
+pub(super) fn piano_black(note: u8) -> bool {
+    matches!(note % 12, 1 | 3 | 6 | 8 | 10)
+}
+
+pub(super) fn piano_key_rect(note: u8) -> Rect {
+    // MIDI 0..127 has 75 natural keys. Accidentals share the boundary between them.
+    let before = (0..note).filter(|&n| !piano_black(n)).count() as f32;
+    let width = PIANO_KEYS.2 / 75.0;
+    if piano_black(note) {
+        (
+            PIANO_KEYS.0 + (before - 0.31) * width,
+            PIANO_KEYS.1,
+            width * 0.62,
+            PIANO_KEYS.3 * 0.62,
+        )
+    } else {
+        (
+            PIANO_KEYS.0 + before * width,
+            PIANO_KEYS.1,
+            width,
+            PIANO_KEYS.3,
+        )
+    }
+}
+
+pub(super) fn piano_note_x(note: u8) -> f32 {
+    let r = piano_key_rect(note);
+    r.0 + r.2 / 2.0
+}
+
+pub(super) fn piano_note_at(x: f32, y: f32) -> Option<u8> {
+    if !super::hit(PIANO_KEYS, x, y) {
+        return None;
+    }
+    (0..128u8)
+        .filter(|&n| piano_black(n))
+        .chain((0..128u8).filter(|&n| !piano_black(n)))
+        .find(|&n| super::hit(piano_key_rect(n), x, y))
+}
+
+pub(super) fn piano_nearest_note(x: f32) -> u8 {
+    (0..128u8)
+        .min_by(|&a, &b| {
+            (piano_note_x(a) - x)
+                .abs()
+                .total_cmp(&(piano_note_x(b) - x).abs())
+        })
+        .unwrap_or(60)
 }

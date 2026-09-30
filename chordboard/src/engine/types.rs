@@ -1,3 +1,4 @@
+use super::routing::{Route, ROUTE_COUNT, SOURCE_COUNT, SOURCE_DEFAULTS, TARGET_COUNT};
 use crate::harmony::Notes;
 pub const POINTER_KEY_OFFSET: u8 = 64;
 pub const KEY_TOKEN_COUNT: usize = 128;
@@ -8,17 +9,26 @@ pub const ARP: u8 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Config {
+    pub root_on_select: bool,
+    pub routes: [Route; ROUTE_COUNT],
     pub filter: u8,
     pub split_channels: bool,
     pub bass_channel: u8,
     pub upper_channel: u8,
     pub mode: u8,
     pub quality: u8,
+    pub voice_leading: u8,
     pub inversion: u8,
     pub transpose: i8,
     pub spread: u8,
     pub latch: bool,
+    pub always_bass: bool,
+    pub always_chord: bool,
+    pub key_split: bool,
+    pub split_note: u8,
     pub strings: u8,
+    pub strings_played: u8,
+    pub routed_x: Option<f32>,
     pub velocity: f32,
     pub length_ms: f32,
     pub strum_ms: f32,
@@ -52,17 +62,26 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            root_on_select: false,
+            routes: [Route::default(); ROUTE_COUNT],
             filter: 0,
             split_channels: false,
             bass_channel: 0,
             upper_channel: 1,
             mode: CHORD,
             quality: 0,
+            voice_leading: 2,
             inversion: 0,
             transpose: 0,
             spread: 0,
             latch: false,
+            always_bass: false,
+            always_chord: false,
+            key_split: false,
+            split_note: 60,
             strings: 8,
+            strings_played: 12,
+            routed_x: None,
             velocity: 0.8,
             length_ms: 350.0,
             strum_ms: 120.0,
@@ -149,6 +168,7 @@ pub struct Voice {
     pub channel: u8,
     pub started: u64,
     pub off: u64,
+    pub layer: bool,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Scheduled {
@@ -184,8 +204,15 @@ pub enum Command {
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Snapshot {
+    pub held_notes: [bool; 128],
+    pub sounding_notes: [bool; 128],
+    pub sources: [f32; SOURCE_COUNT],
+    pub routed: [Option<f32>; TARGET_COUNT],
     pub captured: u64,
     pub full_notes: Notes,
+    pub leading_from: Notes,
+    pub leading_to: Notes,
+    pub leading_serial: u64,
     pub notes: Notes,
     pub root: i16,
     pub second: i16,
@@ -207,8 +234,15 @@ pub struct Snapshot {
 impl Default for Snapshot {
     fn default() -> Self {
         Self {
+            held_notes: [false; 128],
+            sounding_notes: [false; 128],
+            sources: SOURCE_DEFAULTS,
+            routed: [None; TARGET_COUNT],
             captured: 0,
             full_notes: Notes::default(),
+            leading_from: Notes::default(),
+            leading_to: Notes::default(),
+            leading_serial: 0,
             notes: Notes::default(),
             root: -1,
             second: -1,

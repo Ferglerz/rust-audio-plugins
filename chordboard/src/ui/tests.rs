@@ -1022,6 +1022,7 @@ fn left_performance_targets_do_not_overlap() {
         Menu::Scale.trigger_rect(),
         Menu::Quality.trigger_rect(),
         voicing_controls()[1].1,
+        voicing_controls()[2].1,
     ];
     targets.extend((0..KEY_COUNT).map(key_rect));
     targets.extend((0..8).map(memory_rect));
@@ -1069,6 +1070,7 @@ fn direct_selection_pairs_parameter_gestures() {
     }
     for (r, ptr) in [
         (voicing_controls()[1].1, view.params.spread.as_ptr()),
+        (voicing_controls()[2].1, view.params.voice_leading.as_ptr()),
         (direction_rect(2), view.params.direction.as_ptr()),
     ] {
         click(&mut view, &mut cx, target, r);
@@ -1245,10 +1247,7 @@ fn compact_mapping_controls_fit_each_axis_and_close_without_parameter_changes() 
 }
 
 fn pad_center() -> (f32, f32) {
-    (
-        PLAY_PAD.0 + PLAY_PAD.2 / 2.0,
-        PLAY_PAD.1 + PLAY_PAD.3 / 2.0,
-    )
+    (PLAY_PAD.0 + PLAY_PAD.2 / 2.0, PLAY_PAD.1 + PLAY_PAD.3 / 2.0)
 }
 
 fn drain_commands(view: &ChordboardView) -> Vec<Command> {
@@ -1312,14 +1311,13 @@ fn trackpad_latch_button_toggles_hover_strum_without_a_click() {
         y,
         WindowEvent::MouseMove(nx, y),
     );
-    assert!(changes.borrow().iter().any(|(ptr, value)| {
-        *ptr == view.params.x.as_ptr() && (*value - 0.75).abs() < 0.001
-    }));
-    assert!(
-        drain_commands(&view)
-            .iter()
-            .all(|c| !matches!(c, Command::BeginGesture(_, _) | Command::EndGesture))
-    );
+    assert!(changes
+        .borrow()
+        .iter()
+        .any(|(ptr, value)| { *ptr == view.params.x.as_ptr() && (*value - 0.75).abs() < 0.001 }));
+    assert!(drain_commands(&view)
+        .iter()
+        .all(|c| !matches!(c, Command::BeginGesture(_, _) | Command::EndGesture)));
 
     event(
         &mut view,
@@ -1330,11 +1328,9 @@ fn trackpad_latch_button_toggles_hover_strum_without_a_click() {
         WindowEvent::MouseMove(PLAY_PAD.0 - 20.0, y),
     );
     assert!(!view.pad_hover);
-    assert!(
-        drain_commands(&view)
-            .iter()
-            .any(|c| matches!(c, Command::EndGesture))
-    );
+    assert!(drain_commands(&view)
+        .iter()
+        .any(|c| matches!(c, Command::EndGesture)));
 }
 
 #[test]
@@ -1372,11 +1368,9 @@ fn trackpad_latch_hover_promotes_to_a_captured_drag_once() {
     );
     assert!(matches!(view.drag, Some(Drag::Pad)));
     assert!(!view.pad_hover);
-    assert!(
-        drain_commands(&view)
-            .iter()
-            .all(|c| !matches!(c, Command::BeginGesture(_, _) | Command::EndGesture))
-    );
+    assert!(drain_commands(&view)
+        .iter()
+        .all(|c| !matches!(c, Command::BeginGesture(_, _) | Command::EndGesture)));
 }
 
 #[test]
@@ -1547,4 +1541,460 @@ fn arp_mode_collapses_an_open_strum_field() {
         view.tick(&mut EventContext::new_with_current(&mut cx, target));
     }
     assert_eq!(view.expand_progress, 0.0);
+}
+
+#[test]
+fn routing_panel_owns_covered_targets_and_edits_the_selected_slot() {
+    let mut view = view(2, false);
+    let (mut cx, target, changes) = context();
+    click(&mut view, &mut cx, target, ROUTES_BUTTON);
+    assert_eq!(view.panel, Some(Panel::Routes));
+    click(&mut view, &mut cx, target, route_slot_rect(7));
+    assert_eq!(view.route_slot, 7);
+    click(&mut view, &mut cx, target, ROUTE_SOURCE);
+    assert_eq!(view.menu, Some(Menu::RouteSource));
+    let choice = view.menu_option_rect(Menu::RouteSource, 2);
+    click(&mut view, &mut cx, target, choice);
+    assert!(changes
+        .borrow()
+        .iter()
+        .any(|(ptr, _)| *ptr == view.params.routes[7].source.as_ptr()));
+    assert!(!changes
+        .borrow()
+        .iter()
+        .any(|(ptr, _)| *ptr == view.params.routes[0].source.as_ptr()));
+    // Covered pad space cannot start a strum through the smaller editor.
+    click(&mut view, &mut cx, target, (740.0, 392.0, 16.0, 16.0));
+    assert_eq!(view.panel, Some(Panel::Routes));
+}
+
+#[test]
+fn route_ranges_use_destination_units_and_route_slots_fit() {
+    let view = view(2, false);
+    let c = view.control("route_min").unwrap();
+    assert_eq!(view.display_value(&c), "3");
+    assert!((view.parse_display_value(&c, "8").unwrap() - 5.0 / 9.0).abs() < 1e-6);
+    for i in 0..crate::engine::routing::ROUTE_COUNT {
+        let r = route_slot_rect(i);
+        assert!(hit(Panel::Routes.rect(), r.0, r.1));
+        assert!(hit(Panel::Routes.rect(), r.0 + r.2 - 1.0, r.1 + r.3 - 1.0));
+    }
+    for menu in [Menu::RouteSource, Menu::RouteTarget] {
+        let r = menu.bounds();
+        assert!(r.0 >= 0.0 && r.1 >= 0.0 && r.0 + r.2 <= W && r.1 + r.3 <= H);
+    }
+}
+
+#[test]
+fn source_meter_click_is_inert_and_root_toggle_is_available_in_all_modes() {
+    for mode in 1..=3 {
+        let mut view = view(mode, false);
+        let (mut cx, target, changes) = context();
+        click(&mut view, &mut cx, target, ROOT_ON_SELECT);
+        assert!(changes
+            .borrow()
+            .iter()
+            .any(|(p, v)| *p == view.params.root_on_select.as_ptr() && *v == 1.0));
+        changes.borrow_mut().clear();
+        click(&mut view, &mut cx, target, meter_rect(3));
+        assert_eq!(view.panel, None);
+        assert!(view.drag.is_none());
+        assert!(changes.borrow().is_empty());
+    }
+}
+
+fn route_drag_to(
+    view: &mut ChordboardView,
+    cx: &mut Context,
+    target: Entity,
+    source: usize,
+    x: f32,
+    y: f32,
+) {
+    let r = meter_rect(source);
+    event(
+        view,
+        cx,
+        target,
+        r.0 + r.2 / 2.0,
+        r.1 + r.3 / 2.0,
+        WindowEvent::MouseDown(MouseButton::Left),
+    );
+    event(view, cx, target, x, y, WindowEvent::MouseMove(x, y));
+    event(
+        view,
+        cx,
+        target,
+        x,
+        y,
+        WindowEvent::MouseUp(MouseButton::Left),
+    );
+}
+
+#[test]
+fn route_drag_links_only_on_drop_and_never_moves_the_destination_control() {
+    for (source, id) in [(0, "strings"), (3, "spread"), (8, "quality")] {
+        let mut view = view(2, false);
+        let (mut cx, entity, changes) = context();
+        let r = meter_rect(source);
+        let (_, destination) = view
+            .base_controls()
+            .into_iter()
+            .find(|(c, _)| c.id == id)
+            .unwrap();
+        let (x, y) = (
+            destination.0 + destination.2 / 2.0,
+            destination.1 + destination.3 / 2.0,
+        );
+        event(
+            &mut view,
+            &mut cx,
+            entity,
+            r.0 + 20.0,
+            r.1 + 20.0,
+            WindowEvent::MouseDown(MouseButton::Left),
+        );
+        event(
+            &mut view,
+            &mut cx,
+            entity,
+            x,
+            y,
+            WindowEvent::MouseMove(x, y),
+        );
+        assert!(changes.borrow().is_empty());
+        assert!(matches!(view.drag, Some(Drag::Route(drag)) if drag.active));
+        assert!(view.route_drag_hint().unwrap().starts_with("Link "));
+        event(
+            &mut view,
+            &mut cx,
+            entity,
+            x,
+            y,
+            WindowEvent::MouseUp(MouseButton::Left),
+        );
+        assert_eq!(view.panel, Some(Panel::Routes));
+        let route = &view.params.routes[0];
+        let destination_index = crate::engine::routing::TARGETS
+            .iter()
+            .position(|t| t.id == id)
+            .unwrap();
+        assert!(changes.borrow().contains(&(
+            route.source.as_ptr(),
+            route.source.preview_normalized(source as i32 + 1)
+        )));
+        assert!(changes.borrow().contains(&(
+            route.target.as_ptr(),
+            route.target.preview_normalized(destination_index as i32)
+        )));
+        assert!(!changes
+            .borrow()
+            .iter()
+            .any(|(p, _)| *p == view.control(id).unwrap().ptr));
+        assert!(view.drag.is_none() && view.edit.is_none() && view.menu.is_none());
+    }
+}
+
+#[test]
+fn route_drag_cancel_jitter_and_focus_loss_never_assign_or_strum() {
+    for cancel in [0, 1, 2, 3] {
+        let mut view = view(2, false);
+        Arc::get_mut(&mut view.params).unwrap().strum_latch =
+            BoolParam::new("Trackpad latch", true);
+        let (mut cx, entity, changes) = context();
+        let r = meter_rect(1);
+        event(
+            &mut view,
+            &mut cx,
+            entity,
+            r.0 + 20.0,
+            r.1 + 20.0,
+            WindowEvent::MouseDown(MouseButton::Left),
+        );
+        let (x, y) = if cancel == 0 {
+            (r.0 + 22.0, r.1 + 21.0)
+        } else if cancel == 1 {
+            (580.0, 580.0)
+        } else {
+            (850.0, 400.0)
+        };
+        event(
+            &mut view,
+            &mut cx,
+            entity,
+            x,
+            y,
+            WindowEvent::MouseMove(x, y),
+        );
+        if cancel == 2 {
+            event(
+                &mut view,
+                &mut cx,
+                entity,
+                x,
+                y,
+                WindowEvent::KeyDown(Code::Escape, None),
+            );
+        } else if cancel == 3 {
+            event(&mut view, &mut cx, entity, x, y, WindowEvent::FocusOut);
+        }
+        event(
+            &mut view,
+            &mut cx,
+            entity,
+            x,
+            y,
+            WindowEvent::MouseUp(MouseButton::Left),
+        );
+        assert!(changes.borrow().is_empty());
+        assert!(view.drag.is_none() && !view.pad_hover);
+        assert!(
+            !std::iter::from_fn(|| view.bridge.commands.pop()).any(|c| matches!(
+                c,
+                Command::BeginGesture(_, _) | Command::X(_) | Command::Y(_)
+            ))
+        );
+    }
+}
+
+#[test]
+fn route_drag_reuses_existing_destination_and_preserves_range_and_curve() {
+    for source in [0, 3] {
+        let mut view = view(2, false);
+        let route = &mut Arc::get_mut(&mut view.params).unwrap().routes[6];
+        route.source = IntParam::new("Source", 1, IntRange::Linear { min: 0, max: 9 });
+        route.min = FloatParam::new("Minimum", 0.25, FloatRange::Linear { min: 0.0, max: 1.0 });
+        route.curve = FloatParam::new(
+            "Curve",
+            -0.4,
+            FloatRange::Linear {
+                min: -1.0,
+                max: 1.0,
+            },
+        );
+        let (mut cx, entity, changes) = context();
+        route_drag_to(&mut view, &mut cx, entity, source, 1010.0, 500.0);
+        assert_eq!(view.route_slot, 6);
+        assert_eq!(view.panel, Some(Panel::Routes));
+        let expected = if source == 0 {
+            vec![]
+        } else {
+            vec![(view.params.routes[6].source.as_ptr(), 4.0 / 9.0)]
+        };
+        assert_eq!(*changes.borrow(), expected);
+    }
+}
+
+#[test]
+fn route_drag_respects_popover_occlusion_and_exposes_output_destinations() {
+    let mut view = view(2, false);
+    let (mut cx, entity, changes) = context();
+    view.set_panel(Some(Panel::Output));
+    assert_eq!(view.route_target_at(850.0, 135.0), None); // Mode buttons are covered.
+    let (_, rect) = view
+        .panel_controls()
+        .into_iter()
+        .find(|(c, _)| c.id == "output_channel")
+        .unwrap();
+    route_drag_to(&mut view, &mut cx, entity, 1, rect.0 + 25.0, rect.1 + 20.0);
+    assert_eq!(view.panel, Some(Panel::Routes));
+    assert!(changes
+        .borrow()
+        .iter()
+        .any(|(p, _)| *p == view.params.routes[0].source.as_ptr()));
+    changes.borrow_mut().clear();
+    // Starting a new drag folds the route editor away so Strings is reachable.
+    route_drag_to(&mut view, &mut cx, entity, 2, 1010.0, 500.0);
+    assert!(changes
+        .borrow()
+        .iter()
+        .any(|(p, _)| *p == view.params.routes[0].target.as_ptr()));
+}
+
+#[test]
+fn route_drag_with_no_free_slots_does_not_overwrite_an_unrelated_link() {
+    let mut view = view(2, false);
+    for route in &mut Arc::get_mut(&mut view.params).unwrap().routes {
+        route.source = IntParam::new("Source", 1, IntRange::Linear { min: 0, max: 9 });
+    }
+    let (mut cx, entity, changes) = context();
+    route_drag_to(&mut view, &mut cx, entity, 1, 400.0, 570.0); // Spread, all slots target Strings.
+    assert!(changes.borrow().is_empty());
+    assert!(view.status.starts_with("All 16 routes"));
+    assert!(view.panel.is_none());
+}
+
+#[test]
+fn auto_strum_cannot_expand_and_collapses_the_manual_field() {
+    let mut view = view(1, false);
+    let (mut cx, target, _) = context();
+    assert!(!view.can_expand_strum());
+    click(&mut view, &mut cx, target, expand_rect(0.0));
+    assert_eq!(view.expand_target, 0.0);
+    view.expand_progress = 1.0;
+    view.expand_target = 1.0;
+    view.tick(&mut EventContext::new_with_current(&mut cx, target));
+    assert_eq!(view.expand_target, 0.0);
+}
+
+#[test]
+fn modulator_drop_targets_include_auto_amount_and_manual_sweep() {
+    for (mode, id) in [(1, "strings_played"), (2, "x")] {
+        let mut view = view(mode, false);
+        let (mut cx, entity, changes) = context();
+        let target = crate::engine::routing::TARGETS
+            .iter()
+            .position(|t| t.id == id)
+            .unwrap();
+        let (_, r) = view
+            .route_targets()
+            .into_iter()
+            .find(|(i, _)| *i == target)
+            .unwrap();
+        view.finish_route_drag(
+            &mut EventContext::new_with_current(&mut cx, entity),
+            1,
+            r.0 + r.2 / 2.0,
+            r.1 + r.3 / 2.0,
+        );
+        BackendContext::new_with_event_manager(&mut cx).process_events();
+        let route = &view.params.routes[0];
+        assert!(changes.borrow().contains(&(
+            route.target.as_ptr(),
+            route.target.preview_normalized(target as i32)
+        )));
+        assert!(changes
+            .borrow()
+            .contains(&(route.source.as_ptr(), route.source.preview_normalized(2))));
+    }
+}
+
+#[test]
+fn route_graph_nodes_edit_selected_parameters_and_release_capture() {
+    for node in 0..3 {
+        let mut view = view(2, false);
+        view.panel = Some(Panel::Routes);
+        view.route_slot = 7;
+        let (mut cx, target, changes) = context();
+        let (x, y) = view.route_nodes()[node];
+        event(&mut view, &mut cx, target, x, y, WindowEvent::MouseDown(MouseButton::Left));
+        assert!(matches!(view.drag, Some(Drag::RouteNode(..))));
+        let y = ROUTE_GRAPH.1 + ROUTE_GRAPH.3 * 0.75;
+        event(&mut view, &mut cx, target, x, y, WindowEvent::MouseMove(x, y));
+        event(&mut view, &mut cx, target, x, y, WindowEvent::MouseUp(MouseButton::Left));
+        let r = &view.params.routes[7];
+        let (ptr, expected) = match node {
+            0 => (r.min.as_ptr(), 0.25),
+            2 => (r.max.as_ptr(), 0.25),
+            _ => (r.curve.as_ptr(), r.curve.preview_normalized(1.0 / 3.0)),
+        };
+        assert!(changes.borrow().iter().any(|(p,v)| *p == ptr && (v-expected).abs() < 0.0001));
+        assert!(view.drag.is_none());
+        assert!(!std::iter::from_fn(|| view.bridge.commands.pop()).any(|c| matches!(c, Command::BeginGesture(..))));
+    }
+}
+#[test]
+fn route_graph_curve_handles_reversed_and_flat_ranges() {
+    let mut view = view(2, false);
+    let r = &mut Arc::get_mut(&mut view.params).unwrap().routes[0];
+    r.min = FloatParam::new("Minimum", 1.0, FloatRange::Linear { min: 0.0, max: 1.0 });
+    r.max = FloatParam::new("Maximum", 0.0, FloatRange::Linear { min: 0.0, max: 1.0 });
+    let value = view.route_node_value(1, ROUTE_GRAPH.1 + ROUTE_GRAPH.3 * 0.25).unwrap();
+    assert!((value - view.params.routes[0].curve.preview_normalized(1.0 / 3.0)).abs() < 0.0001);
+    Arc::get_mut(&mut view.params).unwrap().routes[0].max = FloatParam::new("Maximum", 1.0,
+        FloatRange::Linear { min: 0.0, max: 1.0 });
+    assert_eq!(view.route_node_value(1, ROUTE_GRAPH.1), None);
+}
+
+#[test]
+fn route_destination_menu_skips_touch_bounds_without_shifting_saved_ids() {
+    let mut view = view(2, false);
+    let (mut cx, entity, changes) = context();
+    for (menu_index, (saved_index, target)) in crate::engine::routing::available_targets().enumerate() {
+        assert_eq!(Menu::RouteTarget.items()[menu_index], target.name);
+        view.select_menu(&mut EventContext::new_with_current(&mut cx, entity), Menu::RouteTarget, menu_index);
+        BackendContext::new_with_event_manager(&mut cx).process_events();
+        let p = &view.params.routes[0].target;
+        assert!(changes.borrow().contains(&(p.as_ptr(), p.preview_normalized(saved_index as i32))));
+    }
+    assert!(view.route_targets().iter().all(|(i, _)| crate::engine::routing::TARGETS[*i].available()));
+}
+
+#[test]
+fn leading_animation_restarts_when_a_new_transition_arrives() {
+    let mut view = view(2, false);
+    let (mut cx, target, _) = context();
+    view.bridge.snapshots.push(Snapshot { leading_serial: 1, ..Snapshot::default() }).unwrap();
+    view.last_frame = Instant::now() - Duration::from_millis(50);
+    view.tick(&mut EventContext::new_with_current(&mut cx, target));
+    assert!(view.leading_progress < 0.2);
+    for _ in 0..8 {
+        view.last_frame = Instant::now() - Duration::from_millis(100);
+        view.tick(&mut EventContext::new_with_current(&mut cx, target));
+    }
+    assert_eq!(view.leading_progress, 1.0);
+    view.bridge.snapshots.push(Snapshot { leading_serial: 2, ..Snapshot::default() }).unwrap();
+    view.last_frame = Instant::now() - Duration::from_millis(50);
+    view.tick(&mut EventContext::new_with_current(&mut cx, target));
+    assert!(view.leading_progress < 0.2);
+}
+
+#[test]
+fn full_piano_fits_below_performance_and_never_plays_notes() {
+    let mut view = view(2, false);
+    let (mut cx, target, _) = context();
+    for note in 0..128u8 {
+        let r = piano_key_rect(note);
+        assert!(r.1 >= EXPANDED_SURFACE.1 + EXPANDED_SURFACE.3);
+        assert!(r.1 + r.3 < H);
+        assert!(hit(PIANO_SURFACE, r.0 + r.2, r.1 + r.3));
+        assert_eq!(piano_note_at(r.0 + r.2 / 2.0, r.1 + r.3 - 2.0), Some(note));
+        click(&mut view, &mut cx, target, r);
+    }
+    assert!(!std::iter::from_fn(|| view.bridge.commands.pop()).any(|c| matches!(c, Command::KeyDown(..) | Command::BeginGesture(..))));
+}
+
+#[test]
+fn full_piano_buttons_work_in_every_mode_and_expanded_manual() {
+    for mode in 1..4 {
+        let mut view = view(mode, false);
+        if mode == 2 { view.expand_progress = 1.0; }
+        let (mut cx, target, changes) = context();
+        for (r, ptr) in [(ALWAYS_BASS, view.params.always_bass.as_ptr()), (ALWAYS_CHORD, view.params.always_chord.as_ptr()), (KEY_SPLIT, view.params.key_split.as_ptr())] {
+            click(&mut view, &mut cx, target, r);
+            assert_eq!(changes.borrow().last().copied(), Some((ptr, 1.0)));
+        }
+    }
+}
+
+#[test]
+fn piano_split_drag_selects_accidentals_and_clamps_at_midi_edges() {
+    let mut view = view(2, false);
+    view.params = Arc::new(ChordboardParams { key_split: BoolParam::new("Key split", true), ..ChordboardParams::default() });
+    let (mut cx, target, changes) = context();
+    let r = piano_key_rect(61);
+    event(&mut view, &mut cx, target, r.0 + r.2 / 2.0, r.1 + 8.0, WindowEvent::MouseDown(MouseButton::Left));
+    assert!(matches!(view.drag, Some(Drag::Split)));
+    assert_eq!(changes.borrow().last().copied(), Some((view.params.split_note.as_ptr(), view.params.split_note.preview_normalized(61))));
+    for (x, note) in [(-10.0, 0), (W + 10.0, 127)] {
+        event(&mut view, &mut cx, target, x, PIANO_LEADING.1, WindowEvent::MouseMove(x, PIANO_LEADING.1));
+        assert_eq!(changes.borrow().last().copied(), Some((view.params.split_note.as_ptr(), view.params.split_note.preview_normalized(note))));
+    }
+    event(&mut view, &mut cx, target, W + 10.0, PIANO_LEADING.1, WindowEvent::MouseUp(MouseButton::Left));
+    assert!(view.drag.is_none());
+    assert!(!std::iter::from_fn(|| view.bridge.commands.pop()).any(|c| matches!(c, Command::KeyDown(..) | Command::BeginGesture(..))));
+}
+
+#[test]
+fn piano_tooltips_distinguish_silent_controls_and_live_notes() {
+    let mut view = view(1, false);
+    view.params.control_base.store(24, Ordering::Relaxed);
+    let r = piano_key_rect(27);
+    let hint = view.piano_hint(r.0 + r.2 / 2.0, r.1 + 8.0).unwrap();
+    assert!(hint.contains("MIDI 27") && hint.contains("silent") && hint.contains(harmony::CONTROL_LABELS[3]));
+    view.snapshot.held_notes[60] = true;
+    view.snapshot.sounding_notes[60] = true;
+    let r = piano_key_rect(60);
+    let hint = view.piano_hint(r.0 + r.2 / 2.0, r.1 + r.3 - 2.0).unwrap();
+    assert!(hint.contains("C4") && hint.contains("MIDI 60") && hint.contains("Held input") && hint.contains("Sounding output"));
 }

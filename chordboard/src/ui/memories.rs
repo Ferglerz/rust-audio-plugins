@@ -237,13 +237,6 @@ impl ChordboardView {
 
     pub(super) fn draw_memories(&self, d: &mut Draw) {
         d.text(32.0, 459.0, "Mem", 11.0, MUTED);
-        d.text(
-            32.0,
-            502.0,
-            "Click empty to save · drag to move · Shift-click to replace",
-            11.0,
-            MUTED,
-        );
         self.button(
             d,
             SAVE_MEMORY,

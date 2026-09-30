@@ -2,7 +2,7 @@
 """Small CLAP ABI integration test; no DAW, audio device, or external packages.
 
 Declarations follow the clap-sys ABI used by the workspace's NIH-plug.
-Usage: python3 chordboard/scripts/verify-clap.py /path/to/Chordboard.clap
+Usage: python3 chordboard/scripts/verify-clap.py /path/to/Chordboard.clap [--held-chord]
 """
 import ctypes as C
 import pathlib
@@ -98,13 +98,19 @@ class Harness:
 def run_tests(path):
     h=Harness(path)
     try:
+        # CLAP stepped parameter values are zero-based. Fix the voicing size
+        # explicitly; Auto Strum now plays all eight strings by default.
+        h.run([h.parameter('Strings',0),h.parameter('Strum time ms',0),
+               h.parameter('Output protocol',2)])
         events=h.run([midi(32,0x91,60,100),midi(96,0x92,62,100)])
         ons=[(e[1],e[3]) for e in events if e[0]=='on']
-        assert ons==[(32,60),(32,64),(32,67),(96,62)],ons
-        assert any(e[0]=='off' and e[1]==96 and e[3]==64 for e in events)
+        assert ons==[(32,60),(32,64),(32,67),(96,60),(96,62),(96,67)],ons
+        assert not any(e[0]=='off' and e[3]==64 for e in events),'outgoing third lost its tail'
         events=h.run([midi(10,0x81,60,50),midi(100,0x82,62,50)])
-        assert all(e[1]==100 for e in events if e[0]=='off'),'root incorrectly released/promoted'
-        h.run([h.parameter('MPE output',1)])
+        assert [e[3] for e in events if e[0]=='on']==[62,66,69],'remaining key was not promoted'
+        assert not any(e[0]=='off' and e[1]==100 for e in events),'release cut scheduled tails'
+        h.plugin.reset(h.ptr)
+        h.run([h.parameter('Output protocol',1)])
         events=h.run([midi(0,0xd1,90),midi(0,0xb1,74,80),midi(12,0x91,60,100)])
         ons=[e for e in events if e[0]=='on'];assert [e[2] for e in ons]==[1,2,3],ons
         for note in ons:
@@ -114,30 +120,141 @@ def run_tests(path):
         events=h.run([midi(20,0xd1,100)])
         assert sum(e[0]=='midi' and e[2] in (0xd1,0xd2,0xd3) and e[3]==100 for e in events)==3
         # Parameter changes within a block must silence old voices at their own boundary.
-        events=h.run([h.parameter('Play mode',2,48)])
+        events=h.run([h.parameter('Play mode',1,48)])
         assert all(e[1]==48 for e in events if e[0]=='off'),events
-        h.run([midi(0,0xb0,1,0)])
+        h.run([h.parameter('Strings',5),midi(0,0xb0,1,0)])
         events=h.run([midi(64,0xb0,1,127)])
         ons=[e for e in events if e[0]=='on'];assert len(ons)==7,ons
         assert all(e[1]==64 for e in ons),ons
         events=h.run([midi(0,0x81,60,55)])
-        assert len([e for e in events if e[0]=='off'])==7
-        h.run([h.parameter('Play mode',0),h.parameter('Note filter',3),h.parameter('Inversion',1)])
+        assert not [e for e in events if e[0]=='off'],'manual strum release cut tails'
+        h.plugin.reset(h.ptr)
+        h.run()
+        h.run([h.parameter('Play mode',0),h.parameter('Strings',0),h.parameter('Output protocol',2),h.parameter('Note filter',3),h.parameter('Inversion',1)])
         events=h.run([midi(16,0x91,60,100)])
-        assert [e[3] for e in events if e[0]=='on']==[64,72],events
+        assert [e[3] for e in events if e[0]=='on']==[64,72,76],events
         h.plugin.reset(h.ptr)
         events=h.run()
-        assert len([e for e in events if e[0]=='off'])==2,'reset lost owned note offs'
+        assert len([e for e in events if e[0]=='off'])==3,'reset lost owned note offs'
         assert not [e for e in h.run() if e[0]=='on'],'reset restored held notes'
         h.run([midi(0,0x91,60,100)])
         events=h.run([midi(i,0xd1,50+i%70) for i in range(200)])
-        assert len([e for e in events if e[0]=='off'])==2,'event storm lost existing note releases'
+        assert len([e for e in events if e[0]=='off'])==3,'event storm lost existing note releases'
         assert not [e for e in h.run() if e[0]=='on'],'event storm left scheduled strikes'
         print('CLAP integration passed: passthrough, sample timing, two-note harmony, release order, MPE initialization/fan-out, automation, CC1, filters, reset, bounded event-storm recovery.')
     finally:
         h.close()
 
+def run_held_chord_tests(path):
+    for root_first,gap in [(False,0),(True,0),(False,1),(True,1),(False,None)]:
+        h=Harness(path)
+        try:
+            # CLAP's stepped values are zero-based: Manual Strum is index 1.
+            h.run([h.parameter('Play mode',1),h.parameter('Latch',1),h.parameter('Output protocol',2)])
+            h.run([midi(0,0x91,60,100),midi(32,0x92,62,100)])
+            order=[(0x81,60),(0x82,62)] if root_first else [(0x82,62),(0x81,60)]
+            releases=[midi(64,*order[0],50)]
+            if gap is not None:
+                releases.append(midi(64+gap,*order[1],50))
+            h.run(releases)
+            h.run([midi(0,0xb0,1,0)])
+            events=h.run([midi(16,0xb0,1,127)])
+            pitches={e[3]%12 for e in events if e[0]=='on'}
+            assert pitches=={0,2,7},('sus2 lost after release',root_first,gap,pitches)
+            if gap is None:
+                h.run([midi(0,0x81,60,50)])
+            h.run([midi(0,0x91,60,100)])
+            h.run([midi(0,0xb0,1,0)])
+            events=h.run([midi(16,0xb0,1,127)])
+            pitches={e[3]%12 for e in events if e[0]=='on'}
+            assert pitches=={0,4,7},('root re-trigger did not reset',pitches)
+        finally:
+            h.close()
+    print('CLAP Hold chord passed: simultaneous and adjacent-sample releases in both orders, alteration-only release, retained sus2 MIDI, root re-trigger reset.')
+
+def run_strum_tests(path):
+    h=Harness(path)
+    try:
+        h.run([h.parameter('Play mode',0),h.parameter('Strings',9),
+               h.parameter('Strings played',11),h.parameter('Inversion',1),
+               h.parameter('Strum time ms',0),h.parameter('Output protocol',2)])
+        events=h.run([midi(16,0x90,63,100)])
+        expected=[67,70,75,79,82,87,91,94,99,103,106,111]
+        actual=[e[3] for e in events if e[0]=='on']
+        assert actual==expected,('D# full strings differ from labels',actual)
+        events=h.run([midi(8,0x80,63,50)])
+        assert not any(e[0]=='off' for e in events),'release cut ringing strings'
+        h.run([h.parameter('Strings played',2)])
+        events=h.run([midi(16,0x90,65,100)])
+        assert [e[3] for e in events if e[0]=='on']==[69,72,77],events
+        assert not any(e[0]=='off' and e[3] in expected for e in events),'chord change cut tails'
+        events=h.run([midi(8,0x80,65,50)])
+        assert not any(e[0]=='off' for e in events)
+        expired=[]
+        for _ in range(40):
+            expired.extend(h.run(frames=512))
+        assert set(expected+[69,72,77]) <= {e[3] for e in expired if e[0]=='off'},'tails did not expire'
+        h.run([h.parameter('Strum direction',1)])
+        events=h.run([midi(16,0x90,63,100)])
+        assert [e[3] for e in events if e[0]=='on']==[111,106,103],events
+        print('CLAP strum controls passed: twelve D# strings match labels, partial sweeps in both directions, chord-change tails preserved and released.')
+    finally:
+        h.close()
+
+def run_split_tests(path):
+    for full,latch in [(False,False),(True,False),(True,True)]:
+        h=Harness(path)
+        try:
+            h.run([h.parameter('Play mode',1),h.parameter('Output protocol',2),
+                   h.parameter('Key split',1),h.parameter('First right-hand note',60),
+                   h.parameter('Always play bass',1),h.parameter('Always play full chord',int(full)),
+                   h.parameter('Latch',int(latch))])
+            # Melody passes through on its own channel; it cannot become a chord root.
+            events=h.run([midi(0,0x94,72,100)])
+            assert [(e[2],e[3]) for e in events if e[0]=='on']==[(4,72)],events
+            events=h.run([midi(0,0x90,48,100)])
+            chord=[48,52,55] if full else [48]
+            assert [e[3] for e in events if e[0]=='on']==chord,events
+            h.run([midi(0,0x80,48,50),midi(1,0x94,76,100)])
+            events=[]
+            for _ in range(40):
+                events.extend(h.run(frames=512))
+            assert not any(e[0]=='off' and e[3] in chord for e in events),'held layer timed out'
+            events=h.run([midi(0,0x84,72,50)])
+            assert any(e[0]=='off' and e[2:4]==(4,72) for e in events),events
+            assert not any(e[0]=='off' and e[3] in chord for e in events),'first RH release closed gate'
+            events=h.run([midi(0,0x84,76,50)])
+            assert any(e[0]=='off' and e[2:4]==(4,76) for e in events),events
+            if latch:
+                assert not any(e[0]=='off' and e[3] in chord for e in events),'latch released layer'
+                events=h.run([midi(0,0x90,50,100)])
+                assert {e[3] for e in events if e[0]=='off'}==set(chord),events
+                assert [e[3] for e in events if e[0]=='on']==[50,54,57],events
+            else:
+                assert {e[3] for e in events if e[0]=='off'} >= set(chord),events
+            h.run([midi(0,0xb0,123,0)])
+        finally:
+            h.close()
+    h=Harness(path)
+    try:
+        h.run([h.parameter('Play mode',1),h.parameter('Output protocol',2),
+               h.parameter('Key split',1),h.parameter('Always play full chord',1)])
+        h.run([midi(0,0x90,48,100),midi(1,0x94,72,100)])
+        events=h.run([midi(i,0xd0,50+i%70) for i in range(200)])
+        assert {(0,48),(0,52),(0,55),(4,72)} <= {(e[2],e[3]) for e in events if e[0]=='off'},'overflow lost split-owned releases'
+        assert sum(e[0]=='midi' and e[2]&0xf0==0xb0 and e[3:]==(64,0) for e in events)==16,'overflow lost pedal release'
+    finally:
+        h.close()
+    print('CLAP split controls passed: melody passthrough, sustained bass/full chord, last-right-key gate, latch replacement, and overflow recovery.')
+
 if __name__=='__main__':
     path=pathlib.Path(sys.argv[1]).expanduser().resolve()
     if path.is_dir():path=path/'Contents'/'MacOS'/'Chordboard'
-    run_tests(path)
+    if '--split-controls' in sys.argv[2:]:
+        run_split_tests(path)
+    elif '--strum-controls' in sys.argv[2:]:
+        run_strum_tests(path)
+    elif '--held-chord' in sys.argv[2:]:
+        run_held_chord_tests(path)
+    else:
+        run_tests(path)

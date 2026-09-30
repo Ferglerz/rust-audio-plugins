@@ -5,6 +5,25 @@ pub const QUALITY_NAMES: [&str; 12] = [
 pub const QUALITY_SUFFIX: [&str; 12] = [
     "", "m", "7", "maj7", "m7", "dim", "aug", "6", "m6", "dim7", "m7b5", "5",
 ];
+/// Chromatic controls relative to the learned tonic: 1, b2, 2, b3, 3,
+/// 4, b5, 5, #5, 6, b7, 7. Quality IDs stay stable for saved state.
+pub const CONTROL_CHORDS: [(u8, Option<u8>); 12] = [
+    (0, None),
+    (0, Some(1)),
+    (0, Some(2)),
+    (1, None),
+    (0, None),
+    (0, Some(5)),
+    (5, None),
+    (11, None),
+    (6, None),
+    (7, None),
+    (2, None),
+    (3, None),
+];
+pub const CONTROL_LABELS: [&str; 12] = [
+    "Maj", "b9", "sus2", "Min", "Maj", "sus4", "dim", "5", "aug", "6", "7", "maj7",
+];
 pub const NOTE_NAMES: [&str; 12] = [
     "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
 ];
@@ -138,9 +157,124 @@ pub fn voice(
     out
 }
 
+/// Compare ordered voices, proportionally matching ranks when chord sizes differ.
+/// Integer weighting makes the result deterministic without audio-thread allocation.
+fn movement(a: Notes, b: Notes) -> i32 {
+    let count = a.len.max(b.len);
+    (0..count)
+        .map(|i| (a.values[i * a.len / count] as i32 - b.values[i * b.len / count] as i32).abs())
+        .sum()
+}
+
+/// Search inversions and octave placements within one octave of the requested
+/// voicing. Invalid/clipped candidates are discarded, preserving every chord tone.
+pub fn lead(
+    chord: SavedChord,
+    spread: u8,
+    previous: SavedChord,
+    previous_notes: Notes,
+    base: Notes,
+    furthest_dominant: bool,
+) -> Notes {
+    if previous_notes.len == 0 || base.len == 0 {
+        return base;
+    }
+    let alteration = |c: SavedChord| {
+        c.second
+            .map(|n| (n as i16 - c.root as i16).rem_euclid(12) as u8)
+    };
+    let old_tones = intervals(previous.quality, alteration(previous));
+    let tones = intervals(chord.quality, alteration(chord));
+    // Recognize major/dominant harmony resolving down a fifth to major or minor.
+    let dominant = (previous.root as i16 + previous.transpose as i16
+        - chord.root as i16
+        - chord.transpose as i16)
+        .rem_euclid(12)
+        == 7
+        && old_tones.as_slice().contains(&4)
+        && old_tones.as_slice().contains(&7)
+        && !old_tones.as_slice().contains(&11)
+        && (tones.as_slice().contains(&3) || tones.as_slice().contains(&4))
+        && tones.as_slice().contains(&7);
+    let maximize = furthest_dominant && dominant;
+    let score = |notes| {
+        let distance = movement(previous_notes, notes);
+        (
+            if maximize { -distance } else { distance },
+            movement(base, notes),
+        )
+    };
+    let mut best = base;
+    let mut best_score = score(base);
+    for inversion in 0..tones.len {
+        for octave in [-24i16, -12, 0, 12] {
+            let transpose = chord.transpose as i16 + octave;
+            let candidate = voice(
+                chord.root,
+                chord.quality,
+                chord.second,
+                transpose as i8,
+                inversion as u8,
+                spread,
+            );
+            if candidate.len != tones.len
+                || candidate.len != base.len
+                || candidate
+                    .as_slice()
+                    .iter()
+                    .zip(base.as_slice())
+                    .any(|(&a, &b)| (a as i16 - b as i16).abs() > 12)
+            {
+                continue;
+            }
+            let candidate_score = score(candidate);
+            if candidate_score < best_score {
+                best = candidate;
+                best_score = candidate_score;
+            }
+        }
+    }
+    best
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn smart_voice_leading_preserves_tones_and_midi_bounds() {
+        let previous = SavedChord {
+            root: 67,
+            quality: 2,
+            second: None,
+            inversion: 0,
+            spread: 0,
+            transpose: 0,
+        };
+        let previous_notes = voice(67, 2, None, 0, 0, 0);
+        for root in 0..=127 {
+            for quality in 0..12 {
+                for spread in 0..3 {
+                    let chord = SavedChord {
+                        root,
+                        quality,
+                        spread,
+                        ..previous
+                    };
+                    let base = voice(root, quality, None, 0, 0, spread);
+                    for far in [false, true] {
+                        let notes = lead(chord, spread, previous, previous_notes, base, far);
+                        assert_eq!(notes.len, base.len);
+                        assert!(notes.as_slice().windows(2).all(|w| w[0] < w[1]));
+                        let mut expected: Vec<_> = base.as_slice().iter().map(|n| n % 12).collect();
+                        let mut actual: Vec<_> = notes.as_slice().iter().map(|n| n % 12).collect();
+                        expected.sort_unstable();
+                        actual.sort_unstable();
+                        assert_eq!(actual, expected);
+                    }
+                }
+            }
+        }
+    }
     #[test]
     fn agreed_examples() {
         for (second, expected) in [

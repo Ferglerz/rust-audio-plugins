@@ -168,10 +168,8 @@ impl Chordboard {
                 tuning,
                 ..
             } => {
-                if self
-                    .engine
-                    .root
-                    .is_some_and(|s| s.held && s.channel == channel && s.note == note)
+                if self.engine.melody_note_held(channel, note)
+                    || self.engine.root.is_some_and(|s| s.held && s.channel == channel && s.note == note)
                 {
                     let range = self.engine.input_bend[channel as usize].max(1.0);
                     self.engine
@@ -184,16 +182,21 @@ impl Chordboard {
                 brightness,
                 ..
             } => {
-                if self
-                    .engine
-                    .root
-                    .is_some_and(|s| s.held && s.channel == channel && s.note == note)
+                if self.engine.melody_note_held(channel, note)
+                    || self.engine.root.is_some_and(|s| s.held && s.channel == channel && s.note == note)
                 {
                     self.engine.control(channel, 74, brightness, out);
                 }
             }
             NoteEvent::Choke { .. } => self.engine.panic(out),
             _ => {}
+        }
+        // Publish learning before another event can reconfigure the engine (MPE
+        // detection also reads these parameters within the current audio block).
+        if let Some(base) = self.engine.learned_base.take() {
+            self.params
+                .control_base
+                .store(base as i32, Ordering::Relaxed);
         }
     }
 }
@@ -252,7 +255,7 @@ impl Plugin for Chordboard {
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
         let count = buffer.samples();
-        let starting_voices = self.engine.voices;
+        let starting_notes = self.engine.owned_output_notes();
         let mut emitted = EventBatch::default();
         let transport = context.transport();
         let playing = transport.playing;
@@ -336,8 +339,26 @@ impl Plugin for Chordboard {
         }
         if emitted.overflow {
             self.engine.panic(&mut |_| {});
-            for voice in starting_voices.into_iter().flatten() {
-                context.send_event(output(Out::Off(voice.channel, voice.note, 0.0), 0));
+            // A pedal-up earlier in the dropped batch may have cleared the
+            // internal flag already. Release sustain on every output channel.
+            for channel in 0..16 {
+                context.send_event(output(Out::Cc(channel, 64, 0.0), 0));
+            }
+            let owned_count = starting_notes.iter().flatten().filter(|&&owned| owned).count();
+            if owned_count > 480 {
+                // Bound emergency recovery even after many transparent notes
+                // accumulated across prior blocks.
+                for channel in 0..16 {
+                    context.send_event(output(Out::Cc(channel, 123, 0.0), 0));
+                }
+            } else {
+                for (channel, notes) in starting_notes.iter().enumerate() {
+                    for (note, &owned) in notes.iter().enumerate() {
+                        if owned {
+                            context.send_event(output(Out::Off(channel as u8, note as u8, 0.0), 0));
+                        }
+                    }
+                }
             }
         } else {
             for &(timing, event) in emitted.events[..emitted.len].iter().flatten() {
@@ -384,6 +405,66 @@ mod protocol_tests {
             },
             &mut |_| {},
         );
+    }
+    #[test]
+    fn split_melody_survives_auto_mpe_detection_and_poly_expression() {
+        let mut plugin = Chordboard {
+            params: Arc::new(ChordboardParams {
+                key_split: BoolParam::new("Key split", true),
+                always_chord: BoolParam::new("Always play full chord", true),
+                mode: IntParam::new("Play mode", 2, IntRange::Linear { min: 1, max: 3 }),
+                ..ChordboardParams::default()
+            }),
+            ..Chordboard::default()
+        };
+        plugin.engine.configure(plugin.params.config(), &mut |_| {});
+        for (channel, note) in [(0, 48), (1, 72), (2, 76)] {
+            plugin.input(NoteEvent::NoteOn { timing: 0, voice_id: None, channel, note, velocity: 0.8 }, &mut |_| {});
+        }
+        let mut events = Vec::new();
+        plugin.input(NoteEvent::PolyTuning { timing: 0, voice_id: None, channel: 1, note: 72, tuning: 2.0 }, &mut |e| events.push(e));
+        assert!(plugin.engine.config.mpe);
+        assert!(plugin.engine.melody_note_held(1, 72));
+        assert!(plugin.engine.melody_note_held(2, 76));
+        assert!(!events.iter().any(|e| matches!(e, Out::Off(1, 72, _) | Out::Off(2, 76, _))));
+        assert!(events.iter().any(|e| matches!(e, Out::Bend(1, value) if *value > 0.5)));
+        events.clear();
+        plugin.input(NoteEvent::PolyBrightness { timing: 0, voice_id: None, channel: 2, note: 76, brightness: 0.8 }, &mut |e| events.push(e));
+        assert!(events.contains(&Out::Cc(2, 74, 0.8)));
+    }
+
+    #[test]
+    fn learned_control_octave_survives_same_block_mpe_configuration() {
+        let mut plugin = Chordboard::default();
+        plugin.engine.command(engine::Command::Learn(4), &mut |_| {});
+        plugin.input(
+            NoteEvent::NoteOn {
+                timing: 0,
+                voice_id: None,
+                channel: 0,
+                note: 36,
+                velocity: 0.8,
+            },
+            &mut |_| {},
+        );
+        assert_eq!(plugin.params.control_base.load(Ordering::Relaxed), 36);
+        cc(&mut plugin, 0, 101, 0);
+        cc(&mut plugin, 0, 100, 6);
+        cc(&mut plugin, 0, 6, 8);
+        let mut events = Vec::new();
+        plugin.input(
+            NoteEvent::NoteOn {
+                timing: 0,
+                voice_id: None,
+                channel: 1,
+                note: 39,
+                velocity: 0.8,
+            },
+            &mut |e| events.push(e),
+        );
+        assert!(!events.iter().any(|e| matches!(e, Out::On(..))));
+        assert!(plugin.engine.root.is_none());
+        assert_eq!(plugin.engine.quality, 1);
     }
     #[test]
     fn auto_detects_announced_mpe_zones_and_respects_forced_modes() {

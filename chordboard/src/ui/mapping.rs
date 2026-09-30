@@ -10,6 +10,7 @@ impl ChordboardView {
         self.surface(d, r);
         self.button(d, self.panel_close_rect(panel), "×", false, TEAL);
         match panel {
+            Panel::Routes => self.draw_routes(d),
             Panel::Mapping => self.draw_mapping(d),
             Panel::Output => {
                 d.text(

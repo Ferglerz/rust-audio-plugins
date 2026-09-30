@@ -7,11 +7,7 @@ impl ChordboardView {
         }
         if self.font.get().is_none() {
             self.font.set(canvas.add_font_mem(FONT_JETBRAINS_MONO).ok());
-            self.ui_font.set(
-                canvas
-                    .add_font_mem(nih_plug_vizia::assets::fonts::NOTO_SANS_REGULAR)
-                    .ok(),
-            );
+            self.ui_font.set(self.font.get());
             self.bold_font.set(
                 canvas
                     .add_font_mem(nih_plug_vizia::assets::fonts::NOTO_SANS_BOLD)
@@ -29,26 +25,11 @@ impl ChordboardView {
         d.rounded_rect(0.0, 0.0, W, H, 0.0, BG);
         d.rounded_rect(0.0, 0.0, W, 76.0, 0.0, PANEL);
         d.line(0.0, 75.0, W, 75.0, LINE, 1.0);
-        d.font = self.bold_font.get();
-        d.text(32.0, 43.0, "Chordboard", 27.0, TEXT);
+        d.font = self.font.get();
+        d.text(32.0, 44.0, "CHORDBOARD", 24.0, GOLD);
+        d.text(202.0, 44.0, "HARMONY & PERFORMANCE", 12.0, MUTED);
+        d.appearance_button(APPEARANCE, prefs().label());
         d.font = self.ui_font.get();
-        d.text(32.0, 62.0, "HARMONY & PERFORMANCE", 10.0, MUTED);
-        d.rounded_rect(219.0, 27.0, 3.0, 28.0, 1.5, TEAL);
-        d.text(234.0, 43.0, "Choose. Shape. Play.", 12.0, MUTED);
-        self.button(
-            &mut d,
-            APPEARANCE,
-            &format!(
-                "Theme: {}",
-                match prefs().label() {
-                    "LIGHT" => "Light",
-                    "DARK" => "Dark",
-                    _ => "Auto",
-                }
-            ),
-            false,
-            TEAL,
-        );
         let expand = self.expand_t();
         let chords = shrink_width(CHORDS_SURFACE, expand);
         let voicing = shrink_width(VOICING_SURFACE, expand);
@@ -114,35 +95,6 @@ impl ChordboardView {
         }
         if expand == 0.0 {
             d.font = self.ui_font.get();
-            d.text(
-                600.0,
-                616.0,
-                if self.snapshot.voices > 0 {
-                    "Playing your harmony"
-                } else {
-                    "Ready to play"
-                },
-                13.0,
-                TEXT,
-            );
-            d.text(
-                600.0,
-                638.0,
-                match self.params.mode.value() {
-                    2 => "Hold a chord, then sweep the strings · Latch plays on hover.",
-                    3 => "Hold a chord to hear the pattern.",
-                    _ => "Click a chord or play your MIDI keyboard.",
-                },
-                11.0,
-                MUTED,
-            );
-            d.text(
-                600.0,
-                660.0,
-                "MIDI effect · route output to an instrument",
-                11.0,
-                MUTED,
-            );
             for axis in 0..2 {
                 let mapping = crate::engine::Mapping::decode(
                     self.params.mapping(axis).load(Ordering::Relaxed),
@@ -198,6 +150,7 @@ impl ChordboardView {
             }
             self.draw_control(&mut d, c, *r, GOLD);
         }
+        self.draw_piano(&mut d);
         if self.panel.is_some() {
             self.draw_panel(&mut d);
             for (c, r) in &panel_controls {
@@ -205,6 +158,7 @@ impl ChordboardView {
             }
         }
         self.draw_memory_drag(&mut d);
+        self.draw_route_drag(&mut d);
         if let Some(edit) = &self.edit {
             d.font = self.font.get();
             d.value_edit(edit, GOLD);
@@ -224,12 +178,12 @@ impl ChordboardView {
         } else if !self.status.is_empty() {
             &self.status
         } else {
-            "Play a chord, then add a second note to colour it.  ↑ / ↓ changes inversion."
+            ""
         };
         let footer = self.fit_text(&d, footer, W - 64.0, 11.0);
         d.text(
             32.0,
-            694.0,
+            H - 10.0,
             &footer,
             11.0,
             if feedback { GOLD } else { MUTED },
@@ -258,18 +212,48 @@ impl ChordboardView {
     }
 
     fn hover_hint(&self, controls: &[(Control, Rect)]) -> Option<String> {
+        if let Some(hint) = self.route_drag_hint() {
+            return Some(hint);
+        }
         let (x, y) = self.pointer?;
+        if self.menu.is_some() {
+            return None;
+        }
+        if self.panel == Some(Panel::Routes) && hit(self.panel_rect(Panel::Routes), x, y) {
+            if hit(ROUTE_GRAPH, x, y) {
+                return Some("Drag endpoints for the output range · Drag the center node vertically for curve · Linear resets curve".into());
+            }
+            for i in 0..crate::engine::routing::ROUTE_COUNT {
+                if hit(route_slot_rect(i), x, y) {
+                    let r = self.params.routes[i].route();
+                    return Some(if r.source == 0 {
+                        format!("Route {} · Unassigned", i + 1)
+                    } else {
+                        format!(
+                            "Route {} · {} → {}",
+                            i + 1,
+                            crate::engine::routing::SOURCES[r.source as usize],
+                            crate::engine::routing::TARGETS[r.target as usize].name
+                        )
+                    });
+                }
+            }
+            return None;
+        }
+        if let Some(hint) = self.piano_hint(x, y) {
+            return Some(hint);
+        }
         if self.expand_t() > 0.0 && y >= HEADER_H {
-            if hit(self.expand_button(), x, y) {
+            if self.can_expand_strum() && hit(self.expand_button(), x, y) {
                 return Some("Collapse the strum field".into());
             }
-            if hit(strum_latch_rect(self.expand_t()), x, y) && self.params.mode.value() == 2 {
+            if hit(strum_latch_rect(self.expand_t()), x, y) && self.mode() == 2 {
                 return Some(
                     "Hover the strum field to play without clicking · Click the field to drag as usual"
                         .into(),
                 );
             }
-            if self.params.mode.value() == 2 {
+            if self.mode() == 2 {
                 let play = self.play_pad();
                 for y_axis in [false, true] {
                     let (min, max) = if y_axis {
@@ -298,6 +282,9 @@ impl ChordboardView {
             }
             return None;
         }
+        if (0..KEY_COUNT).any(|i| self.snapshot.ignored & (1 << i) != 0 && hit(key_rect(i), x, y)) {
+            return Some("Extra key pending · The last held key becomes the next root".into());
+        }
         if hit(self.expand_button(), x, y) && self.can_expand_strum() {
             return Some("Expand the strum field over the plugin body".into());
         }
@@ -317,9 +304,9 @@ impl ChordboardView {
         }
         if hit(LEARN_OCTAVE, x, y) {
             return Some(if self.learning() == 4 {
-                "Play your keyboard's lowest key…".into()
+                "Play C to set the control octave…".into()
             } else {
-                "Click, then play your keyboard’s lowest key to assign twelve chord-quality selectors".into()
+                "Learn C · C major, Db b9, D sus2, Eb minor, E major, F sus4, F# dim, G power, Ab aug, A 6, Bb 7, B maj7".into()
             });
         }
         if hit(MPE, x, y) {
@@ -332,18 +319,23 @@ impl ChordboardView {
                 }
             ));
         }
+        if hit(LATCH, x, y) {
+            return Some(
+                "Keep the chord and alteration after release · Re-press the root to reset".into(),
+            );
+        }
         if hit(QWERTY, x, y) {
             return Some(
                 "Computer keys play only when enabled and this window is focused · Click a chord key to focus".into(),
             );
         }
-        if hit(strum_latch_rect(self.expand_t()), x, y) && self.params.mode.value() == 2 {
+        if hit(strum_latch_rect(self.expand_t()), x, y) && self.mode() == 2 {
             return Some(
                 "Hover the strum field to play without clicking · Click the field to drag as usual"
                     .into(),
             );
         }
-        if self.params.mode.value() == 2 && self.panel.is_none() {
+        if self.mode() == 2 && self.panel.is_none() {
             let play = self.play_pad();
             for y_axis in [false, true] {
                 let (min, max) = if y_axis {
@@ -370,11 +362,26 @@ impl ChordboardView {
                 });
             }
         }
+        if let Some((c, _)) = controls
+            .iter()
+            .find(|(c, r)| hit(*r, x, y) && self.routed_control(c).is_some())
+        {
+            return Some(format!(
+                "{} is routed · Teal shows its live value; editing changes the saved base value",
+                c.name
+            ));
+        }
+        if controls
+            .iter()
+            .any(|(c, r)| c.id == "voice_leading" && hit(*r, x, y))
+        {
+            return Some("Click: Nearest resolution / Furthest dominant resolution / Off · Furthest uses larger motion on V–I; otherwise nearest".into());
+        }
         if controls
             .iter()
             .any(|(c, r)| c.id == "spread" && hit(*r, x, y))
         {
-            return Some("Click to cycle Close / Open / Wide · Keys show the full voicing".into());
+            return Some("Click to cycle Close / Open / Wide · The full keyboard shows the voicing and voice-leading paths".into());
         }
         if controls
             .iter()
@@ -389,18 +396,23 @@ impl ChordboardView {
                 "Drag anywhere to adjust · Click value to type · Shift for fine adjustment".into(),
             );
         }
-        for (i, label) in ["Pressure", "Timbre", "Bend"].iter().enumerate() {
+        if hit(ROOT_ON_SELECT, x, y) {
+            return Some(
+                "Play the root immediately on chord selection, including Manual Strum".into(),
+            );
+        }
+        if hit(ROUTES_BUTTON, x, y) {
+            return Some(
+                "Link controllers to parameters · Each route has its own range and curve".into(),
+            );
+        }
+        for i in 0..crate::engine::routing::SOURCE_COUNT {
             if hit(meter_rect(i), x, y) {
-                let value = [
-                    self.snapshot.pressure,
-                    self.snapshot.timbre,
-                    self.snapshot.bend,
-                ][i];
-                return Some(if i == 0 {
-                    format!("{label}: {:.0}%", value * 100.0)
-                } else {
-                    format!("{label}: {:+.0}%", (value - 0.5) * 200.0)
-                });
+                return Some(format!(
+                    "{} input: {:.0}% · Drag to a control to link · Routes edits range and curve",
+                    crate::engine::routing::SOURCES[i + 1],
+                    self.snapshot.sources[i] * 100.0
+                ));
             }
         }
         if hit(SAVE_MEMORY, x, y) {
@@ -424,6 +436,9 @@ impl ChordboardView {
         None
     }
     fn draw_control(&self, d: &mut Draw, c: &Control, rect: Rect, color: Color) {
+        let routed = self.routed_control(c);
+        let c = routed.as_ref().unwrap_or(c);
+        let color = if routed.is_some() { TEAL } else { color };
         let name = match c.id {
             "length_ms" => "Note length",
             "output_channel" => "MIDI channel",
@@ -445,13 +460,24 @@ impl ChordboardView {
                 rect,
                 &format!(
                     "{} ▾",
-                    Menu::Quality.items()[self.params.quality.value() as usize]
+                    Menu::Quality.items()[self
+                        .routed_plain("quality")
+                        .unwrap_or(self.params.quality.value() as f32)
+                        as usize]
                 ),
                 self.menu == Some(Menu::Quality),
                 GOLD,
             );
+        } else if c.id == "voice_leading" {
+            self.button(
+                d,
+                rect,
+                ["Nearest", "Furthest dominant", "Off"][self.params.voice_leading.value() as usize],
+                self.params.voice_leading.value() != 2,
+                TEAL,
+            );
         } else if c.id == "spread" {
-            self.draw_spread_keyboard(d, rect, &c.value);
+            self.button(d, rect, &c.value, false, GOLD);
         } else if c.toggle {
             self.button(
                 d,

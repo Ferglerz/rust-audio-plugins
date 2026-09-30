@@ -15,6 +15,8 @@ impl ChordboardView {
             "Held"
         } else if self.params.latch.value() && self.snapshot.full_notes.len > 0 {
             "Latched"
+        } else if self.params.key_split.value() && self.snapshot.full_notes.len > 0 {
+            "Selected"
         } else if self.snapshot.notes.len > 0 {
             "Sustained"
         } else if self.can_capture() {
@@ -28,20 +30,11 @@ impl ChordboardView {
         d.font = self.ui_font.get();
         d.text(32.0, 116.0, "CHORD", 11.0, MUTED);
         let state = self.chord_state_label();
-        d.circle(
-            107.0,
-            112.0,
-            3.0,
-            if self.snapshot.voices > 0 {
-                TEAL
-            } else {
-                MUTED
-            },
-            true,
-        );
-        d.text(117.0, 116.0, state, 11.0, MUTED);
+        if state != "Ready" {
+            d.text(117.0, 116.0, state, 11.0, MUTED);
+        }
         let name = SavedChord::decode(self.snapshot.captured)
-            .map_or_else(|| "Play a chord".into(), harmony::chord_name);
+            .map_or_else(|| "—".into(), harmony::chord_name);
         d.font = self.bold_font.get();
         let size = (33.0 * 284.0 / self.text_width(d, &name, 33.0).max(1.0)).clamp(24.0, 33.0);
         let title = self.fit_text(d, &name, 284.0, size);
@@ -62,25 +55,27 @@ impl ChordboardView {
             .collect::<Vec<_>>()
             .join("  ");
         let tones = self.fit_text(d, &tones, 284.0, 11.0);
-        d.text(
-            32.0,
-            174.0,
-            if tones.is_empty() {
-                "Click a key below to begin"
-            } else {
-                &tones
-            },
-            11.0,
-            MUTED,
-        );
+        d.text(32.0, 174.0, &tones, 11.0, MUTED);
         d.font = self.ui_font.get();
+        let base = self.params.control_base.load(Ordering::Relaxed);
+        let range_label = if base >= 0 {
+            format!(
+                "Control {}{}–{}{}",
+                harmony::NOTE_NAMES[base as usize % 12],
+                base / 12 - 1,
+                harmony::NOTE_NAMES[(base as usize + 11) % 12],
+                (base + 11) / 12 - 1
+            )
+        } else {
+            "Set control octave".into()
+        };
         self.button(
             d,
             LEARN_OCTAVE,
             if self.learning() == 4 {
                 "Listening… Cancel learn"
             } else {
-                "Learn MIDI keyboard"
+                &range_label
             },
             self.learning() == 4,
             TEAL,
@@ -111,7 +106,7 @@ impl ChordboardView {
             if second >= 0 { GOLD } else { MUTED },
         );
         d.font = self.ui_font.get();
-        self.button(d, LATCH, "Latch", self.params.latch.value(), GOLD);
+        self.button(d, LATCH, "Hold chord", self.params.latch.value(), GOLD);
         self.button(
             d,
             Menu::Key.trigger_rect(),
@@ -241,21 +236,18 @@ impl ChordboardView {
                     if amt > 0.1 { color } else { TEXT },
                 );
                 d.font = self.ui_font.get();
-                let roman = self.fit_text(
-                    d,
-                    &harmony::roman(
-                        root,
-                        harmony::row_quality(i / KEY_COLUMNS),
-                        self.params.key.value() as u8,
-                    ),
-                    w - 8.0,
-                    11.0,
+                let roman = harmony::roman(
+                    root,
+                    harmony::row_quality(i / KEY_COLUMNS),
+                    self.params.key.value() as u8,
                 );
+                let roman_size =
+                    (11.0 * (w - 8.0) / self.text_width(d, &roman, 11.0).max(1.0)).min(11.0);
                 d.text(
                     x + 4.0,
                     y + 40.0,
                     &roman,
-                    11.0,
+                    roman_size,
                     if compatible { color } else { MUTED },
                 );
             }
@@ -274,6 +266,8 @@ impl ChordboardView {
 
     fn draw_voicing(&self, d: &mut Draw) {
         d.text(32.0, 556.0, "Chord quality", 12.0, MUTED);
+        d.text(218.0, 556.0, "Voice leading", 12.0, MUTED);
+        d.text(400.0, 556.0, "Spread", 12.0, MUTED);
         d.text(32.0, 622.0, "Inversion", 11.0, MUTED);
         self.button(d, inversion_rect(0), "↓", false, TEAL);
         self.button(d, inversion_rect(1), "↑", false, TEAL);

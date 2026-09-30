@@ -2,8 +2,8 @@ use super::*;
 
 impl ChordboardView {
     pub(super) fn draw_performance_header(&self, d: &mut Draw) {
-        d.font = self.bold_font.get();
-        d.text(600.0, 111.0, "Performance", 15.0, TEXT);
+        d.font = self.font.get();
+        d.text(600.0, 111.0, "PERFORMANCE", 14.0, TEXT);
         d.font = self.ui_font.get();
         d.text_right(
             778.0,
@@ -48,7 +48,7 @@ impl ChordboardView {
                 d,
                 mode_rect(i),
                 label,
-                self.params.mode.value().max(1) == i as i32 + 1,
+                self.mode().max(1) == i as i32 + 1,
                 TEAL,
             );
         }
@@ -233,7 +233,9 @@ impl ChordboardView {
                     value
                 } * (y_max - y_min)
         };
-        let n = self.params.strings.value() as usize;
+        let n = self
+            .routed_plain("strings")
+            .unwrap_or(self.params.strings.value() as f32) as usize;
         for i in 0..n {
             let x = field.0 + (min + i as f32 * (max - min) / (n - 1) as f32) * field.2;
             let string = if manual && self.params.x_reverse.value() {
@@ -277,19 +279,21 @@ impl ChordboardView {
             TEXT_LABEL,
             TEAL,
         );
-        self.button(
-            d,
-            self.expand_button(),
-            if self.expand_target > 0.5 {
-                "COLLAPSE ◂"
-            } else {
-                "EXPAND ▸"
-            },
-            self.expand_target > 0.5,
-            TEAL,
-        );
         if manual {
-            self.trackpad_latch_button(
+            self.button(
+                d,
+                self.expand_button(),
+                if self.expand_target > 0.5 {
+                    "COLLAPSE ◂"
+                } else {
+                    "EXPAND ▸"
+                },
+                self.expand_target > 0.5,
+                TEAL,
+            );
+        }
+        if manual {
+            self.touch_latch_button(
                 d,
                 strum_latch_rect(self.expand_t()),
                 self.params.strum_latch.value(),
@@ -398,101 +402,95 @@ impl ChordboardView {
         }
     }
 
-    pub(super) fn draw_spread_keyboard(&self, d: &mut Draw, r: Rect, label: &str) {
-        let notes = self.spread_preview_notes();
-        let tones = notes.as_slice();
-        let first = tones.first().copied().unwrap_or(48) / 12 * 12;
-        let last = ((tones.last().copied().unwrap_or(60) as u16 / 12 + 1) * 12 - 1).min(127) as u8;
-        let black = |note: u8| matches!(note % 12, 1 | 3 | 6 | 8 | 10);
-        let whites = (first..=last).filter(|&n| !black(n)).count().max(1);
-        let key_w = r.2 / whites as f32;
-        let top = r.1 + 23.0;
-        let height = r.3 - 25.0;
-        let hovered = self.pointer.is_some_and(|(x, y)| hit(r, x, y));
-        d.text(r.0, r.1 + 15.0, "Spread", TEXT_SMALL, MUTED);
-        d.text_right(
-            r.0 + r.2,
-            r.1 + 15.0,
-            &format!("{label} · click to change"),
-            TEXT_SMALL,
-            GOLD,
-        );
-        let white_key = if d.light { BG } else { alpha(TEXT, 0.65) };
-        let black_key = if d.light { TEXT } else { BG };
-        let mut white_index = 0;
-        for note in first..=last {
-            if black(note) {
-                continue;
-            }
-            let x = r.0 + white_index as f32 * key_w;
-            d.rect(
-                x,
-                top,
-                key_w,
-                height,
-                if tones.contains(&note) {
-                    GOLD
-                } else {
-                    white_key
-                },
-            );
-            d.outline((x, top, key_w, height), BG);
-            white_index += 1;
-        }
-        white_index = 0;
-        for note in first..=last {
-            if !black(note) {
-                white_index += 1;
-                continue;
-            }
-            let x = r.0 + white_index as f32 * key_w - key_w * 0.3;
-            d.rect(
-                x,
-                top,
-                key_w * 0.6,
-                height * 0.62,
-                if tones.contains(&note) {
-                    GOLD
-                } else {
-                    black_key
-                },
-            );
-            d.outline((x, top, key_w * 0.6, height * 0.62), LINE);
-        }
-        d.outline((r.0, top, r.2, height), if hovered { GOLD } else { LINE });
-    }
-
     pub(super) fn draw_meters(&self, d: &mut Draw) {
-        d.font = self.ui_font.get();
-        for (i, label) in ["Pressure", "Timbre", "Bend"].iter().enumerate() {
+        use crate::engine::routing::SOURCE_SHORT;
+        d.font = self.font.get();
+        d.text(600.0, 616.0, "MODULATION", 12.0, TEXT);
+        d.text(724.0, 616.0, "Drag to route", 10.0, MUTED);
+        let count = self
+            .params
+            .routes
+            .iter()
+            .filter(|p| p.route().active())
+            .count();
+        self.button(
+            d,
+            ROUTES_BUTTON,
+            &format!("Routes {count} ▾"),
+            self.panel == Some(Panel::Routes),
+            TEAL,
+        );
+        for (i, label) in SOURCE_SHORT.iter().enumerate() {
             let r = meter_rect(i);
-            let x = r.0 + r.2 / 2.0;
-            let top = r.1 + 7.0;
-            let height = 52.0;
-            let bottom = top + height;
-            let end = bottom - self.meters[i].clamp(0.0, 1.0) * height;
+            let value = self.snapshot.sources[i];
+            let x = r.0 + r.2 * 0.5;
+            let hover = self.hover_amount(r);
+            let dragging = matches!(self.drag, Some(Drag::Route(drag)) if drag.source == i);
+            let linked = self
+                .params
+                .routes
+                .iter()
+                .any(|p| p.route().active() && p.source.value() as usize == i + 1);
+            let emphasis = if dragging { 1.0 } else { hover };
             d.rounded_rect(
-                x - 5.0,
-                top - 1.0,
-                10.0,
-                height + 2.0,
-                5.0,
-                alpha(TEXT, 0.055),
+                r.0,
+                r.1,
+                r.2,
+                r.3,
+                4.0,
+                alpha(TEAL, 0.025 + emphasis * 0.12),
             );
-            d.rounded_rect(x - 3.0, top, 6.0, height, 3.0, BG);
-            let origin = if i == 0 { bottom } else { top + height / 2.0 };
-            let amount = (end - origin).abs();
-            if amount > 0.0 {
-                d.rounded_rect(x - 3.0, end.min(origin), 6.0, amount, 2.5, TEAL);
+            d.outline_rounded(
+                r.0,
+                r.1,
+                r.2,
+                r.3,
+                4.0,
+                alpha(
+                    if linked || emphasis > 0.0 { TEAL } else { LINE },
+                    0.55 + emphasis * 0.4,
+                ),
+                1.0,
+            );
+            for row in 0..3 {
+                for col in 0..2 {
+                    d.circle(
+                        r.0 + r.2 - 10.0 + col as f32 * 3.0,
+                        r.1 + 7.0 + row as f32 * 3.0,
+                        0.75,
+                        alpha(MUTED, 0.4 + emphasis * 0.5),
+                        true,
+                    );
+                }
             }
-            for tick in 0..=4 {
-                let y = top + tick as f32 * height / 4.0;
-                d.line(x + 9.0, y, x + 12.0, y, alpha(MUTED, 0.35), 1.0);
+            if linked {
+                d.circle(r.0 + 6.0, r.1 + 7.0, 1.8, TEAL, true);
             }
-            if i > 0 {
-                d.line(x - 8.0, origin, x + 8.0, origin, alpha(MUTED, 0.7), 1.0);
+            d.rounded_rect(x - 3.0, r.1 + 4.0, 6.0, 20.0, 2.0, BG);
+            if value > 0.0 {
+                d.rounded_rect(
+                    x - 3.0,
+                    r.1 + 4.0 + 20.0 * (1.0 - value),
+                    6.0,
+                    20.0 * value,
+                    2.0,
+                    TEAL,
+                );
             }
-            d.text_centered(x, r.1 + r.3 - 2.0, label, 11.0, MUTED);
+            if i == 0 {
+                d.line(x - 5.0, r.1 + 14.0, x + 5.0, r.1 + 14.0, MUTED, 1.0);
+            }
+            d.text_centered(
+                x,
+                r.1 + r.3 - 4.0,
+                label,
+                10.0,
+                if linked || dragging || hover > 0.3 {
+                    TEAL
+                } else {
+                    MUTED
+                },
+            );
         }
     }
 }

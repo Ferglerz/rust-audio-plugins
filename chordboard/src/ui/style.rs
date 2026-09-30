@@ -19,7 +19,15 @@ impl ChordboardView {
             }));
             return targets;
         }
-        let mut targets = vec![(OUTPUT, self.panel == Some(Panel::Output)), (MPE, false)];
+        let mut targets = vec![
+            (OUTPUT, self.panel == Some(Panel::Output)),
+            (MPE, false),
+            (ROUTES_BUTTON, self.panel == Some(Panel::Routes)),
+        ];
+        if self.expand_t() == 0.0 {
+            targets
+                .extend((0..crate::engine::routing::SOURCE_COUNT).map(|i| (meter_rect(i), false)));
+        }
         targets.extend((0..2).map(|i| {
             (
                 mapping_summary_rect(i),
@@ -33,6 +41,17 @@ impl ChordboardView {
                     .iter()
                     .map(|(c, r)| (*r, c.toggle && c.norm >= 0.5)),
             );
+            if panel == Panel::Routes {
+                targets.extend(
+                    (0..crate::engine::routing::ROUTE_COUNT)
+                        .map(|i| (route_slot_rect(i), i == self.route_slot)),
+                );
+                targets.extend([
+                    (ROUTE_SOURCE, false),
+                    (ROUTE_TARGET, false),
+                    (ROUTE_CLEAR, false),
+                ]);
+            }
             if panel == Panel::Mapping {
                 targets.push((
                     mapping_learn_rect(self.mapping_axis),
@@ -55,6 +74,10 @@ impl ChordboardView {
             return targets;
         }
         targets.extend([
+            (ALWAYS_BASS, self.params.always_bass.value()),
+            (ALWAYS_CHORD, self.params.always_chord.value()),
+            (KEY_SPLIT, self.params.key_split.value()),
+            (SPLIT_NOTE, self.params.key_split.value()),
             (APPEARANCE, false),
             (LATCH, self.params.latch.value()),
             (QWERTY, self.params.keyboard.value()),
@@ -74,18 +97,13 @@ impl ChordboardView {
         targets.extend((0..8).map(|i| (memory_rect(i), self.memory_ui.armed)));
         targets.extend((0..2).map(|i| (inversion_rect(i), false)));
         targets.extend((0..5).map(|i| (transpose_rect(i), false)));
-        targets.extend((0..3).map(|i| {
-            (
-                mode_rect(i),
-                self.params.mode.value().max(1) == i as i32 + 1,
-            )
-        }));
+        targets.extend((0..3).map(|i| (mode_rect(i), self.mode().max(1) == i as i32 + 1)));
         targets.extend(
             self.base_controls()
                 .iter()
                 .map(|(c, r)| (*r, c.toggle && c.norm >= 0.5)),
         );
-        match self.params.mode.value() {
+        match self.mode() {
             1 => {
                 targets.push((
                     strum_sync_rect(self.expand_t()),
@@ -177,16 +195,15 @@ impl ChordboardView {
     }
 
     pub(super) fn surface(&self, d: &mut Draw, r: Rect) {
-        d.rounded_rect(r.0, r.1 + 3.0, r.2, r.3, 12.0, alpha(BG, 0.55));
-        d.rounded_rect(r.0, r.1, r.2, r.3, 12.0, PANEL);
-        d.outline_rounded(r.0, r.1, r.2, r.3, 12.0, alpha(LINE, 0.7), 1.0);
+        d.rounded_rect(r.0, r.1, r.2, r.3, 6.0, PANEL);
+        d.outline(r, LINE);
     }
 
     pub(super) fn button(&self, d: &mut Draw, r: Rect, label: &str, on: bool, color: Color) {
         self.paint_button(d, r, label, on, color, false);
     }
 
-    pub(super) fn trackpad_latch_button(&self, d: &mut Draw, r: Rect, on: bool, color: Color) {
+    pub(super) fn touch_latch_button(&self, d: &mut Draw, r: Rect, on: bool, color: Color) {
         self.paint_button(d, r, "Latch", on, color, true);
     }
 
@@ -197,7 +214,7 @@ impl ChordboardView {
         label: &str,
         on: bool,
         color: Color,
-        trackpad: bool,
+        touch: bool,
     ) {
         let hover = self.hover_amount(r);
         let selected = self
@@ -209,44 +226,36 @@ impl ChordboardView {
             .action_flash
             .filter(|(rect, _)| *rect == r)
             .map_or(0.0, |(_, v)| v);
-        d.rounded_rect(r.0, r.1, r.2, r.3, 6.0, BG);
-        d.rounded_rect(
+        d.rect(r.0, r.1, r.2, r.3, PANEL);
+        d.rect(
             r.0,
             r.1,
             r.2,
             r.3,
-            6.0,
-            alpha(color, selected * 0.12 + hover * 0.05 + flash * 0.07),
+            alpha(color, hover * 0.05 + flash * 0.07),
         );
-        d.outline_rounded(r.0, r.1, r.2, r.3, 6.0, LINE, 1.0);
-        d.outline_rounded(
-            r.0,
-            r.1,
-            r.2,
-            r.3,
-            6.0,
-            alpha(color, (selected * 0.65 + hover * 0.35).min(1.0)),
-            1.0,
-        );
+        if selected > 0.0 {
+            d.rect(r.0, r.1 + r.3 - 2.0, r.2, 2.0, alpha(color, selected));
+        }
         let old = d.font;
-        d.font = self.ui_font.get();
-        let label_color = if on || color == MUTED { color } else { TEXT };
-        let padding = if r.2 < 64.0 { 6.0 } else { 12.0 };
-        let text = self.fit_text(d, label, r.2 - padding, 12.0);
-        if trackpad {
-            const ICON_WIDTH: f32 = 14.0;
+        d.font = self.font.get();
+        let label_color = if on { color } else { MUTED };
+        let padding = if r.2 < 90.0 { 6.0 } else { 12.0 };
+        let text = self.fit_text(d, label, r.2 - padding, 11.0);
+        if touch {
+            const ICON_WIDTH: f32 = 18.0;
             const GAP: f32 = 5.0;
-            let text_w = self.text_width(d, &text, 12.0);
+            let text_w = self.text_width(d, &text, 11.0);
             let left = r.0 + (r.2 - ICON_WIDTH - GAP - text_w) * 0.5;
             let center_y = r.1 + r.3 * 0.5;
-            d.trackpad_icon(left + ICON_WIDTH * 0.5, center_y, label_color);
-            d.text_middle(left + ICON_WIDTH + GAP, center_y, &text, 12.0, label_color);
+            d.touch_icon(left + ICON_WIDTH * 0.5, center_y, label_color);
+            d.text_middle(left + ICON_WIDTH + GAP, center_y, &text, 11.0, label_color);
         } else {
             d.text_centered(
                 r.0 + r.2 / 2.0,
                 r.1 + r.3 / 2.0 + 4.0,
                 &text,
-                12.0,
+                11.0,
                 label_color,
             );
         }
@@ -281,6 +290,14 @@ impl ChordboardView {
     }
 
     pub(super) fn display_value(&self, c: &Control) -> String {
+        if let Some(routed) = self.routed_control(c) {
+            return routed.value;
+        }
+        if matches!(c.id, "route_min" | "route_max") {
+            return crate::engine::routing::TARGETS
+                [self.params.routes[self.route_slot].target.value() as usize]
+                .label(c.norm);
+        }
         match c.id {
             "velocity" => format!("{:.0}%", self.params.velocity.value() * 100.0),
             "humanize" => format!("{:.0}%", self.params.humanize.value() * 100.0),
@@ -296,6 +313,42 @@ impl ChordboardView {
 
     pub(super) fn parse_display_value(&self, c: &Control, text: &str) -> Option<f32> {
         let text = text.trim();
+        if matches!(c.id, "route_min" | "route_max") {
+            let target = &crate::engine::routing::TARGETS
+                [self.params.routes[self.route_slot].target.value() as usize];
+            // Enumerated labels accept their displayed names; numbers use destination units.
+            if target.discrete {
+                for step in target.min as i32..=target.max as i32 {
+                    let norm = (step as f32 - target.min) / (target.max - target.min);
+                    if target.label(norm).eq_ignore_ascii_case(text) {
+                        return Some(norm);
+                    }
+                }
+            }
+            let v = text
+                .trim_end_matches("ms")
+                .trim_end_matches("st")
+                .trim_end_matches('%')
+                .trim()
+                .parse::<f32>()
+                .ok()?;
+            let v = if matches!(
+                target.id,
+                "velocity" | "humanize" | "gate" | "contour" | "swing"
+            ) {
+                v / 100.0
+            } else if matches!(
+                target.id,
+                "output_channel" | "bass_channel" | "upper_channel"
+            ) {
+                v - 1.0
+            } else {
+                v
+            };
+            return v
+                .is_finite()
+                .then(|| ((v - target.min) / (target.max - target.min)).clamp(0.0, 1.0));
+        }
         let percent = || {
             text.trim_end_matches('%')
                 .trim()

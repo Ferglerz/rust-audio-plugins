@@ -72,6 +72,20 @@ impl Draw<'_> {
             (4.0, -6.0),
             (-1.0, -7.0),
         ];
+        // Subdivide and round each corner twice: 56 short segments keep the
+        // silhouette and thumb recess legible without the coarse polygon edges.
+        let mut points = points[..points.len() - 1].to_vec();
+        for _ in 0..2 {
+            let mut rounded = Vec::with_capacity(points.len() * 2);
+            for i in 0..points.len() {
+                let (ax, ay) = points[i];
+                let (bx, by) = points[(i + 1) % points.len()];
+                rounded.push((0.75 * ax + 0.25 * bx, 0.75 * ay + 0.25 * by));
+                rounded.push((0.25 * ax + 0.75 * bx, 0.25 * ay + 0.75 * by));
+            }
+            points = rounded;
+        }
+        points.push(points[0]);
         let points: Vec<_> = points.iter().map(|&(x, y)| (cx + x, cy + y)).collect();
         self.poly(&points, color, 1.2);
         for (x, y) in [(-2.0, -4.0), (-4.0, -1.0), (-3.0, 3.0), (1.0, 4.0)] {
@@ -84,10 +98,42 @@ impl Draw<'_> {
         self.line(cx + 4.0, cy - 4.0, cx - 4.0, cy + 4.0, color, 1.4);
     }
 
-    /// Rounded trackpad with a contact point; pairs with a short "Latch" label.
-    pub fn trackpad_icon(&mut self, cx: f32, cy: f32, color: Color) {
-        self.outline_rounded(cx - 6.5, cy - 4.5, 13.0, 9.0, 2.4, color, 1.3);
-        self.circle(cx + 1.0, cy - 0.2, 1.35, color, true);
+    /// Raised index finger and open touch rings, legible at toolbar size.
+    pub fn touch_icon(&mut self, cx: f32, cy: f32, color: Color) {
+        for radius in [3.5, 5.5] {
+            let points: Vec<_> = (0..=28)
+                .map(|i| {
+                    let angle = 2.5 + 4.4 * i as f32 / 28.0;
+                    (
+                        cx - 2.0 + radius * angle.cos(),
+                        cy - 4.0 + radius * angle.sin(),
+                    )
+                })
+                .collect();
+            self.poly(&points, color, 1.1);
+        }
+        let x = |v: f32| self.ox + (cx + v + self.offset_x) * self.s;
+        let y = |v: f32| self.oy + (cy + v) * self.s;
+        let mut p = Path::new();
+        p.move_to(x(-3.5), y(3.0));
+        p.line_to(x(-3.5), y(-4.0));
+        p.bezier_to(x(-3.5), y(-6.0), x(-0.5), y(-6.0), x(-0.5), y(-4.0));
+        p.line_to(x(-0.5), y(0.0));
+        p.bezier_to(x(-0.5), y(-2.0), x(2.0), y(-2.0), x(2.0), y(0.0));
+        p.line_to(x(2.0), y(2.0));
+        p.move_to(x(2.0), y(0.5));
+        p.bezier_to(x(2.0), y(-1.0), x(4.5), y(-1.0), x(4.5), y(1.0));
+        p.line_to(x(4.5), y(3.0));
+        p.move_to(x(4.5), y(2.0));
+        p.bezier_to(x(4.5), y(0.5), x(7.0), y(0.5), x(7.0), y(2.5));
+        p.line_to(x(7.0), y(5.0));
+        p.bezier_to(x(7.0), y(12.0), x(-4.0), y(12.0), x(-5.0), y(5.0));
+        p.line_to(x(-6.0), y(1.0));
+        p.bezier_to(x(-6.5), y(-1.0), x(-4.0), y(-1.5), x(-3.5), y(1.0));
+        p.line_to(x(-3.5), y(3.0));
+        let mut paint = Paint::color(self.color(color));
+        paint.set_line_width(1.1 * self.s);
+        self.c.stroke_path(&p, &paint);
     }
 
     pub fn headphones(&mut self, cx: f32, cy: f32, color: Color) {

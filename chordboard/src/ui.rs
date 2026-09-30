@@ -3,11 +3,14 @@ mod events;
 mod layout;
 mod mapping;
 mod menu;
+mod routing;
 mod style;
 use menu::Menu;
 mod memories;
 use memories::{MemoryDrag, MemoryUi};
+use routing::RouteDrag;
 mod performance;
+mod piano;
 mod render;
 use crate::{
     bridge::Bridge,
@@ -106,6 +109,9 @@ enum Drag {
     Control(ControlDrag),
     Key(u8),
     Memory(MemoryDrag),
+    Route(RouteDrag),
+    RouteNode(u8, ParamPtr),
+    Split,
 }
 #[derive(Clone, Copy)]
 struct ControlDrag {
@@ -126,6 +132,7 @@ struct ChordboardView {
     action_flash: Option<(Rect, f32)>,
     memory_ui: MemoryUi,
     snapshot: Snapshot,
+    leading_progress: f32,
     pending_learn: Option<(u8, i32, u32)>,
     pressed: [bool; KEY_COUNT],
     special: [bool; 2],
@@ -154,6 +161,7 @@ struct ChordboardView {
     expand_elapsed: f32,
     controls_signature: Vec<f32>,
     slot_signature: [u64; 8],
+    route_slot: usize,
     mapping_axis: usize,
     mapping_signature: [u32; 2],
 }
@@ -181,6 +189,7 @@ impl ChordboardView {
             action_flash: None,
             memory_ui: MemoryUi::default(),
             snapshot: Snapshot::default(),
+            leading_progress: 1.0,
             pending_learn: None,
             pressed: [false; KEY_COUNT],
             special: [false; 2],
@@ -209,18 +218,21 @@ impl ChordboardView {
             expand_elapsed: pleasant_ui::page_slide::DURATION,
             controls_signature: Vec::new(),
             slot_signature: [0; 8],
+            route_slot: 0,
             mapping_axis: 0,
             mapping_signature: [0; 2],
         }
     }
     fn control(&self, id: &str) -> Option<Control> {
-        self.params.control(id)
+        self.params.routes[self.route_slot]
+            .control(id)
+            .or_else(|| self.params.control(id))
     }
     fn arp_main(&self) -> bool {
-        self.params.mode.value() == 3
+        self.mode() == 3
     }
     fn can_expand_strum(&self) -> bool {
-        matches!(self.params.mode.value().max(1), 1 | 2)
+        self.mode() == 2
     }
     fn expand_t(&self) -> f32 {
         self.expand_progress
@@ -281,12 +293,13 @@ impl ChordboardView {
             || self.snapshot.accepted & (1 << key) != 0
     }
     fn base_controls(&self) -> Vec<(Control, Rect)> {
-        self.controls_for_mode(self.params.mode.value())
+        self.controls_for_mode(self.mode())
     }
     fn controls_for_mode(&self, mode: i32) -> Vec<(Control, Rect)> {
         let mut positions = Vec::new();
         let mode = mode.max(1);
         positions.extend(voicing_controls());
+        positions.push(("root_on_select", ROOT_ON_SELECT));
         if mode == 3 {
             positions.extend(arp_controls());
         } else if mode == 1 {
@@ -342,7 +355,14 @@ impl ChordboardView {
         let Some(panel) = self.panel else {
             return Vec::new();
         };
+        if panel == Panel::Routes {
+            return ["route_enabled"]
+                .into_iter()
+                .filter_map(|id| self.control(id).map(|c| (c, route_control_rect(id))))
+                .collect();
+        }
         let ids: &[&str] = match panel {
+            Panel::Routes => unreachable!(),
             Panel::Mapping => match self.mapping_axis {
                 0 => &["x_reverse"],
                 1 if self.params.y_target.value() == 5 => &["y", "y_reverse", "y_cc"],
@@ -403,6 +423,10 @@ impl ChordboardView {
     }
     fn menu_selection(&self, menu: Menu) -> usize {
         match menu {
+            Menu::RouteSource => self.params.routes[self.route_slot].source.value() as usize,
+            Menu::RouteTarget => crate::engine::routing::available_targets()
+                .position(|(i, _)| i == self.params.routes[self.route_slot].target.value() as usize)
+                .unwrap_or(0),
             Menu::Quality => self.params.quality.value() as usize,
             Menu::Protocol => self.params.output_mode.value() as usize,
             Menu::YTarget => self.params.y_target.value() as usize,
@@ -427,6 +451,23 @@ impl ChordboardView {
     fn select_menu(&mut self, cx: &mut EventContext, menu: Menu, index: usize) {
         self.menu = None;
         match menu {
+            Menu::RouteSource => {
+                let route = &self.params.routes[self.route_slot];
+                Self::emit(
+                    cx,
+                    route.source.as_ptr(),
+                    route.source.preview_normalized(index as i32),
+                );
+            }
+            Menu::RouteTarget => {
+                let Some((index, _)) = crate::engine::routing::available_targets().nth(index) else { return; };
+                let route = &self.params.routes[self.route_slot];
+                Self::emit(
+                    cx,
+                    route.target.as_ptr(),
+                    route.target.preview_normalized(index as i32),
+                );
+            }
             Menu::Quality => Self::emit(
                 cx,
                 self.params.quality.as_ptr(),
@@ -536,7 +577,7 @@ impl ChordboardView {
         )
     }
     fn strum_bound_at(&self, x: f32, y: f32) -> Option<(bool, bool)> {
-        if self.params.mode.value() != 2 {
+        if self.mode() != 2 {
             return None;
         }
         let play = self.play_pad();
@@ -556,7 +597,7 @@ impl ChordboardView {
         None
     }
     fn can_pad_hover(&self) -> bool {
-        self.params.mode.value() == 2
+        self.mode() == 2
             && self.params.strum_latch.value()
             && self.panel.is_none()
             && self.menu.is_none()
@@ -605,9 +646,9 @@ impl ChordboardView {
     }
     fn sync_pad_hover(&mut self, cx: &mut EventContext) {
         let over = self.can_pad_hover()
-            && self
-                .pointer
-                .is_some_and(|(x, y)| hit(self.play_pad(), x, y) && self.strum_bound_at(x, y).is_none());
+            && self.pointer.is_some_and(|(x, y)| {
+                hit(self.play_pad(), x, y) && self.strum_bound_at(x, y).is_none()
+            });
         if over {
             if !self.pad_hover {
                 if let Some((x, y)) = self.pointer {
@@ -632,7 +673,9 @@ impl ChordboardView {
                         self.bound_param(y_axis, right).as_ptr(),
                     ));
                 }
-                Drag::Memory(_) => {}
+                Drag::RouteNode(_, ptr) => cx.emit(RawParamEvent::EndSetParameter(ptr)),
+                Drag::Split => cx.emit(RawParamEvent::EndSetParameter(self.params.split_note.as_ptr())),
+                Drag::Memory(_) | Drag::Route(_) => {}
                 Drag::Control(drag) => {
                     if drag.started {
                         cx.emit(RawParamEvent::EndSetParameter(drag.ptr));
@@ -672,7 +715,7 @@ impl ChordboardView {
         let dt = (now - self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
         let was_sliding = self.page_elapsed < pleasant_ui::page_slide::DURATION;
-        let mode = self.params.mode.value().max(1);
+        let mode = self.mode().max(1);
         if mode != self.page_target {
             self.page_start = self.page_position;
             self.page_target = mode;
@@ -725,6 +768,13 @@ impl ChordboardView {
             }
         }
         let mut changed = old != self.snapshot;
+        if old.leading_serial != self.snapshot.leading_serial {
+            self.leading_progress = 0.0;
+        }
+        if self.leading_progress < 1.0 {
+            self.leading_progress = (self.leading_progress + dt / 0.65).min(1.0);
+            changed = true;
+        }
         changed |= self.tick_motion(dt);
         changed |= self.tick_memories(dt);
         for i in 0..KEY_COUNT {

@@ -2,6 +2,8 @@ use super::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Menu {
+    RouteSource,
+    RouteTarget,
     Key,
     Scale,
     Quality,
@@ -16,6 +18,12 @@ pub(super) enum Menu {
 impl Menu {
     pub(super) fn items(self) -> Vec<String> {
         let labels: &[&str] = match self {
+            Self::RouteSource => &crate::engine::routing::SOURCES,
+            Self::RouteTarget => {
+                return crate::engine::routing::available_targets()
+                    .map(|(_, t)| t.name.to_string())
+                    .collect()
+            }
             Self::Key => &harmony::NOTE_NAMES,
             Self::Scale => &harmony::SCALE_NAMES,
             Self::Quality => &[
@@ -65,6 +73,8 @@ impl Menu {
 
     pub(super) fn title(self) -> &'static str {
         match self {
+            Self::RouteSource => "Source",
+            Self::RouteTarget => "Destination",
             Self::Key => "Key centre",
             Self::Scale => "Scale highlighting",
             Self::Quality => "Chord quality",
@@ -79,6 +89,7 @@ impl Menu {
 
     fn cell_width(self) -> f32 {
         match self {
+            Self::RouteSource | Self::RouteTarget => 146.0,
             Self::Key => 60.0,
             Self::Scale => 146.0,
             Self::Quality => 128.0,
@@ -92,6 +103,8 @@ impl Menu {
 
     pub(super) fn columns(self) -> usize {
         match self {
+            Self::RouteSource => 2,
+            Self::RouteTarget => 4,
             Self::Scale | Self::MappingKind | Self::StrumRate | Self::YTarget => 2,
             Self::MappingChannel(_) => 6,
             Self::MappingCc(_) => 16,
@@ -146,6 +159,8 @@ impl Menu {
 
     pub(super) fn trigger_rect(self) -> Rect {
         match self {
+            Self::RouteSource => ROUTE_SOURCE,
+            Self::RouteTarget => ROUTE_TARGET,
             Self::Key => (32.0, 190.0, 90.0, 28.0),
             Self::Scale => (130.0, 190.0, 174.0, 28.0),
             Self::Quality => QUALITY,
