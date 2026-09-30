@@ -245,6 +245,22 @@ def run_split_tests(path):
         assert sum(e[0]=='midi' and e[2]&0xf0==0xb0 and e[3:]==(64,0) for e in events)==16,'overflow lost pedal release'
     finally:
         h.close()
+    # Verify chord-hand extensions through the real plugin's MIDI output.
+    for second, expected in [(58, {48,52,55,58}), (46, {48,52,55,58}), (55, {48,55})]:
+        h=Harness(path)
+        try:
+            h.run([h.parameter('Play mode',1),h.parameter('Output protocol',2),
+                   h.parameter('Key split',1),h.parameter('Always play full chord',1)])
+            events=h.run([midi(0,0x90,48,100),midi(1,0x94,72,100),midi(32,0x90,second,100)])
+            sounding=set()
+            for event in events:
+                if event[0]=='on' and event[2]==0:
+                    sounding.add(event[3])
+                elif event[0]=='off' and event[2]==0:
+                    sounding.discard(event[3])
+            assert sounding==expected,('chord-hand interval',second,sounding,expected)
+        finally:
+            h.close()
     print('CLAP split controls passed: melody passthrough, sustained bass/full chord, last-right-key gate, latch replacement, and overflow recovery.')
 
 if __name__=='__main__':

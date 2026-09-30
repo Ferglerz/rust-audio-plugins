@@ -104,7 +104,13 @@ pub fn intervals(quality: u8, alteration: Option<u8>) -> Notes {
             tones[8] = false;
             tones[6] = true;
         }
-        Some(n @ (7 | 8)) => {
+        // A root plus its perfect fifth explicitly selects a power chord.
+        Some(7) => {
+            tones.fill(false);
+            tones[0] = true;
+            tones[7] = true;
+        }
+        Some(n @ 8) => {
             tones[6] = false;
             tones[7] = false;
             tones[8] = false;
@@ -282,6 +288,9 @@ mod tests {
             (64, &[60, 64, 67]),
             (65, &[60, 65, 67]),
             (66, &[60, 64, 66]),
+            (67, &[60, 67]),
+            (70, &[60, 64, 67, 70]),
+            (58, &[60, 64, 67, 70]),
         ] {
             assert_eq!(voice(60, 0, Some(second), 0, 0, 0).as_slice(), expected);
         }

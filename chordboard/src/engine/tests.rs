@@ -1935,3 +1935,36 @@ fn split_melody_on_mpe_master_uses_master_bend_range() {
         .filter(|v| matches!(v, Out::Bend(0, _)))
         .all(|v| *v == Out::Bend(0, 0.8)));
 }
+
+#[test]
+fn chord_hand_seventh_and_fifth_reach_sustained_output() {
+    for (second, expected, label) in [
+        (58, vec![48, 52, 55, 58], "C7"),
+        (46, vec![48, 52, 55, 58], "C7"),
+        (55, vec![48, 55], "C5"),
+    ] {
+        for channel in [0, 1] {
+            let mut e = Engine::default();
+            configure(
+                &mut e,
+                Config {
+                    always_chord: true,
+                    ..split_config()
+                },
+            );
+            on(&mut e, 48, 0);
+            on(&mut e, 72, 4);
+            on(&mut e, second, channel);
+            assert_eq!(
+                e.full_notes.as_slice(),
+                expected.as_slice(),
+                "second {second}"
+            );
+            assert_eq!(layer_notes(&e), expected, "second {second}");
+            assert_eq!(harmony::chord_name(e.memory.unwrap()), label);
+            off(&mut e, second, channel);
+            off(&mut e, 48, 0);
+            assert_eq!(layer_notes(&e), expected);
+        }
+    }
+}
