@@ -16,10 +16,9 @@ pub struct OpenWurliUi {
     finish: FastFinish,
 }
 
-/// Existing post-engine hiss and extra sag, shared by both circuit modes.
+/// Optional post-engine extra sag, shared by both circuit modes.
 /// The Heavy circuit also includes its native physical rail behavior.
 struct FastFinish {
-    noise_state: u32,
     sag_envelope: f32,
     sag_attack: f32,
     sag_release: f32,
@@ -28,7 +27,6 @@ struct FastFinish {
 impl FastFinish {
     fn new(sample_rate: f32) -> Self {
         let mut finish = Self {
-            noise_state: 0xA53C_9E17,
             sag_envelope: 0.0,
             sag_attack: 0.0,
             sag_release: 0.0,
@@ -44,23 +42,10 @@ impl FastFinish {
     }
 
     fn reset(&mut self) {
-        self.noise_state = 0xA53C_9E17;
         self.sag_envelope = 0.0;
     }
 
-    fn process(
-        &mut self,
-        output: &mut [f32],
-        volume: f32,
-        noise_enabled: bool,
-        noise_gain: f32,
-        sag_enabled: bool,
-    ) {
-        let noise_level = if noise_enabled {
-            0.00008 * noise_gain * volume
-        } else {
-            0.0
-        };
+    fn process(&mut self, output: &mut [f32], sag_enabled: bool) {
         for sample in output {
             if sag_enabled {
                 let magnitude = sample.abs();
@@ -71,13 +56,6 @@ impl FastFinish {
                 };
                 self.sag_envelope += coefficient * (magnitude - self.sag_envelope);
                 *sample /= 1.0 + 1.2 * self.sag_envelope;
-            }
-            if noise_enabled {
-                self.noise_state ^= self.noise_state << 13;
-                self.noise_state ^= self.noise_state >> 17;
-                self.noise_state ^= self.noise_state << 5;
-                let noise = (self.noise_state as f32 / u32::MAX as f32) * 2.0 - 1.0;
-                *sample += noise * noise_level;
             }
         }
         if !sag_enabled {
@@ -109,6 +87,8 @@ impl OpenWurliUi {
         self.engine
             .set_speaker_character(self.params.speaker_character.value() as f64);
         self.engine.set_mlp_enabled(self.params.mlp_enabled.value());
+        // Hiss is removed, including native preamp noise in both circuit modes.
+        self.engine.set_noise_enabled(false);
         self.engine
             .set_reed_decay(self.params.reed_decay.value() as f64);
         self.engine
@@ -247,9 +227,6 @@ impl Plugin for OpenWurliUi {
         self.render_block(&mut channels[0][..num_samples], || context.next_event());
         self.finish.process(
             &mut channels[0][..num_samples],
-            self.params.volume.value(),
-            self.params.noise_enabled.value(),
-            self.params.noise_gain.value(),
             self.params.rail_sag.value(),
         );
         let (left, rest) = channels.split_at_mut(1);
@@ -486,19 +463,53 @@ mod tests {
     }
 
     #[test]
-    fn fast_finish_bypasses_cleanly_and_controls_hiss_and_sag() {
+    fn extended_reed_decay_reaches_the_audio_path_in_both_modes() {
+        with_circuit_stack(|| {
+            let params = OpenWurliUiParams::default();
+            assert_eq!(params.reed_decay.preview_plain(0.0), 0.5);
+            assert_eq!(params.reed_decay.preview_plain(1.0), 20.0);
+            for mode in [CircuitMode::Fast, CircuitMode::Heavy] {
+                let render = |decay| {
+                    let mut engine = WurliEngine::new(44_100.0);
+                    engine.set_circuit_mode(mode);
+                    engine.set_noise_enabled(false);
+                    engine.set_reed_decay(decay);
+                    engine.note_on(60, 0.8);
+                    let mut samples = vec![0.0; 16_384];
+                    for chunk in samples.chunks_mut(256) {
+                        engine.render(chunk);
+                    }
+                    assert!(samples.iter().all(|s| s.is_finite()));
+                    samples
+                };
+                let previous_max = render(2.0);
+                let extended = render(20.0);
+                let difference: f32 = previous_max
+                    .iter()
+                    .zip(&extended)
+                    .map(|(a, b)| (a - b).abs())
+                    .sum();
+                assert!(difference > 0.01, "{mode:?}: decay still clamped at 2x");
+            }
+        });
+    }
+
+    #[test]
+    fn fast_finish_preserves_silence_and_controls_sag() {
         let mut finish = FastFinish::new(44_100.0);
         let original = [0.2; 1024];
         let mut clean = original;
-        finish.process(&mut clean, 0.5, false, 1.0, false);
+        finish.process(&mut clean, false);
         assert_eq!(clean, original);
 
-        let mut noisy = [0.0; 1024];
-        finish.process(&mut noisy, 0.5, true, 30.0, false);
-        assert!(noisy.iter().any(|sample| sample.abs() > 1e-5));
+        for sag in [false, true] {
+            let mut silent = [0.0; 1024];
+            finish.process(&mut silent, sag);
+            assert_eq!(silent, [0.0; 1024]);
+        }
 
         let mut sagged = original;
-        finish.process(&mut sagged, 0.5, false, 1.0, true);
+        finish.process(&mut sagged, true);
         assert!(sagged[1023] < original[1023]);
         assert!(sagged[1023] > 0.0);
         finish.reset();

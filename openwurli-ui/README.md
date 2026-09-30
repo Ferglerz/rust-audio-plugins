@@ -2,7 +2,7 @@
 
 An independent CLAP/VST3 instrument with the [OpenWurli](https://github.com/hal0zer0/openwurli) synthesis engine and a Pleasant UI editor. Its plugin IDs are distinct from upstream OpenWurli so both can be installed in one host.
 
-The main panel exposes Volume, Tremolo Depth, Speaker Character, and MLP Corrections. The cog opens sound settings for Reed Decay, Hammer Hardness, Pickup Drive, Tremolo Response, Hiss, Noise Level, and Sag. The four voicing multipliers are neutral at 1.0×; the first three affect newly started notes. OpenWurli v0.7.0 defaults MLP Corrections to **off**; this wrapper follows that source default.
+The main panel exposes Volume, Tremolo Depth, Speaker Character, and MLP Corrections. The cog opens sound settings for Reed Decay, Hammer Hardness, Pickup Drive, Tremolo Response, and Extra Sag. Reed Decay spans 0.5–20× (ten times the previous maximum). The four voicing multipliers are neutral at 1.0×; the first three affect newly started notes. OpenWurli v0.7.0 defaults MLP Corrections to **off**; this wrapper follows that source default.
 
 ## Upstream source
 
@@ -21,7 +21,7 @@ permanent reference code; experimental tables are generated from those equations
 and are **disabled** in this plugin. Original complete engines can be reconstructed
 from pinned Git revisions by the fork's comparison tools.
 
-The wrapper uses OpenWurli's default fast preamp and power amp. Its Reed, Hammer, Pickup, and Tremolo controls still call the fork's engine APIs. Hiss and Sag are inexpensive output effects in the wrapper: Hiss adds low-level noise after the engine, and Sag applies a level-dependent gain reduction. Both default off, preserving the fast engine's output until enabled. These approximate the heavier circuit features rather than reproducing their exact electrical behavior. Existing host parameter IDs and ranges are retained for preset compatibility; saved projects with Sag enabled keep that setting.
+The wrapper uses OpenWurli's default fast preamp and power amp. Its Reed, Hammer, Pickup, and Tremolo controls still call the fork's engine APIs. Extra Sag applies optional level-dependent output gain reduction and defaults off. Hiss has been removed from the wrapper and native preamps in both circuit modes. The old noise parameter IDs remain hidden and inert for saved-session compatibility. Saved projects with Sag enabled keep that setting.
 
 For future updates, port the optimization branch against the intended upstream
 revision, repeat its native/table comparisons, then integrate it into

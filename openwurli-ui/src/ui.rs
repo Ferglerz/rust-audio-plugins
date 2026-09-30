@@ -30,7 +30,6 @@ const CPU_BUTTON: (f32, f32, f32, f32) = (307.0, 284.0, 172.0, 36.0);
 const THEME_BUTTON: (f32, f32, f32, f32) = (601.0, 21.0, 80.0, 30.0);
 const COG_BUTTON: (f32, f32, f32, f32) = (541.0, 21.0, 32.0, 30.0);
 const ENGINE_BUTTON: (f32, f32, f32, f32) = (426.0, 21.0, 94.0, 30.0);
-const NOISE_BUTTON: (f32, f32, f32, f32) = (375.0, 241.0, 144.0, 50.0);
 const SAG_BUTTON: (f32, f32, f32, f32) = (531.0, 241.0, 144.0, 50.0);
 
 static PREFS: OnceLock<AppearanceStore> = OnceLock::new();
@@ -48,17 +47,15 @@ enum Knob {
     HammerHardness,
     PickupDrive,
     TremoloResponse,
-    NoiseGain,
 }
 
 impl Knob {
     const MAIN: [Self; 3] = [Self::Volume, Self::Tremolo, Self::Speaker];
-    const ADVANCED: [Self; 5] = [
+    const ADVANCED: [Self; 4] = [
         Self::ReedDecay,
         Self::HammerHardness,
         Self::PickupDrive,
         Self::TremoloResponse,
-        Self::NoiseGain,
     ];
 
     fn rect(self) -> (f32, f32, f32, f32) {
@@ -89,12 +86,6 @@ impl Knob {
                 171.0,
                 300.0,
                 57.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA,
-            ),
-            Self::NoiseGain => (
-                45.0,
-                241.0,
-                300.0,
-                50.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA,
             ),
         }
     }
@@ -128,7 +119,6 @@ impl OpenWurliView {
             Knob::HammerHardness => &self.params.hammer_hardness,
             Knob::PickupDrive => &self.params.pickup_drive,
             Knob::TremoloResponse => &self.params.tremolo_response,
-            Knob::NoiseGain => &self.params.noise_gain,
         }
     }
 
@@ -179,17 +169,12 @@ impl OpenWurliView {
             Knob::HammerHardness => ("HAMMER HARDNESS", TEAL),
             Knob::PickupDrive => ("PICKUP DRIVE", GOLD),
             Knob::TremoloResponse => ("TREMOLO RESPONSE", TEAL),
-            Knob::NoiseGain => ("NOISE LEVEL", MUTED),
             _ => return,
         };
         let rect = knob.rect();
         let param = self.param(knob);
         let norm = param.unmodulated_normalized_value();
-        let value = if knob == Knob::NoiseGain {
-            format!("{:.1}×", param.value())
-        } else {
-            format!("{:.2}×", param.value())
-        };
+        let value = format!("{:.2}×", param.value());
         d.rect(rect.0, rect.1, rect.2, rect.3, PANEL);
         d.outline(rect, LINE);
         d.text(rect.0 + 12.0, rect.1 + 20.0, label, 11.0, TEXT);
@@ -246,13 +231,6 @@ impl View for OpenWurliView {
                             1.0
                         };
                         Self::emit_once(cx, self.params.mlp_enabled.as_ptr(), next);
-                    } else if self.show_advanced && Self::hit(x, y, NOISE_BUTTON) {
-                        let next = if self.params.noise_enabled.value() {
-                            0.0
-                        } else {
-                            1.0
-                        };
-                        Self::emit_once(cx, self.params.noise_enabled.as_ptr(), next);
                     } else if self.show_advanced && Self::hit(x, y, SAG_BUTTON) {
                         let next = if self.params.rail_sag.value() {
                             0.0
@@ -363,12 +341,6 @@ impl View for OpenWurliView {
             for knob in Knob::ADVANCED {
                 self.draw_advanced_slider(&mut d, knob);
             }
-            d.button(
-                NOISE_BUTTON,
-                "HISS",
-                self.params.noise_enabled.value(),
-                TEAL,
-            );
             d.button(SAG_BUTTON, "EXTRA SAG", self.params.rail_sag.value(), GOLD);
             d.text(
                 45.0,

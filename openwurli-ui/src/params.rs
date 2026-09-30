@@ -66,19 +66,34 @@ impl Default for OpenWurliUiParams {
             mlp_enabled: BoolParam::new("MLP Corrections", false),
             // Old presets omit this parameter and retain the previous Fast sound.
             cpu_mode: EnumParam::new("CPU Mode", CpuMode::Fast),
-            reed_decay: multiplier_param("Reed Decay"),
+            reed_decay: FloatParam::new(
+                "Reed Decay",
+                1.0,
+                FloatRange::Skewed {
+                    min: 0.5,
+                    max: 20.0,
+                    factor: FloatRange::skew_factor(-2.0),
+                },
+            )
+            .with_unit("×")
+            .with_value_to_string(Arc::new(|value| format!("{value:.2}")))
+            .with_string_to_value(Arc::new(|text| {
+                text.trim().trim_end_matches('×').parse().ok()
+            })),
             hammer_hardness: multiplier_param("Hammer Hardness"),
             pickup_drive: multiplier_param("Pickup Drive"),
             tremolo_response: multiplier_param("Tremolo Response"),
-            noise_enabled: BoolParam::new("Hiss", false),
+            // Retain inert, hidden IDs so older saved sessions still load.
+            noise_enabled: BoolParam::new("Hiss (removed)", false).hide(),
             noise_gain: FloatParam::new(
-                "Noise Level",
+                "Noise Level (removed)",
                 1.0,
                 FloatRange::Linear {
                     min: 0.0,
                     max: 30.0,
                 },
             )
+            .hide()
             .with_unit("×")
             .with_value_to_string(Arc::new(|value| format!("{value:.1}")))
             .with_string_to_value(Arc::new(|text| {

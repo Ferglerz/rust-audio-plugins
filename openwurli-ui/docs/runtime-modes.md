@@ -31,12 +31,16 @@ rate conversion, rail reset and last-good behavior remain. An exhaustive field
 list forces review if regenerated state gains fields. All original analytical
 equations remain intact; the generated solvers' CPU edits are described below.
 
-Heavy retains its physical rail sag. The UI's optional **Extra Sag** and **Hiss**
-remain shared post-engine effects with their previous meanings.
+Heavy retains its physical rail sag. The UI's optional **Extra Sag** remains a
+shared post-engine effect. Hiss is removed, including native preamp noise in both
+modes. Reed Decay now spans 0.5–20× and affects newly started notes.
+
+The current build pins `b51f8da`, which extends the reed-decay limit on top of that
+CPU pass. The historical bit-exact claims below describe the earlier CPU pass.
 
 ## Exact CPU pass
 
-This build pins DSP revision `ff8a972` (DSP source `f70325c` plus notes and
+The exact CPU pass used DSP revision `ff8a972` (DSP source `f70325c` plus notes and
 records). In both modes its audio is bit-identical to the 0.1.1 engine (`3103753`): every change performs the
 original floating-point operations in their original order, or skips work whose
 result is already known or cannot reach the output. Physical equations,

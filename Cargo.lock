@@ -2917,7 +2917,7 @@ dependencies = [
 [[package]]
 name = "openwurli-dsp"
 version = "0.7.0"
-source = "git+https://github.com/Ferglerz/openwurli?rev=ff8a97230fed119acc3b70c5f4ad0f8e0f7ff1d7#ff8a97230fed119acc3b70c5f4ad0f8e0f7ff1d7"
+source = "git+https://github.com/Ferglerz/openwurli?rev=b51f8dad3c5fb62070a20a11e20bf2886b8ff860#b51f8dad3c5fb62070a20a11e20bf2886b8ff860"
 dependencies = [
  "melange-primitives",
  "wide",
