@@ -1968,3 +1968,20 @@ fn chord_hand_seventh_and_fifth_reach_sustained_output() {
         }
     }
 }
+
+#[test]
+fn expression_is_unassigned_by_default_but_field_y_controls_velocity() {
+    let mut e = Engine::default();
+    let original = e.strike_velocity();
+    for channel in 0..16 {
+        e.control(channel, 11, 0.1, &mut |_| {});
+        e.control(channel, 11, 0.9, &mut |_| {});
+    }
+    assert!(!e.y_active);
+    assert_eq!(e.strike_velocity(), original);
+    e.position(0.2, 1, &mut |_| {});
+    assert!(e.y_active);
+    let low = e.strike_velocity();
+    e.position(0.9, 1, &mut |_| {});
+    assert!(e.strike_velocity() > low);
+}

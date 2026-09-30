@@ -264,26 +264,85 @@ impl ChordboardView {
         self.draw_voicing(d);
     }
 
+    pub(super) fn active_quality_tile(&self) -> usize {
+        match self.snapshot.control_alteration {
+            Some(2) => 12,
+            Some(5) => 13,
+            Some(1) => 14,
+            _ => self.snapshot.quality.min(11) as usize,
+        }
+    }
+
     fn draw_voicing(&self, d: &mut Draw) {
-        d.text(32.0, 556.0, "Chord quality", 12.0, MUTED);
-        d.text(218.0, 556.0, "Voice leading", 12.0, MUTED);
-        d.text(400.0, 556.0, "Spread", 12.0, MUTED);
-        d.text(32.0, 622.0, "Inversion", 11.0, MUTED);
+        d.text(32.0, 551.0, "CHORD QUALITY", 10.0, MUTED);
+        let selected = self.active_quality_tile();
+        for (i, symbol) in QUALITY_SYMBOLS.iter().enumerate() {
+            let r = quality_rect(i);
+            let hover = self.hover_amount(r);
+            let on = selected == i;
+            d.rounded_rect(
+                r.0,
+                r.1 - hover,
+                r.2,
+                r.3,
+                4.0,
+                alpha(GOLD, if on { 0.19 } else { 0.04 + hover * 0.12 }),
+            );
+            d.outline_rounded(
+                r.0,
+                r.1 - hover,
+                r.2,
+                r.3,
+                4.0,
+                alpha(if on { GOLD } else { LINE }, 0.6 + hover * 0.4),
+                1.0,
+            );
+            d.text_centered(
+                r.0 + r.2 * 0.5,
+                r.1 + 15.0 - hover,
+                symbol,
+                12.0 + hover,
+                if on || hover > 0.1 { GOLD } else { TEXT },
+            );
+        }
+        d.text(330.0, 555.0, "VOICE LEADING", 10.0, MUTED);
+        d.text(330.0, 598.0, "SPREAD", 10.0, MUTED);
+        for (spread, labels) in [
+            (false, ["Nearest", "Furthest", "Off"]),
+            (true, ["Close", "Open", "Wide"]),
+        ] {
+            let value = if spread {
+                self.params.spread.value()
+            } else {
+                self.params.voice_leading.value()
+            };
+            for (i, label) in labels.iter().enumerate() {
+                self.button(
+                    d,
+                    voicing_choice_rect(spread, i),
+                    label,
+                    value == i as i32,
+                    TEAL,
+                );
+            }
+        }
         self.button(d, inversion_rect(0), "↓", false, TEAL);
         self.button(d, inversion_rect(1), "↑", false, TEAL);
         let label = match self.snapshot.inversion {
             0 => "Root position".into(),
             n => format!("Inversion {n}"),
         };
-        d.text(110.0, 649.0, &label, 12.0, TEXT);
-        d.text(
-            326.0,
-            622.0,
-            &format!("Transpose  {:+} st", self.params.transpose.value()),
-            11.0,
-            MUTED,
-        );
-        for (i, label) in ["−12", "−1", "Reset", "+1", "+12"].iter().enumerate() {
+        d.text(110.0, 655.0, &label, 11.0, TEXT);
+        for (i, label) in [
+            "−12",
+            "−1",
+            &format!("{:+} st", self.params.transpose.value()),
+            "+1",
+            "+12",
+        ]
+        .iter()
+        .enumerate()
+        {
             self.button(d, transpose_rect(i), label, false, TEAL);
         }
     }

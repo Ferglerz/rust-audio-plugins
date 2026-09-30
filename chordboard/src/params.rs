@@ -185,7 +185,7 @@ impl Default for ChordboardParams {
             selected_quality: AtomicU32::new(0),
             control_base: AtomicI32::new(-1),
             map_x: AtomicU32::new(Mapping::cc(1, 16).encode()),
-            map_y: AtomicU32::new(Mapping::cc(11, 16).encode()),
+            map_y: AtomicU32::new(Mapping::default().encode()),
             slot_0: AtomicU64::new(0),
             slot_1: AtomicU64::new(0),
             slot_2: AtomicU64::new(0),

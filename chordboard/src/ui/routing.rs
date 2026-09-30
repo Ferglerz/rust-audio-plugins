@@ -35,8 +35,11 @@ impl ChordboardView {
             .collect();
         targets.extend([
             ("latch", LATCH),
-            ("inversion", (32.0, 610.0, 252.0, 48.0)),
-            ("transpose", (326.0, 610.0, 222.0, 48.0)),
+            ("quality", QUALITY),
+            ("voice_leading", (330.0, 563.0, 218.0, 24.0)),
+            ("spread", (330.0, 605.0, 218.0, 24.0)),
+            ("inversion", (32.0, 638.0, 252.0, 26.0)),
+            ("transpose", (326.0, 638.0, 222.0, 26.0)),
             ("mode", (600.0, 122.0, 488.0, 28.0)),
         ]);
         match self.mode() {
@@ -72,7 +75,12 @@ impl ChordboardView {
         }
         targets
             .into_iter()
-            .filter_map(|(id, r)| TARGETS.iter().position(|t| t.available() && t.id == id).map(|i| (i, r)))
+            .filter_map(|(id, r)| {
+                TARGETS
+                    .iter()
+                    .position(|t| t.available() && t.id == id)
+                    .map(|i| (i, r))
+            })
             .collect()
     }
 

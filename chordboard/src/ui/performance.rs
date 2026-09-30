@@ -405,8 +405,8 @@ impl ChordboardView {
     pub(super) fn draw_meters(&self, d: &mut Draw) {
         use crate::engine::routing::SOURCE_SHORT;
         d.font = self.font.get();
-        d.text(600.0, 616.0, "MODULATION", 12.0, TEXT);
-        d.text(724.0, 616.0, "Drag to route", 10.0, MUTED);
+        d.text(600.0, 566.0, "MODULATION", 12.0, TEXT);
+        d.text(724.0, 566.0, "Drag to route", 10.0, MUTED);
         let count = self
             .params
             .routes

@@ -77,7 +77,12 @@ fn rhythm_controls_and_pointer_targets_follow_active_mode() {
         let mut view = view(mode, false);
         let ids: Vec<_> = view.base_controls().iter().map(|(c, _)| c.id).collect();
         for id in ["quality", "spread"] {
-            assert!(ids.contains(&id), "mode {mode}: {id}");
+            assert!(
+                view.route_targets()
+                    .iter()
+                    .any(|(i, _)| crate::engine::routing::TARGETS[*i].id == id),
+                "mode {mode}: {id}"
+            );
         }
         for id in ["humanize", "gate", "swing"] {
             assert_eq!(ids.contains(&id), mode == 3, "mode {mode}: {id}");
@@ -857,7 +862,7 @@ fn spread_keyboard_cycles_all_voicings_without_drag_or_text_entry() {
             spread: IntParam::new("Spread", current, IntRange::Linear { min: 0, max: 2 }),
             ..ChordboardParams::default()
         });
-        let r = voicing_controls()[1].1;
+        let r = voicing_choice_rect(true, ((current + 1) % 3) as usize);
         click(&mut view, &mut cx, target, r);
         assert_eq!(
             changes.borrow().last().copied(),
@@ -879,7 +884,7 @@ fn spread_keyboard_cycles_all_voicings_without_drag_or_text_entry() {
 }
 
 #[test]
-fn defaults_use_auto_strum_zero_sweep_and_expression_cc_on_any_channel() {
+fn defaults_use_auto_strum_zero_sweep_and_unassigned_y_controller() {
     let params = ChordboardParams::default();
     assert_eq!(params.mode.value(), 1);
     assert_eq!(params.strum_ms.value(), 0.0);
@@ -887,7 +892,7 @@ fn defaults_use_auto_strum_zero_sweep_and_expression_cc_on_any_channel() {
         params.config().mappings,
         [
             crate::engine::Mapping::cc(1, 16),
-            crate::engine::Mapping::cc(11, 16)
+            crate::engine::Mapping::default()
         ]
     );
     assert_eq!(MODE_LABELS, ["Auto Strum", "Manual Strum", "Arpeggiator"]);
@@ -897,10 +902,8 @@ fn defaults_use_auto_strum_zero_sweep_and_expression_cc_on_any_channel() {
 fn quality_menu_selects_without_drag_text_or_scroll_changes() {
     let mut view = view(1, false);
     let (mut cx, target, changes) = context();
-    click(&mut view, &mut cx, target, Menu::Quality.trigger_rect());
-    assert!(view.menu == Some(Menu::Quality));
-    assert!(view.drag.is_none() && view.edit.is_none());
-    click(&mut view, &mut cx, target, Menu::Quality.option_rect(3));
+    click(&mut view, &mut cx, target, quality_rect(3));
+    assert!(view.menu.is_none() && view.drag.is_none() && view.edit.is_none());
     assert_eq!(
         changes.borrow().last().copied(),
         Some((
@@ -1020,10 +1023,10 @@ fn left_performance_targets_do_not_overlap() {
         SAVE_MEMORY,
         Menu::Key.trigger_rect(),
         Menu::Scale.trigger_rect(),
-        Menu::Quality.trigger_rect(),
-        voicing_controls()[1].1,
-        voicing_controls()[2].1,
     ];
+    targets.extend((0..QUALITY_SYMBOLS.len()).map(quality_rect));
+    targets
+        .extend((0..3).flat_map(|i| [voicing_choice_rect(false, i), voicing_choice_rect(true, i)]));
     targets.extend((0..KEY_COUNT).map(key_rect));
     targets.extend((0..8).map(memory_rect));
     targets.extend((0..2).map(inversion_rect));
@@ -1069,8 +1072,11 @@ fn direct_selection_pairs_parameter_gestures() {
         gestures.borrow_mut().clear();
     }
     for (r, ptr) in [
-        (voicing_controls()[1].1, view.params.spread.as_ptr()),
-        (voicing_controls()[2].1, view.params.voice_leading.as_ptr()),
+        (voicing_choice_rect(true, 1), view.params.spread.as_ptr()),
+        (
+            voicing_choice_rect(false, 1),
+            view.params.voice_leading.as_ptr(),
+        ),
         (direction_rect(2), view.params.direction.as_ptr()),
     ] {
         click(&mut view, &mut cx, target, r);
@@ -1638,9 +1644,9 @@ fn route_drag_links_only_on_drop_and_never_moves_the_destination_control() {
         let (mut cx, entity, changes) = context();
         let r = meter_rect(source);
         let (_, destination) = view
-            .base_controls()
+            .route_targets()
             .into_iter()
-            .find(|(c, _)| c.id == id)
+            .find(|(i, _)| crate::engine::routing::TARGETS[*i].id == id)
             .unwrap();
         let (x, y) = (
             destination.0 + destination.2 / 2.0,
@@ -1818,7 +1824,7 @@ fn route_drag_with_no_free_slots_does_not_overwrite_an_unrelated_link() {
         route.source = IntParam::new("Source", 1, IntRange::Linear { min: 0, max: 9 });
     }
     let (mut cx, entity, changes) = context();
-    route_drag_to(&mut view, &mut cx, entity, 1, 400.0, 570.0); // Spread, all slots target Strings.
+    route_drag_to(&mut view, &mut cx, entity, 1, 400.0, 616.0); // Spread, all slots target Strings.
     assert!(changes.borrow().is_empty());
     assert!(view.status.starts_with("All 16 routes"));
     assert!(view.panel.is_none());
@@ -1877,11 +1883,32 @@ fn route_graph_nodes_edit_selected_parameters_and_release_capture() {
         view.route_slot = 7;
         let (mut cx, target, changes) = context();
         let (x, y) = view.route_nodes()[node];
-        event(&mut view, &mut cx, target, x, y, WindowEvent::MouseDown(MouseButton::Left));
+        event(
+            &mut view,
+            &mut cx,
+            target,
+            x,
+            y,
+            WindowEvent::MouseDown(MouseButton::Left),
+        );
         assert!(matches!(view.drag, Some(Drag::RouteNode(..))));
         let y = ROUTE_GRAPH.1 + ROUTE_GRAPH.3 * 0.75;
-        event(&mut view, &mut cx, target, x, y, WindowEvent::MouseMove(x, y));
-        event(&mut view, &mut cx, target, x, y, WindowEvent::MouseUp(MouseButton::Left));
+        event(
+            &mut view,
+            &mut cx,
+            target,
+            x,
+            y,
+            WindowEvent::MouseMove(x, y),
+        );
+        event(
+            &mut view,
+            &mut cx,
+            target,
+            x,
+            y,
+            WindowEvent::MouseUp(MouseButton::Left),
+        );
         let r = &view.params.routes[7];
         let (ptr, expected) = match node {
             0 => (r.min.as_ptr(), 0.25),
@@ -1912,7 +1939,11 @@ fn route_destination_menu_skips_touch_bounds_without_shifting_saved_ids() {
     let (mut cx, entity, changes) = context();
     for (menu_index, (saved_index, target)) in crate::engine::routing::available_targets().enumerate() {
         assert_eq!(Menu::RouteTarget.items()[menu_index], target.name);
-        view.select_menu(&mut EventContext::new_with_current(&mut cx, entity), Menu::RouteTarget, menu_index);
+        view.select_menu(
+            &mut EventContext::new_with_current(&mut cx, entity),
+            Menu::RouteTarget,
+            menu_index,
+        );
         BackendContext::new_with_event_manager(&mut cx).process_events();
         let p = &view.params.routes[0].target;
         assert!(changes.borrow().contains(&(p.as_ptr(), p.preview_normalized(saved_index as i32))));
@@ -1960,7 +1991,11 @@ fn full_piano_buttons_work_in_every_mode_and_expanded_manual() {
         let mut view = view(mode, false);
         if mode == 2 { view.expand_progress = 1.0; }
         let (mut cx, target, changes) = context();
-        for (r, ptr) in [(ALWAYS_BASS, view.params.always_bass.as_ptr()), (ALWAYS_CHORD, view.params.always_chord.as_ptr()), (KEY_SPLIT, view.params.key_split.as_ptr())] {
+        for (r, ptr) in [
+            (ALWAYS_BASS, view.params.always_bass.as_ptr()),
+            (ALWAYS_CHORD, view.params.always_chord.as_ptr()),
+            (KEY_SPLIT, view.params.key_split.as_ptr()),
+        ] {
             click(&mut view, &mut cx, target, r);
             assert_eq!(changes.borrow().last().copied(), Some((ptr, 1.0)));
         }
@@ -1973,14 +2008,41 @@ fn piano_split_drag_selects_accidentals_and_clamps_at_midi_edges() {
     view.params = Arc::new(ChordboardParams { key_split: BoolParam::new("Key split", true), ..ChordboardParams::default() });
     let (mut cx, target, changes) = context();
     let r = piano_key_rect(61);
-    event(&mut view, &mut cx, target, r.0 + r.2 / 2.0, r.1 + 8.0, WindowEvent::MouseDown(MouseButton::Left));
+    event(
+        &mut view,
+        &mut cx,
+        target,
+        r.0 + r.2 / 2.0,
+        r.1 + 8.0,
+        WindowEvent::MouseDown(MouseButton::Left),
+    );
     assert!(matches!(view.drag, Some(Drag::Split)));
     assert_eq!(changes.borrow().last().copied(), Some((view.params.split_note.as_ptr(), view.params.split_note.preview_normalized(61))));
     for (x, note) in [(-10.0, 0), (W + 10.0, 127)] {
-        event(&mut view, &mut cx, target, x, PIANO_LEADING.1, WindowEvent::MouseMove(x, PIANO_LEADING.1));
-        assert_eq!(changes.borrow().last().copied(), Some((view.params.split_note.as_ptr(), view.params.split_note.preview_normalized(note))));
+        event(
+            &mut view,
+            &mut cx,
+            target,
+            x,
+            PIANO_LEADING.1,
+            WindowEvent::MouseMove(x, PIANO_LEADING.1),
+        );
+        assert_eq!(
+            changes.borrow().last().copied(),
+            Some((
+                view.params.split_note.as_ptr(),
+                view.params.split_note.preview_normalized(note)
+            ))
+        );
     }
-    event(&mut view, &mut cx, target, W + 10.0, PIANO_LEADING.1, WindowEvent::MouseUp(MouseButton::Left));
+    event(
+        &mut view,
+        &mut cx,
+        target,
+        W + 10.0,
+        PIANO_LEADING.1,
+        WindowEvent::MouseUp(MouseButton::Left),
+    );
     assert!(view.drag.is_none());
     assert!(!std::iter::from_fn(|| view.bridge.commands.pop()).any(|c| matches!(c, Command::KeyDown(..) | Command::BeginGesture(..))));
 }
@@ -1997,4 +2059,43 @@ fn piano_tooltips_distinguish_silent_controls_and_live_notes() {
     let r = piano_key_rect(60);
     let hint = view.piano_hint(r.0 + r.2 / 2.0, r.1 + r.3 - 2.0).unwrap();
     assert!(hint.contains("C4") && hint.contains("MIDI 60") && hint.contains("Held input") && hint.contains("Sounding output"));
+}
+
+#[test]
+fn control_octave_and_clicked_symbols_share_live_quality_readout() {
+    let mut view = view(1, false);
+    let mut engine = crate::engine::Engine::default();
+    engine.configure(
+        crate::engine::Config {
+            control_base: 24,
+            ..Default::default()
+        },
+        &mut |_| {},
+    );
+    for (interval, tile) in [
+        (0, 0),
+        (1, 14),
+        (2, 12),
+        (3, 1),
+        (5, 13),
+        (6, 5),
+        (7, 11),
+        (8, 6),
+        (9, 7),
+        (10, 2),
+        (11, 3),
+    ] {
+        engine.midi_note(true, 0, 24 + interval, 0.8, &mut |_| {});
+        view.snapshot = engine.snapshot();
+        assert_eq!(view.active_quality_tile(), tile);
+    }
+    let (mut cx, target, _) = context();
+    for tile in 12..15 {
+        click(&mut view, &mut cx, target, quality_rect(tile));
+        for command in drain_commands(&view) {
+            engine.command(command, &mut |_| {});
+        }
+        view.snapshot = engine.snapshot();
+        assert_eq!(view.active_quality_tile(), tile);
+    }
 }

@@ -95,6 +95,17 @@ impl ChordboardView {
         }
         targets.extend((0..KEY_COUNT).map(|i| (key_rect(i), false)));
         targets.extend((0..8).map(|i| (memory_rect(i), self.memory_ui.armed)));
+        targets.extend(
+            (0..QUALITY_SYMBOLS.len()).map(|i| (quality_rect(i), self.active_quality_tile() == i)),
+        );
+        for spread in [false, true] {
+            let selected = if spread {
+                self.params.spread.value()
+            } else {
+                self.params.voice_leading.value()
+            };
+            targets.extend((0..3).map(|i| (voicing_choice_rect(spread, i), selected == i as i32)));
+        }
         targets.extend((0..2).map(|i| (inversion_rect(i), false)));
         targets.extend((0..5).map(|i| (transpose_rect(i), false)));
         targets.extend((0..3).map(|i| (mode_rect(i), self.mode().max(1) == i as i32 + 1)));

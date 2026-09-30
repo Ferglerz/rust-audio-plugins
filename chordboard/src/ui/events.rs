@@ -367,15 +367,18 @@ impl ChordboardView {
                     self.toggle_expand();
                     return true;
                 }
-                if let Some(source) =
-                    (0..crate::engine::routing::SOURCE_COUNT).find(|&i| hit(meter_rect(i), x, y))
-                {
+                if let Some(source) = (0..crate::engine::routing::SOURCE_COUNT).find(|&i| {
+                    hit(meter_rect(i), x, y)
+                        && self.panel.is_none_or(|p| !hit(self.panel_rect(p), x, y))
+                }) {
                     self.end_drag(cx);
                     self.drag = Some(Drag::Route(RouteDrag::new(source, x, y)));
                     cx.capture();
                     return true;
                 }
-                if hit(ROUTES_BUTTON, x, y) {
+                if hit(ROUTES_BUTTON, x, y)
+                    && self.panel.is_none_or(|p| !hit(self.panel_rect(p), x, y))
+                {
                     self.set_panel(if self.panel == Some(Panel::Routes) {
                         None
                     } else {
@@ -526,6 +529,34 @@ impl ChordboardView {
                 if hit(LEARN_OCTAVE, x, y) {
                     self.request_learn(if self.learning() == 4 { 0 } else { 4 });
                     return true;
+                }
+                for i in 0..QUALITY_SYMBOLS.len() {
+                    if hit(quality_rect(i), x, y) {
+                        if i < 12 {
+                            Self::emit(
+                                cx,
+                                self.params.quality.as_ptr(),
+                                self.params.quality.preview_normalized(i as i32),
+                            );
+                        } else {
+                            self.bridge
+                                .send(Command::SetControlChord([2, 5, 1][i - 12]));
+                        }
+                        return true;
+                    }
+                }
+                for spread in [false, true] {
+                    for i in 0..3 {
+                        if hit(voicing_choice_rect(spread, i), x, y) {
+                            let param = if spread {
+                                &self.params.spread
+                            } else {
+                                &self.params.voice_leading
+                            };
+                            Self::emit(cx, param.as_ptr(), param.preview_normalized(i as i32));
+                            return true;
+                        }
+                    }
                 }
                 for (i, step) in TRANSPOSE_STEPS.iter().enumerate() {
                     if hit(transpose_rect(i), x, y) {

@@ -396,6 +396,17 @@ impl Engine {
                     self.scheduled.fill(None);
                 }
             }
+            Command::SetControlChord(interval) => {
+                let (quality, alteration) = harmony::CONTROL_CHORDS[interval.min(11) as usize];
+                self.quality = quality;
+                self.control_alteration = alteration;
+                if self.root.is_none() {
+                    if let Some(memory) = self.memory.as_mut() {
+                        memory.second = None;
+                    }
+                }
+                self.rebuild(out);
+            }
             Command::SetQuality(quality) => {
                 if self.quality != quality.min(11) || self.control_alteration.is_some() {
                     self.quality = quality.min(11);
@@ -707,6 +718,7 @@ impl Engine {
             root: self.root.map_or(-1, |s| s.note as i16),
             second: self.second.map_or(-1, |s| s.note as i16),
             quality: self.quality,
+            control_alteration: self.control_alteration,
             inversion: self.inversion,
             accepted,
             ignored,

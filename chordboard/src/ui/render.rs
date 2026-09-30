@@ -95,47 +95,14 @@ impl ChordboardView {
         }
         if expand == 0.0 {
             d.font = self.ui_font.get();
+            d.text(600.0, 660.0, "Controller settings", 10.0, MUTED);
             for axis in 0..2 {
-                let mapping = crate::engine::Mapping::decode(
-                    self.params.mapping(axis).load(Ordering::Relaxed),
-                );
-                let source = match mapping.kind {
-                    1 => format!("CC {}", mapping.number),
-                    2 => format!("CC {} / {}", mapping.number, mapping.number + 32),
-                    3 => "Pitch bend".into(),
-                    _ => "Unassigned".into(),
-                };
-                let channel = if mapping.kind == 0 {
-                    String::new()
-                } else if mapping.channel == 16 {
-                    " · Any channel".into()
-                } else {
-                    format!(" · Ch {}", mapping.channel + 1)
-                };
-                let r = mapping_summary_rect(axis);
                 self.button(
                     &mut d,
-                    r,
-                    "",
+                    mapping_summary_rect(axis),
+                    ["X setup ▾", "Y setup ▾"][axis],
                     self.panel == Some(Panel::Mapping) && self.mapping_axis == axis,
                     TEAL,
-                );
-                let label = if axis == 0 {
-                    "X · Strum".into()
-                } else {
-                    format!(
-                        "Y · {}",
-                        Menu::YTarget.items()[self.params.y_target.value() as usize]
-                    )
-                };
-                d.text(r.0 + 12.0, r.1 + 17.0, &label, 12.0, TEAL);
-                d.text_right(r.0 + r.2 - 12.0, r.1 + 17.0, "Edit ▾", 11.0, MUTED);
-                d.text(
-                    r.0 + 12.0,
-                    r.1 + 35.0,
-                    &format!("{source}{channel}"),
-                    11.0,
-                    MUTED,
                 );
             }
         }
@@ -430,6 +397,12 @@ impl ChordboardView {
         if hit((32.0, 120.0, 284.0, 58.0), x, y) {
             return SavedChord::decode(self.snapshot.captured).map(harmony::chord_name);
         }
+        if let Some(i) = (0..QUALITY_SYMBOLS.len()).find(|&i| hit(quality_rect(i), x, y)) {
+            return Some(if i < 12 { harmony::QUALITY_NAMES[i] } else { ["Suspended second", "Suspended fourth", "Major with flat ninth"][i - 12] }.into());
+        }
+        if hit(transpose_rect(2), x, y) {
+            return Some("Transpose in semitones · Click to reset to zero".into());
+        }
         if (0..2).any(|i| hit(mapping_summary_rect(i), x, y)) {
             return Some("Edit this controller’s source and range here".into());
         }
@@ -440,7 +413,8 @@ impl ChordboardView {
         let c = routed.as_ref().unwrap_or(c);
         let color = if routed.is_some() { TEAL } else { color };
         let name = match c.id {
-            "length_ms" => "Note length",
+            "length_ms" => "Length",
+            "strings_played" => "Played",
             "output_channel" => "MIDI channel",
             "upper" => "Upper zone",
             "members" => "Members",

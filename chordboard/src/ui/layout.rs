@@ -10,8 +10,8 @@ pub(super) const PLAY_PAD: Rect = (660.0, 233.0, 408.0, 205.0);
 pub(super) const AUTO_FIELD: Rect = (620.0, 203.0, 448.0, 115.0);
 pub(super) const CHORDS_SURFACE: Rect = (16.0, 92.0, 548.0, 436.0);
 pub(super) const VOICING_SURFACE: Rect = (16.0, 536.0, 548.0, 138.0);
-pub(super) const PERF_SURFACE: Rect = (584.0, 92.0, 520.0, 484.0);
-pub(super) const METERS_SURFACE: Rect = (584.0, 596.0, 520.0, 78.0);
+pub(super) const PERF_SURFACE: Rect = (584.0, 92.0, 520.0, 440.0);
+pub(super) const METERS_SURFACE: Rect = (584.0, 544.0, 520.0, 130.0);
 pub(super) const EXPAND: Rect = (808.0, 162.0, 88.0, 28.0);
 pub(super) const EXPANDED_SURFACE: Rect = (16.0, 92.0, 1088.0, 580.0);
 pub(super) const EXPANDED_PAD: Rect = (32.0, 108.0, 1056.0, 548.0);
@@ -25,13 +25,13 @@ pub(super) const QWERTY: Rect = (432.0, 190.0, 116.0, 28.0);
 pub(super) const ORDER: Rect = (312.0, 190.0, 112.0, 28.0);
 pub(super) const APPEARANCE: Rect = (950.0, 24.0, 138.0, 30.0);
 pub(super) const SAVE_MEMORY: Rect = (416.0, 442.0, 132.0, 28.0);
-pub(super) const QUALITY: Rect = (32.0, 564.0, 176.0, 32.0);
+pub(super) const QUALITY: Rect = (32.0, 558.0, 280.0, 72.0);
 pub(super) const MODE_LABELS: [&str; 3] = ["Auto Strum", "Manual Strum", "Arpeggiator"];
 pub(super) fn mode_rect(i: usize) -> Rect {
     (600.0 + i as f32 * 164.0, 122.0, 160.0, 28.0)
 }
 pub(super) fn inversion_rect(i: usize) -> Rect {
-    (32.0 + i as f32 * 38.0, 630.0, 32.0, 28.0)
+    (32.0 + i as f32 * 38.0, 638.0, 30.0, 26.0)
 }
 pub(super) fn direction_rect(i: usize) -> Rect {
     (616.0 + i as f32 * 76.0, 366.0, 70.0, 28.0)
@@ -161,7 +161,7 @@ pub(super) const EXPANDED_STRUM_LATCH: Rect = (892.0, 116.0, 88.0, 28.0);
 pub(super) const OUTPUT: Rect = (988.0, 94.0, 100.0, 24.0);
 pub(super) const LEARN_OCTAVE: Rect = (344.0, 102.0, 204.0, 28.0);
 pub(super) fn mapping_summary_rect(i: usize) -> Rect {
-    (600.0 + i as f32 * 248.0, 524.0, 240.0, 40.0)
+    (868.0 + i as f32 * 112.0, 644.0, 108.0, 24.0)
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Panel {
@@ -213,17 +213,13 @@ pub(super) fn mapping_control_rect(axis: usize, id: &str) -> Rect {
 }
 pub(super) const TRANSPOSE_STEPS: [i32; 5] = [-12, -1, 0, 1, 12];
 pub(super) fn transpose_rect(i: usize) -> Rect {
-    (326.0 + i as f32 * 45.0, 630.0, 42.0, 28.0)
+    (326.0 + i as f32 * 45.0, 638.0, 42.0, 26.0)
 }
-pub(super) fn voicing_controls() -> [(&'static str, Rect); 3] {
-    [
-        ("quality", QUALITY),
-        ("spread", (400.0, 564.0, 148.0, 32.0)),
-        ("voice_leading", (218.0, 564.0, 166.0, 32.0)),
-    ]
+pub(super) fn voicing_controls() -> [(&'static str, Rect); 0] {
+    []
 }
 pub(super) fn meter_rect(i: usize) -> Rect {
-    (600.0 + i as f32 * 54.0, 627.0, 48.0, 42.0)
+    (600.0 + i as f32 * 54.0, 582.0, 48.0, 54.0)
 }
 pub(super) fn strum_controls() -> [(&'static str, Rect); 2] {
     [
@@ -363,7 +359,7 @@ pub(super) fn strum_bound_anchor_in(
     }
 }
 
-pub(super) const ROUTES_BUTTON: Rect = (956.0, 598.0, 132.0, 26.0);
+pub(super) const ROUTES_BUTTON: Rect = (956.0, 548.0, 132.0, 26.0);
 pub(super) const ROOT_ON_SELECT: Rect = (32.0, 488.0, 194.0, 24.0);
 pub(super) fn route_slot_rect(i: usize) -> Rect {
     (
@@ -439,4 +435,24 @@ pub(super) fn piano_nearest_note(x: f32) -> u8 {
                 .total_cmp(&(piano_note_x(b) - x).abs())
         })
         .unwrap_or(60)
+}
+
+pub(super) const QUALITY_SYMBOLS: [&str; 15] = [
+    "M", "m", "7", "maj7", "m7", "dim", "+", "6", "m6", "dim7", "ø7", "5", "sus2", "sus4", "♭9",
+];
+pub(super) fn quality_rect(i: usize) -> Rect {
+    (
+        32.0 + (i % 5) as f32 * 57.0,
+        558.0 + (i / 5) as f32 * 25.0,
+        52.0,
+        22.0,
+    )
+}
+pub(super) fn voicing_choice_rect(spread: bool, i: usize) -> Rect {
+    (
+        330.0 + i as f32 * 74.0,
+        if spread { 605.0 } else { 563.0 },
+        70.0,
+        24.0,
+    )
 }

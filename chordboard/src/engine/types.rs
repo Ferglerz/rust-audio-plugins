@@ -110,7 +110,7 @@ impl Default for Config {
             y_max: 1.0,
             y_target: 0,
             y_cc: 11,
-            mappings: [Mapping::cc(1, 16), Mapping::cc(11, 16)],
+            mappings: [Mapping::cc(1, 16), Mapping::default()],
         }
     }
 }
@@ -192,6 +192,7 @@ pub enum Command {
     ReleaseKeyboard,
     Inversion(i8),
     SetQuality(u8),
+    SetControlChord(u8),
     SetInversion(u8),
     Panic,
     Learn(u8),
@@ -217,6 +218,7 @@ pub struct Snapshot {
     pub root: i16,
     pub second: i16,
     pub quality: u8,
+    pub control_alteration: Option<u8>,
     pub inversion: u8,
     pub accepted: u64,
     pub ignored: u64,
@@ -247,6 +249,7 @@ impl Default for Snapshot {
             root: -1,
             second: -1,
             quality: 0,
+            control_alteration: None,
             inversion: 0,
             accepted: 0,
             ignored: 0,
