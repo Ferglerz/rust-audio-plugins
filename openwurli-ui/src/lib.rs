@@ -121,8 +121,14 @@ impl OpenWurliUi {
 
     fn handle_event(&mut self, event: &NoteEvent<()>) {
         match event {
-            NoteEvent::NoteOn { note, velocity, .. } => self.engine.note_on(*note, *velocity),
-            NoteEvent::NoteOff { note, .. } => self.engine.note_off(*note),
+            // The upstream engine clamps high notes to its top reed. Discard
+            // both halves here so stray high notes cannot strike or release it.
+            NoteEvent::NoteOn { note, velocity, .. } if *note <= openwurli_dsp::tables::MIDI_HI => {
+                self.engine.note_on(*note, *velocity)
+            }
+            NoteEvent::NoteOff { note, .. } if *note <= openwurli_dsp::tables::MIDI_HI => {
+                self.engine.note_off(*note)
+            }
             NoteEvent::MidiCC { cc, value, .. } if *cc == control_change::DAMPER_PEDAL => {
                 self.engine.set_sustain(*value >= 0.5)
             }
@@ -422,6 +428,47 @@ mod tests {
                 .zip(&no_note[128..])
                 .any(|(a, b)| (a - b).abs() > 1e-6));
             assert_eq!(plugin.engine.held_voice_count(), 1);
+        });
+    }
+
+    #[test]
+    fn high_midi_notes_are_discarded_without_releasing_the_top_key() {
+        with_circuit_stack(|| {
+            for mode in [CircuitMode::Fast, CircuitMode::Heavy] {
+                let mut plugin = OpenWurliUi::default();
+                plugin.engine.set_circuit_mode(mode);
+                let top = openwurli_dsp::tables::MIDI_HI;
+                for note in top + 1..=127 {
+                    plugin.handle_event(&note_on(0, note));
+                    assert_eq!(
+                        plugin.engine.held_voice_count(),
+                        0,
+                        "above-range note {note} must not allocate a voice"
+                    );
+                    plugin.handle_event(&note_off(0, note));
+                }
+                plugin.handle_event(&note_on(0, top));
+                assert_eq!(plugin.engine.held_voice_count(), 1);
+                for note in top + 1..=127 {
+                    plugin.handle_event(&note_off(0, note));
+                    let mut zero_velocity = note_on(0, note);
+                    if let NoteEvent::NoteOn { velocity, .. } = &mut zero_velocity {
+                        *velocity = 0.0;
+                    }
+                    plugin.handle_event(&zero_velocity);
+                    assert_eq!(
+                        plugin.engine.held_voice_count(),
+                        1,
+                        "above-range release must leave the top key held"
+                    );
+                }
+                plugin.handle_event(&pedal(1.0));
+                plugin.handle_event(&note_off(0, top));
+                assert_eq!(plugin.engine.held_voice_count(), 0);
+                assert_eq!(plugin.engine.sustained_voice_count(), 1);
+                plugin.handle_event(&pedal(0.0));
+                assert_eq!(plugin.engine.sustained_voice_count(), 0);
+            }
         });
     }
 
