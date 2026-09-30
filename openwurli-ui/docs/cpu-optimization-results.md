@@ -485,3 +485,17 @@ Integration verification on 2026-09-29:
 Installed bundles are `~/Library/Audio/Plug-Ins/CLAP/OpenWurli UI.clap` and
 `~/Library/Audio/Plug-Ins/VST3/OpenWurli UI.vst3`. Reload a loaded plugin to use
 those binaries. No REAPER control or host listening test was performed.
+
+## 10. Second pass: exact Fast and Heavy reductions
+
+The sections above describe the first pass, measured on Apple M1 against the
+original v0.7 engine. The wrapper has since gained runtime Fast/Heavy circuit
+selection (0.1.1, DSP `3103753`). A second pass, DSP `ff8a972`, reduces
+both modes' render time with output bit-identical to `3103753`: shared Heavy
+preamp matrix rebuilds, reuse of converged transistor evaluations, lockstep
+transistor solves, reuse of the legacy preamp's final currents, and skipping
+the LDR mapping at zero vibrato depth. Its changes, audio proof and CPU table
+are in [runtime-modes.md](runtime-modes.md#exact-cpu-pass).
+
+That pass was timed on an x86-64 cloud VM against `3103753`, not on M1 against
+the original engine, so its percentages must not be added to the figures above.

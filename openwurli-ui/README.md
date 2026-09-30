@@ -56,7 +56,9 @@ incoming circuit for 100 ms, then crossfades for 20 ms without retriggering note
 Heavy retains its physical amplifier rails; **Extra Sag** is the existing shared
 post-engine effect. The models can sound different.
 
-This release keeps the prior CPU optimizations. Additional CPU candidates are
-deferred pending timing qualification; the failing damper approximation is not
-included. See [runtime modes and study status](docs/runtime-modes.md) for the
-changes, completed checks, remaining validation and preserved research.
+An exact CPU pass reduces render time in both models while keeping their output
+bit-identical to the previous 0.1.1 engine. Heavy gains most: its preamp matrix
+rebuilds are shared and its transistor solves run in lockstep. The failing
+damper approximation is not included. See [runtime modes and CPU
+evidence](docs/runtime-modes.md) for the changes, measurements, completed checks
+and remaining validation.
