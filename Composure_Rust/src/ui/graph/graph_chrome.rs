@@ -13,6 +13,10 @@ use super::graph_display;
 use super::graph_pages::AXIS_W;
 
 const MAX_AXIS_LABELS: usize = 12;
+const RANGE_MENU_W: f32 = 76.0;
+const RANGE_MENU_H: f32 = 216.0;
+// Vizia's Popup adds 4px of translation; retain a 4px visible gap above the button.
+const RANGE_MENU_TOP: f32 = -RANGE_MENU_H - 8.0;
 
 pub fn build<P, D>(cx: &mut Context, params: P, display: D)
 where
@@ -135,7 +139,56 @@ impl View for RangeButton {
                 cx.emit(PopupEvent::Switch);
                 meta.consume();
             }
+            if matches!(e, WindowEvent::MouseMove(_, _) | WindowEvent::MouseLeave) {
+                cx.needs_redraw();
+            }
         });
+    }
+    fn draw(&self, cx: &mut DrawContext, canvas: &mut Canvas) {
+        let range = graph_range_db(&super::EditorData::params.get(cx));
+        let mut d = super::appearance::painter(cx, canvas, AXIS_W);
+        let highlighted = d.hover.is_some() || PopupData::is_open.get(cx);
+        let tint = if highlighted {
+            pleasant_ui::TEAL
+        } else {
+            pleasant_ui::TEXT
+        };
+        d.rounded_rect(1.0, 0.0, AXIS_W - 2.0, 20.0, 6.0, pleasant_ui::PANEL);
+        d.rounded_rect(
+            1.0,
+            0.0,
+            AXIS_W - 2.0,
+            20.0,
+            6.0,
+            nih_plug_vizia::vizia::vg::Color {
+                a: if highlighted { 0.14 } else { 0.045 },
+                ..tint
+            },
+        );
+        d.outline_rounded(
+            1.0,
+            0.0,
+            AXIS_W - 2.0,
+            20.0,
+            6.0,
+            if highlighted {
+                pleasant_ui::TEAL
+            } else {
+                pleasant_ui::LINE
+            },
+            1.0,
+        );
+        d.text_centered(
+            AXIS_W * 0.5,
+            14.0,
+            &format!("-{}", range as i32),
+            13.0,
+            if highlighted {
+                pleasant_ui::TEXT
+            } else {
+                pleasant_ui::MUTED
+            },
+        );
     }
 }
 
@@ -186,16 +239,6 @@ impl View for RangeMenu {
 fn build_range_selector(cx: &mut Context) {
     RangeButton
         .build(cx, |cx| {
-            // Use the axis label style so range text matches in both skins.
-            Label::new(
-                cx,
-                super::EditorData::params.map(|p| format!("-{} ▾", graph_range_db(p) as i32)),
-            )
-            .class("graph-axis-label")
-            .hoverable(false)
-            .width(Stretch(1.0))
-            .height(Stretch(1.0))
-            .text_align(TextAlign::Center);
             PopupData::default().build(cx);
             Popup::new(cx, PopupData::is_open, true, |cx| {
                 RangeMenu {
@@ -206,14 +249,14 @@ fn build_range_selector(cx: &mut Context) {
                     ),
                 }
                 .build(cx, |_| {})
-                .width(Pixels(76.0))
-                .height(Pixels(216.0));
+                .width(Pixels(RANGE_MENU_W))
+                .height(Pixels(RANGE_MENU_H));
             })
             .on_blur(|cx| cx.emit(PopupEvent::Close))
             .left(Pixels(0.0))
-            .top(super::EditorData::params.map(|p| Pixels(12.0 - range_button_y(p))))
-            .width(Pixels(76.0))
-            .height(Pixels(216.0));
+            .top(Pixels(RANGE_MENU_TOP))
+            .width(Pixels(RANGE_MENU_W))
+            .height(Pixels(RANGE_MENU_H));
         })
         .z_index(20)
         .position_type(PositionType::SelfDirected)
@@ -221,4 +264,16 @@ fn build_range_selector(cx: &mut Context) {
         .top(super::EditorData::params.map(|p| Pixels(range_button_y(p))))
         .width(Pixels(AXIS_W))
         .height(Pixels(20.0));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn range_menu_stays_anchored_above_the_bottom_marker() {
+        let params = ComposureParams::default();
+        let button_y = range_button_y(&params);
+        assert!(button_y + RANGE_MENU_TOP > 12.0);
+        assert_eq!(RANGE_MENU_TOP + RANGE_MENU_H + 4.0, -4.0);
+    }
 }

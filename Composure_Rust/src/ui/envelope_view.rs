@@ -183,6 +183,7 @@ struct GraphDrag {
     origin: (f32, f32),
     start_norm: f32,
     lookahead_on_graph: bool,
+    axis: pleasant_ui::pointer::AxisLock,
 }
 
 struct LabelPress {
@@ -425,6 +426,7 @@ impl EnvelopeView {
             origin: Self::point(cx),
             start_norm,
             lookahead_on_graph,
+            axis: pleasant_ui::pointer::AxisLock::default(),
         });
     }
 
@@ -771,6 +773,10 @@ impl View for EnvelopeView {
                 }
                 WindowEvent::MouseMove(_, _) => {
                     self.hover = Some(point);
+                    let axis_delta = self.drag.as_mut().map_or(0.0, |drag| {
+                        drag.axis
+                            .delta(point.0 - drag.origin.0, point.1 - drag.origin.1, 1.0)
+                    });
                     if let Some(drag) = &self.drag {
                         let values = drag.start;
                         let laid = layout(Viewport::from_tuple(GRAPH), values);
@@ -778,7 +784,7 @@ impl View for EnvelopeView {
                             EnvelopeHit::Lookahead => {
                                 let fine = cx.modifiers().shift();
                                 let start = self.lookahead.preview_plain(drag.start_norm);
-                                let dx = (point.0 - drag.origin.0) * if fine { 0.2 } else { 1.0 };
+                                let dx = axis_delta * if fine { 0.2 } else { 1.0 };
                                 let ms = if drag.lookahead_on_graph {
                                     if dx.abs() < f32::EPSILON {
                                         start
@@ -823,12 +829,12 @@ impl View for EnvelopeView {
                             }
                             hit => {
                                 let fine = cx.modifiers().shift();
-                                let dx = (point.0 - drag.origin.0) * if fine { 0.2 } else { 1.0 };
+                                let dx = axis_delta * if fine { 0.2 } else { 1.0 };
                                 let plain = stage_time_drag(hit, values, dx);
                                 self.set_plain(
                                     cx,
                                     hit,
-                                    if fine {
+                                    if fine || axis_delta == 0.0 {
                                         plain
                                     } else {
                                         Self::snapped_plain(hit, plain)
@@ -1182,6 +1188,27 @@ mod tests {
                 _ => 0.0,
             };
             assert!(time > start);
+        }
+    }
+
+    #[test]
+    fn vertical_time_drag_increases_up_and_keeps_its_axis() {
+        for hit in [
+            EnvelopeHit::AttackLength,
+            EnvelopeHit::HoldLength,
+            EnvelopeHit::ReleaseLength,
+        ] {
+            let mut axis = pleasant_ui::pointer::AxisLock::default();
+            assert_eq!(axis.delta(1.0, -2.0, 1.0), 0.0);
+            let up_delta = axis.delta(1.0, -10.0, 1.0);
+            assert_eq!(axis.delta(100.0, -10.0, 1.0), up_delta);
+            let up = stage_time_drag(hit, test_values(), up_delta);
+            let down = stage_time_drag(hit, test_values(), axis.delta(100.0, 10.0, 1.0));
+            if hit == EnvelopeHit::HoldLength {
+                assert!(up > down);
+            } else {
+                assert!(rate_to_ms(up) > rate_to_ms(down));
+            }
         }
     }
 

@@ -1,0 +1,1286 @@
+//! Wurlitzer 200A power amplifier — feature-toggled between circuit and behavioral models.
+//!
+//! Default: melange-generated 7-BJT Class AB circuit solver.
+//! `--features legacy-power-amp`: behavioral closed-loop NR approximation (A/B diagnostics only).
+//!
+//! Rail sag (melange path only): under load, the unregulated ±22 V rails sag from
+//! their idle ~±24.5 V toward the spec ±22 V. Modeled by [`RailDynamics`] and pushed
+//! per-sample into the melange solver via the `.runtime V` directives on V1/V2.
+//! Calibration anchor: `docs/research/output-stage.md` §4.3.1.
+
+/// Open-circuit (idle, light-load) rail magnitude in volts.
+/// Service-manual measurement; matches `tb_power_supply.cir` light-load test.
+const RAIL_V_OPEN: f64 = 24.5;
+
+/// Static DC bias of V1/V2 in `wurli-power-amp.cir` (matches the spec ±22 V
+/// nominal). The runtime offset is `actual_rail - RAIL_DC_BIAS`.
+const RAIL_DC_BIAS: f64 = 22.5;
+
+/// Effective DC source impedance per rail [Ω]. Back-solved from the documented
+/// load line: ±24.5 V at idle → ±22 V at rated 20 W into 8 Ω (avg per-rail
+/// current Ipk/π = 0.71 A → 2.5 V drop / 0.71 A = 3.5 Ω).
+const RAIL_R_EFF: f64 = 3.5;
+
+/// Speaker / output load impedance [Ω]. Two 16 Ω drivers in parallel.
+/// Used to compute load current for rail sag from the melange amp's output voltage.
+const SPEAKER_LOAD_OHMS: f64 = 8.0;
+
+/// Attack time constant — how fast a rail sags when load increases.
+/// Approximated by R_eff × C_filter (3.5 Ω × 2200 µF) ≈ 7.7 ms; rounded to 8 ms.
+const RAIL_TAU_ATTACK: f64 = 0.008;
+
+/// Release time constant — how fast a rail recovers when load drops.
+/// Slower than attack: full-wave rectifier only conducts during AC peaks
+/// (8.3 ms apart at 60 Hz), so recovery is gated by line cycle.
+const RAIL_TAU_RELEASE: f64 = 0.015;
+
+/// Current-averaging envelope time constant. The rail target depends on the
+/// *average* output current, not the instantaneous value — physically, filter
+/// caps integrate audio-rate ripple. 2200 µF at audio frequencies has
+/// ~0.07 Ω impedance vs ~8 Ω load, so the cap supplies audio-rate current
+/// with negligible rail-voltage change; only the slow envelope of |v_out|
+/// matters. 30 ms cleanly suppresses anything above ~5 Hz reaching the rails,
+/// killing the AM-IM artifacts that audio-rate target updates would generate
+/// at H7+ of upper-register notes (8–12 kHz click band).
+const RAIL_TAU_I_AVG: f64 = 0.030;
+
+/// Behavioral rail sag dynamics. Tracks the two unregulated rail magnitudes
+/// based on the *averaged* output current (not instantaneous), asymmetric one-pole.
+/// See module-level docs and `docs/research/output-stage.md` §4.3.1 for the
+/// calibration rationale.
+///
+/// Two-stage filtering:
+/// 1. Current envelope follower (30 ms tau) — models filter-cap audio-rate
+///    integration. The target current the rail sees has no audio-rate content.
+/// 2. Rail dynamics (8 ms attack / 15 ms release) — models how fast the cap
+///    voltage actually moves toward the new target.
+///
+/// Result: rails respond to the slow envelope of load (note attacks, sustained
+/// chord, release) but never AM-modulate the amp at audio rate. Removes the
+/// click-band IM artifacts (H7+) that an instantaneous-target implementation
+/// produced.
+///
+/// Per-sample cost: 6 muls, 6 adds, 4 compares — no transcendentals.
+#[derive(Debug, Clone, Copy)]
+pub struct RailDynamics {
+    /// Current positive rail magnitude [V]. Idle ~+24.5 V, sags toward +22 V at rated load.
+    v_rail_pos: f64,
+    /// Current negative rail magnitude [V] (positive number).
+    v_rail_neg: f64,
+    /// Smoothed magnitude of positive output current (envelope). Audio-rate
+    /// content has been integrated out — only sub-audio load envelope remains.
+    i_avg_pos: f64,
+    /// Smoothed magnitude of negative output current.
+    i_avg_neg: f64,
+    /// Precomputed `1 - exp(-dt / tau_attack)` — fast attack toward the load-line target.
+    alpha_attack: f64,
+    /// Precomputed `1 - exp(-dt / tau_release)` — slower release back toward V_OPEN.
+    alpha_release: f64,
+    /// Precomputed `1 - exp(-dt / tau_i_avg)` — current-averaging envelope coefficient.
+    alpha_i_avg: f64,
+}
+
+impl RailDynamics {
+    /// Starts rails at the static DC bias (`RAIL_DC_BIAS = 22.5 V`) — i.e.
+    /// runtime offsets begin at zero. The cached melange settled state was
+    /// computed at this same bias, so the solver opens cleanly. Dynamics then
+    /// pull rails toward `RAIL_V_OPEN = 24.5 V` (idle target) over ~80 ms,
+    /// which is well within typical plugin warmup.
+    pub fn new(sample_rate: f64) -> Self {
+        let mut s = Self {
+            v_rail_pos: RAIL_DC_BIAS,
+            v_rail_neg: RAIL_DC_BIAS,
+            i_avg_pos: 0.0,
+            i_avg_neg: 0.0,
+            alpha_attack: 0.0,
+            alpha_release: 0.0,
+            alpha_i_avg: 0.0,
+        };
+        s.set_sample_rate(sample_rate);
+        s
+    }
+
+    pub fn set_sample_rate(&mut self, sample_rate: f64) {
+        let dt = 1.0 / sample_rate;
+        self.alpha_attack = 1.0 - (-dt / RAIL_TAU_ATTACK).exp();
+        self.alpha_release = 1.0 - (-dt / RAIL_TAU_RELEASE).exp();
+        self.alpha_i_avg = 1.0 - (-dt / RAIL_TAU_I_AVG).exp();
+    }
+
+    pub fn reset(&mut self) {
+        self.v_rail_pos = RAIL_DC_BIAS;
+        self.v_rail_neg = RAIL_DC_BIAS;
+        self.i_avg_pos = 0.0;
+        self.i_avg_neg = 0.0;
+    }
+
+    /// Rail magnitudes as `(positive, negative)`, both as positive numbers.
+    pub fn rail_voltages(&self) -> (f64, f64) {
+        (self.v_rail_pos, self.v_rail_neg)
+    }
+
+    /// Step one sample. `v_out` is the previous output voltage in volts (raw,
+    /// pre-normalization). Positive output draws from +rail, negative from −rail.
+    /// Audio-rate content in v_out is integrated out by the current envelope
+    /// follower before reaching the rail target — physical filter caps don't
+    /// see audio-rate ripple as net charge change.
+    #[inline]
+    pub fn step(&mut self, v_out: f64) {
+        // Stage 1: instantaneous current magnitude per rail (only the conducting one)
+        let i_pos = (v_out / SPEAKER_LOAD_OHMS).max(0.0);
+        let i_neg = (-v_out / SPEAKER_LOAD_OHMS).max(0.0);
+
+        // Stage 2: average via 30 ms envelope follower — models filter-cap
+        // audio-rate integration. After this, i_avg has no audio-rate content.
+        self.i_avg_pos += self.alpha_i_avg * (i_pos - self.i_avg_pos);
+        self.i_avg_neg += self.alpha_i_avg * (i_neg - self.i_avg_neg);
+
+        // Stage 3: rail target from the smoothed (sub-audio) average current.
+        let target_pos = RAIL_V_OPEN - self.i_avg_pos * RAIL_R_EFF;
+        let target_neg = RAIL_V_OPEN - self.i_avg_neg * RAIL_R_EFF;
+
+        // Stage 4: rail follows target with attack (sag) / release (recovery).
+        let alpha_p = if target_pos < self.v_rail_pos {
+            self.alpha_attack
+        } else {
+            self.alpha_release
+        };
+        let alpha_n = if target_neg < self.v_rail_neg {
+            self.alpha_attack
+        } else {
+            self.alpha_release
+        };
+        self.v_rail_pos += alpha_p * (target_pos - self.v_rail_pos);
+        self.v_rail_neg += alpha_n * (target_neg - self.v_rail_neg);
+    }
+
+    /// Runtime V offsets to push into the melange CircuitState
+    /// (additive to V1/V2's ±22.5 V DC bias).
+    pub fn offsets(&self) -> (f64, f64) {
+        (
+            self.v_rail_pos - RAIL_DC_BIAS,
+            self.v_rail_neg - RAIL_DC_BIAS,
+        )
+    }
+}
+
+#[cfg(any(feature = "legacy-power-amp", feature = "runtime-models"))]
+mod behavioral {
+    //! Behavioral closed-loop negative feedback model.
+
+    const OPEN_LOOP_GAIN: f64 = 19_000.0;
+    const FEEDBACK_BETA: f64 = 220.0 / (220.0 + 15_000.0);
+    const HEADROOM: f64 = 22.0;
+    const CROSSOVER_VT: f64 = 0.013;
+    const QUIESCENT_GAIN: f64 = 0.1;
+    const NR_MAX_ITER: usize = 8;
+    const NR_TOL: f64 = 1e-6;
+
+    pub struct PowerAmp {
+        open_loop_gain: f64,
+        feedback_beta: f64,
+        crossover_vt: f64,
+        rail_limit: f64,
+        closed_loop_gain: f64,
+        quiescent_gain: f64,
+        #[cfg(feature = "experimental-circuit-lut")]
+        tanh_table: &'static crate::circuit_lut::Table,
+    }
+
+    impl PowerAmp {
+        pub fn new() -> Self {
+            Self {
+                open_loop_gain: OPEN_LOOP_GAIN,
+                feedback_beta: FEEDBACK_BETA,
+                crossover_vt: CROSSOVER_VT,
+                rail_limit: HEADROOM,
+                closed_loop_gain: OPEN_LOOP_GAIN / (1.0 + OPEN_LOOP_GAIN * FEEDBACK_BETA),
+                quiescent_gain: QUIESCENT_GAIN,
+                #[cfg(feature = "experimental-circuit-lut")]
+                tanh_table: crate::circuit_lut::tanh_table(),
+            }
+        }
+
+        /// Behavioral model is rate-independent (closed-form `tanh`, no integrator).
+        /// Argument is accepted for API parity with the melange path.
+        pub fn new_at_sample_rate(_sample_rate: f64) -> Self {
+            Self::new()
+        }
+
+        pub fn process(&mut self, input: f64) -> f64 {
+            let mut y = (input * self.closed_loop_gain)
+                .clamp(-self.rail_limit + NR_TOL, self.rail_limit - NR_TOL);
+
+            for _ in 0..NR_MAX_ITER {
+                let error = input - self.feedback_beta * y;
+                let v = self.open_loop_gain * error;
+                let (f_val, f_deriv) = self.forward_path(v);
+                let residual = y - f_val;
+                let jacobian = 1.0 + self.open_loop_gain * self.feedback_beta * f_deriv;
+                let delta = residual / jacobian;
+                y -= delta;
+                if delta.abs() < NR_TOL {
+                    break;
+                }
+            }
+
+            y / self.rail_limit
+        }
+
+        #[inline]
+        fn forward_path(&self, v: f64) -> (f64, f64) {
+            #[cfg(feature = "experimental-circuit-lut")]
+            {
+                self.forward_path_with_math(v, crate::circuit_math::exp, |x| {
+                    self.tanh_table.tanh(x)
+                })
+            }
+            #[cfg(not(feature = "experimental-circuit-lut"))]
+            {
+                self.forward_path_analytical(v)
+            }
+        }
+
+        /// Original native forward model, retained for focused comparisons even
+        /// when the optional table evaluator is selected for normal processing.
+        #[inline]
+        pub fn forward_path_analytical(&self, v: f64) -> (f64, f64) {
+            self.forward_path_with_math(v, crate::circuit_math::exp, crate::circuit_math::tanh)
+        }
+
+        #[inline]
+        fn forward_path_with_math(
+            &self,
+            v: f64,
+            exp: impl Fn(f64) -> (f64, f64),
+            tanh: impl Fn(f64) -> (f64, f64),
+        ) -> (f64, f64) {
+            let v_sq = v * v;
+            let vt_sq = self.crossover_vt * self.crossover_vt;
+            let (exp_term, exp_derivative) = exp(-v_sq / vt_sq);
+            let q = self.quiescent_gain;
+            let cross_gain = q + (1.0 - q) * (1.0 - exp_term);
+            let v_cross = v * cross_gain;
+            let dcross_dv = cross_gain + v * (1.0 - q) * (2.0 * v / vt_sq) * exp_derivative;
+            let tanh_arg = v_cross / self.rail_limit;
+            let (tanh_val, tanh_derivative) = tanh(tanh_arg);
+            let f_val = self.rail_limit * tanh_val;
+            let f_deriv = tanh_derivative * dcross_dv;
+            (f_val, f_deriv)
+        }
+
+        /// Behavioral model has no solver, no divergence to detect — returns
+        /// the same clamped result as `process`. Exists only for API parity
+        /// with the melange adapter's diagnostic probe.
+        pub fn diag_raw_process(&mut self, input: f64) -> f64 {
+            self.process(input)
+        }
+
+        pub fn diag_snapshot(&self) -> (u64, u64, f64) {
+            (0, 0, 0.0)
+        }
+
+        pub fn reset(&mut self) {}
+
+        /// No-op on the behavioral path — rails are folded into the closed-loop
+        /// approximation, so dynamic sag isn't separable. Kept for API parity.
+        pub fn set_rail_sag(&mut self, _on: bool) {}
+
+        pub fn rail_sag_enabled(&self) -> bool {
+            false
+        }
+
+        pub fn rail_voltages(&self) -> (f64, f64) {
+            (super::RAIL_DC_BIAS, super::RAIL_DC_BIAS)
+        }
+    }
+
+    impl Default for PowerAmp {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+}
+
+#[cfg(feature = "legacy-power-amp")]
+pub use behavioral::PowerAmp;
+
+#[cfg(any(not(feature = "legacy-power-amp"), feature = "runtime-models"))]
+mod melange_adapter {
+    //! Melange-generated 7-BJT Class AB circuit solver.
+
+    use crate::gen_power_amp::{self, CircuitState};
+    use std::sync::OnceLock;
+
+    /// Rail headroom for output normalization (matches behavioral model).
+    const HEADROOM: f64 = 22.0;
+
+    static SETTLED_STATE: OnceLock<CircuitState> = OnceLock::new();
+
+    fn compute_settled_state() -> CircuitState {
+        let mut s = CircuitState::default();
+        for _ in 0..44100 {
+            gen_power_amp::process_sample(0.0, &mut s);
+        }
+        s
+    }
+
+    fn init_state(sample_rate: f64) -> CircuitState {
+        let cached = SETTLED_STATE.get_or_init(compute_settled_state);
+        let mut state = cached.clone();
+        if (sample_rate - gen_power_amp::SAMPLE_RATE).abs() > 0.5 {
+            state.set_sample_rate(sample_rate);
+        }
+        state
+    }
+
+    // Keep this exhaustive field list local to the adapter. A generated-state
+    // schema change must fail compilation here instead of silently retaining
+    // stale history. Box::clone_from reuses the cold-state allocation; derived
+    // CircuitState::clone_from would use its default whole-value clone instead.
+    macro_rules! circuit_state_fields {
+        ($operation:ident) => {
+            $operation!(
+                v_prev,
+                i_nl_prev,
+                i_nl_prev_prev,
+                dc_operating_point,
+                input_prev,
+                last_nr_iterations,
+                dc_block_x_prev,
+                dc_block_y_prev,
+                dc_block_r,
+                diag_peak_output,
+                diag_clamp_count,
+                diag_nr_max_iter_count,
+                diag_be_fallback_count,
+                diag_be_latch_count,
+                diag_active_set_pin_count,
+                diag_nan_reset_count,
+                diag_substep_count,
+                diag_refactor_count,
+                diag_voltage_damp_count,
+                chord_lu,
+                chord_dr,
+                chord_dc,
+                chord_perm,
+                chord_j_dev,
+                chord_valid,
+                chord_dense,
+                a,
+                a_neg,
+                a_be,
+                a_neg_be,
+                cold,
+                current_sample_rate,
+                device_0_is,
+                device_0_vt,
+                device_0_bf,
+                device_0_br,
+                device_1_is,
+                device_1_vt,
+                device_1_bf,
+                device_1_br,
+                device_2_is,
+                device_2_vt,
+                device_2_bf,
+                device_2_br,
+                device_3_is,
+                device_3_vt,
+                device_3_bf,
+                device_3_br,
+                device_4_is,
+                device_4_vt,
+                device_4_bf,
+                device_4_br,
+                device_5_is,
+                device_5_vt,
+                device_5_bf,
+                device_5_br,
+                device_6_is,
+                device_6_vt,
+                device_6_bf,
+                device_6_br,
+                v_rail_pos_offset,
+                v_rail_neg_offset,
+            );
+        };
+    }
+
+    fn restore_state_in_place(state: &mut CircuitState, sample_rate: f64) {
+        // Construction initializes this cache before any callback can reset.
+        let cached = SETTLED_STATE
+            .get()
+            .expect("PowerAmp constructed before reset");
+        macro_rules! restore_fields {
+            ($($field:ident),+ $(,)?) => {
+                let CircuitState { $($field),+ } = state;
+                $($field.clone_from(&cached.$field);)+
+            };
+        }
+        circuit_state_fields!(restore_fields);
+        // Preserve the original cached-clone then rate-conversion order.
+        if (sample_rate - gen_power_amp::SAMPLE_RATE).abs() > 0.5 {
+            state.set_sample_rate(sample_rate);
+        }
+    }
+
+    /// Lifetime counts since construction, retained across solver/host resets.
+    /// These describe events, not Newton iteration totals: a failed primary
+    /// solve's iteration field is a sentinel, including early LU failures.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub struct SolverDiagnostics {
+        pub primary_failures: u64,
+        pub skipped_recoveries: u64,
+        pub recovery_attempts: u64,
+        pub guard_resets: u64,
+        pub last_iteration_rejections: u64,
+    }
+
+    pub struct PowerAmp {
+        state: CircuitState,
+        diagnostics: SolverDiagnostics,
+        sample_rate: f64,
+        /// Last confirmed-good adapter output; used to hold continuity when
+        /// the melange solver diverges and we have to reset.
+        last_good: f64,
+        /// Behavioral rail dynamics; only consulted when `rail_sag_on` is true.
+        rails: super::RailDynamics,
+        /// When true, push per-sample rail offsets into the solver via runtime V.
+        /// Default false to preserve historical ideal-rail behavior; flip for A/B.
+        rail_sag_on: bool,
+    }
+
+    impl PowerAmp {
+        pub fn new() -> Self {
+            Self::new_at_sample_rate(44100.0)
+        }
+
+        /// Construct at a specific sample rate. The melange BE integrator's
+        /// per-sample timestep is `1 / sample_rate`; running it at the engine's
+        /// upsampled rate (88.2 kHz at 44.1k host) instead of the base rate
+        /// halves the integration error per harmonic order, which is critical
+        /// for keeping the high-order harmonics realistic on harmonic-rich
+        /// inputs (the pickup pumps content past Nyquist into the amp at ff
+        /// playing). See `engine.rs` `render_voices_to_preamp_out` — the
+        /// power amp is now run inside the same upsample/downsample block as
+        /// the preamp.
+        pub fn new_at_sample_rate(sample_rate: f64) -> Self {
+            Self {
+                state: init_state(sample_rate),
+                diagnostics: SolverDiagnostics::default(),
+                sample_rate,
+                last_good: 0.0,
+                rails: super::RailDynamics::new(sample_rate),
+                // Rail sag is correct physics with negligible CPU cost (+0.66%
+                // measured) and a small audible effect (~0.5 dB chord
+                // compression, ~+0.3 dB single-note headroom). Default ON.
+                // Toggle via `set_rail_sag(false)` for A/B against ideal rails.
+                rail_sag_on: true,
+            }
+        }
+
+        /// Enable / disable rail sag modeling. When off, rails stay fixed at
+        /// ±22.5 V (V1/V2 DC bias, runtime offsets = 0) — bit-compat with the
+        /// pre-rail-sag adapter. Defaults to on.
+        pub fn set_rail_sag(&mut self, on: bool) {
+            self.rail_sag_on = on;
+            if !on {
+                self.state.v_rail_pos_offset = 0.0;
+                self.state.v_rail_neg_offset = 0.0;
+            }
+        }
+
+        pub fn rail_sag_enabled(&self) -> bool {
+            self.rail_sag_on
+        }
+
+        /// Current rail magnitudes `(positive, negative)` as positive numbers.
+        /// When rail sag is off, returns the fixed ±22.5 V DC bias.
+        pub fn rail_voltages(&self) -> (f64, f64) {
+            if self.rail_sag_on {
+                self.rails.rail_voltages()
+            } else {
+                (super::RAIL_DC_BIAS, super::RAIL_DC_BIAS)
+            }
+        }
+
+        pub fn process(&mut self, input: f64) -> f64 {
+            self.process_with_recovery::<{ cfg!(feature = "reference-full-recovery") }>(input)
+        }
+
+        fn process_with_recovery<const COMPLETE_RECOVERY: bool>(&mut self, input: f64) -> f64 {
+            // Push runtime rail offsets BEFORE process_sample so the solver
+            // sees the rail state computed from the previous sample's draw.
+            if self.rail_sag_on {
+                let (off_pos, off_neg) = self.rails.offsets();
+                self.state.v_rail_pos_offset = off_pos;
+                self.state.v_rail_neg_offset = off_neg;
+            }
+
+            let output = if COMPLETE_RECOVERY {
+                Some(gen_power_amp::process_sample(input, &mut self.state))
+            } else {
+                gen_power_amp::process_sample_guarded(input, &mut self.state)
+            };
+            if self.state.last_nr_iterations >= gen_power_amp::MAX_ITER as u32 {
+                self.diagnostics.primary_failures =
+                    self.diagnostics.primary_failures.saturating_add(1);
+                if COMPLETE_RECOVERY {
+                    self.diagnostics.recovery_attempts =
+                        self.diagnostics.recovery_attempts.saturating_add(1);
+                } else {
+                    self.diagnostics.skipped_recoveries =
+                        self.diagnostics.skipped_recoveries.saturating_add(1);
+                }
+            }
+            let Some([raw]) = output else {
+                self.diagnostics.guard_resets = self.diagnostics.guard_resets.saturating_add(1);
+                self.reset();
+                return self.last_good;
+            };
+            let result = raw / HEADROOM;
+
+            // Divergence guard. Under continuous polyphonic playing, the
+            // melange 7-BJT NR solver intermittently fails to converge and
+            // the BE fallback also produces non-physical output (observed
+            // internal node voltages up to 1e272 V on stress tests). The
+            // visible symptom at the output is a clamp-saturated rail slam
+            // that the speaker's HPF/LPF ring on and POST_SPEAKER_GAIN
+            // amplifies to +20 dBFS spikes — enough to trip DAW peak-protect
+            // muting. Three signals we use to detect it:
+            //
+            //   1. Non-finite raw output (NaN/Inf propagation)
+            //   2. NR exhausted MAX_ITER without converging (signals the
+            //      BE fallback ran, which can also silently diverge)
+            //   3. Any internal node voltage above 100 V (physical rails
+            //      are ±22 V + supplies; anything past this is garbage)
+            //
+            // On any signal, reset the solver state to its cached DC
+            // operating point and hold the last confirmed-good output.
+            // Holding (rather than silencing) keeps the waveform continuous
+            // across a divergence burst — otherwise a 25-sample run of
+            // zeros would click audibly. Next sample's NR starts from a
+            // clean state and normally picks up tracking the input.
+            //
+            // Upstream: this is a melange robustness issue with the Class AB
+            // push-pull topology under certain polyphonic transient patterns.
+            // File upstream once a minimal reproducer is extracted.
+            let nr_failed = self.state.last_nr_iterations >= gen_power_amp::MAX_ITER as u32 - 1;
+            let state_insane = self
+                .state
+                .v_prev
+                .iter()
+                .any(|v| !v.is_finite() || v.abs() > 100.0);
+            if !result.is_finite() || nr_failed || state_insane {
+                self.diagnostics.guard_resets = self.diagnostics.guard_resets.saturating_add(1);
+                if self.state.last_nr_iterations == gen_power_amp::MAX_ITER as u32 - 1 {
+                    self.diagnostics.last_iteration_rejections =
+                        self.diagnostics.last_iteration_rejections.saturating_add(1);
+                }
+                self.reset();
+                return self.last_good;
+            }
+            let clamped = result.clamp(-1.0, 1.0);
+            self.last_good = clamped;
+
+            // Update rail state from the just-computed output for the NEXT
+            // sample. `raw` is in volts (pre-normalization), which is what
+            // RailDynamics expects to compute load current via v_out / 8 Ω.
+            if self.rail_sag_on {
+                self.rails.step(raw);
+            }
+
+            clamped
+        }
+
+        /// Raw, pre-clamp output of the melange solver. Audio-unsafe for normal
+        /// use (not bounded), but needed for diagnostic probing of solver
+        /// divergence: if |raw| exceeds the circuit rails (±22 V physically,
+        /// ±1.0 after the HEADROOM normalization), the NR converged to a
+        /// non-physical branch. Not called by the normal plugin path.
+        pub fn diag_raw_process(&mut self, input: f64) -> f64 {
+            gen_power_amp::process_sample(input, &mut self.state)[0] / HEADROOM
+        }
+
+        /// Counts that survive the cached-state reset, unlike `diag_snapshot`.
+        pub fn solver_diagnostics(&self) -> SolverDiagnostics {
+            self.diagnostics
+        }
+
+        /// Snapshot of melange NR diagnostics:
+        /// `(clamp_count, nr_max_iter_count, peak_output_volts)`.
+        pub fn diag_snapshot(&self) -> (u64, u64, f64) {
+            (
+                self.state.diag_clamp_count,
+                self.state.diag_nr_max_iter_count,
+                self.state.diag_peak_output,
+            )
+        }
+
+        pub fn reset(&mut self) {
+            restore_state_in_place(&mut self.state, self.sample_rate);
+            self.rails.reset();
+            // Do NOT clear last_good — the divergence-guard hold relies on it
+            // surviving the reset. Only `new()` zeros it.
+        }
+    }
+
+    #[cfg(test)]
+    mod reset_tests {
+        use super::*;
+        use crate::gen_power_amp::CircuitStateCold;
+
+        trait StateBits {
+            fn poison(&mut self);
+            fn assert_same(&self, other: &Self);
+        }
+        impl StateBits for f64 {
+            fn poison(&mut self) {
+                *self = f64::from_bits(0x7ff8_0000_0000_002a);
+            }
+            fn assert_same(&self, other: &Self) {
+                assert_eq!(self.to_bits(), other.to_bits());
+            }
+        }
+        macro_rules! integer_bits {
+            ($($ty:ty),+) => { $(impl StateBits for $ty {
+                fn poison(&mut self) { *self = <$ty>::MAX; }
+                fn assert_same(&self, other: &Self) { assert_eq!(self, other); }
+            })+ };
+        }
+        integer_bits!(u32, u64, usize);
+        impl StateBits for bool {
+            fn poison(&mut self) {
+                *self = !*self;
+            }
+            fn assert_same(&self, other: &Self) {
+                assert_eq!(self, other);
+            }
+        }
+        impl<T: StateBits, const N: usize> StateBits for [T; N] {
+            fn poison(&mut self) {
+                for value in self {
+                    value.poison();
+                }
+            }
+            fn assert_same(&self, other: &Self) {
+                for (actual, expected) in self.iter().zip(other) {
+                    actual.assert_same(expected);
+                }
+            }
+        }
+        impl StateBits for Box<CircuitStateCold> {
+            fn poison(&mut self) {
+                let CircuitStateCold {
+                    s,
+                    k,
+                    s_ni,
+                    s_be,
+                    k_be,
+                    s_ni_be,
+                    s_sub,
+                    a_neg_sub,
+                    k_sub,
+                    s_ni_sub,
+                } = self.as_mut();
+                s.poison();
+                k.poison();
+                s_ni.poison();
+                s_be.poison();
+                k_be.poison();
+                s_ni_be.poison();
+                s_sub.poison();
+                a_neg_sub.poison();
+                k_sub.poison();
+                s_ni_sub.poison();
+            }
+            fn assert_same(&self, other: &Self) {
+                let CircuitStateCold {
+                    s,
+                    k,
+                    s_ni,
+                    s_be,
+                    k_be,
+                    s_ni_be,
+                    s_sub,
+                    a_neg_sub,
+                    k_sub,
+                    s_ni_sub,
+                } = self.as_ref();
+                s.assert_same(&other.s);
+                k.assert_same(&other.k);
+                s_ni.assert_same(&other.s_ni);
+                s_be.assert_same(&other.s_be);
+                k_be.assert_same(&other.k_be);
+                s_ni_be.assert_same(&other.s_ni_be);
+                s_sub.assert_same(&other.s_sub);
+                a_neg_sub.assert_same(&other.a_neg_sub);
+                k_sub.assert_same(&other.k_sub);
+                s_ni_sub.assert_same(&other.s_ni_sub);
+            }
+        }
+        fn poison_state(state: &mut CircuitState) {
+            macro_rules! poison_fields {
+                ($($field:ident),+ $(,)?) => {
+                    let CircuitState { $($field),+ } = state;
+                    $($field.poison();)+
+                };
+            }
+            circuit_state_fields!(poison_fields);
+        }
+        fn assert_state_bits(actual: &CircuitState, expected: &CircuitState) {
+            macro_rules! assert_fields {
+                ($($field:ident),+ $(,)?) => {
+                    let CircuitState { $($field),+ } = actual;
+                    $($field.assert_same(&expected.$field);)+
+                };
+            }
+            circuit_state_fields!(assert_fields);
+        }
+
+        fn assert_rail_bits(
+            actual: &super::super::RailDynamics,
+            expected: &super::super::RailDynamics,
+        ) {
+            let super::super::RailDynamics {
+                v_rail_pos,
+                v_rail_neg,
+                i_avg_pos,
+                i_avg_neg,
+                alpha_attack,
+                alpha_release,
+                alpha_i_avg,
+            } = actual;
+            for (a, b) in [
+                (*v_rail_pos, expected.v_rail_pos),
+                (*v_rail_neg, expected.v_rail_neg),
+                (*i_avg_pos, expected.i_avg_pos),
+                (*i_avg_neg, expected.i_avg_neg),
+                (*alpha_attack, expected.alpha_attack),
+                (*alpha_release, expected.alpha_release),
+                (*alpha_i_avg, expected.alpha_i_avg),
+            ] {
+                assert_eq!(a.to_bits(), b.to_bits());
+            }
+        }
+
+        #[test]
+        fn heavy_recovery_shortcut_preserves_audio_and_complete_state() {
+            let mut primary_failures = 0;
+            let mut complete_recovery_verified = false;
+            for rate in [44100.0, 88200.0, 96000.0, 192000.0] {
+                for sag in [false, true] {
+                    let mut actual = PowerAmp::new_at_sample_rate(rate);
+                    let mut reference = PowerAmp::new_at_sample_rate(rate);
+                    actual.set_rail_sag(sag);
+                    reference.set_rail_sag(sag);
+                    let cold_pointer = actual.state.cold.as_ref() as *const CircuitStateCold;
+                    for index in 0..1536 {
+                        // Smooth notes, abrupt polyphonic transients, polarity
+                        // changes and sanitized nonfinite input, all deterministic.
+                        let input = match index % 384 {
+                            0 => f64::NAN,
+                            1 => f64::INFINITY,
+                            2 => f64::NEG_INFINITY,
+                            3..=127 => (index as f64 * 0.071).sin() * 0.05,
+                            128..=255 => (index as f64 * 0.143).sin() * 1.5,
+                            _ => {
+                                if index % 2 == 0 {
+                                    0.6
+                                } else {
+                                    -0.6
+                                }
+                            }
+                        };
+                        // Capture a real failing solve before adapter reset can
+                        // hide evidence that the full generated path recovers.
+                        let failure_fixture = (!complete_recovery_verified).then(|| {
+                            let mut state = actual.state.clone();
+                            if actual.rail_sag_on {
+                                let (pos, neg) = actual.rails.offsets();
+                                state.v_rail_pos_offset = pos;
+                                state.v_rail_neg_offset = neg;
+                            }
+                            state
+                        });
+                        let failures_before = actual.diagnostics.primary_failures;
+                        let a = actual.process_with_recovery::<false>(input);
+                        let b = reference.process_with_recovery::<true>(input);
+                        if actual.diagnostics.primary_failures > failures_before {
+                            if let Some(mut guarded) = failure_fixture {
+                                let mut full = guarded.clone();
+                                let before = (full.diag_substep_count, full.diag_be_fallback_count);
+                                assert!(
+                                    gen_power_amp::process_sample_guarded(input, &mut guarded)
+                                        .is_none()
+                                );
+                                let _ = gen_power_amp::process_sample(input, &mut full);
+                                assert!(
+                                    full.diag_substep_count > before.0
+                                        || full.diag_be_fallback_count > before.1,
+                                    "complete generated solver must still perform recovery"
+                                );
+                                assert_eq!(
+                                    (guarded.diag_substep_count, guarded.diag_be_fallback_count),
+                                    before
+                                );
+                                complete_recovery_verified = true;
+                            }
+                        }
+
+                        assert_eq!(
+                            a.to_bits(),
+                            b.to_bits(),
+                            "rate {rate}, sag {sag}, sample {index}"
+                        );
+                        // Exhaustive circuit and rail equality includes accepted
+                        // state and every reset, not just matching audible output.
+                        assert_state_bits(&actual.state, &reference.state);
+                        assert_rail_bits(&actual.rails, &reference.rails);
+                        assert_eq!(actual.last_good.to_bits(), reference.last_good.to_bits());
+                        assert_eq!(
+                            cold_pointer,
+                            actual.state.cold.as_ref() as *const CircuitStateCold
+                        );
+                        if index == 767 {
+                            let before = actual.solver_diagnostics();
+                            actual.reset();
+                            reference.reset();
+                            assert_eq!(actual.solver_diagnostics(), before);
+                            actual.set_rail_sag(!sag);
+                            reference.set_rail_sag(!sag);
+                        }
+                    }
+                    let a = actual.solver_diagnostics();
+                    let b = reference.solver_diagnostics();
+                    assert_eq!(a.primary_failures, b.primary_failures);
+                    assert_eq!(a.guard_resets, b.guard_resets);
+                    assert_eq!(a.last_iteration_rejections, b.last_iteration_rejections);
+                    assert_eq!(a.skipped_recoveries, a.primary_failures);
+                    assert_eq!(a.recovery_attempts, 0);
+                    assert_eq!(b.recovery_attempts, b.primary_failures);
+                    assert_eq!(b.skipped_recoveries, 0);
+                    primary_failures += a.primary_failures;
+                }
+            }
+            assert!(
+                primary_failures > 0,
+                "stress must exercise discarded recovery"
+            );
+            assert!(complete_recovery_verified);
+        }
+
+        #[test]
+        fn heavy_reset_reuses_box_and_matches_native_state_bits() {
+            // Native, near-native tolerance boundaries, and oversampled host rates.
+            for rate in [44100.0, 44100.5, 44100.75, 88200.0, 96000.0, 192000.0] {
+                let mut amp = PowerAmp::new_at_sample_rate(rate);
+                let expected = init_state(rate); // Original native clone retained as reference.
+                let cold_pointer = amp.state.cold.as_ref() as *const CircuitStateCold;
+                amp.last_good = -0.125;
+                for _ in 0..3 {
+                    poison_state(&mut amp.state);
+                    amp.rails.step(12.0);
+                    amp.reset();
+                    assert_eq!(
+                        cold_pointer,
+                        amp.state.cold.as_ref() as *const CircuitStateCold
+                    );
+                    assert_state_bits(&amp.state, &expected);
+                    assert_eq!(amp.last_good.to_bits(), (-0.125f64).to_bits());
+                    assert_eq!(
+                        amp.rails.rail_voltages(),
+                        (super::super::RAIL_DC_BIAS, super::super::RAIL_DC_BIAS)
+                    );
+                    assert_eq!(amp.rails.i_avg_pos.to_bits(), 0.0f64.to_bits());
+                    assert_eq!(amp.rails.i_avg_neg.to_bits(), 0.0f64.to_bits());
+                }
+            }
+        }
+
+        #[test]
+        fn heavy_reset_following_audio_matches_native_reset_bits() {
+            for rate in [44100.0, 88200.0, 96000.0, 192000.0] {
+                for rail_sag in [false, true] {
+                    let mut actual = PowerAmp::new_at_sample_rate(rate);
+                    let mut native = PowerAmp::new_at_sample_rate(rate);
+                    actual.set_rail_sag(rail_sag);
+                    native.set_rail_sag(rail_sag);
+                    for index in 0..256 {
+                        let input = (index as f64 * 0.071).sin() * 0.05;
+                        assert_eq!(
+                            actual.process(input).to_bits(),
+                            native.process(input).to_bits()
+                        );
+                    }
+                    actual.reset();
+                    native.state = init_state(rate);
+                    native.rails.reset();
+                    assert_state_bits(&actual.state, &native.state);
+                    assert_eq!(actual.last_good.to_bits(), native.last_good.to_bits());
+                    for index in 0..512 {
+                        let input = (index as f64 * 0.043).sin() * 0.08;
+                        assert_eq!(
+                            actual.process(input).to_bits(),
+                            native.process(input).to_bits()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    impl Default for PowerAmp {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+}
+
+#[cfg(not(feature = "legacy-power-amp"))]
+pub use melange_adapter::PowerAmp;
+
+#[cfg(feature = "runtime-models")]
+pub use behavioral::PowerAmp as FastPowerAmp;
+#[cfg(feature = "runtime-models")]
+pub use melange_adapter::PowerAmp as HeavyPowerAmp;
+
+#[cfg(any(not(feature = "legacy-power-amp"), feature = "runtime-models"))]
+pub use melange_adapter::SolverDiagnostics as HeavySolverDiagnostics;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::f64::consts::PI;
+
+    const SR: f64 = 44100.0;
+
+    /// Measure gain using a sine wave (works for both memoryless and circuit models).
+    fn measure_gain(pa: &mut PowerAmp, freq: f64, amp: f64) -> f64 {
+        let settle = (SR * 0.3) as usize;
+        for i in 0..settle {
+            pa.process(amp * (2.0 * PI * freq * i as f64 / SR).sin());
+        }
+        let measure = (SR * 0.1) as usize;
+        let mut peak = 0.0f64;
+        for i in 0..measure {
+            let t = (settle + i) as f64 / SR;
+            peak = peak.max(pa.process(amp * (2.0 * PI * freq * t).sin()).abs());
+        }
+        20.0 * (peak / amp).log10()
+    }
+
+    #[test]
+    fn test_closed_loop_gain() {
+        let mut pa = PowerAmp::new();
+        let gain_db = measure_gain(&mut pa, 1000.0, 0.001);
+        // 69× / 22V normalization = 3.14×. 20*log10(3.14) = 9.9 dB
+        assert!(
+            gain_db > 5.0 && gain_db < 20.0,
+            "Gain should be ~10-16 dB (69x normalized): got {gain_db:.1} dB"
+        );
+    }
+
+    #[test]
+    fn test_rail_clipping() {
+        let mut pa = PowerAmp::new();
+        // Large sine should clip near ±1.0
+        let settle = (SR * 0.1) as usize;
+        let mut peak = 0.0f64;
+        for i in 0..(SR * 0.2) as usize {
+            let x = 5.0 * (2.0 * PI * 100.0 * i as f64 / SR).sin();
+            let y = pa.process(x);
+            if i > settle {
+                peak = peak.max(y.abs());
+            }
+        }
+        assert!(
+            peak > 0.85 && peak <= 1.0,
+            "Should clip near 1.0: got {peak}"
+        );
+    }
+
+    #[test]
+    fn test_crossover_reduced_by_feedback() {
+        let mut pa = PowerAmp::new();
+        let freq = 440.0;
+        let amplitude = 0.001;
+
+        let n = (SR * 0.3) as usize;
+        let mut samples = Vec::new();
+        for i in 0..n {
+            let x = amplitude * (2.0 * PI * freq * i as f64 / SR).sin();
+            let y = pa.process(x);
+            if i > n / 2 {
+                samples.push(y);
+            }
+        }
+
+        let f1 = dft_mag(&samples, freq, SR);
+        let f3 = dft_mag(&samples, 3.0 * freq, SR);
+        let h3_db = 20.0 * (f3 / f1).log10();
+        assert!(
+            h3_db < -30.0,
+            "Feedback should suppress H3 below -30 dB: got {h3_db:.1} dB"
+        );
+    }
+
+    #[test]
+    fn test_output_bounded() {
+        let mut pa = PowerAmp::new();
+        for &input in &[0.0, 0.001, 0.01, 0.1, 0.5, 1.0, 5.0, -0.1, -1.0, -5.0] {
+            // Feed several samples to let coupling caps charge
+            for _ in 0..100 {
+                pa.process(input);
+            }
+            let output = pa.process(input);
+            assert!(
+                output.is_finite() && output.abs() <= 1.0,
+                "Output should be bounded for input {input}: got {output}"
+            );
+        }
+    }
+
+    fn dft_mag(samples: &[f64], freq: f64, sr: f64) -> f64 {
+        let n = samples.len() as f64;
+        let (mut re, mut im) = (0.0, 0.0);
+        for (i, &s) in samples.iter().enumerate() {
+            let phase = 2.0 * PI * freq * i as f64 / sr;
+            re += s * phase.cos();
+            im += s * phase.sin();
+        }
+        (re * re + im * im).sqrt() / n
+    }
+
+    // ── Rail sag tests ──────────────────────────────────────────────────────
+    //
+    // These guard the calibration anchor in docs/research/output-stage.md
+    // §4.3.1: idle ≈ ±24.5 V, sustained-rated load ≈ ±22 V. Run on the
+    // melange path only; the behavioral path's rail-sag stubs are no-ops.
+
+    #[test]
+    fn test_rail_sag_default_is_on() {
+        // Rail sag defaults to ON on the melange path. The behavioral path's
+        // rail_sag_enabled() is hard-wired to false (no separable rail model).
+        let pa = PowerAmp::new();
+        #[cfg(not(feature = "legacy-power-amp"))]
+        assert!(
+            pa.rail_sag_enabled(),
+            "Default should be ON on melange path"
+        );
+        #[cfg(feature = "legacy-power-amp")]
+        assert!(
+            !pa.rail_sag_enabled(),
+            "Behavioral path has no separable rails"
+        );
+    }
+
+    #[test]
+    fn test_rail_sag_off_preserves_static_bias() {
+        // With rail sag explicitly off, rail_voltages reports the static DC
+        // bias and runtime offsets stay zero. Bit-compat invariant for A/B.
+        let mut pa = PowerAmp::new();
+        pa.set_rail_sag(false);
+        let (vp, vn) = pa.rail_voltages();
+        assert!(
+            (vp - 22.5).abs() < 1e-9,
+            "Static-bias vp should be 22.5: got {vp}"
+        );
+        assert!(
+            (vn - 22.5).abs() < 1e-9,
+            "Static-bias vn should be 22.5: got {vn}"
+        );
+        for _ in 0..100 {
+            pa.process(0.0);
+        }
+        let (vp, vn) = pa.rail_voltages();
+        assert!((vp - 22.5).abs() < 1e-9);
+        assert!((vn - 22.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_rail_sag_idle_voltage() {
+        // With rail sag on and zero load, rails should ramp from the static
+        // DC bias (22.5 V — matches cached settled state) up to the light-load
+        // measurement (24.5 V) over ~5 tau_release ~= 75 ms. Generous warmup.
+        #[cfg(not(feature = "legacy-power-amp"))]
+        {
+            let mut pa = PowerAmp::new();
+            pa.set_rail_sag(true);
+            for _ in 0..(SR as usize / 4) {
+                // 250 ms — well past 5 tau_release for asymptotic convergence
+                pa.process(0.0);
+            }
+            let (vp, vn) = pa.rail_voltages();
+            assert!(
+                (vp - 24.5).abs() < 0.05,
+                "Idle vp should be +24.5 V: got {vp}"
+            );
+            assert!(
+                (vn - 24.5).abs() < 0.05,
+                "Idle vn should be +24.5 V (mag): got {vn}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_rail_sag_sustained_load_drops_rails() {
+        // With a sustained input that drives the amp toward the rails, the
+        // rails should sag below idle. Don't pin to exactly 22 V — the actual
+        // load current depends on the closed-loop response and the test is a
+        // qualitative load-line check, not a calibration regression.
+        #[cfg(not(feature = "legacy-power-amp"))]
+        {
+            let mut pa = PowerAmp::new();
+            pa.set_rail_sag(true);
+
+            // Settle at idle first
+            for _ in 0..(SR as usize / 10) {
+                pa.process(0.0);
+            }
+            let (vp_idle, _) = pa.rail_voltages();
+
+            // 200 mV sine sustained — closed-loop ~69x → ~14 V output
+            // → ~1.7 A peak through 8 Ω → noticeable rail sag
+            let freq = 220.0;
+            let amp = 0.20;
+            let n = (SR * 0.5) as usize;
+            for i in 0..n {
+                let x = amp * (2.0 * PI * freq * i as f64 / SR).sin();
+                pa.process(x);
+            }
+            let (vp_loaded, vn_loaded) = pa.rail_voltages();
+            assert!(
+                vp_loaded < vp_idle - 0.1,
+                "Loaded vp ({vp_loaded:.3}) should be below idle ({vp_idle:.3}) by >0.1 V"
+            );
+            assert!(
+                vn_loaded < vp_idle - 0.1,
+                "Loaded vn ({vn_loaded:.3}) should be below idle ({vp_idle:.3}) by >0.1 V"
+            );
+            // Sanity: sag shouldn't drop rails below the spec floor (~22 V)
+            // by a wide margin under a normal music-level signal.
+            assert!(vp_loaded > 20.0, "vp sagged too far: {vp_loaded}");
+            assert!(vn_loaded > 20.0, "vn sagged too far: {vn_loaded}");
+        }
+    }
+
+    #[test]
+    fn test_rail_sag_recovery_after_load() {
+        // After sustained load is removed, rails should recover toward idle.
+        #[cfg(not(feature = "legacy-power-amp"))]
+        {
+            let mut pa = PowerAmp::new();
+            pa.set_rail_sag(true);
+
+            // Drive hard for 200 ms to sag the rails
+            for i in 0..(SR * 0.2) as usize {
+                let x = 0.3 * (2.0 * PI * 110.0 * i as f64 / SR).sin();
+                pa.process(x);
+            }
+            let (vp_loaded, _) = pa.rail_voltages();
+            assert!(vp_loaded < 24.0, "Should be sagged: {vp_loaded}");
+
+            // Now silence for 200 ms
+            for _ in 0..(SR * 0.2) as usize {
+                pa.process(0.0);
+            }
+            let (vp_recovered, _) = pa.rail_voltages();
+            assert!(
+                vp_recovered > vp_loaded + 0.5,
+                "Rail should recover (loaded {vp_loaded:.3} → recovered {vp_recovered:.3})"
+            );
+            assert!(
+                (vp_recovered - 24.5).abs() < 0.05,
+                "Should be back near idle: {vp_recovered}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_rail_sag_toggle_zeros_offsets() {
+        // Toggling rail-sag off should immediately zero the runtime offsets,
+        // returning the solver to ideal-rail behavior.
+        #[cfg(not(feature = "legacy-power-amp"))]
+        {
+            let mut pa = PowerAmp::new();
+            pa.set_rail_sag(true);
+            // Drive hard to sag the rails
+            for i in 0..(SR * 0.05) as usize {
+                pa.process(0.5 * (2.0 * PI * 220.0 * i as f64 / SR).sin());
+            }
+            // Toggle off — rail_voltages should immediately report the static DC bias
+            pa.set_rail_sag(false);
+            let (vp, vn) = pa.rail_voltages();
+            assert!((vp - 22.5).abs() < 1e-9);
+            assert!((vn - 22.5).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn test_rail_dynamics_unit() {
+        // Pure RailDynamics test, no melange. Verifies the two-stage filter
+        // (current envelope + rail dynamics).
+        let mut rails = RailDynamics::new(SR);
+        // Initialized at DC bias 22.5 V (matches cached melange state)
+        let (vp, _) = rails.rail_voltages();
+        assert!((vp - 22.5).abs() < 1e-9);
+
+        // No load: rails should ramp toward 24.5 V (release tau = 15 ms).
+        for _ in 0..(SR as usize / 4) {
+            rails.step(0.0);
+        }
+        let (vp, _) = rails.rail_voltages();
+        assert!(
+            (vp - 24.5).abs() < 0.05,
+            "Unloaded rail should approach 24.5 V: got {vp}"
+        );
+
+        // Step with v_out=8V → I_pos = 1A → target_pos = 24.5 - 1.0*3.5 = 21.0 V
+        // Now requires longer settling: i_avg envelope (30 ms) + rail (8 ms),
+        // so 300 ms = 10 τ_i_avg ensures convergence.
+        for _ in 0..(SR * 0.3) as usize {
+            rails.step(8.0);
+        }
+        let (vp, vn) = rails.rail_voltages();
+        assert!(
+            (vp - 21.0).abs() < 0.1,
+            "vp should converge to 21.0 under 1A load: got {vp}"
+        );
+        assert!((vn - 24.5).abs() < 0.05, "vn untouched at 24.5: got {vn}");
+    }
+
+    #[test]
+    fn test_rail_dynamics_offsets() {
+        // Offsets should be (rail - 22.5) so additive on V1/V2 DC bias.
+        let mut rails = RailDynamics::new(SR);
+        // At init: rails at 22.5 V → offsets = 0 (matches cached melange state)
+        let (off_pos, off_neg) = rails.offsets();
+        assert!(off_pos.abs() < 1e-9);
+        assert!(off_neg.abs() < 1e-9);
+
+        // Settle at idle
+        for _ in 0..(SR as usize / 4) {
+            rails.step(0.0);
+        }
+        let (off_pos, off_neg) = rails.offsets();
+        // Rails at ~24.5 → offset ~+2
+        assert!((off_pos - 2.0).abs() < 0.05);
+        assert!((off_neg - 2.0).abs() < 0.05);
+
+        // Settle under load — requires 5+ τ_i_avg = 150+ ms for the envelope
+        // to fully average, plus rail attack settling.
+        for _ in 0..(SR * 0.3) as usize {
+            rails.step(8.0); // I_pos = 1.0 A
+        }
+        let (off_pos, off_neg) = rails.offsets();
+        // pos rail at ~21.0 V → offset ≈ -1.5
+        assert!(
+            off_pos < -1.0 && off_pos > -2.0,
+            "off_pos under load should be ~-1.5: got {off_pos}"
+        );
+        // neg rail back near +2 (idle)
+        assert!((off_neg - 2.0).abs() < 0.05);
+    }
+}

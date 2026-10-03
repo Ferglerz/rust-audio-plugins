@@ -221,18 +221,12 @@ impl StripView {
                 );
                 d.outline(joined_card, LINE);
                 let is_peak = self.params.pse_peak.value();
-                let det_hover = !pse_bypassed
-                    && self
-                        .idle_hover()
-                        .is_some_and(|(hx, hy)| inside(hx, hy, det_r));
-                d.button(
+                d.button_tinted(
                     det_r,
                     if is_peak { "PEAK" } else { "RMS" },
                     true,
                     if pse_bypassed {
                         MUTED
-                    } else if det_hover {
-                        TEXT
                     } else {
                         PSE_BLUE
                     },

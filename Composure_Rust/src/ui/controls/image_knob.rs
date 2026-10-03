@@ -21,6 +21,7 @@ pub struct ImageKnob {
     drag: ParamDragSession,
     value_edit: param_widget_ext::ParamValueEdit,
     step_set: StepSet,
+    hovered: bool,
 }
 
 impl ImageKnob {
@@ -42,6 +43,7 @@ impl ImageKnob {
             drag: ParamDragSession::INACTIVE,
             value_edit: param_widget_ext::ParamValueEdit::default(),
             step_set,
+            hovered: false,
         }
         .build(cx, |_| {})
     }
@@ -65,6 +67,7 @@ impl View for ImageKnob {
             norm,
         );
         super::appearance::draw_knob_activity(cx, canvas, self.param_base.name(), &self.display);
+        super::appearance::draw_knob_guide(cx, canvas, self.param_base.name(), norm, self.hovered);
         if !inactive {
             self.value_edit
                 .draw(cx, canvas, super::appearance::Control::Knob);
@@ -80,6 +83,26 @@ impl View for ImageKnob {
             return;
         }
         event.map(|window_event, meta| {
+            let scale = cx.scale_factor();
+            let b = cx.bounds();
+            let lx = (cx.mouse().cursorx - b.x) / scale;
+            let ly = (cx.mouse().cursory - b.y) / scale;
+            let inside = lx >= 0.0 && lx <= b.w / scale && ly >= 0.0 && ly <= b.h / scale;
+            let hovered = if self.drag.active {
+                true
+            } else {
+                match window_event {
+                    WindowEvent::MouseEnter => true,
+                    WindowEvent::MouseMove(_, _) => inside,
+                    WindowEvent::MouseLeave | WindowEvent::FocusOut => false,
+                    _ => self.hovered,
+                }
+            };
+            if self.hovered != hovered {
+                self.hovered = hovered;
+                cx.needs_redraw();
+            }
+
             if !self.drag.active {
                 let handled = self.value_edit.event(
                     cx,

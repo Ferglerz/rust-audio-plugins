@@ -259,3 +259,55 @@ fn rejects_old_float_format() -> Result<(), Box<dyn std::error::Error>> {
     assert!(ScdPack::open(&path).is_err());
     Ok(())
 }
+
+#[test]
+fn overlapping_snare_notes_keep_wire_variants_and_rr_separate(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("snare.scdpack");
+    let strikes = vec![
+        StrikeEntry::new(
+            38,
+            1,
+            127,
+            1,
+            0,
+            KitPieceId::OpenSnare,
+            [None; MicChannel::COUNT],
+        ),
+        StrikeEntry::new(
+            38,
+            1,
+            127,
+            1,
+            0,
+            KitPieceId::Snare,
+            [None; MicChannel::COUNT],
+        ),
+        StrikeEntry::new(
+            38,
+            1,
+            127,
+            2,
+            0,
+            KitPieceId::Snare,
+            [None; MicChannel::COUNT],
+        ),
+    ];
+    write_pack(&path, strikes, &[])?;
+    let pack = ScdPack::open(&path)?;
+    for piece in [KitPieceId::Snare, KitPieceId::OpenSnare] {
+        assert_eq!(
+            pack.find_strike_for_piece(38, 64, 1, Some(piece))
+                .unwrap()
+                .kit_piece,
+            piece
+        );
+    }
+    assert_eq!(pack.max_rr_for_piece(38, Some(KitPieceId::Snare)), 2);
+    assert_eq!(pack.max_rr_for_piece(38, Some(KitPieceId::OpenSnare)), 1);
+    assert!(pack
+        .find_strike_for_piece(38, 64, 1, Some(KitPieceId::Kick))
+        .is_none());
+    Ok(())
+}

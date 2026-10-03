@@ -102,19 +102,6 @@ pub(super) fn build(cx: &mut Context, params: Arc<ComposureParams>, display: Arc
                 .top(Pixels(12.0))
                 .width(EditorData::appearance.map(|mode| Pixels(appearance::graph_size(*mode))))
                 .height(EditorData::appearance.map(|mode| Pixels(appearance::graph_size(*mode))));
-                image_knob::ImageKnob::new(
-                    cx,
-                    EditorData::params,
-                    |p| &p.input_offset_db,
-                    display.clone(),
-                    step_points::StepSet::None,
-                )
-                .class("production-knob")
-                .position_type(PositionType::SelfDirected)
-                .left(Pixels(AXIS_W + 12.0))
-                .top(Pixels(24.0))
-                .width(Pixels(96.0))
-                .height(Pixels(96.0));
             })
             .position_type(PositionType::SelfDirected)
             .left(Pixels(0.0))
@@ -164,13 +151,13 @@ pub(super) fn build(cx: &mut Context, params: Arc<ComposureParams>, display: Arc
             .left(Pixels(0.0))
             .top(Pixels(0.0))
             .width(Pixels(PAGE_W))
-            .height(Pixels(appearance::PLEASANT_GRAPH_SIZE + CURVE_HEADER_H));
+            .height(Pixels(appearance::SIDE_H));
     })
     .position_type(PositionType::SelfDirected)
     .left(Pixels(appearance::ENV_X + appearance::ENV_W))
     .top(Pixels(appearance::ENV_Y))
     .width(GraphPages::progress.map(|p| Pixels(p * EXPANSION_W)))
-    .height(Pixels(appearance::PLEASANT_GRAPH_SIZE + CURVE_HEADER_H))
+    .height(Pixels(appearance::SIDE_H))
     .overflow(Overflow::Hidden);
 }
 
@@ -188,31 +175,196 @@ impl View for CurveTitle {
     }
 }
 
-struct EqToggle;
+use pleasant_eq::{BandCoefficients, BandSettings, EqShape};
+use std::sync::atomic::Ordering;
+
+struct EqToggle {
+    hovered: bool,
+}
+
 impl View for EqToggle {
     fn event(&mut self, cx: &mut EventContext, event: &mut Event) {
-        event.map(|e, meta| {
-            if matches!(e, WindowEvent::MouseDown(MouseButton::Left)) {
+        event.map(|e, meta| match e {
+            WindowEvent::MouseEnter => {
+                self.hovered = true;
+                cx.needs_redraw();
+            }
+            WindowEvent::MouseLeave => {
+                self.hovered = false;
+                cx.needs_redraw();
+            }
+            WindowEvent::MouseMove(..) => {
+                if !self.hovered {
+                    self.hovered = true;
+                    cx.needs_redraw();
+                }
+            }
+            WindowEvent::MouseDown(MouseButton::Left) => {
                 cx.emit(PageEvent::Toggle);
                 meta.consume();
             }
+            _ => {}
         });
     }
     fn draw(&self, cx: &mut DrawContext, canvas: &mut Canvas) {
         let selected = GraphPages::target.get(cx) > 0.5;
         let width = cx.bounds().w / cx.scale_factor();
         let mut d = appearance::painter(cx, canvas, width);
-        appearance::button(
-            &mut d,
-            (0.0, 0.0, width, 28.0),
-            if selected { "SC EQ <" } else { "SC EQ >" },
-            selected,
-            pleasant_ui::GOLD,
-        );
+
+        if selected {
+            // When EQ is on, we won't show the diagram part of the button
+            appearance::button(
+                &mut d,
+                (0.0, 0.0, width, 28.0),
+                "SC EQ <",
+                true,
+                pleasant_ui::GOLD,
+            );
+            return;
+        }
+
+        // Button background
+        d.button((0.0, 0.0, width, 28.0), "", false, pleasant_ui::GOLD);
+        if self.hovered {
+            d.rect(
+                0.0,
+                0.0,
+                width,
+                28.0,
+                nih_plug_vizia::vizia::vg::Color::rgba(255, 255, 255, 18),
+            );
+        }
+
+        let params = EditorData::params.get(cx);
+        let display = EditorData::display.get(cx);
+        let rate = (display.sample_rate.load(Ordering::Relaxed) as f64).max(44100.0);
+
+        let mut active_coeffs = Vec::new();
+        if params.hp_freq.value() > 0.0 {
+            let settings = BandSettings {
+                shape: EqShape::LowCut,
+                order: 2,
+                frequency_hz: params.hp_freq.value() as f64,
+                gain_db: 0.0,
+                q: std::f64::consts::FRAC_1_SQRT_2,
+                enabled: true,
+                ..BandSettings::default()
+            };
+            active_coeffs.push(BandCoefficients::prepare(&settings, rate));
+        }
+        if params.lp_freq.value() > 0.0 {
+            let settings = BandSettings {
+                shape: EqShape::HighCut,
+                order: 2,
+                frequency_hz: params.lp_freq.value() as f64,
+                gain_db: 0.0,
+                q: std::f64::consts::FRAC_1_SQRT_2,
+                enabled: true,
+                ..BandSettings::default()
+            };
+            active_coeffs.push(BandCoefficients::prepare(&settings, rate));
+        }
+        for band in params.detector_eq.iter() {
+            if band.active.value() && band.enabled.value() {
+                let settings = band.settings();
+                active_coeffs.push(BandCoefficients::prepare(&settings, rate));
+            }
+        }
+
+        let has_sc_eq = params.hp_freq.value() > 0.0
+            || params.lp_freq.value() > 0.0
+            || params.detector_eq.iter().any(|band| {
+                band.active.value()
+                    && band.enabled.value()
+                    && (!band.settings().shape.has_gain() || band.gain.value().abs() > 0.01)
+            });
+
+        let (coeffs, curve_color) = if has_sc_eq && !active_coeffs.is_empty() {
+            (active_coeffs, pleasant_ui::GOLD)
+        } else {
+            let default_hp = BandSettings {
+                shape: EqShape::LowCut,
+                order: 2,
+                frequency_hz: 100.0,
+                gain_db: 0.0,
+                q: std::f64::consts::FRAC_1_SQRT_2,
+                enabled: true,
+                ..BandSettings::default()
+            };
+            let default_cut = BandSettings {
+                shape: EqShape::Bell,
+                order: 2,
+                frequency_hz: 1800.0,
+                gain_db: -4.5,
+                q: 1.2,
+                enabled: true,
+                ..BandSettings::default()
+            };
+            (
+                vec![
+                    BandCoefficients::prepare(&default_hp, rate),
+                    BandCoefficients::prepare(&default_cut, rate),
+                ],
+                if self.hovered {
+                    pleasant_ui::TEXT
+                } else {
+                    pleasant_ui::MUTED
+                },
+            )
+        };
+
+        let diag_w = 26.0;
+        let diag_h = 14.0;
+        let gap = 6.0;
+        let label = "SC EQ >";
+        let label_size = 13.0;
+        let label_color = if self.hovered {
+            pleasant_ui::TEXT
+        } else {
+            pleasant_ui::MUTED
+        };
+
+        let text_w = {
+            let mut p = nih_plug_vizia::vizia::vg::Paint::color(d.color(label_color));
+            if let Some(font) = d.font {
+                p.set_font(&[font]);
+            }
+            p.set_font_size(label_size * d.s);
+            d.c.measure_text(0.0, 0.0, label, &p)
+                .map(|m| m.width() / d.s)
+                .unwrap_or(label.len() as f32 * label_size * 0.55)
+        };
+
+        let total_w = diag_w + gap + text_w;
+        let diag_x = (width - total_w) * 0.5;
+        let diag_y = (28.0 - diag_h) * 0.5;
+        let text_x = diag_x + diag_w + gap;
+
+        // Faint 0 dB reference line
+        let cy = diag_y + diag_h * 0.5;
+        let mut guide = pleasant_ui::LINE;
+        guide.a = 0.45;
+        d.line(diag_x, cy, diag_x + diag_w, cy, guide, 0.8);
+
+        // Mini EQ curve
+        let points: Vec<(f32, f32)> = (0..=32)
+            .map(|i| {
+                let t = i as f32 / 32.0;
+                let freq = 20.0 * 1000.0_f64.powf(t as f64);
+                let db: f64 = coeffs.iter().map(|c| c.response_db(freq, rate)).sum();
+                let y = (diag_y + diag_h * (0.5 - (db.clamp(-18.0, 18.0) as f32 / 36.0)))
+                    .clamp(diag_y, diag_y + diag_h);
+                (diag_x + diag_w * t, y)
+            })
+            .collect();
+        d.poly(&points, curve_color, 1.4);
+
+        // Text label
+        d.text_middle(text_x, 14.0, label, label_size, label_color);
     }
 }
 pub(super) fn build_toggle(cx: &mut Context, rect: (f32, f32, f32)) {
-    EqToggle
+    EqToggle { hovered: false }
         .build(cx, |_| {})
         .position_type(PositionType::SelfDirected)
         .left(Pixels(rect.0))

@@ -119,7 +119,7 @@ pub struct ViziaState {
     /// Whether the editor's window is currently open.
     #[serde(skip)]
     open: AtomicBool,
-    /// Fit before opening on the UI thread, including restored state and display changes.
+    /// Fit a fresh default once on the UI thread. Explicit sizes bypass this.
     #[serde(skip)]
     fit_to_screen: AtomicBool,
     /// Plugin name used to store the last size for new instances.
@@ -154,6 +154,7 @@ impl Debug for ViziaState {
 
 impl<'a> PersistentField<'a, ViziaState> for Arc<ViziaState> {
     fn set(&self, new_value: ViziaState) {
+        self.fit_to_screen.store(false, Ordering::Relaxed);
         self.scale_factor.store(new_value.scale_factor.load());
     }
 
@@ -185,8 +186,9 @@ impl ViziaState {
     }
 
     /// Start from the last resized size for `plugin_id`, or 100% of artwork
-    /// drawn at 120% when nothing has been saved yet. Leaves at least 25% of
-    /// the available screen width free and room for host chrome.
+    /// drawn at 120% when nothing has been saved yet. The first-open default
+    /// fits within 90% of screen width with room for host chrome. Saved and
+    /// manually resized windows always override that initial fit.
     ///
     /// Restoring a plugin instance overwrites this scale from that instance's
     /// persisted editor state.
@@ -194,8 +196,13 @@ impl ViziaState {
         plugin_id: &'static str,
         size_fn: impl Fn() -> (u32, u32) + Send + Sync + 'static,
     ) -> Arc<Self> {
-        let scale = editor_scale::load_scale(plugin_id).unwrap_or_else(editor_scale::default_scale);
-        Self::create(plugin_id, size_fn, scale, true)
+        let saved = editor_scale::load_scale(plugin_id);
+        Self::create(
+            plugin_id,
+            size_fn,
+            saved.unwrap_or_else(editor_scale::default_scale),
+            saved.is_none(),
+        )
     }
 
     fn create(
@@ -215,6 +222,8 @@ impl ViziaState {
     }
 
     pub(crate) fn remember_scale(&self, scale: f64) {
+        // An accepted host/handle resize owns the size on subsequent opens.
+        self.fit_to_screen.store(false, Ordering::Relaxed);
         if self.plugin_id.is_empty() || editor_scale::clamp_scale(scale).is_none() {
             return;
         }
@@ -236,6 +245,7 @@ impl ViziaState {
                     self.scale_factor.load(),
                     (screen.width, screen.height),
                 ));
+                self.fit_to_screen.store(false, Ordering::Relaxed);
             }
         }
     }
@@ -287,7 +297,7 @@ fn screen_fit_scale(
         return preferred;
     }
     preferred
-        .min(screen_w * 0.75 / width as f64)
+        .min(screen_w * 0.90 / width as f64)
         .min((screen_h - 80.0) / height as f64)
 }
 
@@ -300,8 +310,12 @@ mod sizing_tests {
             screen_fit_scale((1282, 656), 1.0 / 1.2, (1920.0, 1080.0)),
             1.0 / 1.2
         );
+        assert_eq!(
+            screen_fit_scale((1621, 840), 1.0 / 1.2, (1536.0, 864.0)),
+            1.0 / 1.2
+        );
         let scale = screen_fit_scale((1282, 656), 1.0, (1024.0, 600.0));
-        assert!(1282.0 * scale <= 768.0);
+        assert!(1282.0 * scale <= 921.6);
         assert!(656.0 * scale <= 520.0);
         assert_eq!(
             screen_fit_scale((1040, 660), 1.0, (1920.0, 600.0)),
@@ -324,6 +338,7 @@ mod sizing_tests {
 
         let state = ViziaState::new_screen_sized("Test Plugin", || (1282, 656));
         assert_eq!(state.scale_factor.load(), 1.37);
+        assert!(!state.fit_to_screen.load(Ordering::Relaxed));
 
         let restored = ViziaState {
             size_fn: Box::new(|| (0, 0)),
@@ -335,6 +350,7 @@ mod sizing_tests {
         };
         PersistentField::set(&state, restored);
         assert_eq!(state.scale_factor.load(), 0.91);
+        assert!(!state.fit_to_screen.load(Ordering::Relaxed));
         assert_eq!(editor_scale::load_scale("Test Plugin"), Some(1.37));
 
         state.remember_scale(1.55);

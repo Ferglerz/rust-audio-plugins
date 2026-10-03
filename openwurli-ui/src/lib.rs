@@ -101,14 +101,19 @@ impl OpenWurliUi {
 
     fn handle_event(&mut self, event: &NoteEvent<()>) {
         match event {
-            // The upstream engine clamps high notes to its top reed. Discard
-            // both halves here so stray high notes cannot strike or release it.
-            NoteEvent::NoteOn { note, velocity, .. } if *note <= openwurli_dsp::tables::MIDI_HI => {
-                self.engine.note_on(*note, *velocity)
+            NoteEvent::NoteOn { note, velocity, .. } if *velocity == 0.0 => {
+                self.engine.note_off_extended(*note)
             }
-            NoteEvent::NoteOff { note, .. } if *note <= openwurli_dsp::tables::MIDI_HI => {
-                self.engine.note_off(*note)
+            NoteEvent::NoteOn { note, velocity, .. }
+                if self.params.extended_notes.value()
+                    || (openwurli_dsp::tables::MIDI_LO..=openwurli_dsp::tables::MIDI_HI)
+                        .contains(note) =>
+            {
+                self.engine.note_on_extended(*note, *velocity)
             }
+            // Always release the exact pitch, even if Extended Notes was
+            // disabled while it was held. Ignored pitches cannot release an end key.
+            NoteEvent::NoteOff { note, .. } => self.engine.note_off_extended(*note),
             NoteEvent::MidiCC { cc, value, .. } if *cc == control_change::DAMPER_PEDAL => {
                 self.engine.set_sustain(*value >= 0.5)
             }
@@ -172,6 +177,10 @@ impl Plugin for OpenWurliUi {
     fn filter_state(state: &mut PluginState) {
         // Missing parameters retain their current value in NIH-plug. Explicitly
         // restore the old Fast sound even when loading into a Heavy instance.
+        state
+            .params
+            .entry("extended_notes".into())
+            .or_insert(nih_plug::wrapper::state::ParamValue::Bool(false));
         state
             .params
             .entry("cpu_mode".into())
@@ -409,24 +418,26 @@ mod tests {
     }
 
     #[test]
-    fn high_midi_notes_are_discarded_without_releasing_the_top_key() {
+    fn out_of_range_midi_notes_do_not_strike_or_release_either_end_key() {
         with_circuit_stack(|| {
             for mode in [CircuitMode::Fast, CircuitMode::Heavy] {
                 let mut plugin = OpenWurliUi::default();
                 plugin.engine.set_circuit_mode(mode);
+                let low = openwurli_dsp::tables::MIDI_LO;
                 let top = openwurli_dsp::tables::MIDI_HI;
-                for note in top + 1..=127 {
+                for note in (0..low).chain(top + 1..=127) {
                     plugin.handle_event(&note_on(0, note));
                     assert_eq!(
                         plugin.engine.held_voice_count(),
                         0,
-                        "above-range note {note} must not allocate a voice"
+                        "out-of-range note {note} must not allocate a voice"
                     );
                     plugin.handle_event(&note_off(0, note));
                 }
+                plugin.handle_event(&note_on(0, low));
                 plugin.handle_event(&note_on(0, top));
-                assert_eq!(plugin.engine.held_voice_count(), 1);
-                for note in top + 1..=127 {
+                assert_eq!(plugin.engine.held_voice_count(), 2);
+                for note in (0..low).chain(top + 1..=127) {
                     plugin.handle_event(&note_off(0, note));
                     let mut zero_velocity = note_on(0, note);
                     if let NoteEvent::NoteOn { velocity, .. } = &mut zero_velocity {
@@ -435,10 +446,11 @@ mod tests {
                     plugin.handle_event(&zero_velocity);
                     assert_eq!(
                         plugin.engine.held_voice_count(),
-                        1,
-                        "above-range release must leave the top key held"
+                        2,
+                        "out-of-range release must leave both end keys held"
                     );
                 }
+                plugin.handle_event(&note_off(0, low));
                 plugin.handle_event(&pedal(1.0));
                 plugin.handle_event(&note_off(0, top));
                 assert_eq!(plugin.engine.held_voice_count(), 0);
@@ -447,6 +459,113 @@ mod tests {
                 assert_eq!(plugin.engine.sustained_voice_count(), 0);
             }
         });
+    }
+
+    fn set_extended(plugin: &mut OpenWurliUi, enabled: bool) {
+        Arc::get_mut(&mut plugin.params).unwrap().extended_notes =
+            BoolParam::new("Extended Notes", enabled);
+    }
+
+    #[test]
+    fn extended_notes_keep_their_identity_and_release_after_disabling() {
+        with_circuit_stack(|| {
+            for mode in [CircuitMode::Fast, CircuitMode::Heavy] {
+                let mut plugin = OpenWurliUi::default();
+                plugin.engine.set_circuit_mode(mode);
+                for note in 0..=127 {
+                    set_extended(&mut plugin, true);
+                    plugin.handle_event(&note_on(0, note));
+                    assert_eq!(
+                        plugin.engine.count_voices_with_note_in_state(
+                            note,
+                            openwurli_dsp::engine::VoiceState::Held
+                        ),
+                        1,
+                        "{mode:?}: MIDI {note} must retain its actual pitch"
+                    );
+                    set_extended(&mut plugin, false);
+                    plugin.handle_event(&pedal(1.0));
+                    if note % 2 == 0 {
+                        plugin.handle_event(&note_off(0, note));
+                    } else {
+                        let mut event = note_on(0, note);
+                        if let NoteEvent::NoteOn { velocity, .. } = &mut event {
+                            *velocity = 0.0;
+                        }
+                        plugin.handle_event(&event);
+                    }
+                    assert_eq!(plugin.engine.held_voice_count(), 0);
+                    assert_eq!(plugin.engine.sustained_voice_count(), 1);
+                    plugin.handle_event(&pedal(0.0));
+                    assert_eq!(plugin.engine.sustained_voice_count(), 0);
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn extended_notes_render_finite_distinct_audio_in_both_modes() {
+        with_circuit_stack(|| {
+            for mode in [CircuitMode::Fast, CircuitMode::Heavy] {
+                for mlp in [false, true] {
+                    let render = |note| {
+                        let mut plugin = OpenWurliUi::default();
+                        set_extended(&mut plugin, true);
+                        plugin.sync_params();
+                        plugin.engine.set_circuit_mode(mode);
+                        plugin.engine.set_mlp_enabled(mlp);
+                        plugin.engine.warm_up();
+                        plugin.handle_event(&note_on(0, note));
+                        let mut audio = vec![0.0; 16_384];
+                        for block in audio.chunks_mut(256) {
+                            plugin.render_block(block, || None);
+                        }
+                        assert!(audio.iter().all(|s| s.is_finite()), "{mode:?}: MIDI {note}");
+                        assert!(
+                            audio.iter().any(|s| s.abs() > 1e-6),
+                            "{mode:?}: MIDI {note} silent"
+                        );
+                        assert_eq!(plugin.engine.nan_guard_fires(), 0);
+                        audio
+                    };
+                    for (edge, notes) in [(33, [0, 21, 32]), (96, [97, 108, 127])] {
+                        let boundary = render(edge);
+                        for note in notes {
+                            let extended = render(note);
+                            let difference: f32 = boundary
+                                .iter()
+                                .zip(extended)
+                                .map(|(a, b)| (a - b).abs())
+                                .sum();
+                            assert!(difference > 0.01, "{mode:?}: MIDI {note} still clamped");
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn old_states_disable_extended_notes_and_saved_values_survive() {
+        let mut state = PluginState {
+            version: "0.1.1".into(),
+            params: Default::default(),
+            fields: Default::default(),
+        };
+        OpenWurliUi::filter_state(&mut state);
+        assert!(matches!(
+            state.params["extended_notes"],
+            nih_plug::wrapper::state::ParamValue::Bool(false)
+        ));
+        state.params.insert(
+            "extended_notes".into(),
+            nih_plug::wrapper::state::ParamValue::Bool(true),
+        );
+        OpenWurliUi::filter_state(&mut state);
+        assert!(matches!(
+            state.params["extended_notes"],
+            nih_plug::wrapper::state::ParamValue::Bool(true)
+        ));
     }
 
     #[test]
@@ -538,6 +657,7 @@ mod tests {
                 "trem_response",
                 "noise_enable",
                 "noise_gain",
+                "extended_notes",
                 "rail_sag",
             ]
         );
@@ -552,6 +672,7 @@ mod tests {
         assert_eq!(params.tremolo_response.default_plain_value(), 1.0);
         assert!(!params.noise_enabled.default_plain_value());
         assert_eq!(params.noise_gain.default_plain_value(), 1.0);
+        assert!(!params.extended_notes.default_plain_value());
         assert!(!params.rail_sag.default_plain_value());
         assert!(params.serialize_fields().contains_key("editor-state"));
     }

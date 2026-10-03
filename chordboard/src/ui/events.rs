@@ -6,24 +6,6 @@ impl ChordboardView {
             self.toggle_expand();
             return true;
         }
-        if self.mode() == 1 {
-            if hit(strum_sync_rect(self.expand_t()), x, y) {
-                self.set(
-                    cx,
-                    "strum_sync",
-                    if self.params.strum_sync.value() {
-                        0.0
-                    } else {
-                        1.0
-                    },
-                );
-                return true;
-            }
-            if self.params.strum_sync.value() && hit(strum_rate_rect(self.expand_t()), x, y) {
-                self.open_menu(Menu::StrumRate);
-                return true;
-            }
-        }
         if self.mode() == 2 && hit(strum_latch_rect(self.expand_t()), x, y) {
             self.set(
                 cx,
@@ -53,13 +35,16 @@ impl ChordboardView {
         }
         true
     }
-    fn press_control(&mut self, cx: &mut EventContext, x: f32, y: f32) {
+    pub(super) fn press_control(&mut self, cx: &mut EventContext, x: f32, y: f32) {
         for (c, r) in self.placed_controls() {
             if !hit(r, x, y) {
                 continue;
             }
-            if c.id == "quality" {
-                self.open_menu(Menu::Quality);
+            if self.explain_modulation(c.id) {
+                return;
+            }
+            if c.id == "root_on_select" {
+                self.cycle_selection_mode(cx);
             } else if c.id == "voice_leading" {
                 Self::emit(
                     cx,
@@ -72,13 +57,19 @@ impl ChordboardView {
                 Self::emit(
                     cx,
                     c.ptr,
-                    self.params
-                        .spread
-                        .preview_normalized((self.params.spread.value() + 1) % 3),
+                    self.params.spread.preview_normalized(
+                        (self.params.spread.value() + 1) % harmony::VOICING_NAMES.len() as i32,
+                    ),
                 );
             } else if c.toggle {
                 Self::emit(cx, c.ptr, if c.norm >= 0.5 { 0.0 } else { 1.0 });
             } else {
+                if c.id == "length_ms"
+                    && self.playback_mode() == 1
+                    && self.params.strum_hold.value()
+                {
+                    return;
+                }
                 let value = pleasant_ui::slider_value_rect(r);
                 self.drag = Some(Drag::Control(ControlDrag {
                     press: pleasant_ui::pointer::ValuePress::new(c.id, value, (x, y)),
@@ -117,6 +108,7 @@ impl ChordboardView {
             self.focused = false;
             self.memory_held.fill(false);
             self.pointer = None;
+            self.route_hover = None;
             cx.needs_redraw();
             self.end_pad_hover(cx);
             self.end_drag(cx);
@@ -127,6 +119,7 @@ impl ChordboardView {
         }
         if matches!(event, WindowEvent::MouseLeave) {
             self.pointer = None;
+            self.route_hover = None;
             self.end_pad_hover(cx);
             cx.needs_redraw();
         } else if matches!(
@@ -134,18 +127,29 @@ impl ChordboardView {
             WindowEvent::MouseMove(_, _) | WindowEvent::MouseDown(_)
         ) {
             self.pointer = Some((x, y));
+            self.update_route_hover(x, y);
             if matches!(event, WindowEvent::MouseDown(MouseButton::Left)) {
                 self.flash_press(x, y);
             }
             cx.needs_redraw();
         }
-        // Cancel an in-progress route drag; otherwise Escape belongs to the host.
+        // Dismiss the active interaction before leaving Escape to the host.
         if matches!(
             event,
             WindowEvent::KeyDown(Code::Escape, _) | WindowEvent::KeyUp(Code::Escape, _)
         ) {
             if matches!(self.drag, Some(Drag::Route(_) | Drag::RouteNode(..))) {
                 self.end_drag(cx);
+                cx.needs_redraw();
+                return true;
+            }
+            if self.menu.is_some() && matches!(event, WindowEvent::KeyDown(Code::Escape, _)) {
+                self.menu = None;
+                cx.needs_redraw();
+                return true;
+            }
+            if self.panel.is_some() && matches!(event, WindowEvent::KeyDown(Code::Escape, _)) {
+                self.set_panel(None);
                 cx.needs_redraw();
                 return true;
             }
@@ -156,7 +160,7 @@ impl ChordboardView {
                 WindowEvent::MouseMove(_, _) => {
                     drag.update(x, y);
                     if drag.active && self.panel == Some(Panel::Routes) {
-                        self.panel = None;
+                        self.set_panel(None);
                     }
                     self.drag = Some(Drag::Route(drag));
                     return true;
@@ -164,11 +168,13 @@ impl ChordboardView {
                 WindowEvent::MouseUp(MouseButton::Left) => {
                     drag.update(x, y);
                     if drag.active && self.panel == Some(Panel::Routes) {
-                        self.panel = None;
+                        self.set_panel(None);
                     }
                     self.end_drag(cx);
                     if drag.active {
                         self.finish_route_drag(cx, drag.source, x, y);
+                    } else {
+                        self.toggle_modulator(drag.source);
                     }
                     cx.needs_redraw();
                     return true;
@@ -237,10 +243,6 @@ impl ChordboardView {
                 }
                 WindowEvent::KeyUp(_, _) => return true,
                 WindowEvent::MouseDown(MouseButton::Left) => {
-                    if hit(self.menu_close_rect(menu), x, y) {
-                        self.menu = None;
-                        return true;
-                    }
                     for index in 0..menu.items().len() {
                         if hit(self.menu_option_rect(menu, index), x, y) {
                             self.select_menu(cx, menu, index);
@@ -267,15 +269,18 @@ impl ChordboardView {
         {
             return true;
         }
-        if self.panel.is_none()
-            && self.page_elapsed < pleasant_ui::page_slide::DURATION
+        if self.route_elapsed < pleasant_ui::page_slide::DURATION
+            && hit(CHORDS_SURFACE, x, y)
+            && matches!(
+                event,
+                WindowEvent::MouseDown(_) | WindowEvent::MouseScroll(_, _)
+            )
+        {
+            return true;
+        }
+        if self.page_elapsed < pleasant_ui::page_slide::DURATION
             && hit(
-                (
-                    self.pad().0,
-                    self.pad().1,
-                    self.pad().2,
-                    self.pad().3.max(360.0),
-                ),
+                (self.pad().0, self.pad().1, self.pad().2, self.pad().3),
                 x,
                 y,
             )
@@ -287,9 +292,7 @@ impl ChordboardView {
             return true;
         }
         match event {
-            WindowEvent::KeyDown(code, _)
-                if self.params.keyboard.value() && self.focused && !cx.modifiers().command() =>
-            {
+            WindowEvent::KeyDown(code, _) if self.focused && !cx.modifiers().command() => {
                 if let Some(slot) = MEMORY_CODES.iter().position(|c| c == code) {
                     if !self.memory_held[slot] {
                         self.memory_held[slot] = true;
@@ -354,8 +357,24 @@ impl ChordboardView {
                 {
                     self.end_pad_hover(cx);
                 }
-                if hit(PIANO_SURFACE, x, y) {
-                    if self.panel.is_some() {
+                if self.press_route_overlay(cx, x, y) {
+                    return true;
+                }
+                if let Some(slot) = self.route_chip_at(x, y) {
+                    self.route_slot = slot;
+                    self.set_panel(Some(Panel::Routes));
+                    self.selected_modulator = self.params.routes[slot]
+                        .route()
+                        .source
+                        .checked_sub(1)
+                        .map(|s| s as usize);
+                    self.route_hover = None;
+                    return true;
+                }
+                if hit(PIANO_SURFACE, x, y)
+                    && self.panel.is_none_or(|p| !hit(self.panel_rect(p), x, y))
+                {
+                    if self.panel == Some(Panel::Mapping) {
                         self.set_panel(None);
                     }
                     return self.press_piano(cx, x, y);
@@ -376,16 +395,6 @@ impl ChordboardView {
                     cx.capture();
                     return true;
                 }
-                if hit(ROUTES_BUTTON, x, y)
-                    && self.panel.is_none_or(|p| !hit(self.panel_rect(p), x, y))
-                {
-                    self.set_panel(if self.panel == Some(Panel::Routes) {
-                        None
-                    } else {
-                        Some(Panel::Routes)
-                    });
-                    return true;
-                }
                 if self.panel == Some(Panel::Routes) && hit(self.panel_rect(Panel::Routes), x, y) {
                     if hit(self.panel_close_rect(Panel::Routes), x, y) {
                         self.set_panel(None);
@@ -397,35 +406,15 @@ impl ChordboardView {
                     self.press_control(cx, x, y);
                     return true;
                 }
-                if hit(MPE, x, y) {
-                    self.open_menu(Menu::Protocol);
-                    return true;
-                }
-                for (r, panel) in [(OUTPUT, Panel::Output)] {
-                    if hit(r, x, y) {
-                        self.set_panel(if self.panel == Some(panel) {
-                            None
-                        } else {
-                            Some(panel)
-                        });
-                        return true;
-                    }
-                }
-                for axis in 0..2 {
-                    if hit(mapping_summary_rect(axis), x, y) {
-                        let close = self.panel == Some(Panel::Mapping) && self.mapping_axis == axis;
-                        self.set_panel(if close { None } else { Some(Panel::Mapping) });
-                        self.mapping_axis = axis;
-                        return true;
-                    }
-                }
                 if let Some(panel) = self.panel {
                     if hit(self.panel_close_rect(panel), x, y) {
                         self.set_panel(None);
                         return true;
                     }
                     if !hit(self.panel_rect(panel), x, y) {
-                        self.set_panel(None);
+                        if panel == Panel::Mapping {
+                            self.set_panel(None);
+                        }
                     } else {
                         if panel == Panel::Mapping {
                             if self.mapping_axis == 1
@@ -434,20 +423,10 @@ impl ChordboardView {
                                 self.open_menu(Menu::YTarget);
                                 return true;
                             }
-                            if hit(mapping_learn_rect(self.mapping_axis), x, y) {
-                                self.request_learn(
-                                    if self.learning() == self.mapping_axis as u8 + 1 {
-                                        0
-                                    } else {
-                                        self.mapping_axis as u8 + 1
-                                    },
-                                );
-                                return true;
-                            }
                             for menu in [
                                 Menu::MappingKind,
                                 Menu::MappingChannel(self.mapping().kind == 3),
-                                Menu::MappingCc(self.mapping().kind == 2),
+                                Menu::MappingCc(false),
                             ] {
                                 if matches!(menu, Menu::MappingChannel(_))
                                     && self.mapping_axis < 2
@@ -469,6 +448,21 @@ impl ChordboardView {
                         return true;
                     }
                 }
+                if let Some(id) = self
+                    .route_targets()
+                    .into_iter()
+                    .find(|(_, r)| hit(*r, x, y))
+                    .map(|(target, _)| crate::engine::routing::TARGETS[target].id)
+                {
+                    if id != "x" && self.explain_modulation(id) {
+                        return true;
+                    }
+                }
+                if (0..TRANSPOSE_STEPS.len())
+                    .any(|i| hit(transpose_control_rect(self.params.mpe_enabled(), i), x, y))
+                {
+                    return self.press_piano(cx, x, y);
+                }
                 if hit(TEMPO_SYNC, x, y) {
                     self.set(
                         cx,
@@ -481,8 +475,8 @@ impl ChordboardView {
                     );
                     return true;
                 }
-                if self.mode() == 1 {
-                    if hit(strum_sync_rect(self.expand_t()), x, y) {
+                if self.arp_main() && hit(RATE_SYNC, x, y) {
+                    if !self.explain_modulation("strum_sync") {
                         self.set(
                             cx,
                             "strum_sync",
@@ -492,27 +486,22 @@ impl ChordboardView {
                                 1.0
                             },
                         );
-                        return true;
                     }
-                    if self.params.strum_sync.value() && hit(strum_rate_rect(self.expand_t()), x, y)
-                    {
-                        self.open_menu(Menu::StrumRate);
-                        return true;
-                    }
-                }
-                if hit(SAVE_MEMORY, x, y) {
-                    self.toggle_memory_save();
                     return true;
                 }
-                for i in 0..3 {
-                    if self.mode() == 1 && hit(direction_rect(i), x, y) {
-                        Self::emit(
+                if self.mode() == 1 && hit(STRUM_HOLD, x, y) {
+                    if !self.explain_modulation("strum_hold") {
+                        self.set(
                             cx,
-                            self.params.direction.as_ptr(),
-                            self.params.direction.preview_normalized(i as i32),
+                            "strum_hold",
+                            if self.params.strum_hold.value() {
+                                0.0
+                            } else {
+                                1.0
+                            },
                         );
-                        return true;
                     }
+                    return true;
                 }
                 if self.mode() == 2 && hit(strum_latch_rect(self.expand_t()), x, y) {
                     self.set(
@@ -526,40 +515,8 @@ impl ChordboardView {
                     );
                     return true;
                 }
-                if hit(LEARN_OCTAVE, x, y) {
-                    self.request_learn(if self.learning() == 4 { 0 } else { 4 });
-                    return true;
-                }
-                for i in 0..QUALITY_SYMBOLS.len() {
-                    if hit(quality_rect(i), x, y) {
-                        if i < 12 {
-                            Self::emit(
-                                cx,
-                                self.params.quality.as_ptr(),
-                                self.params.quality.preview_normalized(i as i32),
-                            );
-                        } else {
-                            self.bridge
-                                .send(Command::SetControlChord([2, 5, 1][i - 12]));
-                        }
-                        return true;
-                    }
-                }
-                for spread in [false, true] {
-                    for i in 0..3 {
-                        if hit(voicing_choice_rect(spread, i), x, y) {
-                            let param = if spread {
-                                &self.params.spread
-                            } else {
-                                &self.params.voice_leading
-                            };
-                            Self::emit(cx, param.as_ptr(), param.preview_normalized(i as i32));
-                            return true;
-                        }
-                    }
-                }
                 for (i, step) in TRANSPOSE_STEPS.iter().enumerate() {
-                    if hit(transpose_rect(i), x, y) {
+                    if hit(transpose_control_rect(self.params.mpe_enabled(), i), x, y) {
                         let value = if *step == 0 {
                             0
                         } else {
@@ -577,27 +534,20 @@ impl ChordboardView {
                     prefs().toggle();
                     return true;
                 }
-                if hit(QWERTY, x, y) {
-                    self.set(
-                        cx,
-                        "keyboard",
-                        if self.params.keyboard.value() {
-                            0.0
-                        } else {
-                            1.0
-                        },
-                    );
-                    if self.params.keyboard.value() {
-                        self.release_keys();
-                    }
-                    return true;
-                }
-                for i in 0..3 {
-                    if hit(mode_rect(i as usize), x, y) {
+                for i in 0..MODE_LABELS.len() {
+                    if hit(mode_rect(i), x, y) {
                         Self::emit(
                             cx,
                             self.params.mode.as_ptr(),
-                            self.params.mode.preview_normalized(i + 1),
+                            self.params.mode.preview_normalized(if i == 0 {
+                                if self.params.mode.value() == 3 {
+                                    3
+                                } else {
+                                    1
+                                }
+                            } else {
+                                2
+                            }),
                         );
                         self.end_drag(cx);
                         self.set_panel(None);
@@ -613,20 +563,16 @@ impl ChordboardView {
                     return true;
                 }
                 if hit(ORDER, x, y) {
-                    self.set(
-                        cx,
-                        "fifths",
-                        if self.params.fifths.value() { 0.0 } else { 1.0 },
-                    );
+                    self.set_keyboard_layout(cx, (self.keyboard_layout() + 1) % 4);
                     return true;
                 }
                 for i in 0..KEY_COUNT {
-                    if hit(key_rect(i), x, y) {
-                        if let Some(root) = self.keyboard_root(i % KEY_COLUMNS) {
+                    if self.keyboard_chord(i).is_some() && hit(self.keyboard_key_rect(i), x, y) {
+                        if let Some(chord) = self.keyboard_chord(i) {
                             self.bridge.send(Command::KeyDown(
                                 i as u8 + POINTER_KEY_OFFSET,
-                                (self.params.keyboard_octave.value() + root as i32).min(127) as u8,
-                                harmony::row_quality(i / KEY_COLUMNS),
+                                (self.params.keyboard_octave.value() + chord.root as i32) as u8,
+                                chord.quality,
                             ));
                         }
                         self.drag = Some(Drag::Key(i as u8 + POINTER_KEY_OFFSET));
@@ -660,16 +606,31 @@ impl ChordboardView {
                     self.begin_pad(cx, x, y, true);
                     return true;
                 }
-                if hit(inversion_rect(0), x, y) {
+                if hit(inversion_control_rect(self.params.mpe_enabled(), 0), x, y) {
                     self.inversion(cx, -1);
                     return true;
                 }
-                if hit(inversion_rect(1), x, y) {
+                if hit(inversion_control_rect(self.params.mpe_enabled(), 1), x, y) {
                     self.inversion(cx, 1);
                     return true;
                 }
                 if self.arp_main() {
-                    if hit(RATE_HEADER, x, y) {
+                    for looping in [false, true] {
+                        if hit(repeat_rect(looping), x, y) {
+                            Self::emit(
+                                cx,
+                                self.params.mode.as_ptr(),
+                                self.params
+                                    .mode
+                                    .preview_normalized(if looping { 3 } else { 1 }),
+                            );
+                            return true;
+                        }
+                    }
+                    if self.sweep_synced() && hit(RATE_HEADER, x, y) {
+                        if self.explain_modulation("rate") {
+                            return true;
+                        }
                         if let Some(c) = self.control("rate") {
                             let r = (
                                 RATE_HEADER.0 + RATE_HEADER.2 - 176.0,
@@ -688,7 +649,7 @@ impl ChordboardView {
                         }
                         return true;
                     }
-                    for i in 0..5 {
+                    for i in 0..7 {
                         if hit(pattern_rect(i), x, y) {
                             Self::emit(
                                 cx,
@@ -699,7 +660,7 @@ impl ChordboardView {
                         }
                     }
                     for (i, (_, beats)) in ARP_RATES.iter().enumerate() {
-                        if hit(rate_rect(i), x, y) {
+                        if self.sweep_synced() && hit(rate_rect(i), x, y) {
                             Self::emit(
                                 cx,
                                 self.params.rate.as_ptr(),
@@ -723,6 +684,38 @@ impl ChordboardView {
                 return true;
             }
             WindowEvent::MouseMove(_, _) => match self.drag {
+                Some(Drag::RouteContour {
+                    origin,
+                    min,
+                    max,
+                    slot,
+                    mut axis,
+                }) => {
+                    let (min, max) = Self::route_contour_range(
+                        origin,
+                        (x, y),
+                        min,
+                        max,
+                        cx.modifiers().shift(),
+                        &mut axis,
+                    );
+                    cx.emit(RawParamEvent::SetParameterNormalized(
+                        self.params.routes[slot].min.as_ptr(),
+                        min,
+                    ));
+                    cx.emit(RawParamEvent::SetParameterNormalized(
+                        self.params.routes[slot].max.as_ptr(),
+                        max,
+                    ));
+                    if let Some(Drag::RouteContour { axis: saved, .. }) = self.drag.as_mut() {
+                        *saved = axis;
+                    }
+                    return true;
+                }
+                Some(Drag::BassSplit) => {
+                    self.move_bass_split(cx, x, y);
+                    return true;
+                }
                 Some(Drag::Split) => {
                     self.move_split(cx, x, y);
                     return true;
@@ -822,10 +815,17 @@ impl ChordboardView {
             WindowEvent::MouseScroll(_, dy) => {
                 for (c, r) in self.placed_controls() {
                     if hit(r, x, y) {
+                        if self.explain_modulation(c.id) {
+                            return true;
+                        }
                         if c.id == "quality" {
                             return true;
                         }
-                        Self::emit(cx, c.ptr, if *dy > 0.0 { c.next } else { c.prev });
+                        if c.id == "root_on_select" {
+                            self.step_selection_mode(cx, if *dy > 0.0 { 1 } else { -1 });
+                        } else {
+                            Self::emit(cx, c.ptr, if *dy > 0.0 { c.next } else { c.prev });
+                        }
                         return true;
                     }
                 }

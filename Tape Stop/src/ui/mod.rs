@@ -16,7 +16,6 @@ use nih_plug_vizia::{
 };
 use pleasant_ui::{
     draw::{ButtonAnim, Draw},
-    math::linear_to_db,
     preferences::AppearanceStore,
     theme::{rgb, BG, COLORS, GOLD, LINE, MUTED, PANEL, TEAL, TEXT},
     value_edit::{parse_number_with_units, typed_char, ValueEdit},
@@ -39,10 +38,10 @@ fn prefs() -> &'static AppearanceStore {
 }
 
 // Outer margin matches y-axis % label left edge (GRAPH_X - 40 = 20).
-// MODULE_RIGHT (~881.6) + OUTER_MARGIN, rounded to integer window width.
-const UI_W: f32 = 902.0;
-// Chrome bottom (DROP/TRIGGER readout) is 405; + OUTER_MARGIN (20) → 425.
-const UI_H: f32 = 425.0;
+// Align the outer edge with the remaining drop-time module.
+const UI_W: f32 = 812.0;
+// Leave room beneath the graph for the cog section’s horizontal slider row.
+const UI_H: f32 = 473.0;
 const HEADER_HEIGHT: f32 = 70.0;
 
 pub fn format_ms(seconds: f32) -> String {
@@ -103,7 +102,6 @@ pub struct TapeStopView {
     value_press: Option<pleasant_ui::pointer::ValuePress<KnobId>>,
     hover_stop: Cell<bool>,
     stop_click: Cell<f32>,
-    hover_thresh: Cell<bool>,
     hover: Option<(f32, f32)>,
     curve_hover_anim: Cell<f32>,
     auto_restart_anim: ButtonAnim,
@@ -148,7 +146,6 @@ pub fn create(
                 value_press: None,
                 hover_stop: Cell::new(false),
                 stop_click: Cell::new(0.0),
-                hover_thresh: Cell::new(false),
                 hover: None,
                 curve_hover_anim: Cell::new(0.0),
                 auto_restart_anim: ButtonAnim::new(),
@@ -199,9 +196,7 @@ mod tests {
         assert!(STOP_BUTTON.1 + STOP_BUTTON.3 <= GRAPH_Y + GRAPH_H);
         let midi = midi_slot();
         let ret = axis_slot(0);
-        assert!((midi.1 - ret.1).abs() < f32::EPSILON);
-        assert!((midi.3 - ret.3).abs() < f32::EPSILON);
-        assert!(midi.0 + midi.2 <= ret.0);
+        assert!(midi.1 + midi.3 < ret.1);
         assert!(midi.1 >= GRAPH_Y + GRAPH_H);
         assert_eq!(midi.2, 96.0);
         assert!(midi_value_rect().2 >= 50.0);
@@ -219,60 +214,29 @@ mod tests {
         assert!((bar.1 + bar.3 - (GRAPH_Y + GRAPH_H)).abs() < f32::EPSILON);
         assert!(DROP_TIME_READOUT.1 >= GRAPH_Y + GRAPH_H);
         assert!((DROP_TIME_READOUT.1 + DROP_READOUT_TEXT_Y - AXIS_LABEL_Y).abs() < f32::EPSILON);
-        let trigger = trigger_column();
-        assert!(trigger.0 >= DROP_TIME_SLIDER.0 + DROP_TIME_SLIDER.2);
-        assert!((trigger.1 - DROP_TIME_SLIDER.1).abs() < f32::EPSILON);
-        assert!((trigger.2 - DROP_TIME_SLIDER.2).abs() < f32::EPSILON);
-        assert!((trigger.3 - DROP_TIME_SLIDER.3).abs() < f32::EPSILON);
-        assert!(trigger.0 + trigger.2 <= UI_W);
-        let drop_bar = TapeStopView::drop_bar_rect();
-        let trig_bar = trigger_bar_rect();
-        assert!((trig_bar.1 - drop_bar.1).abs() < f32::EPSILON);
-        assert!((trig_bar.2 - drop_bar.2).abs() < f32::EPSILON);
-        assert!((trig_bar.3 - drop_bar.3).abs() < f32::EPSILON);
-        let title = trigger_title_rect();
-        assert!(title.1 + title.3 <= trigger.1);
-        let chrome = trigger_chrome_rect();
-        assert!((chrome.0 - trigger.0).abs() < f32::EPSILON);
-        assert!((chrome.1 - trigger.1).abs() < f32::EPSILON);
-        assert!((chrome.2 - TRIGGER_W).abs() < f32::EPSILON);
-        assert!(chrome.0 + chrome.2 <= UI_W);
-        // Y-axis labels draw at GRAPH_X - 40; that left edge is the outer-margin reference.
         let outer_margin = GRAPH_X - 40.0;
-        assert!((outer_margin - 20.0).abs() < f32::EPSILON);
-        let right_pad = UI_W - (chrome.0 + chrome.2);
-        assert!((right_pad - outer_margin).abs() < 1.0);
-        assert!((THEME_BUTTON.0 + THEME_BUTTON.2 - (chrome.0 + chrome.2)).abs() < 0.5);
-        let chrome_bottom = chrome.1 + chrome.3;
-        let bottom_gap = UI_H - chrome_bottom;
-        assert!((chrome_bottom - 405.0).abs() < f32::EPSILON);
-        assert!((bottom_gap - outer_margin).abs() < f32::EPSILON);
-        let bypass = trigger_bypass_rect();
-        assert!((bypass.1 - (trigger.1 + 6.0)).abs() < f32::EPSILON);
-        assert!((bypass.0 - (trigger.0 + DROP_SLIDER_W + 4.0)).abs() < f32::EPSILON);
-        assert!(bypass.0 + bypass.2 <= chrome.0 + chrome.2);
-        assert!(bypass.1 + bypass.3 <= chrome.1 + chrome.3);
-        let value = trigger_value_rect();
-        assert!((value.1 - DROP_TIME_READOUT.1).abs() < f32::EPSILON);
-        assert!((value.3 - DROP_TIME_READOUT.3).abs() < f32::EPSILON);
-        assert!((value.0 - trigger.0).abs() < f32::EPSILON);
-        assert!((chrome.1 + chrome.3 - (value.1 + value.3)).abs() < f32::EPSILON);
-        assert!(value.0 + value.2 <= chrome.0 + chrome.2 + f32::EPSILON);
+        assert!((UI_W - MODULE_RIGHT - outer_margin).abs() < 1.0);
+        assert!((THEME_BUTTON.0 + THEME_BUTTON.2 - MODULE_RIGHT).abs() < 0.5);
         let cog = cog_rect();
         assert!(cog.0 + cog.2 <= DROP_TIME_READOUT.0);
-        assert!(
-            (cog.1 + cog.3 * 0.5 - (DROP_TIME_READOUT.1 + DROP_TIME_READOUT.3 * 0.5)).abs() < 1.0
-        );
-        let ret = axis_slot(0);
-        let xfade = axis_slot(1);
-        let stereo = axis_slot(2);
-        assert!(midi_slot().0 + midi_slot().2 <= ret.0);
-        assert!((ret.3 - DROP_READOUT_H).abs() < f32::EPSILON);
-        assert!((ret.1 - DROP_TIME_READOUT.1).abs() < f32::EPSILON);
-        assert!(ret.0 + ret.2 <= xfade.0);
-        assert!(xfade.0 + xfade.2 <= stereo.0);
-        assert!(stereo.0 + stereo.2 <= cog.0);
-        assert!(axis_bar_rect(ret).2 > 8.0);
+        let slots = [axis_slot(0), axis_slot(1), axis_slot(2), trigger_column()];
+        for (i, slot) in slots.iter().enumerate() {
+            assert!(slot.1 > DROP_TIME_READOUT.1 + DROP_TIME_READOUT.3);
+            assert!(slot.1 + slot.3 < UI_H);
+            assert!(slot.0 + slot.2 <= MODULE_RIGHT);
+            let bar = axis_bar_rect(*slot);
+            let value = axis_value_rect(*slot);
+            assert!(bar.2 > 100.0);
+            assert!(bar.1 > value.1 + value.3);
+            assert!(bar.1 + bar.3 <= slot.1 + slot.3);
+            if i > 0 {
+                assert!(slots[i - 1].0 + slots[i - 1].2 < slot.0);
+            }
+        }
+        let bypass = trigger_bypass_rect();
+        let value = trigger_value_rect();
+        assert!(bypass.0 + bypass.2 < value.0);
+        assert!(bypass.1 + bypass.3 < trigger_bar_rect().1);
         let pts = TapeStopView::drop_l_points();
         let s = DROP_TIME_SLIDER;
         let r = DROP_TIME_READOUT;

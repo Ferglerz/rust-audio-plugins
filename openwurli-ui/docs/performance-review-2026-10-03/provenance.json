@@ -1,0 +1,81 @@
+{
+  "date": "2026-10-03",
+  "machine": "MacBookAir10,1, Apple M1, 8 GB RAM",
+  "os": "macOS 26.6.2 (25G83)",
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "source_path": "/Users/ferg/GitHub/audio-plugins/openwurli-ui/vendor/openwurli-dsp",
+  "fork_base": "b51f8dad3c5fb62070a20a11e20bf2886b8ff860",
+  "source_tree_sha256": {
+    "Cargo.toml": "133baa3c6ccd1137fd6242ede034e462f561b74a10572ca4242c9ba0c78b96f3",
+    "LICENSE": "9b021e545c1898a9d867c7c0c4219ae63511c1a58eeb5ba40658130e00d7e6f1",
+    "LOCAL_CHANGES.md": "1b3a92ef0a44dbadb188524c977c28351f4da8b21f2a92b0f072c2af56313ae9",
+    "src/alias_audit.rs": "2e40071af6189c9a19cab5ecdeee60978a9ede247d8807fbca7d47f4fb702ae9",
+    "src/bjt_lockstep.rs": "16e4c5b3cd60fcb743326054bb8304107a0981848c424ecd6a72728e07427b29",
+    "src/circuit_lut.rs": "6e40611426c21e944c8e991783a525294a2a0cc63d153ca20a26c996f62f4f23",
+    "src/circuit_math.rs": "6deba69cf363786989f0839b217af0ed0061430b439cff253e10303b1cd2e91e",
+    "src/dk_preamp/melange_adapter.rs": "4b4e0f78469410ee59f4c6158c97b4be442fd7840051c45d814390b1b4f5269c",
+    "src/dk_preamp/mod.rs": "c4447b1af98e24cc868b49a4e77010e3b4bec1d82f20633c576bee4af00c11f9",
+    "src/dk_preamp_legacy.rs": "a2b344658b046ecd54e85ec9bf3f1f0e6e6055fd0bf109f46820febcbd459878",
+    "src/engine.rs": "a614fba194290b105cc9598300dbc07085e2fa0041ab2d925ddd37a42e56bcc7",
+    "src/filters.rs": "be51c41c2626b6770ebde5140a2c443449f34ef52e0456c7e6f262519d1d96c3",
+    "src/gen_power_amp.rs": "c21facfac091c20fc82fd6993510c981bece7723b882edb786bb76f6a65c610d",
+    "src/gen_preamp.rs": "0f568e013ac036132870a36426fe8f07d7732b6e9a9afc4f1b0ab7c678468ff6",
+    "src/gen_tremolo.rs": "7e3588fd27c1d19c73e0fdffd6f96e7e25755efc52af095a23f80a7b0b9e0654",
+    "src/hammer.rs": "d8dae815ab1a3dc5f722f57a2b5db41dec60a5fecff45a5aca0366afa6909311",
+    "src/lib.rs": "0f51b2c8682082e189fa0e9aadb2e21f62e821921473a7f63d75faf569265478",
+    "src/mlp_correction.rs": "ec900633549222c2bfc9c74b13c36cb9489c58be62f8ba11bb519daf28b6cd7a",
+    "src/mlp_weights.rs": "b8e1ff729f1f1eb3e1689f92c5ebe67e39b520a10aa90bfa2fc16b41ff1d963e",
+    "src/oversampler.rs": "69f39189c6642fa06f2c245b6703b6eaf5a4971e95e2cbfbe2fa063664486100",
+    "src/pickup.rs": "d19ab68d098d3f77e11a091b0b017c30436b1b5552fdbc156d942145f6d98c66",
+    "src/power_amp.rs": "dab770c92489eea5833bd7bdd83c9f81129dc69cf11305dbf5a13889fe34e8d3",
+    "src/preamp.rs": "c23a4a45ebb6f18dae17ba57fbd5ae1f210bb80dc86d611f09ae05a618fe2417",
+    "src/reed.rs": "54c5b7da3c69ce6edc1261254b2f2dfd5357eb42224b9fb339755aedfc83afdd",
+    "src/speaker.rs": "66668c75290037bc10baeac8a47f348bc6d2dd74f16a99fca4b215b000275147",
+    "src/tables.rs": "c4da8cad590b765602c89c3d876a2438443097c07982c100115cbe1a96ff267a",
+    "src/tremolo.rs": "d433c57b6a9f0423c5edb9111ff941e6c4acce671a1fe478770759b5489274f5",
+    "src/variation.rs": "32ccf0375672538570e6e8e5f141376c41b82a002c631c3aeb370bd067434565",
+    "src/voice.rs": "619d2bf5c6a739318a07094b38b98dee47818b2ffa9439341b2a0439e74eece7"
+  },
+  "settings": {
+    "rate": 48000,
+    "block_size": 256,
+    "blocks_per_trial": 94,
+    "audio_seconds_per_trial": 0.5013333333333333,
+    "engine_repetitions": 7,
+    "velocity_f32": 0.95,
+    "mlp": false,
+    "noise": false,
+    "speaker_character": 0.0,
+    "volume": 0.5,
+    "heavy_native_rail_sag": true,
+    "warm_up_seconds": 0.6,
+    "profile": "release, opt-level=3, default codegen-units/LTO, debug=1",
+    "notes_1": [
+      48
+    ],
+    "notes_6": [
+      48,
+      55,
+      60,
+      63,
+      67,
+      70
+    ],
+    "notes_32": "33..64 inclusive",
+    "notes_64": "33..96 inclusive"
+  },
+  "diagnostic_hash_comparisons": {
+    "cases": 10,
+    "matches": 10,
+    "method": "rolling 64-bit hash of f32 bits, seven repeated streams; checksum agreement is not a formal exhaustive bitwise comparison"
+  },
+  "limits": [
+    "CLI wall times, not DAW meter; no scheduling or thermal isolation",
+    "timing cases are sequential rather than randomized",
+    "one short harness rebuild may overlap late original matrix; use medians, not absolute speed guarantees",
+    "component replay is a separate workload and does not produce an additive profile",
+    "recovery timing is a single instrumented run, includes output capture/checksum in denominator; not a speedup A/B",
+    "damper probe measures a formula/envelope kernel, not full-engine audio",
+    "existing product files were not edited; no plugin install, test suite or PR"
+  ]
+}

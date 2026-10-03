@@ -30,6 +30,7 @@ const CPU_BUTTON: (f32, f32, f32, f32) = (307.0, 284.0, 172.0, 36.0);
 const THEME_BUTTON: (f32, f32, f32, f32) = (601.0, 21.0, 80.0, 30.0);
 const COG_BUTTON: (f32, f32, f32, f32) = (541.0, 21.0, 32.0, 30.0);
 const ENGINE_BUTTON: (f32, f32, f32, f32) = (426.0, 21.0, 94.0, 30.0);
+const EXTENDED_BUTTON: (f32, f32, f32, f32) = (45.0, 241.0, 238.0, 50.0);
 const SAG_BUTTON: (f32, f32, f32, f32) = (531.0, 241.0, 144.0, 50.0);
 
 static PREFS: OnceLock<AppearanceStore> = OnceLock::new();
@@ -105,6 +106,7 @@ struct OpenWurliView {
     params: Arc<OpenWurliUiParams>,
     font: Cell<Option<FontId>>,
     drag: Option<Drag>,
+    hover: Option<(f32, f32)>,
     show_advanced: bool,
     show_engine: bool,
 }
@@ -231,6 +233,16 @@ impl View for OpenWurliView {
                             1.0
                         };
                         Self::emit_once(cx, self.params.mlp_enabled.as_ptr(), next);
+                    } else if self.show_advanced && Self::hit(x, y, EXTENDED_BUTTON) {
+                        Self::emit_once(
+                            cx,
+                            self.params.extended_notes.as_ptr(),
+                            if self.params.extended_notes.value() {
+                                0.0
+                            } else {
+                                1.0
+                            },
+                        );
                     } else if self.show_advanced && Self::hit(x, y, SAG_BUTTON) {
                         let next = if self.params.rail_sag.value() {
                             0.0
@@ -267,6 +279,7 @@ impl View for OpenWurliView {
                     }
                 }
                 WindowEvent::MouseMove(_, _) => {
+                    self.hover = Some((x, y));
                     if let Some(drag) = &self.drag {
                         let next = if drag.knob.is_advanced() {
                             Self::slider_norm(drag.knob, x)
@@ -277,8 +290,12 @@ impl View for OpenWurliView {
                             self.param(drag.knob).as_ptr(),
                             next,
                         ));
-                        cx.needs_redraw();
                     }
+                    cx.needs_redraw();
+                }
+                WindowEvent::MouseLeave => {
+                    self.hover = None;
+                    cx.needs_redraw();
                 }
                 WindowEvent::MouseUp(MouseButton::Left) | WindowEvent::FocusOut => {
                     self.end_drag(cx);
@@ -304,7 +321,8 @@ impl View for OpenWurliView {
             bounds.x,
             bounds.y,
             self.font.get(),
-        );
+        )
+        .with_hover(self.hover);
         d.rect(0.0, 0.0, WIDTH, HEIGHT, BG);
         d.rect(0.0, 0.0, WIDTH, 74.0, PANEL);
         d.rect(0.0, 73.0, WIDTH, 1.0, LINE);
@@ -341,6 +359,12 @@ impl View for OpenWurliView {
             for knob in Knob::ADVANCED {
                 self.draw_advanced_slider(&mut d, knob);
             }
+            d.button(
+                EXTENDED_BUTTON,
+                "EXTENDED NOTES",
+                self.params.extended_notes.value(),
+                TEAL,
+            );
             d.button(SAG_BUTTON, "EXTRA SAG", self.params.rail_sag.value(), GOLD);
             d.text(
                 45.0,
@@ -384,7 +408,7 @@ impl View for OpenWurliView {
                 TEAL,
             );
             let heavy = self.params.cpu_mode.value() == crate::params::CpuMode::Heavy;
-            d.button(
+            d.button_tinted(
                 CPU_BUTTON,
                 if heavy { "CPU: HEAVY" } else { "CPU: FAST" },
                 heavy,
@@ -412,6 +436,7 @@ pub fn create(params: Arc<OpenWurliUiParams>) -> Option<Box<dyn Editor>> {
                 params: params.clone(),
                 font: Cell::new(None),
                 drag: None,
+                hover: None,
                 show_advanced: false,
                 show_engine: false,
             }

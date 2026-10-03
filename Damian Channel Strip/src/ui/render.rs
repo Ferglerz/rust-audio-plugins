@@ -23,7 +23,8 @@ impl StripView {
             bounds.x,
             bounds.y,
             self.font.get(),
-        );
+        )
+        .with_hover(self.idle_hover());
         d.rect(0.0, 0.0, UI_W, UI_H, BG);
         d.rect(0.0, 0.0, UI_W, HEADER_H, PANEL);
         d.text(32.0, 46.0, "dB", 28.0, GOLD);
@@ -134,19 +135,19 @@ impl StripView {
             12.0,
             if comp_bypassed { MUTED } else { TEXT },
         );
-        d.button(
+        d.button_tinted(
             self.footer_comp_routing_rect(),
             if is_pre { "PRE" } else { "POST" },
             true,
             if is_pre { TEAL } else { GOLD },
         );
-        d.button(
+        d.button_tinted(
             self.footer_auto_rect(),
             "AUTO",
             self.params.auto_makeup.value(),
             if comp_bypassed { MUTED } else { GOLD },
         );
-        d.button(
+        d.button_tinted(
             self.footer_link_rect(),
             "LINK",
             self.params.stereo_link.value(),

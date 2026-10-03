@@ -180,7 +180,11 @@ impl ScdEditorView {
                                         self.apply_preset(cx, *preset);
                                         self.close_preset_menus();
                                         cx.needs_redraw();
-                                        nih_plug_vizia::consume_window_event(cx, window_event, meta);
+                                        nih_plug_vizia::consume_window_event(
+                                            cx,
+                                            window_event,
+                                            meta,
+                                        );
                                         return;
                                     }
                                 }
@@ -458,9 +462,27 @@ impl ScdEditorView {
                         }
                     }
 
-                    let mixer_x = Self::mixer_x();
-                    for (idx, &kit_piece) in KitPieceId::ALL.iter().enumerate() {
-                        let sx = mixer_x + idx as f32 * STRIP_W;
+                    for mixed in [false, true] {
+                        let (bx, by, bw, bh) = Self::snare_toggle_rect(mixed);
+                        if Self::hit(x, y, bx, by, bw, bh) {
+                            let param = if mixed {
+                                &self.params.snare_mixed
+                            } else {
+                                &self.params.snare_wires_off
+                            };
+                            self.emit_norm(
+                                cx,
+                                param.as_ptr(),
+                                if param.value() { 0.0 } else { 1.0 },
+                            );
+                            cx.needs_redraw();
+                            nih_plug_vizia::consume_window_event(cx, window_event, meta);
+                            return;
+                        }
+                    }
+                    let pieces: Vec<_> = self.visible_pieces().collect();
+                    for kit_piece in pieces {
+                        let sx = Self::strip_x(kit_piece);
                         if !(sx..=sx + STRIP_W).contains(&x) {
                             continue;
                         }
@@ -555,7 +577,11 @@ impl ScdEditorView {
                                         self.vel_just_inserted = true;
                                         self.commit_vel_curve(curve);
                                         cx.needs_redraw();
-                                        nih_plug_vizia::consume_window_event(cx, window_event, meta);
+                                        nih_plug_vizia::consume_window_event(
+                                            cx,
+                                            window_event,
+                                            meta,
+                                        );
                                     }
                                 }
                             }

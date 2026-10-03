@@ -147,9 +147,7 @@ impl StripView {
         let scale_btn = self.scale_button_rect();
         let scale_menu_r = self.scale_menu_rect();
         let draw_grid_and_spectrum = |d: &mut Draw, bypassed: bool, eq_idx: usize| {
-            let step = if self.graph_db <= 6.0 { 6 } else { 12 };
-            let steps = (self.graph_db / step as f64).floor() as i32;
-            for db in (-steps..=steps).map(|i| i * step) {
+            for db in gain_axis_values(self.graph_db) {
                 let y = db_y(db as f64, self.graph_db);
                 d.line(
                     gx,
@@ -198,13 +196,40 @@ impl StripView {
             let scale_hover = self
                 .idle_hover()
                 .is_some_and(|(hx, hy)| inside(hx, hy, scale_btn));
-            d.rect(scale_btn.0, scale_btn.1, scale_btn.2, scale_btn.3, PANEL);
+            let highlighted = scale_hover || (self.scale_menu && self.active_eq.get() == eq_idx);
+            let pill = (
+                scale_btn.0 + 2.0,
+                scale_btn.1,
+                scale_btn.2 - 4.0,
+                scale_btn.3,
+            );
+            d.rounded_rect(pill.0, pill.1, pill.2, pill.3, 6.0, PANEL);
+            d.rounded_rect(
+                pill.0,
+                pill.1,
+                pill.2,
+                pill.3,
+                6.0,
+                C {
+                    a: if highlighted { 0.14 } else { 0.045 },
+                    ..if highlighted { TEAL } else { TEXT }
+                },
+            );
+            d.outline_rounded(
+                pill.0,
+                pill.1,
+                pill.2,
+                pill.3,
+                6.0,
+                if highlighted { TEAL } else { LINE },
+                1.0,
+            );
             d.text_centered(
                 scale_btn.0 + scale_btn.2 * 0.5,
                 axis_label_y(GY, SCALE_BUTTON_TEXT),
-                &format!("±{} ▾", self.graph_db as i32),
+                &format!("±{}", self.graph_db as i32),
                 SCALE_BUTTON_TEXT,
-                if scale_hover { TEXT } else { MUTED },
+                if highlighted { TEXT } else { MUTED },
             );
             if self.scale_menu && self.active_eq.get() == eq_idx {
                 let r = scale_menu_r;
@@ -259,9 +284,8 @@ impl StripView {
                     fill.a = if eq1_bypassed { 0.02 } else { 0.07 };
                     let between = b.dynamic && b.shape.has_gain();
                     let fill_points = if between {
-                        let range = range_curve_points(
-                            b, &xs, (gx, gw, self.graph_db), (sr, eq_sr),
-                        );
+                        let range =
+                            range_curve_points(b, &xs, (gx, gw, self.graph_db), (sr, eq_sr));
                         let polygon = between_curve_polygon(&points, &range);
                         d.fill_poly(&polygon, fill);
                         polygon
@@ -457,9 +481,8 @@ impl StripView {
                     fill.a = if page_bypassed { 0.02 } else { 0.07 };
                     let between = allow_dyn && b.dynamic && b.shape.has_gain();
                     let fill_points = if between {
-                        let range = range_curve_points(
-                            b, &xs, (gx, gw, self.graph_db), (sr, eq_sr),
-                        );
+                        let range =
+                            range_curve_points(b, &xs, (gx, gw, self.graph_db), (sr, eq_sr));
                         let polygon = between_curve_polygon(&points, &range);
                         d.fill_poly(&polygon, fill);
                         polygon

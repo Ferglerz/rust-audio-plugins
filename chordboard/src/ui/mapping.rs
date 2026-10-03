@@ -8,55 +8,20 @@ impl ChordboardView {
         let r = self.panel_rect(panel);
         d.rounded_rect(r.0 - 4.0, r.1 - 4.0, r.2 + 8.0, r.3 + 8.0, 12.0, BG);
         self.surface(d, r);
-        self.button(d, self.panel_close_rect(panel), "×", false, TEAL);
+        self.close_icon(d, self.panel_close_rect(panel), TEAL, false);
         match panel {
             Panel::Routes => self.draw_routes(d),
             Panel::Mapping => self.draw_mapping(d),
-            Panel::Output => {
-                d.text(
-                    r.0 + 16.0,
-                    r.1 + 23.0,
-                    if self.params.mpe_enabled() {
-                        "MPE output"
-                    } else {
-                        "Regular MIDI output"
-                    },
-                    TEXT_LABEL,
-                    TEAL,
-                );
-                d.text(
-                    r.0 + 16.0,
-                    r.1 + r.3 - 16.0,
-                    if self.params.mpe_enabled() {
-                        "Each voice uses its own member channel."
-                    } else {
-                        "Channels apply to standard MIDI output."
-                    },
-                    TEXT_SMALL,
-                    MUTED,
-                );
-            }
         }
     }
     fn draw_mapping(&self, d: &mut Draw) {
         let r = mapping_panel_rect(self.mapping_axis);
-        let learning = self.learning() == self.mapping_axis as u8 + 1;
-        let title = if learning {
-            ["X · Move controller", "Y · Move controller"][self.mapping_axis]
-        } else {
-            ["X · Strum", "Y · Expression"][self.mapping_axis]
-        };
-        d.text(r.0 + 12.0, r.1 + 26.0, title, 12.0, TEAL);
-        self.button(
-            d,
-            mapping_learn_rect(self.mapping_axis),
-            if learning {
-                "Cancel learn"
-            } else {
-                "MIDI Learn"
-            },
-            learning,
-            TEAL,
+        d.text(
+            r.0 + 10.0,
+            module_title_y(r.1, MODULE_TITLE_SIZE),
+            ["X · Strum", "Y · Expression"][self.mapping_axis],
+            MODULE_TITLE_SIZE,
+            TEXT,
         );
         let m = self.mapping();
         self.button(
@@ -64,7 +29,7 @@ impl ChordboardView {
             self.menu_trigger_rect(Menu::MappingKind),
             &format!(
                 "{} ▾",
-                ["Off", "CC 7-bit", "CC 14-bit", "Pitch bend"][m.kind as usize]
+                ["Off", "CC · Auto", "CC · Auto", "Pitch bend"][m.kind as usize]
             ),
             self.menu == Some(Menu::MappingKind),
             TEAL,
@@ -72,7 +37,7 @@ impl ChordboardView {
         let menu = if m.kind == 3 {
             Menu::MappingChannel(true)
         } else {
-            Menu::MappingCc(m.kind == 2)
+            Menu::MappingCc(false)
         };
         if matches!(m.kind, 1..=3) {
             let label = if m.kind == 3 {
@@ -97,17 +62,23 @@ impl ChordboardView {
                 self.menu_trigger_rect(Menu::YTarget),
                 &format!(
                     "{} ▾",
-                    Menu::YTarget.items()[self.params.y_target.value() as usize]
+                    Menu::YTarget.items()[self
+                        .routed_plain("y_target")
+                        .unwrap_or(self.params.y_target.value() as f32)
+                        as usize]
                 ),
                 self.menu == Some(Menu::YTarget),
                 TEAL,
             );
+            if self.routed_plain("y_target").is_some() {
+                self.live_highlight(d, self.menu_trigger_rect(Menu::YTarget));
+            }
         }
-        if !learning && matches!(m.kind, 1 | 2) {
+        if matches!(m.kind, 1 | 2) {
             let channel = if m.channel == 16 {
-                "Any channel".into()
+                "Any ch · Auto bits".into()
             } else {
-                format!("Learned Ch {}", m.channel + 1)
+                format!("Ch {} · Auto bits", m.channel + 1)
             };
             d.text(
                 r.0 + 256.0,

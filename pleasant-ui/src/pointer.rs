@@ -146,3 +146,56 @@ mod readout_drag_tests {
         assert_eq!(readout_drag_delta(0.0, 0.0, false), 0.0);
     }
 }
+
+/// Choose a graph drag's dominant axis after four logical pixels, then retain
+/// that axis until the gesture ends. Positive vertical motion means upward;
+/// callers may invert it for controls whose meaning depends on the grab side.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AxisLock {
+    axis: Option<DragAxis>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum DragAxis {
+    Horizontal,
+    Vertical,
+}
+
+impl AxisLock {
+    pub fn delta(&mut self, dx: f32, dy: f32, up_sign: f32) -> f32 {
+        if self.axis.is_none() {
+            if dx.hypot(dy) < 4.0 {
+                return 0.0;
+            }
+            self.axis = Some(if dx.abs() >= dy.abs() {
+                DragAxis::Horizontal
+            } else {
+                DragAxis::Vertical
+            });
+        }
+        match self.axis {
+            Some(DragAxis::Horizontal) => dx,
+            Some(DragAxis::Vertical) => -dy * up_sign,
+            None => 0.0,
+        }
+    }
+}
+
+#[cfg(test)]
+mod axis_lock_tests {
+    use super::AxisLock;
+
+    #[test]
+    fn buffers_jitter_then_locks_for_the_entire_gesture() {
+        let mut horizontal = AxisLock::default();
+        assert_eq!(horizontal.delta(2.0, -2.0, 1.0), 0.0);
+        assert_eq!(horizontal.delta(5.0, -3.0, 1.0), 5.0);
+        assert_eq!(horizontal.delta(6.0, -50.0, 1.0), 6.0);
+        assert_eq!(horizontal.delta(-2.0, -80.0, 1.0), -2.0);
+        let mut vertical = AxisLock::default();
+        assert_eq!(vertical.delta(1.0, -5.0, 1.0), 5.0);
+        assert_eq!(vertical.delta(80.0, 6.0, 1.0), -6.0);
+        assert_eq!(vertical.delta(80.0, -6.0, -1.0), -6.0);
+        assert_eq!(AxisLock::default().delta(0.0, 0.0, 1.0), 0.0);
+    }
+}

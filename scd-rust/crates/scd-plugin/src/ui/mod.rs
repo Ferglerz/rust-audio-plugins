@@ -194,6 +194,22 @@ const BG_PNG: &[u8] = include_bytes!("../../assets/bg.png");
 const LOGO_PNG: &[u8] = include_bytes!("../../assets/SoundchefSmall.png");
 const STONE_PNG: &[u8] = include_bytes!("../../assets/Stonehouse.png");
 
+const ICONS: [Option<&[u8]>; KitPieceId::COUNT] = [
+    Some(include_bytes!("../../assets/icons/Kick.png")),
+    Some(include_bytes!("../../assets/icons/Snare.png")),
+    Some(include_bytes!("../../assets/icons/Snare.png")),
+    Some(include_bytes!("../../assets/icons/Hihat.png")),
+    Some(include_bytes!("../../assets/icons/Tom1.png")),
+    Some(include_bytes!("../../assets/icons/Tom2.png")),
+    Some(include_bytes!("../../assets/icons/Floor Tom.png")),
+    Some(include_bytes!("../../assets/icons/Ride.png")),
+    Some(include_bytes!("../../assets/icons/China.png")),
+    None,
+    Some(include_bytes!("../../assets/icons/Splash.png")),
+    Some(include_bytes!("../../assets/icons/Crash_L.png")),
+    Some(include_bytes!("../../assets/icons/Crash_R.png")),
+];
+
 pub const MIC_COLORS: [Color; MicChannel::COUNT] = [
     rgb(184, 244, 171), // Close (soft green)
     rgb(244, 171, 184), // XY (soft pink)
@@ -259,6 +275,7 @@ pub struct ScdEditorView {
     bg_img: Cell<Option<ImageId>>,
     logo_img: Cell<Option<ImageId>>,
     stone_img: Cell<Option<ImageId>>,
+    icons: [Cell<Option<ImageId>>; KitPieceId::COUNT],
     blur_shot: Cell<Option<ImageId>>,
     blur_src: Cell<Option<ImageId>>,
     blur_dst: Cell<Option<ImageId>>,
@@ -306,6 +323,7 @@ impl ScdEditorView {
             bg_img: Cell::new(None),
             logo_img: Cell::new(None),
             stone_img: Cell::new(None),
+            icons: std::array::from_fn(|_| Cell::new(None)),
             blur_shot: Cell::new(None),
             blur_src: Cell::new(None),
             blur_dst: Cell::new(None),

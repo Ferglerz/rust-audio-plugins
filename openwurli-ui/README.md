@@ -6,12 +6,13 @@ The main panel exposes Volume, Tremolo Depth, Speaker Character, and MLP Correct
 
 ## Upstream source
 
-The engine is a revision-pinned Git dependency from the [Ferglerz fork](https://github.com/Ferglerz/openwurli)
-on `codex/pleasant-controls`; `Cargo.toml` records the exact revision. The DSP
-changes are maintained independently on
+The engine is vendored from the [Ferglerz fork](https://github.com/Ferglerz/openwurli) at revision `1899523a3eb7a73a7f9c905c8c04ee04a06b415d`. See [local DSP changes](vendor/openwurli-dsp/LOCAL_CHANGES.md) for provenance and the full-MIDI note entry points. Earlier DSP
+optimizations were developed on
 [`codex/dsp-cpu-optimizations`](https://github.com/Ferglerz/openwurli/tree/codex/dsp-cpu-optimizations),
 based on original upstream OpenWurli v0.7.0 (`3023a8a6c42c654c5caeec52fd22dcf2cff3cb15`),
-and merged into the controls branch. This wrapper has no private DSP source copy.
+and merged into the controls branch. The pinned revision adds the exact Heavy recovery shortcut on
+[`codex/heavy-recovery-shortcut`](https://github.com/Ferglerz/openwurli/tree/codex/heavy-recovery-shortcut).
+The local copy preserves the original clamped API and adds explicit full-range note-on/off APIs.
 
 The **ENGINE** page describes the active native processing and measured CPU/audio
 results. See [the implementation and evidence report](docs/cpu-optimization-results.md)
@@ -25,7 +26,7 @@ The wrapper uses OpenWurli's default fast preamp and power amp. Its Reed, Hammer
 
 For future updates, port the optimization branch against the intended upstream
 revision, repeat its native/table comparisons, then integrate it into
-`codex/pleasant-controls` and update the pinned dependency here. Do not silently
+`codex/pleasant-controls` and refresh the vendored source here, preserving the documented local changes. Do not silently
 change the sound model while benchmarking a CPU patch: current upstream v0.9
 changes reed physics, pickup and amplifier behavior relative to this v0.7 engine.
 UI changes stay in this repository. The upstream-based branch is prepared for a
@@ -62,3 +63,15 @@ rebuilds are shared and its transistor solves run in lockstep. The failing
 damper approximation is not included. See [runtime modes and CPU
 evidence](docs/runtime-modes.md) for the changes, measurements, completed checks
 and remaining validation.
+
+A later Heavy-only optimization skips recovery work that the existing amplifier
+guard would discard. Paired M1 benchmarks measured 27.4% less render time for six
+notes and 47.1% less for 64 notes at 50% tremolo, with exact output in the tested
+matrix. Fast remains unchanged. The complete solver is retained, including a
+`reference-full-recovery` build feature and the native exponential configuration.
+See [the recovery shortcut proof](docs/heavy-recovery-shortcut-2026-10-03.md) for
+coverage, reference builds and remaining latency limits.
+
+## Extended notes
+
+The advanced panel’s **Extended Notes** toggle defaults off. Normal mode accepts MIDI 33–96 and ignores notes outside either end without striking or releasing an end key. Enabling it plays the full MIDI 0–127 range at the requested pitches in Fast and Heavy modes. Notes already held still release correctly after the toggle is disabled. The setting is saved and automatable; old presets select the normal range.

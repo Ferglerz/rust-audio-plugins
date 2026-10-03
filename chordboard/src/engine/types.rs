@@ -2,6 +2,7 @@ use super::routing::{Route, ROUTE_COUNT, SOURCE_COUNT, SOURCE_DEFAULTS, TARGET_C
 use crate::harmony::Notes;
 pub const POINTER_KEY_OFFSET: u8 = 64;
 pub const KEY_TOKEN_COUNT: usize = 128;
+pub const MEMORY_COUNT: usize = 10;
 pub const CHORD: u8 = 0;
 pub const AUTO: u8 = 1;
 pub const MANUAL: u8 = 2;
@@ -12,7 +13,6 @@ pub struct Config {
     pub root_on_select: bool,
     pub routes: [Route; ROUTE_COUNT],
     pub filter: u8,
-    pub split_channels: bool,
     pub bass_channel: u8,
     pub upper_channel: u8,
     pub mode: u8,
@@ -24,18 +24,24 @@ pub struct Config {
     pub latch: bool,
     pub always_bass: bool,
     pub always_chord: bool,
+    pub affect_chords: bool,
     pub key_split: bool,
     pub split_note: u8,
+    pub bass_split: i16,
+    pub bass_enabled: bool,
     pub strings: u8,
     pub strings_played: u8,
     pub routed_x: Option<f32>,
+    pub legacy_direct_x: bool,
     pub velocity: f32,
     pub length_ms: f32,
     pub strum_ms: f32,
     pub strum_sync: bool,
     pub strum_beats: f32,
+    pub strum_hold: bool,
     pub direction: u8,
     pub contour: f32,
+    pub contour_curve: f32,
     pub arp_pattern: u8,
     pub rate: f32,
     pub gate: f32,
@@ -59,13 +65,24 @@ pub struct Config {
     pub y_cc: u8,
     pub mappings: [Mapping; 2],
 }
+impl Config {
+    pub fn bass_boundary(&self) -> i16 {
+        if !self.bass_enabled {
+            return -1;
+        }
+        if self.bass_split >= 0 {
+            self.bass_split
+        } else {
+            self.control_base
+        }
+    }
+}
 impl Default for Config {
     fn default() -> Self {
         Self {
             root_on_select: false,
-            routes: [Route::default(); ROUTE_COUNT],
+            routes: super::routing::default_routes(),
             filter: 0,
-            split_channels: false,
             bass_channel: 0,
             upper_channel: 1,
             mode: CHORD,
@@ -77,18 +94,24 @@ impl Default for Config {
             latch: false,
             always_bass: false,
             always_chord: false,
+            affect_chords: false,
             key_split: false,
             split_note: 60,
+            bass_split: -1,
+            bass_enabled: true,
             strings: 8,
             strings_played: 12,
             routed_x: None,
+            legacy_direct_x: false,
             velocity: 0.8,
             length_ms: 350.0,
-            strum_ms: 120.0,
-            strum_sync: false,
+            strum_ms: 125.0,
+            strum_sync: true,
             strum_beats: 0.25,
+            strum_hold: false,
             direction: 0,
             contour: 0.0,
+            contour_curve: 0.0,
             arp_pattern: 0,
             rate: 0.25,
             gate: 0.65,
@@ -176,6 +199,7 @@ pub struct Scheduled {
     pub note: u8,
     pub velocity: f32,
     pub duration: u64,
+    pub gate_step: Option<u64>,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Out {
@@ -207,7 +231,10 @@ pub enum Command {
 pub struct Snapshot {
     pub held_notes: [bool; 128],
     pub sounding_notes: [bool; 128],
+    /// Lowest note owned by the independent bass layer, including sustained notes.
+    pub bass_note: Option<u8>,
     pub sources: [f32; SOURCE_COUNT],
+    pub input_velocity: f32,
     pub routed: [Option<f32>; TARGET_COUNT],
     pub captured: u64,
     pub full_notes: Notes,
@@ -228,6 +255,7 @@ pub struct Snapshot {
     pub x: f32,
     pub y: f32,
     pub strikes: [u32; 12],
+    pub note_strikes: [u32; 128],
     pub voices: u8,
     pub learning: u8,
     pub output_mpe: bool,
@@ -238,7 +266,9 @@ impl Default for Snapshot {
         Self {
             held_notes: [false; 128],
             sounding_notes: [false; 128],
+            bass_note: None,
             sources: SOURCE_DEFAULTS,
+            input_velocity: 0.8,
             routed: [None; TARGET_COUNT],
             captured: 0,
             full_notes: Notes::default(),
@@ -259,10 +289,54 @@ impl Default for Snapshot {
             x: 0.0,
             y: 0.8,
             strikes: [0; 12],
+            note_strikes: [0; 128],
             voices: 0,
             learning: 0,
             output_mpe: false,
             tempo: 120.0,
+        }
+    }
+}
+
+// Quadratic bend: fixed endpoints, monotonic throughout the supported range.
+pub fn contour_factor(position: f32, tilt: f32, curve: f32) -> f32 {
+    let t = position.clamp(0.0, 1.0);
+    1.0 + tilt * (t - 0.5) + tilt.abs() * curve * t * (1.0 - t)
+}
+
+/// Keep one playable chord key between the bass and melody regions.
+pub fn ordered_splits(a: u8, b: u8) -> (u8, u8) {
+    let bass = a.min(b).min(126);
+    (bass, a.max(b).max(bass + 1).min(127))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LearnedSplit {
+    pub target: u8,
+    pub bass: u8,
+    pub melody: u8,
+}
+impl LearnedSplit {
+    pub fn encode(self) -> u32 {
+        ((self.target as u32) << 16) | ((self.bass as u32) << 8) | self.melody as u32
+    }
+    pub fn decode(value: u32) -> Option<Self> {
+        let target = (value >> 16) as u8;
+        let bass = ((value >> 8) & 255) as u8;
+        let melody = (value & 255) as u8;
+        (matches!(target, 5 | 6) && bass < melody && melody < 128).then_some(Self {
+            target,
+            bass,
+            melody,
+        })
+    }
+    pub fn apply(self, config: &mut Config) {
+        config.bass_split = self.bass as i16;
+        config.split_note = self.melody;
+        if self.target == 5 {
+            config.bass_enabled = true;
+        } else {
+            config.key_split = true;
         }
     }
 }

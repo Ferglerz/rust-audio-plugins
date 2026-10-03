@@ -195,7 +195,8 @@ fn auto_strum_uses_sample_clock_and_releases_notes() {
         Config {
             mode: AUTO,
             strings: 3,
-            strum_ms: 100.0,
+            strum_ms: 50.0,
+            strum_sync: false,
             length_ms: 20.0,
             ..Config::default()
         },
@@ -283,7 +284,8 @@ fn delayed_strum_inherits_latest_expression() {
             mpe: true,
             mode: AUTO,
             strings: 3,
-            strum_ms: 100.0,
+            strum_ms: 50.0,
+            strum_sync: false,
             ..Config::default()
         },
     );
@@ -613,6 +615,10 @@ fn memory_captures_and_recalls_full_recipe() {
     send(&mut e, Command::Capture(2));
     let (slot, word) = e.saved.take().unwrap();
     assert_eq!(slot, 2);
+    for index in [8, 9] {
+        send(&mut e, Command::Capture(index));
+        assert_eq!(e.saved.take(), Some((index, word)));
+    }
     send(&mut e, Command::Panic);
     send(&mut e, Command::Recall(word));
     assert_eq!(e.notes, expected);
@@ -638,14 +644,13 @@ fn filters_apply_after_voicing_and_preserve_source_chord() {
     assert_eq!(e.notes.as_slice(), &[64, 72]);
 }
 #[test]
-fn split_channels_do_not_override_mpe_allocation() {
+fn chord_channels_follow_output_or_mpe_allocation() {
     for mpe in [false, true] {
         let mut e = Engine::default();
         configure(
             &mut e,
             Config {
                 mpe,
-                split_channels: true,
                 bass_channel: 5,
                 upper_channel: 6,
                 ..Config::default()
@@ -662,7 +667,7 @@ fn split_channels_do_not_override_mpe_allocation() {
                 }
             })
             .collect();
-        assert_eq!(channels, if mpe { vec![1, 2, 3] } else { vec![5, 6, 6] });
+        assert_eq!(channels, if mpe { vec![1, 2, 3] } else { vec![0, 0, 0] });
     }
 }
 #[test]
@@ -776,7 +781,7 @@ fn signed_swing_reverses_step_durations_without_changing_pair_length() {
 }
 
 #[test]
-fn synced_sweep_uses_beats_while_free_sweep_keeps_milliseconds() {
+fn once_rate_uses_beats_or_milliseconds_per_note() {
     for (tempo, sync, expected) in [(120.0, true, 250), (60.0, true, 500), (60.0, false, 120)] {
         let mut e = Engine {
             sample_rate: 1000.0,
@@ -788,14 +793,14 @@ fn synced_sweep_uses_beats_while_free_sweep_keeps_milliseconds() {
             Config {
                 mode: 1,
                 strum_sync: sync,
-                strum_beats: 0.5,
+                rate: 0.5,
                 strum_ms: 120.0,
                 ..Config::default()
             },
         );
         on(&mut e, 60, 0);
         let last = e.scheduled.iter().flatten().map(|note| note.at).max();
-        assert_eq!(last, Some(expected), "tempo {tempo}, sync {sync}");
+        assert_eq!(last, Some(expected * 7), "tempo {tempo}, sync {sync}");
     }
 }
 
@@ -944,7 +949,7 @@ fn recalled_base_voicing_returns_after_disabling_a_route() {
         &mut |_| {},
     );
     e.control(0, 1, 1.0, &mut |_| {});
-    assert_eq!(e.config.spread, 2);
+    assert_eq!(e.config.spread, 4);
     c.routes[0].enabled = false;
     e.configure(c, &mut |_| {});
     assert_eq!(e.config.spread, 1);
@@ -1192,8 +1197,9 @@ fn auto_full_strings_match_display_in_both_directions() {
                     mode: AUTO,
                     strings: 12,
                     strum_ms: 0.0,
+                    strum_sync: false,
                     spread,
-                    direction,
+                    arp_pattern: direction,
                     inversion: 1,
                     ..Config::default()
                 },
@@ -1260,7 +1266,7 @@ fn released_strums_ring_across_the_next_chord_without_hold() {
 fn auto_strings_played_limits_sweeps_without_changing_the_layout() {
     for total in [3, 8, 12] {
         for played in 1..=12 {
-            for direction in 0..=2 {
+            for direction in 0..2 {
                 let mut e = Engine::default();
                 configure(
                     &mut e,
@@ -1268,8 +1274,9 @@ fn auto_strings_played_limits_sweeps_without_changing_the_layout() {
                         mode: AUTO,
                         strings: total,
                         strings_played: played,
-                        direction,
+                        arp_pattern: direction,
                         strum_ms: 0.0,
+                        strum_sync: false,
                         ..Config::default()
                     },
                 );
@@ -1279,7 +1286,7 @@ fn auto_strings_played_limits_sweeps_without_changing_the_layout() {
                     if sweep == 1 {
                         e.rebuild(&mut |_| {});
                     }
-                    let reverse = direction == 1 || (direction == 2 && sweep == 1);
+                    let reverse = direction == 1;
                     let expected = (0..played.min(total) as usize)
                         .map(|i| {
                             layout
@@ -1410,6 +1417,7 @@ fn control_octave_never_triggers_playback_in_any_mode_or_channel() {
                     latch: true,
                     root_on_select: true,
                     strum_ms: 0.0,
+                    strum_sync: false,
                     ..Config::default()
                 },
             );
@@ -1984,4 +1992,1214 @@ fn expression_is_unassigned_by_default_but_field_y_controls_velocity() {
     let low = e.strike_velocity();
     e.position(0.9, 1, &mut |_| {});
     assert!(e.strike_velocity() > low);
+}
+
+#[test]
+fn quality_changes_preserve_arp_step_and_deadline_for_held_and_latched_chords() {
+    for latched in [false, true] {
+        for source in 0..4 {
+            let mut e = Engine::default();
+            let mut config = Config {
+                mode: ARP,
+                latch: latched,
+                control_base: 36,
+                ..Config::default()
+            };
+            if source == 3 {
+                config.routes[0] = routing::Route {
+                    source: 2,
+                    target: 2,
+                    ..routing::Route::default()
+                };
+            }
+            configure(&mut e, config);
+            on(&mut e, 60, 0);
+            tick(&mut e, 7000);
+            if latched {
+                off(&mut e, 60, 0);
+            }
+            let position = (e.arp_step, e.arp_next);
+            let previous = e.notes;
+            let mut events = Vec::new();
+            match source {
+                0 => e.command(Command::SetQuality(1), &mut |v| events.push(v)),
+                1 => e.command(Command::SetControlChord(3), &mut |v| events.push(v)),
+                2 => e.midi_note(true, 0, 39, 0.8, &mut |v| events.push(v)),
+                _ => e.control(0, 1, 1.0 / 11.0, &mut |v| events.push(v)),
+            }
+            assert_eq!(
+                (e.arp_step, e.arp_next),
+                position,
+                "source {source}, latched {latched}"
+            );
+            assert_ne!(e.notes, previous);
+            assert!(
+                notes(&events).is_empty(),
+                "quality selection must not strike immediately"
+            );
+            let remaining = (e.arp_next - e.now) as usize;
+            assert!(notes(&tick(&mut e, remaining)).is_empty());
+            assert_eq!(notes(&tick(&mut e, 1)).len(), 1);
+            assert_eq!(e.arp_step, position.0 + 1);
+        }
+    }
+}
+
+#[test]
+fn quality_changes_with_only_control_notes_do_not_start_an_arp() {
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            mode: ARP,
+            control_base: 36,
+            ..Config::default()
+        },
+    );
+    on(&mut e, 60, 0);
+    tick(&mut e, 100);
+    off(&mut e, 60, 0);
+    let position = (e.arp_step, e.arp_next);
+    assert!(notes(&on(&mut e, 39, 0)).is_empty());
+    assert!(notes(&send(&mut e, Command::SetQuality(4))).is_empty());
+    assert!(notes(&tick(&mut e, 12000)).is_empty());
+    assert_eq!((e.arp_step, e.arp_next), position);
+}
+
+#[test]
+fn low_zone_routes_only_to_bass_and_never_changes_harmony() {
+    for mode in [CHORD, AUTO, MANUAL, ARP] {
+        let mut e = Engine::default();
+        configure(
+            &mut e,
+            Config {
+                mode,
+                control_base: 36,
+                bass_channel: 4,
+                key_split: true,
+                split_note: 60,
+                ..Config::default()
+            },
+        );
+        let events = on(&mut e, 35, 2);
+        assert!(matches!(events.as_slice(), [Out::On(4, 35, _)]));
+        assert!(e.root.is_none());
+        assert_eq!(e.notes.len, 0);
+        assert!(e.owned_output_notes()[4][35]);
+        assert!(notes(&on(&mut e, 36, 2)).is_empty());
+        assert!(matches!(
+            off(&mut e, 35, 2).as_slice(),
+            [Out::Off(4, 35, _)]
+        ));
+        assert!(!e.owned_output_notes()[4][35]);
+    }
+}
+
+#[test]
+fn bass_zone_sustain_duplicate_owners_and_rerouting_release_safely() {
+    let mut e = Engine::default();
+    let config = Config {
+        control_base: 36,
+        bass_channel: 4,
+        ..Config::default()
+    };
+    configure(&mut e, config);
+    on(&mut e, 24, 0);
+    assert!(on(&mut e, 24, 1).is_empty());
+    assert!(off(&mut e, 24, 0).is_empty());
+    e.control(1, 64, 1.0, &mut |_| {});
+    assert!(off(&mut e, 24, 1).is_empty());
+    assert!(e.owned_output_notes()[4][24]);
+    let mut events = Vec::new();
+    e.control(1, 64, 0.0, &mut |v| events.push(v));
+    assert!(events.iter().any(|v| matches!(v, Out::Off(4, 24, _))));
+    on(&mut e, 24, 0);
+    events.clear();
+    e.configure(
+        Config {
+            bass_channel: 5,
+            ..config
+        },
+        &mut |v| events.push(v),
+    );
+    assert!(events.iter().any(|v| matches!(v, Out::Off(4, 24, _))));
+    assert!(!e.owned_output_notes()[4][24]);
+    assert!(matches!(on(&mut e, 24, 0).as_slice(), [Out::On(5, 24, _)]));
+    events.clear();
+    e.panic(&mut |v| events.push(v));
+    assert!(events.iter().any(|v| matches!(v, Out::Off(5, 24, _))));
+}
+
+#[test]
+fn bass_split_can_cross_the_control_octave_without_consuming_control_keys() {
+    for boundary in [24, 48, 60] {
+        let mut e = Engine::default();
+        configure(
+            &mut e,
+            Config {
+                control_base: 36,
+                bass_split: boundary,
+                bass_channel: 4,
+                ..Config::default()
+            },
+        );
+        for note in 0..boundary as u8 {
+            let events = on(&mut e, note, 0);
+            if (36..48).contains(&note) {
+                assert!(
+                    notes(&events).is_empty(),
+                    "control key {note} must not play bass"
+                );
+            } else {
+                assert!(matches!(events.as_slice(), [Out::On(4, n, _)] if *n == note));
+            }
+            off(&mut e, note, 0);
+        }
+        assert!(e.root.is_none());
+        on(&mut e, boundary as u8, 0);
+        assert_eq!(e.root.map(|root| root.note), Some(boundary as u8));
+    }
+}
+
+#[test]
+fn moving_bass_split_releases_notes_from_the_old_zone() {
+    let mut e = Engine::default();
+    let config = Config {
+        control_base: 36,
+        bass_split: 60,
+        bass_channel: 4,
+        ..Config::default()
+    };
+    configure(&mut e, config);
+    on(&mut e, 55, 0);
+    let mut events = Vec::new();
+    e.configure(
+        Config {
+            bass_split: 24,
+            ..config
+        },
+        &mut |v| events.push(v),
+    );
+    assert!(events.iter().any(|v| matches!(v, Out::Off(4, 55, _))));
+    assert!(e.owned_output_notes().iter().flatten().all(|held| !held));
+}
+
+#[test]
+fn auto_strum_orders_notes_in_ascending_and_descending_thirds() {
+    let mut e = Engine::default();
+    let config_up_3rds = Config {
+        mode: AUTO,
+        arp_pattern: 3, // Up in 3rds
+        strings: 6,
+        strings_played: 6,
+        ..Config::default()
+    };
+    configure(&mut e, config_up_3rds);
+    on(&mut e, 60, 0); // C4 chord
+    let notes_up: Vec<u8> = e
+        .scheduled
+        .iter()
+        .filter_map(|s| s.map(|n| n.note))
+        .collect();
+    // Strings 0..6: Up in 3rds should pick index sequence:
+    // i=0: 0, i=1: 2, i=2: 1, i=3: 3, i=4: 2, i=5: 4
+    let expected_indices_up = [0, 2, 1, 3, 2, 4, 3, 5, 4, 0, 5, 1];
+    let expected_notes_up: Vec<u8> = expected_indices_up
+        .iter()
+        .map(|&idx| e.notes.string(idx).unwrap())
+        .collect();
+    assert_eq!(notes_up, expected_notes_up);
+
+    off(&mut e, 60, 0);
+    tick(&mut e, 50000);
+
+    let config_down_3rds = Config {
+        mode: AUTO,
+        arp_pattern: 4, // Down in 3rds
+        strings: 6,
+        strings_played: 6,
+        ..Config::default()
+    };
+    configure(&mut e, config_down_3rds);
+    on(&mut e, 60, 0);
+    let notes_down: Vec<u8> = e
+        .scheduled
+        .iter()
+        .filter_map(|s| s.map(|n| n.note))
+        .collect();
+    // Strings 0..6: Down in 3rds should pick descending thirds:
+    // i=0: 5, i=1: 3, i=2: 4, i=3: 2, i=4: 3, i=5: 1
+    let expected_indices_down = [5, 3, 4, 2, 3, 1, 2, 0, 1, 5, 0, 4];
+    let expected_notes_down: Vec<u8> = expected_indices_down
+        .iter()
+        .map(|&idx| e.notes.string(idx).unwrap())
+        .collect();
+    assert_eq!(notes_down, expected_notes_down);
+}
+
+#[test]
+fn arp_patterns_in_thirds_step_correctly() {
+    let mut e = Engine::default();
+    let config = Config {
+        mode: ARP,
+        arp_pattern: 3, // Up in 3rds
+        octaves: 1,
+        ..Config::default()
+    };
+    configure(&mut e, config);
+    on(&mut e, 60, 0);
+    let total = e.notes.len;
+    assert!(total >= 3);
+    // Up in 3rds: pairs (0, 2), (1, 3), (2, 4 % total)...
+    let mut played = Vec::new();
+    for _ in 0..(total * 2) {
+        let events = tick(&mut e, 5000);
+        for ev in events {
+            if let Out::On(_, note, _) = ev {
+                played.push(note);
+            }
+        }
+    }
+    assert_eq!(played[0], e.notes.string(0).unwrap());
+    assert_eq!(played[1], e.notes.string(2 % total).unwrap());
+    assert_eq!(played[2], e.notes.string(1).unwrap());
+    assert_eq!(played[3], e.notes.string(3 % total).unwrap());
+}
+
+#[test]
+fn auto_strum_hold_plays_until_next_chord() {
+    let mut e = Engine::default();
+    let config = Config {
+        mode: AUTO,
+        strum_hold: true,
+        strings: 4,
+        strings_played: 4,
+        ..Config::default()
+    };
+    configure(&mut e, config);
+    on(&mut e, 60, 0); // Chord 1: C
+                       // All scheduled notes should have u64::MAX duration
+    assert!(e.scheduled.iter().flatten().all(|s| s.duration == u64::MAX));
+
+    // Tick past strum
+    let events1 = tick(&mut e, 20000);
+    assert!(!events1.is_empty());
+    // Voices should be active and not off
+    assert!(e
+        .voices
+        .iter()
+        .flatten()
+        .any(|v| !v.layer && v.off == u64::MAX));
+
+    // Strike next chord (G)
+    off(&mut e, 60, 0);
+    let mut next_events = Vec::new();
+    e.midi_note(true, 0, 67, 0.8, &mut |v| next_events.push(v));
+
+    // Previous chord voices should receive Off events
+    assert!(next_events.iter().any(|v| matches!(v, Out::Off(_, _, _))));
+}
+
+#[test]
+fn melody_affects_chords_without_exact_doubling_and_restores_on_release() {
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            key_split: true,
+            split_note: 52,
+            control_base: 36,
+            affect_chords: true,
+            always_chord: true,
+            voice_leading: 2,
+            ..Config::default()
+        },
+    );
+    on(&mut e, 48, 0);
+    let base = e.full_notes;
+    on(&mut e, 52, 1);
+    assert!(!e.full_notes.as_slice().contains(&52));
+    assert!(e.full_notes.as_slice().iter().any(|n| n % 12 == 4));
+    assert!(!e.voices.iter().flatten().any(|v| v.note == 52));
+    on(&mut e, 62, 1);
+    assert!(e.full_notes.as_slice().iter().any(|n| n % 12 == 2));
+    assert!(!e.full_notes.as_slice().contains(&62));
+    off(&mut e, 52, 1);
+    off(&mut e, 62, 1);
+    assert_eq!(e.full_notes, base);
+}
+
+#[test]
+fn melody_affects_chords_omits_pitch_when_all_register_octaves_are_held() {
+    let base = harmony::voice(60, 0, None, 0, 0, 0);
+    let mut melody = [[false; 128]; 16];
+    for n in [52, 64, 76] {
+        melody[1][n] = true;
+    }
+    let voiced = harmony::melody_harmony(base, &melody);
+    assert!(!voiced.as_slice().iter().any(|n| n % 12 == 4));
+    assert!(voiced.as_slice().contains(&60));
+    assert!(voiced.as_slice().contains(&67));
+}
+
+#[test]
+fn melody_affects_chords_disabled_preserves_original_harmony() {
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            key_split: true,
+            split_note: 52,
+            control_base: 36,
+            affect_chords: false,
+            voice_leading: 2,
+            ..Config::default()
+        },
+    );
+    on(&mut e, 48, 0);
+    let base = e.full_notes;
+    on(&mut e, 62, 1);
+    assert_eq!(e.full_notes, base);
+}
+
+#[test]
+fn melody_affects_chords_preserves_pending_sweep_timing() {
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            key_split: true,
+            split_note: 52,
+            control_base: 36,
+            affect_chords: true,
+            mode: AUTO,
+            strum_ms: 120.0,
+            voice_leading: 2,
+            ..Config::default()
+        },
+    );
+    on(&mut e, 48, 0);
+    let before: Vec<_> = e.scheduled.iter().flatten().map(|s| s.at).collect();
+    assert!(!before.is_empty());
+    on(&mut e, 52, 1);
+    let after: Vec<_> = e.scheduled.iter().flatten().map(|s| s.at).collect();
+    assert_eq!(after, before);
+    assert!(!e.scheduled.iter().flatten().any(|s| s.note == 52));
+}
+
+#[test]
+fn enabling_melody_affects_chords_removes_live_exact_collisions() {
+    let mut e = Engine::default();
+    let config = Config {
+        key_split: true,
+        split_note: 52,
+        control_base: 36,
+        always_chord: true,
+        voice_leading: 2,
+        ..Config::default()
+    };
+    configure(&mut e, config);
+    on(&mut e, 48, 0);
+    on(&mut e, 52, 1);
+    assert!(e.voices.iter().flatten().any(|v| v.note == 52));
+    configure(
+        &mut e,
+        Config {
+            affect_chords: true,
+            ..config
+        },
+    );
+    assert!(!e.full_notes.as_slice().contains(&52));
+    assert!(!e.voices.iter().flatten().any(|v| v.note == 52));
+    assert!(e.melody_note_held(1, 52));
+    configure(&mut e, config);
+    assert!(e.full_notes.as_slice().contains(&52));
+}
+
+#[test]
+fn velocity_contour_preserves_linear_defaults_and_bends_monotonically() {
+    for tilt in [-1.0, 0.0, 1.0] {
+        for curve in [-1.0, 0.0, 1.0] {
+            assert_eq!(contour_factor(0.0, tilt, curve), 1.0 - tilt * 0.5);
+            assert_eq!(contour_factor(1.0, tilt, curve), 1.0 + tilt * 0.5);
+            let mut previous = contour_factor(0.0, tilt, curve);
+            for i in 1..=100 {
+                let t = i as f32 / 100.0;
+                let value = contour_factor(t, tilt, curve);
+                assert!((0.5..=1.5).contains(&value));
+                assert!((value - previous) * tilt >= -0.00001);
+                if curve == 0.0 {
+                    assert_eq!(value, 1.0 + tilt * (t - 0.5));
+                }
+                previous = value;
+            }
+        }
+    }
+    assert!(contour_factor(0.5, 1.0, 1.0) > 1.0);
+    assert!(contour_factor(0.5, 1.0, -1.0) < 1.0);
+}
+
+#[test]
+fn manual_plucks_apply_velocity_contour_and_curve() {
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            mode: MANUAL,
+            strings: 3,
+            contour: 1.0,
+            contour_curve: 1.0,
+            ..Config::default()
+        },
+    );
+    on(&mut e, 60, 1);
+    let base = e.strike_velocity();
+    for index in 0..3 {
+        let mut out = Vec::new();
+        e.pluck_string(index, &mut |v| out.push(v));
+        let actual = out
+            .iter()
+            .find_map(|v| {
+                if let Out::On(_, _, velocity) = v {
+                    Some(*velocity)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        let expected = (base * contour_factor(index as f32 / 2.0, 1.0, 1.0)).clamp(0.01, 1.0);
+        assert!((actual - expected).abs() < 0.00001);
+    }
+}
+
+#[test]
+fn arp_velocity_contour_follows_each_pattern_cycle_and_repeats() {
+    for pattern in 0..7 {
+        for tilt in [-1.0, 0.0, 1.0] {
+            let mut e = Engine::default();
+            e.sample_rate = 1000.0;
+            configure(
+                &mut e,
+                Config {
+                    mode: ARP,
+                    arp_pattern: pattern,
+                    octaves: 2,
+                    rate: 0.01,
+                    humanize: 0.0,
+                    velocity: 0.4,
+                    contour: tilt,
+                    contour_curve: 0.6,
+                    ..Config::default()
+                },
+            );
+            on(&mut e, 60, 1);
+            let base = e.strike_velocity();
+            let total = e.notes.len * 2;
+            let cycle = match pattern {
+                2 => total * 2 - 2,
+                3 | 4 => total * 2,
+                _ => total,
+            };
+            let mut velocities = Vec::new();
+            while velocities.len() < cycle * 2 {
+                e.tick(&mut |event| {
+                    if let Out::On(_, _, v) = event {
+                        velocities.push(v);
+                    }
+                });
+                assert!(e.now < 1000, "arpeggiator stopped producing notes");
+            }
+            for (step, actual) in velocities.iter().enumerate() {
+                let t = (step % cycle) as f32 / (cycle - 1) as f32;
+                let expected = (base * contour_factor(t, tilt, 0.6)).clamp(0.01, 1.0);
+                assert!(
+                    (actual - expected).abs() < 0.00001,
+                    "pattern {pattern}, step {step}: {actual} != {expected}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn manual_selection_modes_trigger_silence_root_or_chord_for_midi_and_ui() {
+    for ui in [false, true] {
+        for selected in 0..3 {
+            let mut e = Engine::default();
+            configure(
+                &mut e,
+                Config {
+                    mode: MANUAL,
+                    root_on_select: selected == 1,
+                    always_chord: selected == 2,
+                    voice_leading: 2,
+                    ..Config::default()
+                },
+            );
+            let events = if ui {
+                send(&mut e, Command::KeyDown(0, 60, 0))
+            } else {
+                on(&mut e, 60, 0)
+            };
+            let mut sounded = notes(&events);
+            sounded.sort_unstable();
+            let expected = match selected {
+                0 => vec![],
+                1 => vec![60],
+                _ => vec![60, 64, 67],
+            };
+            assert_eq!(sounded, expected, "selection {selected}, UI {ui}");
+            if ui {
+                send(&mut e, Command::KeyUp(0));
+            } else {
+                off(&mut e, 60, 0);
+            }
+            tick(&mut e, 96000);
+            assert!(e.voices.iter().all(Option::is_none));
+        }
+    }
+}
+
+#[test]
+fn learned_splits_swap_crossings_and_consume_the_learning_key_release() {
+    for (target, note, expected) in [
+        (5, 80, (60, 80)),
+        (6, 20, (20, 36)),
+        (5, 60, (60, 61)),
+        (6, 36, (36, 37)),
+    ] {
+        let mut e = Engine::default();
+        configure(
+            &mut e,
+            Config {
+                mode: MANUAL,
+                bass_split: 36,
+                split_note: 60,
+                key_split: true,
+                ..Config::default()
+            },
+        );
+        send(&mut e, Command::Learn(target));
+        assert!(notes(&on(&mut e, note, 0)).is_empty());
+        assert_eq!((e.config.bass_split as u8, e.config.split_note), expected);
+        assert_eq!(e.learn, 0);
+        assert_eq!(
+            LearnedSplit::decode(e.learned_split.unwrap().encode()),
+            e.learned_split
+        );
+        assert!(off(&mut e, note, 0).is_empty());
+        assert!(e.root.is_none());
+    }
+}
+
+#[test]
+fn bass_bypass_releases_owned_bass_and_returns_low_notes_to_performance() {
+    let mut e = Engine::default();
+    let config = Config {
+        mode: MANUAL,
+        bass_split: 36,
+        always_bass: true,
+        ..Config::default()
+    };
+    configure(&mut e, config);
+    assert_eq!(notes(&on(&mut e, 24, 0)), vec![24]);
+    let mut released = Vec::new();
+    e.configure(
+        Config {
+            bass_enabled: false,
+            ..config
+        },
+        &mut |event| released.push(event),
+    );
+    assert!(released
+        .iter()
+        .any(|event| matches!(event, Out::Off(_, 24, _))));
+    assert!(e.owned_output_notes().iter().flatten().all(|on| !on));
+    assert!(notes(&on(&mut e, 24, 0)).is_empty());
+    assert_eq!(e.root.unwrap().note, 24);
+}
+
+#[test]
+fn split_order_always_leaves_one_chord_key() {
+    for bass in 0..128 {
+        for melody in 0..128 {
+            let (low, high) = ordered_splits(bass, melody);
+            assert!(low < high && high < 128);
+        }
+    }
+}
+
+#[test]
+fn arp_controls_do_not_restart_the_clock() {
+    for control in 0..8 {
+        let mut e = Engine {
+            sample_rate: 1000.0,
+            ..Engine::default()
+        };
+        configure(
+            &mut e,
+            Config {
+                mode: ARP,
+                rate: 0.1,
+                ..Config::default()
+            },
+        );
+        on(&mut e, 60, 1);
+        tick(&mut e, 72);
+        let position = (e.arp_step, e.arp_next);
+        let mut c = e.config;
+        match control {
+            0 => c.output_channel = 2,
+            1 => c.mpe = true,
+            2 => c.mode = MANUAL,
+            3 => c.inversion = 1,
+            4 => c.octaves = 3,
+            5 => c.arp_pattern = 2,
+            6 => {
+                send(&mut e, Command::Inversion(1));
+            }
+            _ => e.transport(true, 120.0, false, &mut |_| {}),
+        }
+        if control < 6 {
+            configure(&mut e, c);
+        }
+        assert_eq!((e.arp_step, e.arp_next), position, "control {control}");
+        if control == 2 {
+            tick(&mut e, 100);
+            c.mode = ARP;
+            configure(&mut e, c);
+            assert_eq!((e.arp_step, e.arp_next), (4, 200));
+        }
+    }
+}
+
+#[test]
+fn arp_octave_edits_wait_for_the_current_cycle_limit() {
+    for (before, after) in [(1, 3), (3, 1)] {
+        let mut e = Engine {
+            sample_rate: 80.0,
+            ..Engine::default()
+        };
+        configure(
+            &mut e,
+            Config {
+                mode: ARP,
+                rate: 0.25,
+                octaves: before,
+                ..Config::default()
+            },
+        );
+        on(&mut e, 60, 1);
+        let original = e.notes;
+        let mut heard = notes(&tick(&mut e, 11));
+        let mut c = e.config;
+        c.octaves = after;
+        configure(&mut e, c);
+        let old_len = original.len * before as usize;
+        heard.extend(notes(&tick(&mut e, old_len * 10 - 11)));
+        assert_eq!(
+            heard,
+            (0..old_len)
+                .map(|i| original.string(i).unwrap())
+                .collect::<Vec<_>>()
+        );
+        let next = notes(&tick(&mut e, original.len * after as usize * 10));
+        assert_eq!(
+            next,
+            (0..original.len * after as usize)
+                .map(|i| original.string(i).unwrap())
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn arp_swing_edit_preserves_pair_duration() {
+    let mut e = Engine {
+        sample_rate: 1000.0,
+        ..Engine::default()
+    };
+    configure(
+        &mut e,
+        Config {
+            mode: ARP,
+            rate: 0.1,
+            ..Config::default()
+        },
+    );
+    on(&mut e, 60, 1);
+    tick(&mut e, 20);
+    let mut c = e.config;
+    c.swing = 0.5;
+    configure(&mut e, c);
+    tick(&mut e, 31);
+    assert_eq!(e.arp_next, 100);
+    tick(&mut e, 50);
+    assert_eq!(e.arp_next, 175);
+    tick(&mut e, 75);
+    assert_eq!(e.arp_next, 200);
+}
+
+#[test]
+fn arp_fractional_intervals_do_not_accumulate_rounding_drift() {
+    let mut e = Engine {
+        sample_rate: 1000.0,
+        tempo: 137.0,
+        ..Engine::default()
+    };
+    configure(
+        &mut e,
+        Config {
+            mode: ARP,
+            rate: 0.25,
+            ..Config::default()
+        },
+    );
+    on(&mut e, 60, 1);
+    tick(&mut e, 100_000);
+    let expected = e.arp_step as f64 * 1000.0 * 60.0 / 137.0 * 0.25;
+    assert!(
+        (e.arp_next as f64 - expected).abs() < 1.0,
+        "deadline {} vs {expected}",
+        e.arp_next
+    );
+}
+
+#[test]
+fn xy_cc_auto_resolution_is_channel_local_and_resets() {
+    let mut e = Engine::default();
+    let mut config = Config::default();
+    config.mappings = [Mapping::cc(7, 16); 2];
+    configure(&mut e, config);
+    e.control(0, 7, 1.0, &mut |_| {});
+    assert_eq!((e.x, e.y), (1.0, 1.0));
+    e.control(0, 39, 0.0, &mut |_| {});
+    let expected = 16256.0 / 16383.0;
+    assert!((e.x - expected).abs() < 0.00001);
+    assert!((e.y - expected).abs() < 0.00001);
+    e.control(0, 39, 1.0, &mut |_| {});
+    assert_eq!((e.x, e.y), (1.0, 1.0));
+    e.control(1, 7, 64.0 / 127.0, &mut |_| {});
+    assert!((e.x - 64.0 / 127.0).abs() < 0.00001);
+    e.control(0, 121, 0.0, &mut |_| {});
+    e.control(0, 7, 1.0, &mut |_| {});
+    assert_eq!((e.x, e.y), (1.0, 1.0));
+}
+
+#[test]
+fn arp_pattern_edits_finish_the_previous_cycle_without_moving_beats() {
+    for pattern in 0..7 {
+        let mut e = Engine {
+            sample_rate: 80.0,
+            ..Engine::default()
+        };
+        configure(
+            &mut e,
+            Config {
+                mode: ARP,
+                rate: 0.25,
+                arp_pattern: pattern,
+                ..Config::default()
+            },
+        );
+        on(&mut e, 60, 1);
+        tick(&mut e, 1);
+        let cycle = [3, 3, 4, 6, 6, 3, 3][pattern as usize];
+        let mut c = e.config;
+        c.arp_pattern = (pattern + 1) % 7;
+        c.octaves = 2;
+        configure(&mut e, c);
+        tick(&mut e, cycle * 10 - 1);
+        assert_eq!(e.arp_pattern, pattern);
+        assert_eq!(e.arp_octaves, 1);
+        assert_eq!(e.arp_step, cycle);
+        assert_eq!(e.arp_next, (cycle * 10) as u64);
+        tick(&mut e, 1);
+        assert_eq!(e.arp_pattern, c.arp_pattern);
+        assert_eq!(e.arp_octaves, 2);
+        assert_eq!(e.arp_step, cycle + 1);
+    }
+}
+
+#[test]
+fn arp_rate_edit_finishes_the_swing_pair_before_changing_division() {
+    let mut e = Engine {
+        sample_rate: 800.0,
+        ..Engine::default()
+    };
+    configure(
+        &mut e,
+        Config {
+            mode: ARP,
+            rate: 0.25,
+            swing: 0.5,
+            ..Config::default()
+        },
+    );
+    on(&mut e, 60, 1);
+    tick(&mut e, 20);
+    let mut c = e.config;
+    c.rate = 0.5;
+    configure(&mut e, c);
+    tick(&mut e, 131);
+    assert_eq!(e.arp_next, 200);
+    tick(&mut e, 50);
+    assert_eq!(e.arp_next, 500);
+}
+
+#[test]
+fn arp_new_chord_restarts_but_revoicing_controls_do_not() {
+    let mut e = Engine {
+        sample_rate: 80.0,
+        ..Engine::default()
+    };
+    configure(
+        &mut e,
+        Config {
+            mode: ARP,
+            rate: 0.25,
+            ..Config::default()
+        },
+    );
+    on(&mut e, 60, 1);
+    tick(&mut e, 22);
+    for change in 0..9 {
+        let mut c = e.config;
+        match change {
+            0 => c.quality = 2,
+            1 => c.filter = 1,
+            2 => c.spread = 1,
+            3 => c.transpose = 12,
+            4 => c.voice_leading = 0,
+            5 => c.gate = 0.9,
+            6 => c.humanize = 0.5,
+            7 => c.contour = 1.0,
+            _ => c.root_on_select = true,
+        }
+        configure(&mut e, c);
+        assert_eq!((e.arp_step, e.arp_next), (3, 30), "change {change}");
+    }
+    off(&mut e, 60, 1);
+    on(&mut e, 62, 1);
+    assert_eq!((e.arp_step, e.arp_next), (0, 22));
+}
+
+#[test]
+fn arp_releasing_a_chord_tone_does_not_restart_the_clock() {
+    let mut e = Engine {
+        sample_rate: 80.0,
+        ..Engine::default()
+    };
+    configure(
+        &mut e,
+        Config {
+            mode: ARP,
+            rate: 0.25,
+            ..Config::default()
+        },
+    );
+    on(&mut e, 60, 1);
+    tick(&mut e, 12);
+    on(&mut e, 64, 1);
+    assert_eq!((e.arp_step, e.arp_next), (2, 20));
+    tick(&mut e, 10);
+    off(&mut e, 60, 1);
+    assert_eq!(e.root.unwrap().note, 64);
+    assert_eq!((e.arp_step, e.arp_next), (3, 30));
+}
+
+#[test]
+fn final_contoured_velocity_drives_same_note_length_before_midi_output() {
+    for mode in [AUTO, MANUAL, ARP] {
+        let mut e = Engine {
+            sample_rate: 1000.0,
+            ..Engine::default()
+        };
+        let mut c = Config {
+            mode,
+            contour: 1.0,
+            humanize: 0.0,
+            strings: 3,
+            strings_played: 3,
+            velocity: 0.4,
+            ..Config::default()
+        };
+        let target = routing::TARGETS
+            .iter()
+            .position(|t| t.id == "length_ms")
+            .unwrap();
+        c.routes[1] = routing::Route {
+            source: 7,
+            target: target as u8,
+            ..routing::Route::default()
+        };
+        configure(&mut e, c);
+        on(&mut e, 60, 1);
+        let output = if mode == MANUAL {
+            let mut events = Vec::new();
+            e.pluck_string(0, &mut |v| events.push(v));
+            events
+        } else {
+            tick(&mut e, 1)
+        };
+        let velocity = output
+            .iter()
+            .find_map(|v| {
+                if let Out::On(_, _, velocity) = v {
+                    Some(*velocity)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        assert!((velocity - 0.2).abs() < 0.0001, "mode {mode}");
+        assert_eq!(e.snapshot().sources[6], velocity);
+        let voice = e.voices.iter().flatten().find(|v| !v.layer).unwrap();
+        let expected = (20.0 + velocity * 2980.0) as u64;
+        assert_eq!(voice.off - voice.started, expected, "mode {mode}");
+        if mode == AUTO {
+            assert!(e.scheduled.iter().flatten().count() >= 2);
+        }
+    }
+}
+
+#[test]
+fn each_arp_note_routes_its_final_velocity_to_gate_without_rounding_the_step_twice() {
+    let mut e = Engine {
+        sample_rate: 1000.0,
+        ..Engine::default()
+    };
+    let mut config = Config {
+        mode: ARP,
+        rate: 0.25,
+        contour: 1.0,
+        velocity: 0.4,
+        ..Config::default()
+    };
+    let gate = routing::TARGETS
+        .iter()
+        .position(|t| t.id == "gate")
+        .unwrap();
+    config.routes[1] = routing::Route {
+        source: 7,
+        target: gate as u8,
+        ..routing::Route::default()
+    };
+    configure(&mut e, config);
+    on(&mut e, 60, 1);
+    for _ in 0..3 {
+        let mut emitted = None;
+        while emitted.is_none() {
+            e.tick(&mut |event| {
+                if let Out::On(_, note, velocity) = event {
+                    emitted = Some((note, velocity));
+                }
+            });
+        }
+        let (note, velocity) = emitted.unwrap();
+        let voice = e.voices.iter().flatten().find(|v| v.note == note).unwrap();
+        let expected_gate = 0.05 + 0.95 * velocity;
+        assert_eq!(
+            voice.off - voice.started,
+            (125.0 * expected_gate).max(1.0) as u64
+        );
+        assert_eq!(e.snapshot().sources[6], velocity);
+    }
+}
+
+#[test]
+fn strumfield_plays_without_a_self_route_and_still_drives_modulation() {
+    let mut e = Engine::default();
+    let mut c = Config {
+        mode: MANUAL,
+        routes: [routing::Route::default(); routing::ROUTE_COUNT],
+        ..Config::default()
+    };
+    c.routes[0] = routing::Route {
+        source: 8,
+        target: routing::TARGETS
+            .iter()
+            .position(|t| t.id == "length_ms")
+            .unwrap() as u8,
+        ..routing::Route::default()
+    };
+    configure(&mut e, c);
+    on(&mut e, 60, 1);
+    assert_eq!(
+        notes(&send(&mut e, Command::BeginGesture(0.0, 0.8))),
+        vec![60]
+    );
+    assert_eq!(
+        notes(&send(&mut e, Command::X(1.0))),
+        vec![64, 67, 72, 76, 79, 84, 88]
+    );
+    assert_eq!(e.sources[7], 1.0);
+    assert_eq!(e.x, 1.0);
+    assert_eq!(e.config.length_ms, 3000.0);
+    assert!(notes(&send(&mut e, Command::X(1.0))).is_empty());
+}
+
+#[test]
+fn once_sweep_octaves_feel_and_duration_preserve_scheduled_cycle() {
+    let make = |swing, humanize| {
+        let mut e = Engine::default();
+        e.sample_rate = 1000.0;
+        configure(
+            &mut e,
+            Config {
+                mode: AUTO,
+                strings: 3,
+                strings_played: 3,
+                octaves: 2,
+                strum_ms: 200.0,
+                strum_sync: false,
+                swing,
+                humanize,
+                ..Config::default()
+            },
+        );
+        on(&mut e, 60, 1);
+        let strikes: Vec<_> = e.scheduled.iter().flatten().copied().collect();
+        (e, strikes)
+    };
+    let (_, plain) = make(0.0, 0.0);
+    let (mut e, felt) = make(0.4, 1.0);
+    assert_eq!(
+        plain.iter().map(|s| s.note).collect::<Vec<_>>(),
+        vec![60, 64, 67, 72, 76, 79]
+    );
+    assert!(felt.first().unwrap().at <= 28);
+    assert!(felt.last().unwrap().at > plain.last().unwrap().at);
+    assert!(felt.last().unwrap().at < 1200);
+    assert!(felt[1].at > plain[1].at);
+    assert!(felt[1].velocity < plain[1].velocity);
+    assert!(felt.iter().all(|s| s.gate_step.is_none()));
+    let previous = felt.iter().map(|s| (s.note, s.at)).collect::<Vec<_>>();
+    let mut c = e.host_config;
+    c.octaves = 1;
+    c.swing = 0.0;
+    configure(&mut e, c);
+    assert_eq!(
+        e.scheduled
+            .iter()
+            .flatten()
+            .map(|s| (s.note, s.at))
+            .collect::<Vec<_>>(),
+        previous
+    );
+    assert_eq!(notes(&tick(&mut e, 1200)), vec![60, 64, 67, 72, 76, 79]);
+    assert!(notes(&tick(&mut e, 1200)).is_empty());
+}
+
+#[test]
+fn once_and_loop_use_identical_patterns_and_per_note_rates() {
+    for pattern in 0..7 {
+        for (sync, tempo, interval) in [
+            (true, 120.0, 125),
+            (true, 60.0, 250),
+            (false, 120.0, 80),
+            (false, 60.0, 80),
+        ] {
+            let make = |mode| {
+                let mut e = Engine {
+                    sample_rate: 1000.0,
+                    ..Engine::default()
+                };
+                e.transport(false, tempo, false, &mut |_| {});
+                configure(
+                    &mut e,
+                    Config {
+                        mode,
+                        strings: 3,
+                        strings_played: 3,
+                        arp_pattern: pattern,
+                        strum_sync: sync,
+                        strum_ms: 80.0,
+                        rate: 0.25,
+                        humanize: 0.0,
+                        ..Config::default()
+                    },
+                );
+                on(&mut e, 60, 1);
+                e
+            };
+            let mut once = make(AUTO);
+            let mut looped = make(ARP);
+            let count = Engine::pattern_length(pattern, 3);
+            let mut finite = Vec::new();
+            let mut repeating = Vec::new();
+            for time in 0..count * interval {
+                once.tick(&mut |out| {
+                    if let Out::On(_, note, _) = out {
+                        finite.push((time, note));
+                    }
+                });
+                looped.tick(&mut |out| {
+                    if let Out::On(_, note, _) = out {
+                        repeating.push((time, note));
+                    }
+                });
+            }
+            assert_eq!(
+                finite, repeating,
+                "pattern {pattern}, sync {sync}, tempo {tempo}"
+            );
+            assert_eq!(finite.len(), count);
+            assert_eq!(
+                finite.iter().map(|(t, _)| *t).collect::<Vec<_>>(),
+                (0..count).map(|step| step * interval).collect::<Vec<_>>()
+            );
+            assert!(notes(&tick(&mut once, interval + 1)).is_empty());
+            assert!(!notes(&tick(&mut looped, interval + 1)).is_empty());
+        }
+    }
+}
+
+#[test]
+fn once_long_patterns_fit_scheduler_and_played_order_stays_in_range() {
+    let mut e = Engine {
+        sample_rate: 1000.0,
+        ..Engine::default()
+    };
+    configure(
+        &mut e,
+        Config {
+            mode: AUTO,
+            strings: 12,
+            strings_played: 12,
+            octaves: 4,
+            arp_pattern: 3,
+            ..Config::default()
+        },
+    );
+    on(&mut e, 24, 1);
+    assert_eq!(e.scheduled.iter().flatten().count(), 96);
+    for count in 1..=12 {
+        for step in 0..count {
+            assert!(e.arp_index(5, step, count) < count);
+        }
+    }
+}
+
+#[test]
+fn note_feedback_records_octave_strikes_even_after_short_notes_end() {
+    let mut e = Engine {
+        sample_rate: 1000.0,
+        ..Engine::default()
+    };
+    configure(
+        &mut e,
+        Config {
+            mode: ARP,
+            octaves: 4,
+            rate: 0.0625,
+            gate: 0.05,
+            ..Config::default()
+        },
+    );
+    on(&mut e, 60, 1);
+    tick(&mut e, 285);
+    let snapshot = e.snapshot();
+    assert!(snapshot.note_strikes[96] > 0);
+    assert!(!snapshot.sounding_notes[96]);
 }

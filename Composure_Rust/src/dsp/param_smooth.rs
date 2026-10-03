@@ -64,7 +64,6 @@ pub fn smooth_envelope_params(
     one_minus: f64,
 ) {
     envelope_smooth_scalar_fields!(current, target, one_minus);
-    current.prog_release_inverse = target.prog_release_inverse;
 }
 
 #[cfg(test)]

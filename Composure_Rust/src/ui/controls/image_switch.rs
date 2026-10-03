@@ -48,6 +48,9 @@ impl View for ImageSwitch {
             return;
         }
         event.map(|window_event, meta| match window_event {
+            WindowEvent::MouseEnter | WindowEvent::MouseLeave | WindowEvent::MouseMove(..) => {
+                cx.needs_redraw();
+            }
             WindowEvent::MouseDown(MouseButton::Left) => {
                 param_widget_ext::toggle_bool_param(cx, &self.param_base);
                 cx.needs_redraw();
@@ -95,6 +98,9 @@ impl View for DetectionModeButton {
 
     fn event(&mut self, cx: &mut EventContext, event: &mut Event) {
         event.map(|window_event, meta| match window_event {
+            WindowEvent::MouseEnter | WindowEvent::MouseLeave | WindowEvent::MouseMove(..) => {
+                cx.needs_redraw();
+            }
             WindowEvent::MouseDown(MouseButton::Left) => {
                 param_widget_ext::toggle_bool_param(cx, &self.param_base);
                 cx.needs_redraw();

@@ -36,6 +36,42 @@ impl Engine {
             return;
         }
         let pressed = on && velocity > 0.0;
+        let learn_id = channel as usize * 128 + note as usize;
+        if self.learned_note_held[learn_id] {
+            if !pressed {
+                self.learned_note_held[learn_id] = false;
+            }
+            return;
+        }
+        if pressed && matches!(self.learn, 5 | 6) {
+            let target = self.learn;
+            let bass = if self.host_config.bass_split >= 0 {
+                self.host_config.bass_split as u8
+            } else {
+                if self.host_config.control_base >= 0 {
+                    self.host_config.control_base as u8
+                } else {
+                    36
+                }
+            };
+            let (bass, melody) = if target == 5 {
+                ordered_splits(note, self.host_config.split_note)
+            } else {
+                ordered_splits(bass, note)
+            };
+            let learned = LearnedSplit {
+                target,
+                bass,
+                melody,
+            };
+            self.learn = 0;
+            let mut config = self.host_config;
+            learned.apply(&mut config);
+            self.configure(config, out);
+            self.learned_note_held[learn_id] = true;
+            self.learned_split = Some(learned);
+            return;
+        }
         if pressed && self.learn == 4 {
             let base = note.min(116);
             self.learned_base = Some(base);
@@ -61,6 +97,10 @@ impl Engine {
                 self.rebuild_harmony(false, out);
             }
             // Consume releases and zero-velocity Note Ons on every channel too.
+            return;
+        }
+        if self.config.bass_boundary() >= 0 && (note as i16) < self.config.bass_boundary() {
+            self.bass_note(pressed, channel, note, velocity, out);
             return;
         }
         if self.config.key_split && note >= self.config.split_note {
@@ -165,6 +205,9 @@ impl Engine {
         }
         let raw = (value.clamp(0.0, 1.0) * 127.0).round() as u8;
         self.cc[channel as usize][cc as usize] = raw;
+        if (32..64).contains(&cc) {
+            self.cc_lsb_seen[channel as usize] |= 1 << (cc - 32);
+        }
         match cc {
             1 => self.source(1, value, out),
             11 => self.source(2, value, out),
@@ -199,6 +242,9 @@ impl Engine {
                 return;
             }
             121 => {
+                self.cc_lsb_seen[channel as usize] = 0;
+                self.cc[channel as usize].fill(0);
+                self.bass_pedal(channel, false, out);
                 self.channels[channel as usize] = Expression::default();
                 self.input_bend_values[channel as usize] = 0.5;
                 if self.config.key_split {
@@ -213,6 +259,7 @@ impl Engine {
                 return;
             }
             64 => {
+                self.bass_pedal(channel, raw >= 64, out);
                 if self.config.key_split {
                     self.melody_sustain[channel as usize] = raw >= 64;
                     out(Out::Cc(channel, 64, value));
@@ -237,22 +284,29 @@ impl Engine {
             self.learn = 0;
             return;
         }
+        let mut mapped = false;
         for axis in 0..2 {
             let m = self.config.mappings[axis];
             if m.channel != 16 && m.channel != channel {
                 continue;
             }
-            if m.kind == 1 && cc == m.number {
+            let wide = m.number < 32
+                && (m.kind == 2 || self.cc_lsb_seen[channel as usize] & (1 << m.number) != 0);
+            if matches!(m.kind, 1 | 2) && (cc == m.number || (wide && cc == m.number + 32)) {
+                let value = if wide {
+                    let data = &self.cc[channel as usize];
+                    let val = ((data[m.number as usize] as u16) << 7)
+                        | data[m.number as usize + 32] as u16;
+                    val as f32 / 16383.0
+                } else {
+                    value
+                };
                 self.position(value, axis, out);
-                return;
+                mapped = true;
             }
-            if m.kind == 2 && m.number < 32 && (cc == m.number || cc == m.number + 32) {
-                let data = &self.cc[channel as usize];
-                let val =
-                    ((data[m.number as usize] as u16) << 7) | data[m.number as usize + 32] as u16;
-                self.position(val as f32 / 16383.0, axis, out);
-                return;
-            }
+        }
+        if mapped {
+            return;
         }
         if cc == 74 {
             self.channels[channel as usize].timbre = value;

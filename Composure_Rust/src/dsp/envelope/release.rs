@@ -312,15 +312,21 @@ impl ReleaseCoeffs {
         } else {
             self.release_coeff
         };
-        let input_weight = (p.input_dependence * 0.01).clamp(0.0, 1.0);
-        let gr_weight = (p.gr_dependence * 0.01).clamp(0.0, 1.0);
+        let input_amount = p.input_dependence;
+        let gr_amount = p.gr_dependence;
+        let input_weight = (input_amount.abs() * 0.01).clamp(0.0, 1.0);
+        let gr_weight = (gr_amount.abs() * 0.01).clamp(0.0, 1.0);
         let total = (input_weight + gr_weight).max(1.0);
         let input_weight = input_weight / total;
         let gr_weight = gr_weight / total;
+
+        let input_inverse = input_amount < 0.0;
+        let gr_inverse = gr_amount < 0.0;
+
         let input = if input_weight == 0.0 {
             fixed
         } else {
-            let coefficient = self.release_input_dependent(p, detector_db, p.prog_release_inverse);
+            let coefficient = self.release_input_dependent(p, detector_db, input_inverse);
             if curved {
                 self.calculate_curve_shaped_release_coeff(
                     current_db,
@@ -348,7 +354,7 @@ impl ReleaseCoeffs {
                 is_cut,
             )
         } else {
-            self.release_gr_dependent_dual(p, gr_abs, is_cut, p.prog_release_inverse)
+            self.release_gr_dependent_dual(p, gr_abs, is_cut, gr_inverse)
         };
         let input_effect = (input - fixed) * input_weight;
         let gr_effect = (gr - fixed) * gr_weight;
@@ -461,6 +467,30 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn bipolar_negative_amounts_invert_influences() {
+        let c = coeffs();
+        let mut p = EnvelopeParams::default();
+        let response = |p: &EnvelopeParams| c.release_response(p, -6.0, 0.0, -60.0, 6.0, true).3;
+
+        // Normal input dependence vs inverted input dependence
+        p.input_dependence = 100.0;
+        let normal_input = response(&p);
+        p.input_dependence = -100.0;
+        let inverted_input = response(&p);
+        assert_ne!(normal_input, inverted_input);
+
+        // Input slew rate
+        p = EnvelopeParams::default();
+        let base = c.release_coeff;
+        p.input_rate_amount = 2.0;
+        let normal_rate = c.apply_input_rate(&p, base, 0.1);
+        p.input_rate_amount = -2.0;
+        let inverted_rate = c.apply_input_rate(&p, base, 0.1);
+        assert!(normal_rate < base);
+        assert!(inverted_rate > base);
     }
 
     #[test]

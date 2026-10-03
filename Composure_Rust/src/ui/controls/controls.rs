@@ -3,7 +3,6 @@ use super::display::UiDisplay;
 use super::image_knob::ImageKnob;
 use super::image_switch::{DetectionModeButton, ImageSwitch};
 use super::layout::ControlLayout;
-use super::param_button::ParamButton;
 use super::step_points::StepSet;
 use super::{appearance, theme};
 use crate::params::ComposureParams;
@@ -26,7 +25,7 @@ where
     super::graph_pages::build_toggle(
         cx,
         (
-            appearance::ENV_X + appearance::ENV_W - 10.0 - appearance::SC_EQ_BUTTON_W,
+            appearance::ENV_X + appearance::ENV_W - 22.0 - appearance::SC_EQ_BUTTON_W,
             appearance::ENV_Y + (appearance::MODULE_HEADER_H - 28.0) * 0.5,
             appearance::SC_EQ_BUTTON_W,
         ),
@@ -46,7 +45,7 @@ where
         params.clone(),
         |p| &p.gr_dependence,
         display.clone(),
-        (appearance::ENV_X + 136.0, appearance::ENVELOPE_KNOB_Y),
+        (appearance::ENV_X + 136.0, appearance::PROG_KNOB_Y),
         size,
         StepSet::None,
     );
@@ -55,24 +54,17 @@ where
         params.clone(),
         |p| &p.input_rate_amount,
         display.clone(),
-        (appearance::ENV_X + 258.0, appearance::ENVELOPE_KNOB_Y),
+        (appearance::ENV_X + 258.0, appearance::PROG_KNOB_Y),
         size,
         StepSet::None,
     );
-    ParamButton::new(cx, params.clone(), |p| &p.prog_release_inverse)
-        .class("jsfx-button")
-        .position_type(PositionType::SelfDirected)
-        .left(Pixels(l.inverse_btn.0))
-        .top(Pixels(l.inverse_btn.1))
-        .width(Pixels(l.inverse_btn.2))
-        .height(Pixels(28.0));
     DetectionModeButton::new(cx, params.clone(), |p| &p.detection_mode)
         .class("detection-mode-button")
         .position_type(PositionType::SelfDirected)
         .left(Pixels(l.detection_btn.0))
         .top(Pixels(l.detection_btn.1))
         .width(Pixels(appearance::DETECTION_BUTTON_W))
-        .height(Pixels(28.0));
+        .height(Pixels(appearance::ADAPTIVE_BUTTON_H));
     ImageSwitch::new(cx, params.clone(), |p| &p.harmonic_type)
         .class("image-switch")
         .position_type(PositionType::SelfDirected)
@@ -133,10 +125,16 @@ where
         |p| &p.strength,
         display.clone(),
         l.strength_knob,
-        (
-            appearance::STRENGTH_KNOB_SIZE,
-            appearance::STRENGTH_KNOB_SIZE,
-        ),
+        (appearance::STRENGTH_KNOB_SIZE, appearance::STRENGTH_KNOB_H),
+        StepSet::None,
+    );
+    knob(
+        cx,
+        params.clone(),
+        |p| &p.input_offset_db,
+        display.clone(),
+        l.offset_knob,
+        standard_size,
         StepSet::None,
     );
     ImageSwitch::new(cx, params.clone(), |p| &p.mid_side_mode)

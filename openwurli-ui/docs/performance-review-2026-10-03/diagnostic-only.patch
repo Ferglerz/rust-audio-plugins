@@ -1,0 +1,87 @@
+--- a/src/engine.rs
++++ b/src/engine.rs
+@@ -793,6 +793,8 @@
+             }
+         }
+     }
++
++    pub fn review_stats(&self) -> [u64; 8] { self.circuits.heavy.amp.review_stats() }
+ 
+     // ── Render ───────────────────────────────────────────────────────────
+ 
+--- a/src/power_amp.rs
++++ b/src/power_amp.rs
+@@ -427,6 +427,7 @@
+ 
+     pub struct PowerAmp {
+         state: CircuitState,
++        review_stats: [u64; 8],
+         sample_rate: f64,
+         /// Last confirmed-good adapter output; used to hold continuity when
+         /// the melange solver diverges and we have to reset.
+@@ -455,6 +456,7 @@
+         pub fn new_at_sample_rate(sample_rate: f64) -> Self {
+             Self {
+                 state: init_state(sample_rate),
++                review_stats: [0; 8],
+                 sample_rate,
+                 last_good: 0.0,
+                 rails: super::RailDynamics::new(sample_rate),
+@@ -500,7 +502,15 @@
+                 self.state.v_rail_neg_offset = off_neg;
+             }
+ 
++            let before = (self.state.diag_be_fallback_count, self.state.diag_substep_count, self.state.diag_refactor_count);
+             let raw = gen_power_amp::process_sample(input, &mut self.state)[0];
++            self.review_stats[0] += 1;
++            self.review_stats[1] += self.state.last_nr_iterations as u64 + 1;
++            self.review_stats[2] += self.state.diag_be_fallback_count - before.0;
++            self.review_stats[3] += self.state.diag_substep_count - before.1;
++            self.review_stats[4] += self.state.diag_refactor_count - before.2;
++            self.review_stats[5] = self.review_stats[5].max(self.state.last_nr_iterations as u64 + 1);
++
+             let result = raw / HEADROOM;
+ 
+             // Divergence guard. Under continuous polyphonic playing, the
+@@ -535,6 +545,8 @@
+                 .iter()
+                 .any(|v| !v.is_finite() || v.abs() > 100.0);
+             if !result.is_finite() || nr_failed || state_insane {
++                self.review_stats[6] += 1;
++                self.review_stats[7] += u64::from(nr_failed);
+                 self.reset();
+                 return self.last_good;
+             }
+@@ -550,6 +562,8 @@
+ 
+             clamped
+         }
++
++        pub fn review_stats(&self) -> [u64; 8] { self.review_stats }
+ 
+         /// Raw, pre-clamp output of the melange solver. Audio-unsafe for normal
+         /// use (not bounded), but needed for diagnostic probing of solver
+--- a/src/gen_power_amp.rs
++++ b/src/gen_power_amp.rs
+@@ -9779,6 +9779,7 @@
+         }
+     }
+ 
++    let review_fallback_start = if !converged { Some(std::time::Instant::now()) } else { None };
+     // Adaptive sub-stepping: retry with subdivided timestep
+     if !converged {
+         'substep: for subdiv_power in 1..=3u32 {
+@@ -12054,6 +12055,7 @@
+ 
+     // NaN/Inf check BEFORE state update — prevents corruption of v_prev/i_nl_prev.
+     // Mirrors the DK-path reset in templates/rust/process_sample.rs.tera (Step 7).
++    if let Some(t) = review_fallback_start { REVIEW_FALLBACK_NS.fetch_add(t.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed); }
+     if !v.iter().all(|x| x.is_finite()) {
+         state.v_prev = state.dc_operating_point;
+         state.i_nl_prev = DC_NL_I;
+@@ -12299,3 +12301,5 @@
+         }
+     }
+ }
++
++pub static REVIEW_FALLBACK_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

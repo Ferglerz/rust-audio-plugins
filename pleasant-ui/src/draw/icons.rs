@@ -1,5 +1,5 @@
 use super::Draw;
-use crate::theme::PANEL;
+use crate::theme::{LINE, MUTED, PANEL, TEXT};
 use nih_plug_vizia::vizia::vg::{Color, Paint, Path};
 
 impl Draw<'_> {
@@ -171,5 +171,107 @@ impl Draw<'_> {
         p.close();
         self.c.fill_path(&p, &Paint::color(self.color(color)));
         self.circle(cx, cy, 1.98, PANEL, true);
+    }
+}
+
+impl Draw<'_> {
+    /// Shared graph zoom/restore corner glyphs, originally drawn by Flattery.
+    pub fn graph_zoom_button(
+        &mut self,
+        r: (f32, f32, f32, f32),
+        inward: bool,
+        hot: bool,
+        enabled: bool,
+    ) {
+        let fade = if enabled { 1.0 } else { 0.32 };
+        let mut panel = PANEL;
+        panel.a *= fade;
+        let mut line = LINE;
+        line.a *= fade;
+        self.rounded_rect(r.0, r.1, r.2, r.3, 4.0, panel);
+        self.outline(r, line);
+        let color = if !enabled {
+            Color { a: fade, ..MUTED }
+        } else if hot {
+            TEXT
+        } else {
+            MUTED
+        };
+        let (x, y, w, h) = r;
+        let arm = 5.0;
+        if inward {
+            let m = 4.5;
+            self.poly(
+                &[(x + m, y + m + arm), (x + m, y + m), (x + m + arm, y + m)],
+                color,
+                1.3,
+            );
+            self.poly(
+                &[
+                    (x + w - m - arm, y + m),
+                    (x + w - m, y + m),
+                    (x + w - m, y + m + arm),
+                ],
+                color,
+                1.3,
+            );
+            self.poly(
+                &[
+                    (x + m, y + h - m - arm),
+                    (x + m, y + h - m),
+                    (x + m + arm, y + h - m),
+                ],
+                color,
+                1.3,
+            );
+            self.poly(
+                &[
+                    (x + w - m - arm, y + h - m),
+                    (x + w - m, y + h - m),
+                    (x + w - m, y + h - m - arm),
+                ],
+                color,
+                1.3,
+            );
+        } else {
+            let m = 3.0;
+            let inset = 8.0;
+            self.poly(
+                &[
+                    (x + m, y + inset),
+                    (x + inset, y + inset),
+                    (x + inset, y + m),
+                ],
+                color,
+                1.3,
+            );
+            self.poly(
+                &[
+                    (x + w - inset, y + m),
+                    (x + w - inset, y + inset),
+                    (x + w - m, y + inset),
+                ],
+                color,
+                1.3,
+            );
+            self.poly(
+                &[
+                    (x + inset, y + h - m),
+                    (x + inset, y + h - inset),
+                    (x + m, y + h - inset),
+                ],
+                color,
+                1.3,
+            );
+            self.poly(
+                &[
+                    (x + w - m, y + h - inset),
+                    (x + w - inset, y + h - inset),
+                    (x + w - inset, y + h - m),
+                ],
+                color,
+                1.3,
+            );
+        }
     }
 }

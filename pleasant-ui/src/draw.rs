@@ -47,6 +47,7 @@ pub struct Draw<'a> {
     pub font: Option<FontId>,
     pub offset_x: f32,
     pub alpha_mul: f32,
+    pub hover: Option<(f32, f32)>,
 }
 
 impl<'a> Draw<'a> {
@@ -67,7 +68,28 @@ impl<'a> Draw<'a> {
             font,
             offset_x: 0.0,
             alpha_mul: 1.0,
+            hover: None,
         }
+    }
+
+    pub fn with_hover(mut self, hover: Option<(f32, f32)>) -> Self {
+        self.hover = hover;
+        self
+    }
+
+    pub fn is_hovered(&self, r: (f32, f32, f32, f32)) -> bool {
+        Self::is_hovered_rect(self.hover, self.offset_x, r)
+    }
+
+    pub fn is_hovered_rect(
+        hover: Option<(f32, f32)>,
+        offset_x: f32,
+        r: (f32, f32, f32, f32),
+    ) -> bool {
+        hover.is_some_and(|(hx, hy)| {
+            let rx = r.0 + offset_x;
+            hx >= rx && hx <= rx + r.2 && hy >= r.1 && hy <= r.1 + r.3
+        })
     }
 
     pub fn color(&self, c: Color) -> Color {
@@ -111,5 +133,17 @@ mod tests {
             anim.step();
         }
         assert_eq!(anim.step(), 0.0);
+    }
+
+    #[test]
+    fn test_is_hovered() {
+        let r = (10.0, 10.0, 50.0, 20.0);
+        assert!(!Draw::is_hovered_rect(None, 0.0, r));
+
+        assert!(Draw::is_hovered_rect(Some((20.0, 15.0)), 0.0, r));
+        assert!(!Draw::is_hovered_rect(Some((70.0, 15.0)), 0.0, r));
+
+        assert!(!Draw::is_hovered_rect(Some((20.0, 15.0)), 30.0, r));
+        assert!(Draw::is_hovered_rect(Some((50.0, 15.0)), 30.0, r));
     }
 }

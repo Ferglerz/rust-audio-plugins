@@ -132,7 +132,7 @@ pub(super) const SCALES: [f64; 12] = [
     6.0, 12.0, 18.0, 24.0, 30.0, 36.0, 42.0, 48.0, 54.0, 60.0, 66.0, 72.0,
 ];
 
-/// Graph scale button (±24 ▾) and its dropdown rows.
+/// Graph scale button (±24) and its dropdown rows.
 pub(super) const SCALE_BUTTON_TEXT: f32 = 13.0;
 /// Footer `d.button` label size (process / resolution) and matching dropdowns.
 pub(super) const PROCESS_BUTTON_TEXT: f32 = 11.0;

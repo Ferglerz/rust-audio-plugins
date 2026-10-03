@@ -1,0 +1,9 @@
+rate=44100, bytes_extended=7802368, bytes_normal=3727528
+rate=48000, bytes_extended=8494080, bytes_normal=4058880
+rate=88200, bytes_extended=15607200, bytes_normal=7457520
+rate=96000, bytes_extended=16988160, bytes_normal=8117760
+rate=192000, bytes_extended=33976320, bytes_normal=16235520
+compared_envelope_steps=10358516, differing_bits=0
+note=36, original_ns_per_ramp_sample=18.21987548828125, baked_ns_per_ramp_sample=3.65505615234375
+note=60, original_ns_per_ramp_sample=18.286336263020832, baked_ns_per_ramp_sample=3.647799479166667
+note=84, original_ns_per_ramp_sample=18.26922098795573, baked_ns_per_ramp_sample=3.6710103352864585

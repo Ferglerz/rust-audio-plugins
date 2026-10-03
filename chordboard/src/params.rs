@@ -10,10 +10,16 @@ use std::sync::{
 pub struct ChordboardParams {
     #[id = "always_bass"]
     pub always_bass: BoolParam,
+    #[id = "affect_chords"]
+    pub affect_chords: BoolParam,
     #[id = "always_chord"]
     pub always_chord: BoolParam,
     #[id = "key_split"]
     pub key_split: BoolParam,
+    #[id = "bass_enabled"]
+    pub bass_enabled: BoolParam,
+    #[id = "bass_split"]
+    pub bass_split: IntParam,
     #[id = "split_note"]
     pub split_note: IntParam,
     #[id = "root_on_select"]
@@ -48,6 +54,10 @@ pub struct ChordboardParams {
     pub slot_6: AtomicU64,
     #[persist = "chord-slot-8-v1"]
     pub slot_7: AtomicU64,
+    #[persist = "chord-slot-9-v1"]
+    pub slot_8: AtomicU64,
+    #[persist = "chord-slot-10-v1"]
+    pub slot_9: AtomicU64,
     #[id = "mode"]
     pub mode: IntParam,
     #[id = "quality"]
@@ -78,6 +88,8 @@ pub struct ChordboardParams {
     pub strum_sync: BoolParam,
     #[id = "strum_beats"]
     pub strum_beats: FloatParam,
+    #[id = "strum_hold"]
+    pub strum_hold: BoolParam,
     #[id = "tempo_sync"]
     pub tempo_sync: BoolParam,
     #[id = "tempo"]
@@ -86,6 +98,8 @@ pub struct ChordboardParams {
     pub direction: IntParam,
     #[id = "contour"]
     pub contour: FloatParam,
+    #[id = "contour_curve"]
+    pub contour_curve: FloatParam,
     #[id = "arp_pattern"]
     pub arp_pattern: IntParam,
     #[id = "rate"]
@@ -133,10 +147,15 @@ pub struct ChordboardParams {
     pub x: FloatParam,
     #[id = "y"]
     pub y: FloatParam,
+    // Retained for preset compatibility; computer-key playing is always enabled.
     #[id = "keyboard"]
     pub keyboard: BoolParam,
     #[id = "fifths"]
     pub fifths: BoolParam,
+    #[id = "scale_layout"]
+    pub scale_layout: IntParam,
+    #[id = "key_spelling"]
+    pub key_spelling: IntParam,
     #[id = "bank"]
     pub bank: IntParam,
     #[id = "keyboard_octave"]
@@ -150,8 +169,6 @@ pub struct ChordboardParams {
     pub highlight: BoolParam,
     #[id = "filter"]
     pub filter: IntParam,
-    #[id = "split_channels"]
-    pub split_channels: BoolParam,
     #[id = "bass_channel"]
     pub bass_channel: IntParam,
     #[id = "upper_channel"]
@@ -162,28 +179,72 @@ fn parse_split_note(text: &str) -> Option<i32> {
     if let Ok(note) = text.parse::<i32>() {
         return (0..=127).contains(&note).then_some(note);
     }
-    crate::harmony::NOTE_NAMES.iter().enumerate().find_map(|(pitch, name)| {
-        let octave = text.strip_prefix(name)?.parse::<i32>().ok()?;
-        let note = octave.checked_add(1)?.checked_mul(12)?.checked_add(pitch as i32)?;
-        (0..=127).contains(&note).then_some(note)
-    })
+    crate::harmony::NOTE_NAMES
+        .iter()
+        .enumerate()
+        .find_map(|(pitch, name)| {
+            let octave = text.strip_prefix(name)?.parse::<i32>().ok()?;
+            let note = octave
+                .checked_add(1)?
+                .checked_mul(12)?
+                .checked_add(pitch as i32)?;
+            (0..=127).contains(&note).then_some(note)
+        })
 }
 
 impl Default for ChordboardParams {
     fn default() -> Self {
         Self {
             always_bass: BoolParam::new("Always play bass", false),
+            affect_chords: BoolParam::new("Melody affects chords", false),
             always_chord: BoolParam::new("Always play full chord", false),
             key_split: BoolParam::new("Key split", false),
-            split_note: IntParam::new("First right-hand note", 60, IntRange::Linear { min: 0, max: 127 })
-                .with_value_to_string(Arc::new(|v| format!("{}{} ({v})", crate::harmony::NOTE_NAMES[v as usize % 12], v / 12 - 1)))
-                .with_string_to_value(Arc::new(parse_split_note)),
+            bass_enabled: BoolParam::new("Bass enabled", true),
+            bass_split: IntParam::new("Bass below", -1, IntRange::Linear { min: -1, max: 127 })
+                .with_value_to_string(Arc::new(|v| {
+                    if v < 0 {
+                        "Control octave".into()
+                    } else {
+                        format!(
+                            "{}{} ({v})",
+                            crate::harmony::NOTE_NAMES[v as usize % 12],
+                            v / 12 - 1
+                        )
+                    }
+                }))
+                .with_string_to_value(Arc::new(|text| {
+                    if text.trim().eq_ignore_ascii_case("control octave")
+                        || text.trim().eq_ignore_ascii_case("auto")
+                    {
+                        Some(-1)
+                    } else {
+                        parse_split_note(text)
+                    }
+                })),
+            split_note: IntParam::new(
+                "First right-hand note",
+                60,
+                IntRange::Linear { min: 0, max: 127 },
+            )
+            .with_value_to_string(Arc::new(|v| {
+                format!(
+                    "{}{} ({v})",
+                    crate::harmony::NOTE_NAMES[v as usize % 12],
+                    v / 12 - 1
+                )
+            }))
+            .with_string_to_value(Arc::new(parse_split_note)),
             root_on_select: BoolParam::new("Root on select", false),
-            routes: std::array::from_fn(|_| RouteParams::default()),
-            editor_state: ViziaState::new_screen_sized("Chordboard", || (1120, 856)),
-            schema_version: AtomicU32::new(1),
+            routes: std::array::from_fn(|i| {
+                RouteParams::from_route(crate::engine::routing::default_routes()[i])
+            }),
+            editor_state: ViziaState::new_screen_sized(
+                "Chordboard",
+                crate::ui::initial_editor_size,
+            ),
+            schema_version: AtomicU32::new(2),
             selected_quality: AtomicU32::new(0),
-            control_base: AtomicI32::new(-1),
+            control_base: AtomicI32::new(12),
             map_x: AtomicU32::new(Mapping::cc(1, 16).encode()),
             map_y: AtomicU32::new(Mapping::default().encode()),
             slot_0: AtomicU64::new(0),
@@ -194,9 +255,12 @@ impl Default for ChordboardParams {
             slot_5: AtomicU64::new(0),
             slot_6: AtomicU64::new(0),
             slot_7: AtomicU64::new(0),
+            slot_8: AtomicU64::new(0),
+            slot_9: AtomicU64::new(0),
             mode: IntParam::new("Play mode", 1, IntRange::Linear { min: 1, max: 3 })
                 .with_value_to_string(Arc::new(|v| {
-                    ["Auto Strum", "Manual Strum", "Arpeggiator"][(v - 1) as usize].to_string()
+                    ["Arpeggiator Once", "Manual Strum", "Arpeggiator Loop"][(v - 1) as usize]
+                        .to_string()
                 })),
             quality: IntParam::new("Base quality", 0, IntRange::Linear { min: 0, max: 11 })
                 .with_value_to_string(Arc::new(|v| {
@@ -213,12 +277,20 @@ impl Default for ChordboardParams {
                 })),
             inversion: IntParam::new("Inversion", 0, IntRange::Linear { min: 0, max: 5 }),
             transpose: IntParam::new("Transpose", 0, IntRange::Linear { min: -24, max: 24 }),
-            spread: IntParam::new("Spread", 0, IntRange::Linear { min: 0, max: 2 })
-                .with_value_to_string(Arc::new(|v| {
-                    ["Close", "Open", "Wide"][v as usize].to_string()
-                })),
+            spread: IntParam::new(
+                "Voicing",
+                0,
+                IntRange::Linear {
+                    min: 0,
+                    max: (crate::harmony::VOICING_NAMES.len() - 1) as i32,
+                },
+            )
+            .with_value_to_string(Arc::new(|v| {
+                crate::harmony::VOICING_NAMES[v as usize].to_string()
+            })),
             latch: BoolParam::new("Latch", false),
             strum_latch: BoolParam::new("Trackpad latch", false),
+            strum_hold: BoolParam::new("Hold", false),
             velocity: FloatParam::new(
                 "Velocity",
                 0.8,
@@ -244,23 +316,24 @@ impl Default for ChordboardParams {
                 IntRange::Linear { min: 1, max: 12 },
             ),
             strum_ms: FloatParam::new(
-                "Strum time ms",
-                0.0,
+                "Rate",
+                125.0,
                 FloatRange::Linear {
                     min: 0.0,
                     max: 1500.0,
                 },
             )
             .with_value_to_string(Arc::new(|v| format!("{v:.2}"))),
-            strum_sync: BoolParam::new("Sweep sync", false),
+            strum_sync: BoolParam::new("Rate tempo sync", true),
             strum_beats: FloatParam::new(
-                "Sweep beats",
+                "Sweep beats (legacy)",
                 0.25,
                 FloatRange::Linear {
                     min: 0.0625,
                     max: 2.0,
                 },
-            ),
+            )
+            .hide(),
             tempo_sync: BoolParam::new("Host sync", true),
             tempo: FloatParam::new(
                 "Tempo BPM",
@@ -271,10 +344,15 @@ impl Default for ChordboardParams {
                 },
             )
             .with_value_to_string(Arc::new(|v| format!("{v:.1}"))),
-            direction: IntParam::new("Strum direction", 0, IntRange::Linear { min: 0, max: 2 })
-                .with_value_to_string(Arc::new(|v| {
-                    ["Up", "Down", "Alternate"][v as usize].to_string()
-                })),
+            direction: IntParam::new(
+                "Strum direction (legacy)",
+                0,
+                IntRange::Linear { min: 0, max: 4 },
+            )
+            .with_value_to_string(Arc::new(|v| {
+                ["Up", "Down", "Alternate", "Up in 3rds", "Down in 3rds"][v as usize].to_string()
+            }))
+            .hide(),
             contour: FloatParam::new(
                 "Velocity contour",
                 0.0,
@@ -283,13 +361,32 @@ impl Default for ChordboardParams {
                     max: 1.0,
                 },
             )
-            .with_value_to_string(Arc::new(|v| format!("{v:.2}"))),
-            arp_pattern: IntParam::new("Arp pattern", 0, IntRange::Linear { min: 0, max: 4 })
+            .with_value_to_string(Arc::new(|v| format!("{v:.2}")))
+            .hide(),
+            contour_curve: FloatParam::new(
+                "Contour curve",
+                0.0,
+                FloatRange::Linear {
+                    min: -1.0,
+                    max: 1.0,
+                },
+            )
+            .hide(),
+            arp_pattern: IntParam::new("Arp pattern", 0, IntRange::Linear { min: 0, max: 6 })
                 .with_value_to_string(Arc::new(|v| {
-                    ["Up", "Down", "Up/Down", "Played order", "Random"][v as usize].to_string()
+                    [
+                        "Up",
+                        "Down",
+                        "Up / Down",
+                        "Up in 3rds",
+                        "Down in 3rds",
+                        "Played order",
+                        "Random",
+                    ][v as usize]
+                        .to_string()
                 })),
             rate: FloatParam::new(
-                "Arp beat length",
+                "Rate beats",
                 0.25,
                 FloatRange::Linear {
                     min: 0.0625,
@@ -410,8 +507,18 @@ impl Default for ChordboardParams {
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
             .with_value_to_string(Arc::new(|v| format!("{v:.2}"))),
-            keyboard: BoolParam::new("Keyboard play", true),
+            keyboard: BoolParam::new("Keyboard play", true)
+                .hide()
+                .hide_in_generic_ui(),
             fifths: BoolParam::new("Fifths layout", false),
+            scale_layout: IntParam::new("Scale layout", 0, IntRange::Linear { min: 0, max: 2 })
+                .with_value_to_string(Arc::new(|v| {
+                    ["Off", "Degrees", "Passing"][v as usize].into()
+                })),
+            key_spelling: IntParam::new("Key spelling", 0, IntRange::Linear { min: 0, max: 2 })
+                .with_value_to_string(Arc::new(|v| {
+                    ["Automatic", "Sharps", "Flats"][v as usize].into()
+                })),
             bank: IntParam::new("Root bank", 0, IntRange::Linear { min: 0, max: 1 })
                 .with_value_to_string(Arc::new(|v| ["1", "2"][v as usize].to_string())),
             keyboard_octave: IntParam::new(
@@ -455,7 +562,6 @@ impl Default for ChordboardParams {
                     ][v as usize]
                         .to_string()
                 })),
-            split_channels: BoolParam::new("Split bass / upper (non-MPE)", false),
             bass_channel: IntParam::new("Bass channel", 1, IntRange::Linear { min: 1, max: 16 }),
             upper_channel: IntParam::new("Upper channel", 2, IntRange::Linear { min: 1, max: 16 }),
         }
@@ -473,8 +579,11 @@ impl ChordboardParams {
         Config {
             always_bass: self.always_bass.value(),
             always_chord: self.always_chord.value(),
+            affect_chords: self.affect_chords.value(),
             key_split: self.key_split.value(),
             split_note: self.split_note.value() as u8,
+            bass_split: self.bass_split.value() as i16,
+            bass_enabled: self.bass_enabled.value(),
             root_on_select: self.root_on_select.value(),
             routes: std::array::from_fn(|i| self.routes[i].route()),
             mode: self.mode.value() as u8,
@@ -489,11 +598,14 @@ impl ChordboardParams {
             strings: self.strings.value() as u8,
             strings_played: self.strings_played.value() as u8,
             routed_x: None,
+            legacy_direct_x: self.schema_version.load(Ordering::Relaxed) < 2,
             strum_ms: self.strum_ms.value(),
             strum_sync: self.strum_sync.value(),
             strum_beats: self.strum_beats.value(),
+            strum_hold: self.strum_hold.value(),
             direction: self.direction.value() as u8,
             contour: self.contour.value(),
+            contour_curve: self.contour_curve.value(),
             arp_pattern: self.arp_pattern.value() as u8,
             rate: self.rate.value(),
             gate: self.gate.value(),
@@ -515,7 +627,6 @@ impl ChordboardParams {
             y_min: self.y_min.value(),
             y_max: self.y_max.value(),
             filter: self.filter.value() as u8,
-            split_channels: self.split_channels.value(),
             bass_channel: (self.bass_channel.value() - 1) as u8,
             upper_channel: (self.upper_channel.value() - 1) as u8,
             control_base: self.control_base.load(Ordering::Relaxed).clamp(-1, 116) as i16,
@@ -557,7 +668,9 @@ control_catalog! {
     toggle(always_bass, 0),
     toggle(always_chord, 0),
     toggle(key_split, 0),
+    toggle(bass_enabled, 0),
     control(split_note, 0),
+    control(bass_split, 0),
     control(mode, 0),
     control(quality, 0),
     control(inversion, 0),
@@ -574,10 +687,12 @@ control_catalog! {
     control(strum_ms, 1),
     toggle(strum_sync, 1),
     control(strum_beats, 1),
+    toggle(strum_hold, 1),
     toggle(tempo_sync, 1),
     control(tempo, 1),
     control(direction, 1),
     control(contour, 1),
+    control(contour_curve, 1),
     control(arp_pattern, 1),
     control(rate, 1),
     control(gate, 1),
@@ -600,14 +715,14 @@ control_catalog! {
     control(y_max, 3),
     control(x, 4),
     control(y, 4),
-    toggle(keyboard, 4),
     toggle(fifths, 4),
+    control(scale_layout, 4),
+    control(key_spelling, 5),
     control(bank, 4),
     control(keyboard_octave, 4),
     control(key, 5),
     control(scale, 5),
     control(filter, 5),
-    toggle(split_channels, 5),
     control(bass_channel, 5),
     control(upper_channel, 5),
 }
@@ -653,7 +768,9 @@ impl ChordboardParams {
             4 => &self.slot_4,
             5 => &self.slot_5,
             6 => &self.slot_6,
-            _ => &self.slot_7,
+            7 => &self.slot_7,
+            8 => &self.slot_8,
+            _ => &self.slot_9,
         }
     }
 }
@@ -664,7 +781,11 @@ mod tests {
     #[test]
     fn split_note_readout_roundtrips_and_rejects_out_of_range_notes() {
         for note in 0..=127 {
-            let label = format!("{}{} ({note})", crate::harmony::NOTE_NAMES[note as usize % 12], note / 12 - 1);
+            let label = format!(
+                "{}{} ({note})",
+                crate::harmony::NOTE_NAMES[note as usize % 12],
+                note / 12 - 1
+            );
             assert_eq!(parse_split_note(&label), Some(note));
         }
         assert_eq!(parse_split_note("C#4"), Some(61));
@@ -678,8 +799,8 @@ mod tests {
         let params = ChordboardParams::default();
         let controls = params.controls();
         assert!(params.control("highlight").is_none());
+        assert!(params.control("keyboard").is_none());
         for (id, ptr) in [
-            ("keyboard", params.keyboard.as_ptr()),
             ("latch", params.latch.as_ptr()),
             ("strum_latch", params.strum_latch.as_ptr()),
             ("output_mode", params.output_mode.as_ptr()),
@@ -705,7 +826,9 @@ mod tests {
             transpose: 12,
         };
         params.control_base.store(36, Ordering::Relaxed);
-        params.slot(7).store(chord.encode(), Ordering::Relaxed);
+        for i in 7..10 {
+            params.slot(i).store(chord.encode(), Ordering::Relaxed);
+        }
         params.map_x.store(
             Mapping {
                 kind: 2,
@@ -718,7 +841,9 @@ mod tests {
         let fields = params.serialize_fields();
         let loaded = ChordboardParams::default();
         loaded.deserialize_fields(&fields);
-        assert_eq!(loaded.slot(7).load(Ordering::Relaxed), chord.encode());
+        for i in 7..10 {
+            assert_eq!(loaded.slot(i).load(Ordering::Relaxed), chord.encode());
+        }
         assert_eq!(loaded.config().control_base, 36);
         assert_eq!(loaded.config().mappings[0].kind, 2);
         assert!(!fields
@@ -813,6 +938,30 @@ impl Default for RouteParams {
     }
 }
 impl RouteParams {
+    fn from_route(route: Route) -> Self {
+        Self {
+            source: IntParam::new(
+                "Source",
+                route.source as i32,
+                IntRange::Linear {
+                    min: 0,
+                    max: (SOURCES.len() - 1) as i32,
+                },
+            )
+            .with_value_to_string(Arc::new(|v| SOURCES[v as usize].into())),
+            target: IntParam::new(
+                "Destination",
+                route.target as i32,
+                IntRange::Linear {
+                    min: 0,
+                    max: (TARGETS.len() - 1) as i32,
+                },
+            )
+            .with_value_to_string(Arc::new(|v| TARGETS[v as usize].name.into())),
+            ..Self::default()
+        }
+    }
+
     pub fn route(&self) -> Route {
         Route {
             enabled: self.enabled.value(),
@@ -842,7 +991,7 @@ impl RouteParams {
 mod routing_state_tests {
     use super::*;
     #[test]
-    fn all_route_fields_have_stable_unique_host_ids_and_legacy_defaults_are_inert() {
+    fn all_route_fields_have_stable_unique_host_ids_and_default_strumfield_link() {
         let p = ChordboardParams::default();
         let ids: Vec<_> = p.param_map().into_iter().map(|v| v.0).collect();
         for field in [
@@ -864,7 +1013,9 @@ mod routing_state_tests {
             ids.len()
         );
         assert!(!p.config().root_on_select);
-        assert!(p.config().routes.iter().all(|r| !r.active()));
+        assert_eq!(p.config().routes, crate::engine::routing::default_routes());
+        assert!(p.routes[0].route().active());
+        assert!(p.config().routes[1..].iter().all(|r| !r.active()));
         let range = &p.routes[0];
         assert_eq!(range.min.normalized_value_to_string(0.5, true), "50%");
     }

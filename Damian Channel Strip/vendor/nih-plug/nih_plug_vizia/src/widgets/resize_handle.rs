@@ -15,7 +15,6 @@ pub struct ResizeHandle {
     /// The scale factor when we started dragging. This is kept track of separately to avoid
     /// accumulating rounding errors.
     start_scale_factor: f64,
-    max_scale_factor: f64,
     /// The DPI factor when we started dragging, includes both the HiDPI scaling and the user
     /// scaling factor. This is kept track of separately to avoid accumulating rounding errors.
     start_dpi_factor: f32,
@@ -31,7 +30,6 @@ impl ResizeHandle {
         ResizeHandle {
             drag_active: false,
             start_scale_factor: 1.0,
-            max_scale_factor: 3.0,
             start_dpi_factor: 1.0,
             start_physical_coordinates: (0.0, 0.0),
         }
@@ -58,15 +56,6 @@ impl View for ResizeHandle {
 
                     self.drag_active = true;
                     self.start_scale_factor = cx.user_scale_factor();
-                    self.max_scale_factor = baseview::available_screen_size()
-                        .map(|screen| {
-                            crate::screen_fit_scale(
-                                (cx.window_size().width, cx.window_size().height),
-                                3.0,
-                                (screen.width, screen.height),
-                            )
-                        })
-                        .unwrap_or(3.0);
                     self.start_dpi_factor = cx.scale_factor();
                     self.start_physical_coordinates = (
                         cx.mouse().cursorx * self.start_dpi_factor,
@@ -106,7 +95,6 @@ impl View for ResizeHandle {
                         self.start_scale_factor,
                         (start_physical_x, start_physical_y),
                         (compensated_physical_x, compensated_physical_y),
-                        self.max_scale_factor,
                     );
 
                     // If this is different then the window will automatically be resized at the end
@@ -194,10 +182,11 @@ impl View for ResizeHandle {
 
 // Project onto the window diagonal so horizontal, vertical and diagonal drags
 // all resize smoothly, including when shrinking.
-fn drag_scale(scale: f64, start: (f32, f32), current: (f32, f32), maximum: f64) -> f64 {
+fn drag_scale(scale: f64, start: (f32, f32), current: (f32, f32)) -> f64 {
     let ratio = (current.0 * start.0 + current.1 * start.1)
         / (start.0 * start.0 + start.1 * start.1).max(1.0);
-    (scale * ratio as f64).clamp(0.5_f64.min(maximum), maximum)
+    // Screen fitting is only a first-open default, never a manual resize limit.
+    (scale * ratio as f64).clamp(0.2, 4.0)
 }
 
 /// Test whether a point intersects with the triangle of this resize handle.
@@ -226,14 +215,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn corner_drag_scales_both_directions_and_respects_screen_limit() {
+    fn corner_drag_scales_both_directions_without_a_screen_limit() {
         let start = (1000.0, 600.0);
-        assert_eq!(drag_scale(1.0, start, start, 2.0), 1.0);
-        assert!(drag_scale(1.0, start, (900.0, 600.0), 2.0) < 1.0);
-        assert!(drag_scale(1.0, start, (1000.0, 500.0), 2.0) < 1.0);
-        assert_eq!(drag_scale(1.0, start, (2000.0, 1200.0), 1.2), 1.2);
-        assert_eq!(drag_scale(1.0, start, (0.0, 0.0), 2.0), 0.5);
-        assert_eq!(drag_scale(0.4, start, start, 0.4), 0.4);
+        assert_eq!(drag_scale(1.0, start, start), 1.0);
+        assert!(drag_scale(1.0, start, (900.0, 600.0)) < 1.0);
+        assert!(drag_scale(1.0, start, (1000.0, 500.0)) < 1.0);
+        assert_eq!(drag_scale(1.0, start, (2000.0, 1200.0)), 2.0);
+        assert_eq!(drag_scale(1.0, start, (0.0, 0.0)), 0.2);
+        assert_eq!(drag_scale(0.4, start, start), 0.4);
     }
 
     #[test]

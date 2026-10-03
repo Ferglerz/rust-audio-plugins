@@ -11,8 +11,8 @@ pub const SOURCES: [&str; SOURCE_COUNT + 1] = [
     "Pressure",
     "Timbre",
     "Velocity",
-    "Strum X",
-    "Strum Y",
+    "X controller",
+    "Y controller",
 ];
 pub const SOURCE_SHORT: [&str; SOURCE_COUNT] = [
     "Pitch", "Mod", "Expr", "Breath", "Press", "Timbre", "Vel", "X", "Y",
@@ -45,7 +45,7 @@ impl Route {
             && (1..=SOURCE_COUNT as u8).contains(&self.source)
             && TARGETS
                 .get(self.target as usize)
-                .is_some_and(Target::available)
+                .is_some_and(|target| target.accepts_source(self.source))
     }
     pub fn value(self, input: f32) -> f32 {
         let shape = input
@@ -71,10 +71,10 @@ pub const TARGETS: &[Target] = &[
         discrete: true,
     },
     Target {
-        name: "Spread",
+        name: "Voicing",
         id: "spread",
         min: 0.0,
-        max: 2.0,
+        max: (crate::harmony::VOICING_NAMES.len() - 1) as f32,
         discrete: true,
     },
     Target {
@@ -113,14 +113,14 @@ pub const TARGETS: &[Target] = &[
         discrete: false,
     },
     Target {
-        name: "Sweep",
+        name: "Rate (free)",
         id: "strum_ms",
         min: 0.0,
         max: 1500.0,
         discrete: false,
     },
     Target {
-        name: "Sweep sync",
+        name: "Rate tempo sync",
         id: "strum_sync",
         min: 0.0,
         max: 1.0,
@@ -137,7 +137,7 @@ pub const TARGETS: &[Target] = &[
         name: "Direction",
         id: "direction",
         min: 0.0,
-        max: 2.0,
+        max: 4.0,
         discrete: true,
     },
     Target {
@@ -151,11 +151,11 @@ pub const TARGETS: &[Target] = &[
         name: "Arp pattern",
         id: "arp_pattern",
         min: 0.0,
-        max: 4.0,
+        max: 6.0,
         discrete: true,
     },
     Target {
-        name: "Arp rate",
+        name: "Rate (synced)",
         id: "rate",
         min: 0.0625,
         max: 2.0,
@@ -197,8 +197,15 @@ pub const TARGETS: &[Target] = &[
         discrete: true,
     },
     Target {
-        name: "Hold chord",
+        name: "Latch",
         id: "latch",
+        min: 0.0,
+        max: 1.0,
+        discrete: true,
+    },
+    Target {
+        name: "Auto strum hold",
+        id: "strum_hold",
         min: 0.0,
         max: 1.0,
         discrete: true,
@@ -302,13 +309,6 @@ pub const TARGETS: &[Target] = &[
         discrete: true,
     },
     Target {
-        name: "Split channels",
-        id: "split_channels",
-        min: 0.0,
-        max: 1.0,
-        discrete: true,
-    },
-    Target {
         name: "Bass channel",
         id: "bass_channel",
         min: 0.0,
@@ -330,7 +330,7 @@ pub const TARGETS: &[Target] = &[
         discrete: true,
     },
     Target {
-        name: "Strum X / sweep",
+        name: "Strumfield position",
         id: "x",
         min: 0.0,
         max: 1.0,
@@ -340,7 +340,21 @@ pub const TARGETS: &[Target] = &[
 impl Target {
     // Keep saved destination indices stable; touch bounds are no longer routable.
     pub fn available(&self) -> bool {
-        !matches!(self.id, "x_min" | "x_max" | "y_min" | "y_max")
+        !matches!(
+            self.id,
+            "x_min" | "x_max" | "y_min" | "y_max" | "direction" | "strum_beats" | "contour"
+        )
+    }
+
+    // Controller setup belongs to the input, so it cannot be changed by that
+    // same input. The Strumfield destination is separate from the X controller.
+    pub fn uses_input_velocity(&self) -> bool {
+        matches!(self.id, "velocity" | "contour" | "humanize")
+    }
+    pub fn accepts_source(&self, source: u8) -> bool {
+        self.available()
+            && !(source == 8 && self.id == "x_reverse")
+            && !(source == 9 && matches!(self.id, "y_reverse" | "y_target" | "y_cc"))
     }
 
     pub fn plain(&self, norm: f32) -> f32 {
@@ -354,11 +368,24 @@ impl Target {
     pub fn label(&self, norm: f32) -> String {
         let v = self.plain(norm);
         match self.id {
-            "spread" => ["Close", "Open", "Wide"][v as usize].into(),
+            "spread" => crate::harmony::VOICING_NAMES[v as usize].into(),
             "quality" => crate::harmony::QUALITY_NAMES[v as usize].into(),
-            "mode" => ["Auto Strum", "Manual Strum", "Arpeggiator"][v as usize - 1].into(),
-            "direction" => ["Up", "Down", "Alternate"][v as usize].into(),
-            "arp_pattern" => ["Up", "Down", "Up/Down", "Played order", "Random"][v as usize].into(),
+            "mode" => {
+                ["Arpeggiator Once", "Manual Strum", "Arpeggiator Loop"][v as usize - 1].into()
+            }
+            "direction" => {
+                ["Up", "Down", "Alternate", "Up in 3rds", "Down in 3rds"][v as usize].into()
+            }
+            "arp_pattern" => [
+                "Up",
+                "Down",
+                "Up/Down",
+                "Up in 3rds",
+                "Down in 3rds",
+                "Played order",
+                "Random",
+            ][v as usize]
+                .into(),
             "y_target" => [
                 "Velocity",
                 "Gate",
@@ -377,8 +404,8 @@ impl Target {
                 "Even tones",
             ][v as usize]
                 .into(),
-            "strum_sync" | "root_on_select" | "latch" | "x_reverse" | "y_reverse"
-            | "split_channels" => if v >= 0.5 { "On" } else { "Off" }.into(),
+            "strum_sync" | "strum_hold" | "root_on_select" | "latch" | "x_reverse"
+            | "y_reverse" => if v >= 0.5 { "On" } else { "Off" }.into(),
             "length_ms" | "strum_ms" => format!("{v:.0} ms"),
             "transpose" => format!("{v:+.0} st"),
             "bend_range" | "master_range" => format!("{v:.0} st"),
@@ -402,8 +429,15 @@ impl Target {
             "length_ms" => c.length_ms = v,
             "strum_ms" => c.strum_ms = v,
             "strum_sync" => c.strum_sync = v >= 0.5,
-            "strum_beats" => c.strum_beats = v,
-            "direction" => c.direction = v as u8,
+            "strum_beats" => {
+                c.strum_beats = v;
+                c.rate = v;
+            }
+            "strum_hold" => c.strum_hold = v >= 0.5,
+            "direction" => {
+                c.direction = v as u8;
+                c.arp_pattern = v as u8;
+            }
             "contour" => c.contour = v,
             "arp_pattern" => c.arp_pattern = v as u8,
             "rate" => c.rate = v,
@@ -427,7 +461,6 @@ impl Target {
             "bend_range" => c.bend_range = v,
             "master_range" => c.master_range = v,
             "output_channel" => c.output_channel = v as u8,
-            "split_channels" => c.split_channels = v >= 0.5,
             "bass_channel" => c.bass_channel = v as u8,
             "upper_channel" => c.upper_channel = v as u8,
             _ => {}
@@ -435,11 +468,17 @@ impl Target {
     }
 }
 impl Engine {
+    fn route_input(&self, route: Route) -> f32 {
+        if route.source == 7 && TARGETS[route.target as usize].uses_input_velocity() {
+            self.input_velocity
+        } else {
+            self.sources[route.source as usize - 1]
+        }
+    }
     pub(super) fn apply_routes(&self, config: &mut Config) {
         for route in self.host_config.routes {
             if route.active() {
-                TARGETS[route.target as usize]
-                    .apply(config, route.value(self.sources[route.source as usize - 1]));
+                TARGETS[route.target as usize].apply(config, route.value(self.route_input(route)));
             }
         }
     }
@@ -465,8 +504,7 @@ impl Engine {
         let mut values = [None; TARGET_COUNT];
         for route in self.host_config.routes {
             if route.active() {
-                values[route.target as usize] =
-                    Some(route.value(self.sources[route.source as usize - 1]));
+                values[route.target as usize] = Some(route.value(self.route_input(route)));
             }
         }
         values
@@ -479,6 +517,19 @@ pub fn available_targets() -> impl Iterator<Item = (usize, &'static Target)> {
         .filter(|(_, target)| target.available())
 }
 pub const TARGET_COUNT: usize = TARGETS.len();
+
+pub fn default_routes() -> [Route; ROUTE_COUNT] {
+    let mut routes = [Route::default(); ROUTE_COUNT];
+    routes[0] = Route {
+        source: 8,
+        target: TARGETS
+            .iter()
+            .position(|t| t.id == "x")
+            .expect("Strumfield destination") as u8,
+        ..Route::default()
+    };
+    routes
+}
 
 #[cfg(test)]
 mod tests {
@@ -604,7 +655,7 @@ mod tests {
         e.configure(c, &mut |_| {});
         e.midi_note(true, 0, 60, 0.8, &mut |_| {});
         e.control(0, 1, 1.0, &mut |_| {});
-        assert_eq!((e.config.strings, e.config.spread), (12, 2));
+        assert_eq!((e.config.strings, e.config.spread), (12, 4));
         assert_eq!((e.host_config.strings, e.host_config.spread), (8, 1));
         c.routes[0].enabled = false;
         c.routes[1].enabled = false;
@@ -683,6 +734,7 @@ mod tests {
             mode: AUTO,
             strings: 12,
             strum_ms: 0.0,
+            strum_sync: false,
             ..Config::default()
         };
         c.routes[0] = route(2, "strings_played");
@@ -728,6 +780,61 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn strumfield_connection_is_editable_but_direct_input_survives_removal() {
+        let mut e = Engine::default();
+        let mut c = Config {
+            mode: MANUAL,
+            ..Config::default()
+        };
+        c.routes[0].max = 0.5;
+        c.routes[0].curve = 1.0;
+        e.configure(c, &mut |_| {});
+        e.position(0.5, 0, &mut |_| {});
+        assert!((e.x - 0.5 * 0.5_f32.powi(8)).abs() < 1e-6);
+        assert_eq!(e.sources[7], 0.5);
+        e.position(1.0, 0, &mut |_| {});
+        assert_eq!(e.x, 0.5);
+        c.routes[0].enabled = false;
+        e.configure(c, &mut |_| {});
+        e.position(0.0, 0, &mut |_| {});
+        assert_eq!(e.x, 0.0);
+        c.routes[0].source = 0;
+        c.routes[0].enabled = true;
+        e.configure(c, &mut |_| {});
+        e.position(1.0, 0, &mut |_| {});
+        assert_eq!(e.x, 1.0);
+    }
+
+    #[test]
+    fn controllers_cannot_modulate_their_own_input_setup() {
+        let mut e = Engine::default();
+        let mut c = Config::default();
+        for (slot, source, id) in [
+            (1, 8, "x_reverse"),
+            (2, 9, "y_reverse"),
+            (3, 9, "y_target"),
+            (4, 9, "y_cc"),
+        ] {
+            c.routes[slot] = route(source, id);
+            assert!(!c.routes[slot].active());
+        }
+        e.configure(c, &mut |_| {});
+        e.position(1.0, 0, &mut |_| {});
+        e.position(1.0, 1, &mut |_| {});
+        assert_eq!(
+            (
+                e.config.x_reverse,
+                e.config.y_reverse,
+                e.config.y_target,
+                e.config.y_cc
+            ),
+            (c.x_reverse, c.y_reverse, c.y_target, c.y_cc)
+        );
+        assert!(route(8, "x").active());
+        assert!(route(2, "x_reverse").active());
+    }
+
     #[test]
     fn touch_bounds_are_not_modulation_destinations() {
         let mut e = Engine::default();

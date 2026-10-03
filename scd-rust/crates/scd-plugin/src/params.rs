@@ -320,6 +320,12 @@ pub struct ScdParams {
     #[id = "fader_lock"]
     pub fader_lock: BoolParam,
 
+    #[id = "snare_wires_off"]
+    pub snare_wires_off: BoolParam,
+
+    #[id = "snare_mixed"]
+    pub snare_mixed: BoolParam,
+
     #[id = "cc_num"]
     pub cc_number: IntParam,
 
@@ -380,6 +386,8 @@ impl Default for ScdParams {
             master_gain: db_param("Master Gain", 0.0, FADER_MIN_DB, FADER_MAX_DB),
 
             fader_lock: BoolParam::new("Fader Lock", false),
+            snare_wires_off: BoolParam::new("Snare Wires Off", false),
+            snare_mixed: BoolParam::new("Snare Mixed", false),
             cc_number: IntParam::new("Hihat CC", 4, IntRange::Linear { min: 0, max: 127 }),
             invert_cc: BoolParam::new("Invert CC", true),
             sub_kick: SubKickParams::default(),

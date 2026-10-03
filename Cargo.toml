@@ -21,7 +21,7 @@ members = [
     "openwurli-ui",
     "openwurli-ui/xtask",
 ]
-exclude = ["scd-rust"]
+exclude = ["scd-rust", "openwurli-ui/vendor/openwurli-dsp"]
 resolver = "2"
 
 [patch."https://github.com/RustAudio/baseview.git"]

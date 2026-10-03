@@ -15,16 +15,16 @@ use crate::{detector_eq::DetectorShape, params::ComposureParams};
 
 // Use artwork coordinates directly: enlarging the graph must not enlarge its UI chrome.
 const WIDTH: f32 = super::graph_pages::PAGE_W;
-const HEIGHT: f32 = super::appearance::PLEASANT_GRAPH_SIZE + super::graph_pages::CURVE_HEADER_H;
-const GRAPH: (f32, f32, f32, f32) = (36.0, 76.0, WIDTH - 52.0, HEIGHT - 148.0);
+const HEIGHT: f32 = super::appearance::SIDE_H;
+const GRAPH: (f32, f32, f32, f32) = (36.0, 44.0, WIDTH - 52.0, HEIGHT - 116.0);
 const CENTER_X: f32 = WIDTH * 0.5;
 const ACTIONS_Y: f32 = HEIGHT - 36.0;
 const FOOTER_X: f32 = (WIDTH - 434.0) * 0.5;
 const BYPASS_RECT: (f32, f32, f32, f32) = (FOOTER_X, ACTIONS_Y, 26.0, 28.0);
 const SHAPE_RECT: (f32, f32, f32, f32) = (FOOTER_X + 32.0, ACTIONS_Y, 100.0, 28.0);
 const REMOVE_RECT: (f32, f32, f32, f32) = (FOOTER_X + 416.0, ACTIONS_Y, 18.0, 28.0);
-const LISTEN_RECT: (f32, f32, f32, f32) = (36.0, 38.0, 28.0, 26.0);
-const SIDECHAIN_RECT: (f32, f32, f32, f32) = (76.0, 38.0, 210.0, 26.0);
+const LISTEN_RECT: (f32, f32, f32, f32) = (WIDTH - 262.0, 4.0, 28.0, 26.0);
+const SIDECHAIN_RECT: (f32, f32, f32, f32) = (WIDTH - 226.0, 4.0, 210.0, 26.0);
 const MENU_ROW_H: f32 = 26.0;
 const SHAPE_MENU: (f32, f32, f32, f32) = (
     SHAPE_RECT.0,
@@ -981,9 +981,13 @@ mod tests {
                 ACTIONS_Y + super::super::appearance::PLEASANT_GRAPH_Y
                     - 12.0
                     - super::super::graph_pages::CURVE_HEADER_H,
-                super::super::appearance::PLEASANT_FOOTER_Y
+                super::super::appearance::ENV_Y + super::super::appearance::SIDE_H - 36.0
             );
-            assert!(LISTEN_RECT.1 > 22.0 && LISTEN_RECT.1 + LISTEN_RECT.3 < GRAPH.1);
+            assert!(LISTEN_RECT.1 >= 0.0 && LISTEN_RECT.1 + LISTEN_RECT.3 < GRAPH.1);
+            assert_eq!(LISTEN_RECT.1, SIDECHAIN_RECT.1);
+            assert_eq!(LISTEN_RECT.0 + LISTEN_RECT.2 + 8.0, SIDECHAIN_RECT.0);
+            assert!(LISTEN_RECT.0 > 16.0 + "DETECTOR EQ".len() as f32 * 9.0);
+            assert_eq!(SIDECHAIN_RECT.0 + SIDECHAIN_RECT.2, WIDTH - 16.0);
             assert!(SIDECHAIN_RECT.0 + SIDECHAIN_RECT.2 <= WIDTH);
         }
     }

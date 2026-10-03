@@ -605,6 +605,63 @@ mod tests {
     use super::*;
 
     #[test]
+    fn zero_dependence_hides_only_its_own_meter_thresholds() {
+        use nih_plug::prelude::{BoolParam, FloatParam, FloatRange};
+        for (input, gain, enabled, expected) in [
+            (0.0, 0.0, true, vec![]),
+            (10.0, 0.0, true, vec![ThresholdLine::InputLevel]),
+            (
+                0.0,
+                -10.0,
+                true,
+                vec![
+                    ThresholdLine::GrBlendReduction,
+                    ThresholdLine::GrBlendAddition,
+                ],
+            ),
+            (
+                -10.0,
+                10.0,
+                true,
+                vec![
+                    ThresholdLine::GrBlendReduction,
+                    ThresholdLine::GrBlendAddition,
+                    ThresholdLine::InputLevel,
+                ],
+            ),
+            (10.0, 10.0, false, vec![]),
+        ] {
+            let params = ComposureParams {
+                program_on: BoolParam::new("Program Dependence", enabled),
+                input_dependence: FloatParam::new(
+                    "Input Threshold",
+                    input,
+                    FloatRange::Linear {
+                        min: -100.0,
+                        max: 100.0,
+                    },
+                ),
+                gr_dependence: FloatParam::new(
+                    "Gain Threshold",
+                    gain,
+                    FloatRange::Linear {
+                        min: -100.0,
+                        max: 100.0,
+                    },
+                ),
+                ..ComposureParams::default()
+            };
+            assert_eq!(
+                meter_thresholds(&params)
+                    .into_iter()
+                    .map(|(_, line, _, _)| line)
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn knee_drag_grows_away_from_threshold_and_shrinks_toward_it() {
         for from_top in [true, false] {
             let away = if from_top { -10.0 } else { 10.0 };

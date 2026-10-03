@@ -1,5 +1,13 @@
 use super::super::*;
 
+/// Keep each half of the gain axis evenly divided, with at most three intervals.
+pub(in crate::ui) fn gain_axis_values(range: f64) -> Vec<i32> {
+    let intervals = ((range / 6.0).round() as i32).clamp(1, 3);
+    (-intervals..=intervals)
+        .map(|i| (range * i as f64 / intervals as f64).round() as i32)
+        .collect()
+}
+
 pub(in crate::ui) fn freq_x_at(freq: f64, gx: f32, gw: f32) -> f32 {
     gx + gw * (freq / 20.0).log(1000.0).clamp(0.0, 1.0) as f32
 }
@@ -996,4 +1004,23 @@ pub(in crate::ui) fn plot_band(b: &Band, meters: &[(u64, f32)]) -> Band {
         }
     }
     plot
+}
+
+#[cfg(test)]
+mod axis_tests {
+    use super::*;
+    #[test]
+    fn every_gain_range_has_uniform_subdivisions_and_both_endpoints() {
+        assert_eq!(gain_axis_values(18.0), vec![-18, -12, -6, 0, 6, 12, 18]);
+        assert_eq!(gain_axis_values(72.0), vec![-72, -48, -24, 0, 24, 48, 72]);
+        for range in SCALES {
+            let values = gain_axis_values(range);
+            assert_eq!(values.first(), Some(&-(range as i32)));
+            assert_eq!(values.last(), Some(&(range as i32)));
+            assert!(values.contains(&0));
+            assert!(values.len() <= 7);
+            let step = values[1] - values[0];
+            assert!(values.windows(2).all(|pair| pair[1] - pair[0] == step));
+        }
+    }
 }

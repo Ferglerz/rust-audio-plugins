@@ -6,8 +6,7 @@ pub(super) enum Menu {
     RouteTarget,
     Key,
     Scale,
-    Quality,
-    Protocol,
+    KeyboardParam(&'static str),
     YTarget,
     StrumRate,
     MappingKind,
@@ -24,23 +23,17 @@ impl Menu {
                     .map(|(_, t)| t.name.to_string())
                     .collect()
             }
-            Self::Key => &harmony::NOTE_NAMES,
+            Self::Key => {
+                return harmony::KEY_CHOICES
+                    .iter()
+                    .map(|(name, _, _)| (*name).into())
+                    .collect()
+            }
             Self::Scale => &harmony::SCALE_NAMES,
-            Self::Quality => &[
-                "Major",
-                "Minor",
-                "Dominant 7",
-                "Major 7",
-                "Minor 7",
-                "Diminished",
-                "Augmented",
-                "Major 6",
-                "Minor 6",
-                "Diminished 7",
-                "Half diminished",
-                "Power",
-            ],
-            Self::Protocol => &["Auto", "MPE", "Regular MIDI"],
+            Self::KeyboardParam(id) => {
+                let (min, max) = keyboard_menu_range(id).expect("keyboard dropdown");
+                return (min..=max).map(|value| value.to_string()).collect();
+            }
             Self::YTarget => &[
                 "Velocity",
                 "Gate",
@@ -49,7 +42,7 @@ impl Menu {
                 "Bend",
                 "Custom CC",
             ],
-            Self::MappingKind => &["Off", "CC 7-bit", "CC 14-bit", "Pitch bend"],
+            Self::MappingKind => &["Off", "CC · Auto 7/14-bit", "Pitch bend"],
             Self::StrumRate => {
                 return ARP_RATES
                     .iter()
@@ -76,9 +69,13 @@ impl Menu {
             Self::RouteSource => "Source",
             Self::RouteTarget => "Destination",
             Self::Key => "Key centre",
-            Self::Scale => "Scale highlighting",
-            Self::Quality => "Chord quality",
-            Self::Protocol => "Output protocol",
+            Self::Scale => "Scale",
+            Self::KeyboardParam(id) => match id {
+                "members" => "MPE members",
+                "bass_channel" => "Bass MIDI channel",
+                "upper_channel" => "Melody MIDI channel",
+                _ => "Chord MIDI channel",
+            },
             Self::YTarget => "Y destination",
             Self::StrumRate => "Sweep duration",
             Self::MappingKind => "Controller source",
@@ -92,8 +89,7 @@ impl Menu {
             Self::RouteSource | Self::RouteTarget => 146.0,
             Self::Key => 60.0,
             Self::Scale => 146.0,
-            Self::Quality => 128.0,
-            Self::Protocol => 188.0,
+            Self::KeyboardParam(_) => 40.0,
             Self::YTarget | Self::StrumRate => 112.0,
             Self::MappingKind => 130.0,
             Self::MappingChannel(_) => 40.0,
@@ -108,11 +104,55 @@ impl Menu {
             Self::Scale | Self::MappingKind | Self::StrumRate | Self::YTarget => 2,
             Self::MappingChannel(_) => 6,
             Self::MappingCc(_) => 16,
-            Self::Key | Self::Quality => 3,
-            Self::Protocol => 1,
+            Self::Key => 3,
+            Self::KeyboardParam(_) => 6,
         }
     }
 
+    pub(super) fn groups(self) -> Vec<(&'static str, Vec<usize>)> {
+        match self {
+            Self::RouteSource => vec![
+                ("Routing", vec![0]),
+                ("MIDI expression", (1..7).collect()),
+                ("Performance", (7..10).collect()),
+            ],
+            Self::RouteTarget => {
+                let targets: Vec<_> = crate::engine::routing::available_targets().collect();
+                let mut groups = vec![
+                    ("Harmony & voicing", Vec::new()),
+                    ("Strum", Vec::new()),
+                    ("Arpeggiator", Vec::new()),
+                    ("Performance", Vec::new()),
+                    ("Controllers & MIDI", Vec::new()),
+                ];
+                for (index, (_, target)) in targets.iter().enumerate() {
+                    let group = match target.id {
+                        "spread" | "quality" | "inversion" | "transpose" | "filter" => 0,
+                        "strings" | "strings_played" | "x" => 1,
+                        "arp_pattern" | "rate" | "strum_ms" | "strum_sync" | "strum_hold"
+                        | "gate" | "swing" | "octaves" | "humanize" => 2,
+                        "velocity" | "length_ms" | "contour" | "root_on_select" | "latch"
+                        | "mode" => 3,
+                        _ => 4,
+                    };
+                    groups[group].1.push(index);
+                }
+                groups
+            }
+            _ => Vec::new(),
+        }
+    }
+    pub(super) fn group_heading_rects(self, r: Rect) -> Vec<(&'static str, Rect)> {
+        let mut y = r.1 + 38.0;
+        self.groups()
+            .into_iter()
+            .map(|(name, indices)| {
+                let heading = (r.0 + 12.0, y, r.2 - 24.0, 20.0);
+                y += 22.0 + indices.len().div_ceil(self.columns()) as f32 * 34.0;
+                (name, heading)
+            })
+            .collect()
+    }
     #[cfg(test)]
     pub(super) fn bounds(self) -> Rect {
         self.bounds_at(self.trigger_rect())
@@ -122,7 +162,15 @@ impl Menu {
         let columns = self.columns();
         let rows = self.items().len().div_ceil(columns);
         let width = (self.cell_width() + 4.0) * columns as f32 + 12.0;
-        let height = rows as f32 * 34.0 + 38.0;
+        let groups = self.groups();
+        let height = if groups.is_empty() {
+            rows as f32 * 34.0 + 38.0
+        } else {
+            40.0 + groups
+                .iter()
+                .map(|(_, indices)| 22.0 + indices.len().div_ceil(columns) as f32 * 34.0)
+                .sum::<f32>()
+        };
         let below = trigger.1 + trigger.3 + 6.0;
         let y = if below + height <= H - 24.0 {
             below
@@ -138,17 +186,23 @@ impl Menu {
     }
 
     #[cfg(test)]
-    pub(super) fn close_rect(self) -> Rect {
-        let r = self.bounds();
-        (r.0 + r.2 - 34.0, r.1 + 6.0, 26.0, 26.0)
-    }
-
-    #[cfg(test)]
     pub(super) fn option_rect(self, index: usize) -> Rect {
         self.option_rect_at(self.bounds(), index)
     }
 
     pub(super) fn option_rect_at(self, r: Rect, index: usize) -> Rect {
+        let mut y = r.1 + 38.0;
+        for (_, indices) in self.groups() {
+            if let Some(position) = indices.iter().position(|&i| i == index) {
+                return (
+                    r.0 + 8.0 + (position % self.columns()) as f32 * (self.cell_width() + 4.0),
+                    y + 22.0 + (position / self.columns()) as f32 * 34.0,
+                    self.cell_width(),
+                    30.0,
+                );
+            }
+            y += 22.0 + indices.len().div_ceil(self.columns()) as f32 * 34.0;
+        }
         (
             r.0 + 8.0 + (index % self.columns()) as f32 * (self.cell_width() + 4.0),
             r.1 + 36.0 + (index / self.columns()) as f32 * 34.0,
@@ -161,15 +215,14 @@ impl Menu {
         match self {
             Self::RouteSource => ROUTE_SOURCE,
             Self::RouteTarget => ROUTE_TARGET,
-            Self::Key => (32.0, 190.0, 90.0, 28.0),
-            Self::Scale => (130.0, 190.0, 174.0, 28.0),
-            Self::Quality => QUALITY,
-            Self::Protocol => MPE,
+            Self::Key => (104.0, 100.0, 104.0, 28.0),
+            Self::Scale => (216.0, 100.0, 238.0, 28.0),
+            Self::KeyboardParam(id) => keyboard_control_rect(id, false),
             Self::StrumRate => STRUM_RATE,
-            Self::YTarget => (612.0, 472.0, 224.0, 30.0),
-            Self::MappingKind => (616.0, 324.0, 200.0, 30.0),
-            Self::MappingChannel(_) => (824.0, 324.0, 110.0, 30.0),
-            Self::MappingCc(_) => (942.0, 324.0, 130.0, 30.0),
+            Self::YTarget => (772.0, 472.0, 224.0, 30.0),
+            Self::MappingKind => (776.0, 324.0, 200.0, 30.0),
+            Self::MappingChannel(_) => (984.0, 324.0, 110.0, 30.0),
+            Self::MappingCc(_) => (1102.0, 324.0, 130.0, 30.0),
         }
     }
 }

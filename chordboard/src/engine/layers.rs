@@ -8,6 +8,13 @@ impl Engine {
     /// Every note currently owned by this processor, including transparent melody.
     pub fn owned_output_notes(&self) -> [[bool; 128]; 16] {
         let mut notes = self.melody;
+        for input in &self.bass {
+            for (note, channel) in input.iter().enumerate() {
+                if let Some(channel) = channel {
+                    notes[*channel as usize][note] = true;
+                }
+            }
+        }
         for voice in self.voices.iter().flatten() {
             notes[voice.channel as usize][voice.note as usize] = true;
         }
@@ -17,10 +24,79 @@ impl Engine {
     pub(super) fn output_owned(&self, channel: u8, note: u8) -> bool {
         self.melody[channel as usize][note as usize]
             || self
+                .bass
+                .iter()
+                .any(|input| input[note as usize] == Some(channel))
+            || self
                 .voices
                 .iter()
                 .flatten()
                 .any(|v| v.channel == channel && v.note == note)
+    }
+
+    fn release_bass(
+        &mut self,
+        input: usize,
+        note: usize,
+        velocity: f32,
+        out: &mut impl FnMut(Out),
+    ) {
+        if let Some(channel) = self.bass[input][note].take() {
+            if !self.output_owned(channel, note as u8) {
+                out(Out::Off(channel, note as u8, velocity));
+            }
+        }
+    }
+
+    pub(super) fn bass_note(
+        &mut self,
+        pressed: bool,
+        input: u8,
+        note: u8,
+        velocity: f32,
+        out: &mut impl FnMut(Out),
+    ) {
+        let input = input as usize;
+        let note_index = note as usize;
+        let id = input * 128 + note_index;
+        if self.down[id] == pressed {
+            return;
+        }
+        self.down[id] = pressed;
+        if pressed {
+            let channel = self.config.bass_channel;
+            let owned = self.output_owned(channel, note);
+            self.bass[input][note_index] = Some(channel);
+            if !owned {
+                out(Out::On(channel, note, velocity.clamp(0.01, 1.0)));
+            }
+        } else if !self.bass_sustain[input] {
+            self.release_bass(input, note_index, velocity, out);
+        }
+    }
+
+    pub(super) fn bass_pedal(&mut self, input: u8, held: bool, out: &mut impl FnMut(Out)) {
+        let input = input as usize;
+        self.bass_sustain[input] = held;
+        if !held {
+            for note in 0..128 {
+                if !self.down[input * 128 + note] {
+                    self.release_bass(input, note, 0.0, out);
+                }
+            }
+        }
+    }
+
+    pub(super) fn stop_bass(&mut self, out: &mut impl FnMut(Out)) {
+        for input in 0..16 {
+            for note in 0..128 {
+                if self.bass[input][note].is_some() {
+                    self.down[input * 128 + note] = false;
+                    self.release_bass(input, note, 0.0, out);
+                }
+            }
+        }
+        self.bass_sustain.fill(false);
     }
 
     pub(super) fn melody_channel(&self, channel: u8) -> bool {
@@ -89,6 +165,27 @@ impl Engine {
         } else if !self.output_owned(channel, note) {
             out(Out::Off(channel, note, velocity));
         }
+        if self.config.affect_chords {
+            // Rebuild from the saved recipe, not the previous melody additions.
+            // Keep a sweep's remaining attacks and timing while updating pitches.
+            let pending = self.scheduled;
+            self.rebuild_harmony(self.config.mode == CHORD, out);
+            if self.config.mode != CHORD {
+                for (slot, event) in self.scheduled.iter_mut().zip(pending) {
+                    *slot = event.and_then(|mut event| {
+                        let note = self
+                            .notes
+                            .as_slice()
+                            .iter()
+                            .copied()
+                            .filter(|n| n % 12 == event.note % 12)
+                            .min_by_key(|&n| (n as i16 - event.note as i16).abs())?;
+                        event.note = note;
+                        Some(event)
+                    });
+                }
+            }
+        }
         self.sync_layers(out);
     }
 
@@ -112,7 +209,8 @@ impl Engine {
     }
 
     pub(super) fn sync_layers(&mut self, out: &mut impl FnMut(Out)) {
-        let enabled = self.config.always_bass || self.config.always_chord;
+        let enabled =
+            (self.config.always_bass && self.config.bass_enabled) || self.config.always_chord;
         let held = if self.config.key_split {
             self.melody.iter().any(|channel| channel.iter().any(|&v| v))
         } else {
@@ -131,7 +229,7 @@ impl Engine {
                     desired[note as usize] = true;
                 }
             }
-            if self.config.always_bass {
+            if self.config.always_bass && self.config.bass_enabled {
                 if let Some(note) = self.selected_root() {
                     desired[note as usize] = true;
                 }

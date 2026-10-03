@@ -319,6 +319,10 @@ pub struct ComposureParams {
     // =========================================================================
     // GROUP 3: PROGRAM RELEASE & SETTINGS (JSFX sliders 22–27)
     // =========================================================================
+    /// Program-dependent release processing on/off.
+    #[id = "program_on"]
+    pub program_on: BoolParam,
+
     /// Input-level influence on release speed (0–100%).
     #[id = "input_dependence"]
     pub input_dependence: FloatParam,
@@ -326,10 +330,6 @@ pub struct ComposureParams {
     /// Gain-reduction influence on release speed (0–100%).
     #[id = "gr_dependence"]
     pub gr_dependence: FloatParam,
-
-    /// Inverse program release behavior.
-    #[id = "prog_release_inverse"]
-    pub prog_release_inverse: BoolParam,
 
     /// Independent detector-rate influence; negative amounts invert its response.
     #[id = "input_rate_amount"]
@@ -399,11 +399,11 @@ pub struct ComposureParams {
 
 impl ComposureParams {
     pub fn program_input_enabled(&self) -> bool {
-        self.input_dependence.value() > 0.0
+        self.program_on.value() && self.input_dependence.value().abs() > 0.0
     }
 
     pub fn program_gr_enabled(&self) -> bool {
-        self.gr_dependence.value() > 0.0
+        self.program_on.value() && self.gr_dependence.value().abs() > 0.0
     }
 }
 
@@ -609,30 +609,30 @@ impl Default for ComposureParams {
             .with_step_size(0.1),
 
             // === PROGRAM RELEASE ===
+            program_on: BoolParam::new("Program Dependence", true),
             input_dependence: FloatParam::new(
-                "Input Dep",
+                "Input Threshold",
                 0.0,
                 FloatRange::Linear {
-                    min: 0.0,
+                    min: -100.0,
                     max: 100.0,
                 },
             )
             .with_unit("%")
             .with_step_size(1.0),
             gr_dependence: FloatParam::new(
-                "GR Dep",
+                "Gain Threshold",
                 0.0,
                 FloatRange::Linear {
-                    min: 0.0,
+                    min: -100.0,
                     max: 100.0,
                 },
             )
             .with_unit("%")
             .with_step_size(1.0),
-            prog_release_inverse: BoolParam::new("Program Release Inverse", false),
 
             input_rate_amount: FloatParam::new(
-                "Input Rate",
+                "Input Slew Rate",
                 0.0,
                 FloatRange::Linear {
                     min: -5.0,

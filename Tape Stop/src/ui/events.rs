@@ -157,7 +157,9 @@ impl TapeStopView {
                         return;
                     }
 
-                    if Self::inside(mouse_x, mouse_y, trigger_bypass_rect()) {
+                    if self.show_axis_controls
+                        && Self::inside(mouse_x, mouse_y, trigger_bypass_rect())
+                    {
                         let next = if self.params.auto_restart.value() {
                             0.0
                         } else {
@@ -236,7 +238,7 @@ impl TapeStopView {
                         }
                     }
 
-                    if self.knob_enabled(KnobId::RestartThresh) {
+                    if self.show_axis_controls && self.knob_enabled(KnobId::RestartThresh) {
                         let val_r = trigger_value_rect();
                         if Self::inside(mouse_x, mouse_y, val_r) {
                             self.press_value(cx, KnobId::RestartThresh, val_r, (mouse_x, mouse_y));
@@ -245,17 +247,16 @@ impl TapeStopView {
                         }
                         if Self::inside(mouse_x, mouse_y, trigger_column())
                             && !Self::inside(mouse_x, mouse_y, trigger_bypass_rect())
-                            && !Self::inside(mouse_x, mouse_y, trigger_title_rect())
                         {
                             let bar_r = trigger_bar_rect();
-                            let new_norm = (1.0 - (mouse_y - bar_r.1) / bar_r.3).clamp(0.0, 1.0);
+                            let new_norm = ((mouse_x - bar_r.0) / bar_r.2).clamp(0.0, 1.0);
                             self.emit_knob_norm(cx, KnobId::RestartThresh, new_norm);
                             self.drag = Some(DragState::Slider {
                                 id: KnobId::RestartThresh,
                                 start_x: mouse_x,
                                 start_y: mouse_y,
                                 start_norm: new_norm,
-                                vertical: true,
+                                vertical: false,
                             });
                             cx.needs_redraw();
                             return;
@@ -300,7 +301,8 @@ impl TapeStopView {
                             }
                         }
                     }
-                    if self.knob_enabled(KnobId::RestartThresh)
+                    if self.show_axis_controls
+                        && self.knob_enabled(KnobId::RestartThresh)
                         && Self::inside(mouse_x, mouse_y, trigger_column())
                         && !Self::inside(mouse_x, mouse_y, trigger_value_rect())
                         && !Self::inside(mouse_x, mouse_y, trigger_bypass_rect())
@@ -330,16 +332,6 @@ impl TapeStopView {
                         let hover_stop = dx * dx + dy * dy <= (sw * 0.5 + 4.0) * (sw * 0.5 + 4.0);
                         if hover_stop != self.hover_stop.get() {
                             self.hover_stop.set(hover_stop);
-                            cx.needs_redraw();
-                        }
-
-                        let handle_hit = {
-                            let h = self.thresh_handle_rect();
-                            (h.0 - 4.0, h.1 - 2.0, h.2 + 8.0, h.3 + 4.0)
-                        };
-                        let hover_thresh = Self::inside(mouse_x, mouse_y, handle_hit);
-                        if hover_thresh != self.hover_thresh.get() {
-                            self.hover_thresh.set(hover_thresh);
                             cx.needs_redraw();
                         }
                     }
@@ -403,7 +395,6 @@ impl TapeStopView {
                 WindowEvent::MouseLeave => {
                     self.hover = None;
                     self.hover_stop.set(false);
-                    self.hover_thresh.set(false);
                     cx.needs_redraw();
                 }
 

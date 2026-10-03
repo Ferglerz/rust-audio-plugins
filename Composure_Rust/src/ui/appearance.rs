@@ -9,10 +9,10 @@ use pleasant_ui::{Draw, BG, GOLD, LINE, MUTED, PANEL, TEAL, TEXT};
 /// Title band above the plugin modules.
 pub const HEADER_H: f32 = 56.0;
 
-/// Shared module chrome with 24px bypass and a readable 17px title.
-pub const MODULE_HEADER_H: f32 = 36.0;
+/// Shared module chrome with 24px bypass and a readable 15px title (following Damian Channel Strip).
+pub const MODULE_HEADER_H: f32 = 44.0;
 pub const MODULE_HEADER_CTRL: f32 = 24.0;
-pub const MODULE_TITLE_SIZE: f32 = 17.0;
+pub const MODULE_TITLE_SIZE: f32 = 15.0;
 pub const MODULE_GAP: f32 = 12.0;
 pub const MODULE_MARGIN: f32 = 16.0;
 
@@ -20,9 +20,7 @@ pub const MODULE_MARGIN: f32 = 16.0;
 pub const ENV_X: f32 = MODULE_MARGIN;
 pub const ENV_Y: f32 = 12.0;
 pub const ENV_W: f32 = 381.0;
-pub const PLEASANT_EDITOR_WIDTH: u32 = 1349;
-pub const SIDE_H: f32 = 577.0; // Includes the transfer graph header.
-pub const PLEASANT_EDITOR_HEIGHT: u32 = 661;
+pub const PLEASANT_EDITOR_WIDTH: u32 = 1449;
 pub const HARM_W: f32 = 168.0;
 pub const HARMONIC_BUTTON_W: f32 = 120.0;
 pub const HARMONIC_KNOB_W: f32 = 74.0;
@@ -40,21 +38,29 @@ pub const DETECTION_BUTTON_W: f32 = 100.0;
 pub const SC_EQ_BUTTON_W: f32 = 120.0;
 pub const ADAPTIVE_GAP: f32 = 16.0;
 pub const ADAPTIVE_BUTTON_H: f32 = 28.0;
-pub const STRENGTH_KNOB_SIZE: f32 = theme::KNOB_SIZE + ADAPTIVE_GAP + ADAPTIVE_BUTTON_H;
+pub const STRENGTH_KNOB_SIZE: f32 = theme::KNOB_SIZE;
+// Keep its top and horizontal center, extending the value to the button text center.
+// Knob values sit 12 px above the slot bottom; 15 px text has a 5.25 px baseline offset.
+pub const STRENGTH_KNOB_H: f32 =
+    theme::KNOB_SIZE + ADAPTIVE_GAP + ADAPTIVE_BUTTON_H * 0.5 + 12.0 + 5.25;
 pub const ENVELOPE_GRAPH_X: f32 = ENV_X + 10.0;
 pub const ENVELOPE_GRAPH_Y: f32 = ENV_Y + MODULE_HEADER_H + 8.0;
 pub const ENVELOPE_GRAPH_W: f32 = ENV_W - 20.0;
 pub const ENVELOPE_GRAPH_H: f32 = 240.0;
-pub const ENVELOPE_KNOB_Y: f32 = ENVELOPE_GRAPH_Y + ENVELOPE_GRAPH_H + 8.0;
+pub const ENVELOPE_CONTROLS_Y: f32 = ENVELOPE_GRAPH_Y + ENVELOPE_GRAPH_H + 12.0;
+pub const ENVELOPE_H: f32 = 469.0;
+pub const PROG_Y: f32 = ENV_Y + ENVELOPE_H + MODULE_GAP;
+pub const PROG_H: f32 = 175.0;
+pub const PROG_KNOB_Y: f32 = PROG_Y + MODULE_HEADER_H + 10.0;
+pub const SIDE_H: f32 = ENVELOPE_H + MODULE_GAP + PROG_H; // 656.0
+pub const PLEASANT_EDITOR_HEIGHT: u32 = 740;
 
-/// Square graph shifted left so axis labels sit inside the wider transfer module.
+/// Square graph fills the transfer module while reserving the axis and meter gutters.
 pub const PLEASANT_GRAPH_X: f32 = TRANS_X + 46.0;
 // Reserve the axis gutter, meter handles, and readouts; use the rest for the graph.
 pub const PLEASANT_GRAPH_SIZE: f32 = TRANS_W - 46.0 - 12.0 - PLEASANT_METERS_W - 12.0;
 pub const PLEASANT_GRAPH_Y: f32 = ENV_Y + 44.0;
-/// Shared bottom row for EQ band controls and program detection.
-pub const PLEASANT_FOOTER_Y: f32 = PLEASANT_GRAPH_Y + PLEASANT_GRAPH_SIZE - 48.0;
-pub const PLEASANT_METER_HEIGHT: f32 = PLEASANT_FOOTER_Y - PLEASANT_GRAPH_Y - 8.0;
+pub const PLEASANT_METER_HEIGHT: f32 = SIDE_H - (PLEASANT_GRAPH_Y - ENV_Y) - 12.0;
 pub const PLEASANT_METER_W: f32 = 44.0;
 pub const PLEASANT_METER_GAP: f32 = 16.0;
 pub const PLEASANT_METER_INSET: f32 = 7.0;
@@ -126,14 +132,20 @@ pub(super) fn painter<'a>(cx: &DrawContext, canvas: &'a mut Canvas, width: f32) 
         let _ = cache.set(font);
         Some(font)
     });
+    let s = b.w / width;
     let mut d = Draw::new(
         canvas,
         EditorData::appearance.get(cx) == 1,
-        b.w / width,
+        s,
         b.x,
         b.y,
         font,
     );
+    let mx = cx.mouse().cursorx;
+    let my = cx.mouse().cursory;
+    if mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h {
+        d.hover = Some(((mx - b.x) / s, (my - b.y) / s));
+    }
     d.alpha_mul = cx.opacity();
     d
 }
@@ -142,6 +154,7 @@ pub(super) fn painter<'a>(cx: &DrawContext, canvas: &'a mut Canvas, width: f32) 
 pub enum Control {
     Knob,
     Switch,
+    #[allow(dead_code)]
     Button,
 }
 
@@ -160,9 +173,16 @@ pub(super) fn program_control_inactive(
     params: &crate::params::ComposureParams,
     name: &str,
 ) -> bool {
-    name == "Program Release Inverse"
-        && !params.program_input_enabled()
-        && !params.program_gr_enabled()
+    let is_prog = matches!(
+        name,
+        "Input Threshold"
+            | "Gain Threshold"
+            | "Input Slew Rate"
+            | "Input Dep"
+            | "GR Dep"
+            | "Input Rate"
+    );
+    !params.program_on.value() && is_prog
 }
 
 /// Draw a parameter control using the supported interface.
@@ -198,7 +218,16 @@ pub fn draw_control(
             } else {
                 GOLD
             };
-            if param.name() == "Input Rate" {
+            let is_prog_knob = matches!(
+                param.name(),
+                "Input Threshold"
+                    | "Gain Threshold"
+                    | "Input Slew Rate"
+                    | "Input Rate"
+                    | "Input Dep"
+                    | "GR Dep"
+            );
+            if is_prog_knob {
                 d.knob_with_layout_bipolar(
                     &layout,
                     short_name(param.name()),
@@ -239,7 +268,7 @@ pub fn draw_control(
                 };
                 harmonic_button(&mut d, w, h, &value.to_uppercase(), norm >= 0.5, accent);
             } else if param.name() == "Mid/Side" {
-                button(
+                button_tinted(
                     &mut d,
                     (0.0, 0.0, w, h),
                     if norm > 0.0 { "M/S" } else { "L/R" },
@@ -255,7 +284,7 @@ pub fn draw_control(
                     TEAL,
                 );
             } else if param.name() == "Detection Mode" {
-                button(
+                button_tinted(
                     &mut d,
                     (0.0, 0.0, w, h),
                     &value.to_uppercase(),
@@ -277,7 +306,6 @@ pub fn draw_control(
             let label = match param.name() {
                 "L" => "L",
                 "SC" => "SC",
-                "Program Release Inverse" => "Inverse",
                 _ => param.name(),
             };
             button(
@@ -285,13 +313,7 @@ pub fn draw_control(
                 (0.0, 0.0, w, h),
                 &label.to_uppercase(),
                 norm > 0.0,
-                if inactive {
-                    MUTED
-                } else if label == "Inverse" {
-                    GOLD
-                } else {
-                    TEAL
-                },
+                if inactive { MUTED } else { TEAL },
             );
         }
     }
@@ -330,16 +352,17 @@ pub(super) fn draw_knob_activity(
     use std::sync::atomic::Ordering;
     let params = EditorData::params.get(cx);
     let activity = match name {
-        "Input Rate" if params.input_rate_amount.value() != 0.0 => {
+        "Input Slew Rate" | "Input Rate"
+            if params.input_rate_amount.value() != 0.0 && params.program_on.value() =>
+        {
             display.input_rate_activity.load(Ordering::Relaxed)
         }
-        "Input Dep" if params.program_input_enabled() => {
+        "Input Threshold" | "Input Dep" if params.program_input_enabled() => {
             display.input_dependence_activity.load(Ordering::Relaxed)
         }
-        "GR Dep" if params.program_gr_enabled() => {
+        "Gain Threshold" | "GR Dep" if params.program_gr_enabled() => {
             display.gr_dependence_activity.load(Ordering::Relaxed)
         }
-        "Input Rate" | "Input Dep" | "GR Dep" => 0.0,
         _ => return,
     };
     let w = cx.bounds().w / cx.scale_factor();
@@ -373,10 +396,57 @@ pub(super) fn draw_knob_activity(
     );
 }
 
+pub(super) fn draw_knob_guide(
+    cx: &DrawContext,
+    canvas: &mut Canvas,
+    name: &str,
+    norm: f32,
+    hovered: bool,
+) {
+    if name != "Harmonic Mix" || norm > 0.005 {
+        return;
+    }
+    let params = EditorData::params.get(cx);
+    if !params.harmonics_on.value() {
+        return;
+    }
+    let scale = cx.scale_factor();
+    let mouse_x = cx.mouse().cursorx / scale;
+    let mouse_y = cx.mouse().cursory / scale;
+    let module_hovered = mouse_x >= HARM_X
+        && mouse_x <= HARM_X + HARM_W
+        && mouse_y >= ENV_Y + HEADER_H
+        && mouse_y <= ENV_Y + HEADER_H + HARM_H;
+    if !module_hovered {
+        return;
+    }
+    let mut color = GOLD;
+    if hovered {
+        color.a *= 0.5;
+    }
+    let w = cx.bounds().w / scale;
+    let h = cx.bounds().h / scale;
+    let layout = pleasant_ui::draw::KnobLayout::new((0.0, 0.0, w, h)).with_text_sizes(13.0, 15.0);
+    let mut d = painter(cx, canvas, w);
+    let start = 135.0_f32.to_radians();
+    let sweep = 270.0_f32.to_radians();
+    knob_arc(
+        &mut d,
+        &layout,
+        layout.radius + 5.0,
+        start,
+        sweep,
+        color,
+        2.0,
+    );
+}
+
 fn short_name(name: &str) -> &str {
     match name {
         "Harmonic Mix" => "Mix",
-        "Input Rate" => "INPUT RATE",
+        "Input Slew Rate" | "Input Rate" => "INPUT SLEW",
+        "Input Threshold" | "Input Dep" => "INPUT THRESH",
+        "Gain Threshold" | "GR Dep" => "GAIN THRESH",
         "Input Offset" => "Offset",
         "Makeup Gain" => "Gain",
         "Adaptive" => "ADAPTIVE",
@@ -407,10 +477,27 @@ pub fn button(d: &mut Draw, rect: (f32, f32, f32, f32), label: &str, on: bool, c
     );
 }
 
+pub fn button_tinted(
+    d: &mut Draw,
+    rect: (f32, f32, f32, f32),
+    label: &str,
+    on: bool,
+    color: Color,
+) {
+    d.button_tinted(rect, "", on, color);
+    d.text_centered(
+        rect.0 + rect.2 * 0.5,
+        rect.1 + rect.3 * 0.5 + 4.5,
+        label,
+        13.0,
+        if on { color } else { MUTED },
+    );
+}
+
 fn harmonic_button(d: &mut Draw, w: f32, h: f32, label: &str, transformer: bool, color: Color) {
     use nih_plug_vizia::vizia::vg::Paint;
 
-    d.button((0.0, 0.0, w, h), "", true, color);
+    d.button_tinted((0.0, 0.0, w, h), "", true, color);
     let mut paint = Paint::color(color);
     if let Some(font) = d.font {
         paint.set_font(&[font]);
@@ -483,13 +570,39 @@ fn harmonic_button(d: &mut Draw, w: f32, h: f32, label: &str, transformer: bool,
     d.text(x + icon_w + gap, h * 0.5 + 4.5, label, 13.0, color);
 }
 
-pub struct Background;
+pub struct Background {
+    was_in_harmonics: bool,
+}
 impl Background {
     pub fn new(cx: &mut Context) -> Handle<'_, Self> {
-        Self.build(cx, |_| {})
+        Self {
+            was_in_harmonics: false,
+        }
+        .build(cx, |_| {})
     }
 }
 impl View for Background {
+    fn event(&mut self, cx: &mut EventContext, event: &mut Event) {
+        event.map(|window_event, _| {
+            if matches!(
+                window_event,
+                WindowEvent::MouseMove(..) | WindowEvent::MouseEnter | WindowEvent::MouseLeave
+            ) {
+                let scale = cx.scale_factor();
+                let mouse_x = cx.mouse().cursorx / scale;
+                let mouse_y = cx.mouse().cursory / scale;
+                let in_harmonics = mouse_x >= HARM_X
+                    && mouse_x <= HARM_X + HARM_W
+                    && mouse_y >= ENV_Y + HEADER_H
+                    && mouse_y <= ENV_Y + HEADER_H + HARM_H;
+                if in_harmonics != self.was_in_harmonics {
+                    self.was_in_harmonics = in_harmonics;
+                    cx.needs_redraw();
+                }
+            }
+        });
+    }
+
     fn draw(&self, cx: &mut DrawContext, canvas: &mut Canvas) {
         let width = cx.bounds().w / cx.scale_factor();
         let height = cx.bounds().h / cx.scale_factor();
@@ -518,10 +631,27 @@ impl View for Background {
         ];
         for (x, y, w, h, title, accent) in modules {
             let params = EditorData::params.get(cx);
-            let bypassed = title == "HARMONICS"
-                && (!params.harmonics_on.value() || params.harmonic_mix.value() == 0.0);
+            let bypassed = if title == "HARMONICS" {
+                !params.harmonics_on.value() || params.harmonic_mix.value() == 0.0
+            } else {
+                false
+            };
             draw_module(&mut d, x, y, w, h, title, accent, bypassed);
         }
+        // The program controls belong to the envelope surface, without a second frame.
+        let params = EditorData::params.get(cx);
+        let title_y = PROG_Y + HEADER_H + MODULE_HEADER_H * 0.5 + MODULE_TITLE_SIZE * 0.35;
+        d.text(
+            ENV_X + 10.0 + MODULE_HEADER_CTRL + 6.0,
+            title_y,
+            "PROGRAM DEPENDENCE",
+            MODULE_TITLE_SIZE,
+            if params.program_on.value() {
+                TEXT
+            } else {
+                MUTED
+            },
+        );
     }
 }
 
@@ -543,8 +673,8 @@ fn draw_module(
     }
     let size = MODULE_TITLE_SIZE;
     let mid = y + MODULE_HEADER_H * 0.5;
-    let title_x = if title == "HARMONICS" {
-        x + INSET + MODULE_HEADER_CTRL + 8.0
+    let title_x = if title == "HARMONICS" || title == "PROGRAM DEPENDENCE" {
+        x + INSET + MODULE_HEADER_CTRL + 6.0
     } else {
         x + INSET
     };
@@ -555,6 +685,45 @@ fn draw_module(
         size,
         if bypassed { MUTED } else { TEXT },
     );
+}
+
+pub struct ProgramBypass {
+    param: ParamWidgetBase,
+}
+
+pub fn build_program_bypass(cx: &mut Context) {
+    ProgramBypass {
+        param: ParamWidgetBase::new(cx, EditorData::params, |p| &p.program_on),
+    }
+    .build(cx, |_| {})
+    .position_type(PositionType::SelfDirected)
+    .left(Pixels(ENV_X + 10.0))
+    .top(Pixels(
+        PROG_Y + (MODULE_HEADER_H - MODULE_HEADER_CTRL) * 0.5,
+    ))
+    .width(Pixels(MODULE_HEADER_CTRL))
+    .height(Pixels(MODULE_HEADER_CTRL));
+}
+
+impl View for ProgramBypass {
+    fn draw(&self, cx: &mut DrawContext, canvas: &mut Canvas) {
+        let mut d = painter(cx, canvas, MODULE_HEADER_CTRL);
+        d.bypass_button_static(
+            (0.0, 0.0, MODULE_HEADER_CTRL, MODULE_HEADER_CTRL),
+            self.param.modulated_normalized_value() < 0.5,
+            TEAL,
+        );
+    }
+
+    fn event(&mut self, cx: &mut EventContext, event: &mut Event) {
+        event.map(|window_event, meta| {
+            if matches!(window_event, WindowEvent::MouseDown(MouseButton::Left)) {
+                super::param_widget_ext::toggle_bool_param(cx, &self.param);
+                cx.needs_redraw();
+                meta.consume();
+            }
+        });
+    }
 }
 
 pub struct HarmonicsBypass {

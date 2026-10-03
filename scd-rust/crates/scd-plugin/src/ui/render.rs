@@ -22,6 +22,12 @@ impl ScdEditorView {
         ensure_img(&self.logo_img, canvas, LOGO_PNG);
         ensure_img(&self.stone_img, canvas, STONE_PNG);
 
+        for (slot, bytes) in self.icons.iter().zip(ICONS) {
+            if let Some(bytes) = bytes {
+                ensure_img(slot, canvas, bytes);
+            }
+        }
+
         let s = artwork_scale(bounds.w);
         canvas.save();
         canvas.reset_transform();

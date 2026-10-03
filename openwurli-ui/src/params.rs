@@ -50,6 +50,9 @@ pub struct OpenWurliUiParams {
     #[id = "noise_gain"]
     pub noise_gain: FloatParam,
 
+    #[id = "extended_notes"]
+    pub extended_notes: BoolParam,
+
     #[id = "rail_sag"]
     pub rail_sag: BoolParam,
 }
@@ -99,6 +102,7 @@ impl Default for OpenWurliUiParams {
             .with_string_to_value(Arc::new(|text| {
                 text.trim().trim_end_matches('×').parse().ok()
             })),
+            extended_notes: BoolParam::new("Extended Notes", false),
             rail_sag: BoolParam::new("Extra Sag", false),
         }
     }

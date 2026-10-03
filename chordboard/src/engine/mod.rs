@@ -8,6 +8,7 @@ pub use types::*;
 
 pub struct Engine {
     pub sources: [f32; routing::SOURCE_COUNT],
+    input_velocity: f32,
     pub host_config: Config,
     pub memory: Option<harmony::SavedChord>,
     pub recalled: bool,
@@ -27,7 +28,7 @@ pub struct Engine {
     pub expression: Expression,
     pub channels: [Expression; 16],
     pub voices: [Option<Voice>; 15],
-    pub scheduled: [Option<Scheduled>; 64],
+    pub scheduled: [Option<Scheduled>; 128],
     pub quality: u8,
     control_alteration: Option<u8>,
     pub inversion: u8,
@@ -35,6 +36,8 @@ pub struct Engine {
     pub down: [bool; 2048 + KEY_TOKEN_COUNT],
     held_inputs: [Option<(Slot, Option<u8>)>; 2048 + KEY_TOKEN_COUNT],
     melody: [[bool; 128]; 16],
+    bass: [[Option<u8>; 128]; 16],
+    bass_sustain: [bool; 16],
     melody_sustain: [bool; 16],
     layer_latched: bool,
     pub x: f32,
@@ -43,27 +46,37 @@ pub struct Engine {
     pub x_primed: bool,
     pub last_string: i16,
     pub strikes: [u32; 12],
+    pub note_strikes: [u32; 128],
     pub learn: u8,
     pub learned: Option<(usize, Mapping)>,
     pub learned_base: Option<u8>,
+    pub learned_split: Option<LearnedSplit>,
+    learned_note_held: [bool; 2048],
     pub input_upper: bool,
     pub input_members: u8,
     pub input_bend: [f32; 16],
     input_bend_values: [f32; 16],
     pub rpn: [[u8; 2]; 16],
     pub cc: [[u8; 128]; 16],
+    cc_lsb_seen: [u32; 16],
     pub needs_setup: bool,
     pub arp_next: u64,
     pub arp_step: usize,
+    arp_cycle_step: usize,
+    arp_octaves: u8,
+    arp_pattern: u8,
+    arp_fraction: f64,
+    arp_pair_swing: f64,
+    arp_pair_rate: f64,
     pub rng: u32,
     pub tempo: f64,
     pub playing: bool,
-    pub auto_reverse: bool,
 }
 impl Default for Engine {
     fn default() -> Self {
         Self {
             sources: routing::SOURCE_DEFAULTS,
+            input_velocity: 0.8,
             host_config: Config::default(),
             memory: None,
             recalled: false,
@@ -83,7 +96,7 @@ impl Default for Engine {
             expression: Expression::default(),
             channels: [Expression::default(); 16],
             voices: [None; 15],
-            scheduled: [None; 64],
+            scheduled: [None; 128],
             quality: 0,
             control_alteration: None,
             inversion: 0,
@@ -91,6 +104,8 @@ impl Default for Engine {
             down: [false; 2048 + KEY_TOKEN_COUNT],
             held_inputs: [None; 2048 + KEY_TOKEN_COUNT],
             melody: [[false; 128]; 16],
+            bass: [[None; 128]; 16],
+            bass_sustain: [false; 16],
             melody_sustain: [false; 16],
             layer_latched: false,
             x: 0.0,
@@ -99,9 +114,12 @@ impl Default for Engine {
             x_primed: false,
             last_string: -1,
             strikes: [0; 12],
+            note_strikes: [0; 128],
             learn: 0,
             learned: None,
             learned_base: None,
+            learned_split: None,
+            learned_note_held: [false; 2048],
             input_upper: false,
             input_members: 15,
             input_bend: {
@@ -112,13 +130,19 @@ impl Default for Engine {
             input_bend_values: [0.5; 16],
             rpn: [[127; 2]; 16],
             cc: [[0; 128]; 16],
+            cc_lsb_seen: [0; 16],
             needs_setup: true,
             arp_next: 0,
             arp_step: 0,
+            arp_cycle_step: 0,
+            arp_octaves: 1,
+            arp_pattern: 0,
+            arp_fraction: 0.0,
+            arp_pair_swing: 0.0,
+            arp_pair_rate: 0.25,
             rng: 0x43484f52,
             tempo: 120.0,
             playing: false,
-            auto_reverse: false,
         }
     }
 }
@@ -144,20 +168,27 @@ impl Engine {
             }
         }
         self.apply_routes(&mut config);
+        if config.bass_enabled && config.key_split && config.bass_boundary() >= 0 {
+            let (bass, melody) = ordered_splits(config.bass_boundary() as u8, config.split_note);
+            if bass as i16 != config.bass_boundary() {
+                config.bass_split = bass as i16;
+            }
+            config.split_note = melody;
+        }
         let route = old.mpe != config.mpe
             || old.upper != config.upper
             || old.members != config.members
             || old.output_channel != config.output_channel
-            || old.split_channels != config.split_channels
             || old.bass_channel != config.bass_channel
             || old.upper_channel != config.upper_channel;
         let mode = old.mode != config.mode;
+        if route {
+            self.stop_bass(out);
+        }
         if route || mode {
             self.stop_voices(0.0, out);
             self.scheduled.fill(None);
             self.x_primed = false;
-            self.arp_step = 0;
-            self.arp_next = self.now;
         }
         if route || old.bend_range != config.bend_range || old.master_range != config.master_range {
             self.needs_setup = true;
@@ -169,6 +200,16 @@ impl Engine {
         }
         if old.inversion != config.inversion {
             self.inversion = config.inversion;
+        }
+        if old.strum_hold && !config.strum_hold && self.config.mode == AUTO {
+            let duration = self.duration();
+            for i in 0..15 {
+                if let Some(voice) = self.voices[i].as_mut() {
+                    if !voice.layer && voice.off == u64::MAX {
+                        voice.off = self.now.saturating_add(duration);
+                    }
+                }
+            }
         }
         if old.latch && !config.latch && !config.key_split {
             // Return released, retained inputs to ordinary note-off semantics.
@@ -185,7 +226,9 @@ impl Engine {
             }
             self.scheduled.fill(None);
         }
-        if old.control_base != config.control_base
+        if old.bass_enabled != config.bass_enabled
+            || old.bass_split != config.bass_split
+            || old.control_base != config.control_base
             || old.key_split != config.key_split
             || (config.key_split && old.split_note != config.split_note)
         {
@@ -202,7 +245,8 @@ impl Engine {
         {
             self.leading_history = None;
         }
-        let revoice = old.voice_leading != config.voice_leading
+        let revoice = old.affect_chords != config.affect_chords
+            || old.voice_leading != config.voice_leading
             || old.quality != config.quality
             || old.inversion != config.inversion
             || old.transpose != config.transpose
@@ -211,7 +255,7 @@ impl Engine {
             || old.root_on_select != config.root_on_select;
         if restart {
             if revoice || mode {
-                self.rebuild(out);
+                self.rebuild_harmony(mode || self.config.mode != ARP, out);
             } else if route {
                 self.start_mode(out);
             }
@@ -294,12 +338,11 @@ impl Engine {
             } else {
                 Expression::default()
             };
-            self.arp_step = 0;
-            self.arp_next = self.now;
+            self.restart_arp();
         } else {
             self.second = Some(slot);
         }
-        self.sources[6] = velocity.clamp(0.0, 1.0);
+        self.input_velocity = velocity.clamp(0.0, 1.0);
         self.configure_inner(self.host_config, false, out);
         self.rebuild(out);
     }
@@ -339,6 +382,14 @@ impl Engine {
                 self.root = None;
                 self.second = None;
                 self.down[slot.id as usize] = false;
+                // Releasing a key may promote an already-held chord input, but
+                // must not establish a new rhythmic origin.
+                let clock = (
+                    self.arp_step,
+                    self.arp_cycle_step,
+                    self.arp_next,
+                    self.arp_fraction,
+                );
                 self.note_on(
                     slot.id,
                     slot.note,
@@ -347,6 +398,12 @@ impl Engine {
                     quality,
                     out,
                 );
+                (
+                    self.arp_step,
+                    self.arp_cycle_step,
+                    self.arp_next,
+                    self.arp_fraction,
+                ) = clock;
                 return;
             }
         }
@@ -405,13 +462,13 @@ impl Engine {
                         memory.second = None;
                     }
                 }
-                self.rebuild(out);
+                self.rebuild_harmony(self.config.mode != ARP, out);
             }
             Command::SetQuality(quality) => {
                 if self.quality != quality.min(11) || self.control_alteration.is_some() {
                     self.quality = quality.min(11);
                     self.control_alteration = None;
-                    self.rebuild(out);
+                    self.rebuild_harmony(self.config.mode != ARP, out);
                 }
             }
             Command::SetInversion(inversion) => {
@@ -430,7 +487,7 @@ impl Engine {
             }
             Command::Capture(index) => {
                 if let Some(chord) = self.memory {
-                    self.saved = Some((index.min(7), chord.encode()));
+                    self.saved = Some((index.min(MEMORY_COUNT - 1), chord.encode()));
                 }
             }
             Command::Recall(word) => {
@@ -462,6 +519,7 @@ impl Engine {
                     self.inversion = chord.inversion;
                     self.config.spread = chord.spread;
                     self.config.transpose = chord.transpose;
+                    self.restart_arp();
                     self.recalled = true;
                     self.recall_voicing = Some((chord.spread, chord.transpose));
                     self.configure_inner(self.host_config, false, out);
@@ -478,7 +536,7 @@ impl Engine {
             }
             Command::Panic => self.panic(out),
             Command::Learn(target) => {
-                self.learn = if matches!(target, 0..=2 | 4) {
+                self.learn = if matches!(target, 0..=2 | 4..=6) {
                     target
                 } else {
                     0
@@ -493,8 +551,10 @@ impl Engine {
         }
     }
     pub fn panic(&mut self, out: &mut impl FnMut(Out)) {
+        self.learned_note_held.fill(false);
         self.stop_voices(0.0, out);
         self.stop_melody(out);
+        self.stop_bass(out);
         self.scheduled.fill(None);
         self.root = None;
         self.second = None;
@@ -588,6 +648,16 @@ impl Engine {
             }
         }
         self.leading_history = Some((recipe, self.full_notes));
+        if self.config.affect_chords {
+            self.full_notes = harmony::melody_harmony(self.full_notes, &self.melody);
+            for i in 0..self.voices.len() {
+                if self.voices[i]
+                    .is_some_and(|v| self.melody.iter().any(|notes| notes[v.note as usize]))
+                {
+                    self.end_voice(i, 0.0, out);
+                }
+            }
+        }
         self.notes = harmony::filter_notes(self.full_notes, self.config.filter);
         self.memory = Some(recipe);
         let count = harmony::intervals(
@@ -629,33 +699,70 @@ impl Engine {
                 }
             }
             AUTO => {
-                let reverse =
-                    self.config.direction == 1 || (self.config.direction == 2 && self.auto_reverse);
-                self.auto_reverse = !self.auto_reverse;
+                if self.config.strum_hold {
+                    for i in 0..15 {
+                        if self.voices[i].is_some_and(|v| !v.layer) {
+                            self.end_voice(i, 0.0, out);
+                        }
+                    }
+                }
                 let count = self.config.strings.clamp(3, 12) as usize;
                 let played = (self.config.strings_played as usize).clamp(1, count);
-                for i in 0..played {
-                    let idx = if reverse { count - 1 - i } else { i };
-                    let Some(note) = self.notes.string(idx) else {
+                let octaves = self.config.octaves.clamp(1, 4) as usize;
+                let pattern = self.config.arp_pattern;
+                let strikes = Self::pattern_length(pattern, played * octaves);
+                let total = played * octaves;
+                let offset = if matches!(pattern, 1 | 4) {
+                    count - played
+                } else {
+                    0
+                };
+                let base = self.rate_samples();
+                let mut at = 0.0;
+                for step in 0..strikes {
+                    let index = self.arp_index(pattern, step, total);
+                    let string = offset + index % played + index / played * self.notes.len;
+                    let ratio = step as f32 / (strikes - 1).max(1) as f32;
+                    let random = self.random() as f32 / u32::MAX as f32;
+                    let swing = if step.is_multiple_of(2) {
+                        1.0 + self.config.swing as f64
+                    } else {
+                        1.0 - self.config.swing as f64
+                    };
+                    let spacing = base * swing;
+                    let strike_at = at;
+                    at += spacing;
+                    let Some(note) = self.notes.string(string) else {
                         continue;
                     };
-                    let ratio = i as f32 / (played - 1).max(1) as f32;
                     self.schedule(Scheduled {
-                        at: self.now + self.ms(self.sweep_ms() * ratio),
+                        gate_step: None,
+                        at: self.now
+                            + (strike_at
+                                + spacing * 0.1 * self.config.humanize as f64 * random as f64)
+                                as u64,
                         note,
                         velocity: (self.strike_velocity()
-                            * (1.0 + self.config.contour * (ratio - 0.5)))
+                            * contour_factor(
+                                ratio,
+                                self.config.contour,
+                                self.config.contour_curve,
+                            )
+                            * (1.0 - self.config.humanize * 0.2 * random))
                             .clamp(0.01, 1.0),
-                        duration: self.duration(),
+                        duration: if self.config.strum_hold {
+                            u64::MAX
+                        } else {
+                            self.duration()
+                        },
                     });
                 }
             }
+
             MANUAL => {
                 self.x_primed = false;
             }
-            ARP => {
-                self.arp_next = self.now;
-            }
+            ARP => {}
             _ => {}
         }
         if self.config.root_on_select {
@@ -707,7 +814,11 @@ impl Engine {
         Snapshot {
             held_notes,
             sounding_notes,
+            bass_note: (0..128)
+                .find(|&note| self.bass.iter().any(|input| input[note].is_some()))
+                .map(|note| note as u8),
             sources: self.sources,
+            input_velocity: self.input_velocity,
             routed: self.routed_values(),
             captured: self.memory.map_or(0, |m| m.encode()),
             full_notes: self.full_notes,
@@ -728,6 +839,7 @@ impl Engine {
             x: self.x,
             y: self.y,
             strikes: self.strikes,
+            note_strikes: self.note_strikes,
             voices: self.voices.iter().flatten().count() as u8,
             learning: self.learn,
             output_mpe: self.config.mpe,
@@ -739,11 +851,11 @@ impl Engine {
             + self.config.transpose as i16;
         (0..=127).contains(&root).then_some(root as u8)
     }
-    fn sweep_ms(&self) -> f32 {
+    fn rate_samples(&self) -> f64 {
         if self.config.strum_sync {
-            self.config.strum_beats * 60_000.0 / self.tempo as f32
+            self.sample_rate as f64 * 60.0 / self.tempo * self.config.rate as f64
         } else {
-            self.config.strum_ms
+            self.sample_rate as f64 * self.config.strum_ms as f64 / 1000.0
         }
     }
     fn ms(&self, ms: f32) -> u64 {

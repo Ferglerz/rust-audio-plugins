@@ -155,6 +155,7 @@ fn build_editor_contents(cx: &mut Context, params: Arc<ComposureParams>, display
         ZStack::new(cx, |cx| {
             controls::build_positioned_controls(cx, EditorData::params, display.clone());
             appearance::build_harmonics_bypass(cx);
+            appearance::build_program_bypass(cx);
             debug_view::build(cx, EditorData::display);
 
             let initial_points = params.graph_store.load().graph.num_points;

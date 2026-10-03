@@ -65,8 +65,31 @@ pub(super) fn artwork_scale(width: f32) -> f32 {
 }
 
 impl ScdEditorView {
+    pub(super) fn visible_pieces(&self) -> impl Iterator<Item = KitPieceId> {
+        let off = self.params.snare_wires_off.value();
+        KitPieceId::ALL
+            .into_iter()
+            .filter(|p| *p != KitPieceId::OpenSnare)
+            .map(move |p| {
+                if p == KitPieceId::Snare && off {
+                    KitPieceId::OpenSnare
+                } else {
+                    p
+                }
+            })
+    }
+
+    pub(super) fn snare_toggle_rect(mixed: bool) -> (f32, f32, f32, f32) {
+        (
+            Self::strip_x(KitPieceId::Snare) + 2.0,
+            if mixed { 96.0 } else { 76.0 },
+            STRIP_W - 4.0,
+            18.0,
+        )
+    }
+
     pub(super) fn mixer_x() -> f32 {
-        (WINDOW_W - KitPieceId::COUNT as f32 * STRIP_W) * 0.5
+        (WINDOW_W - (KitPieceId::COUNT - 1) as f32 * STRIP_W) * 0.5
     }
 
     pub(super) fn lock_rect() -> (f32, f32, f32, f32) {
@@ -80,7 +103,7 @@ impl ScdEditorView {
 
     pub(super) fn logo_sc_rect() -> (f32, f32, f32, f32) {
         (
-            Self::mixer_x() + STRIP_W * KitPieceId::COUNT as f32 - LOGO_SC.2,
+            Self::mixer_x() + STRIP_W * (KitPieceId::COUNT - 1) as f32 - LOGO_SC.2,
             LOGO_SC.1,
             LOGO_SC.2,
             LOGO_SC.3,
@@ -303,7 +326,11 @@ impl ScdEditorView {
     }
 
     pub(super) fn strip_x(kit_piece: KitPieceId) -> f32 {
-        Self::mixer_x() + kit_piece as usize as f32 * STRIP_W
+        Self::mixer_x()
+            + (kit_piece as usize
+                - usize::from(kit_piece as usize >= KitPieceId::OpenSnare as usize))
+                as f32
+                * STRIP_W
     }
 
     pub(super) fn cc_menu_rect() -> (f32, f32, f32, f32) {

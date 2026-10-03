@@ -79,10 +79,10 @@ impl TapeStopView {
             if stop_active { GOLD } else { TEXT },
         );
 
-        self.draw_audio_trigger(&mut d);
         self.draw_axis_cog(&mut d);
         if self.show_axis_controls {
             self.draw_midi_slot(&mut d);
+            self.draw_audio_trigger(&mut d);
             for &id in &[KnobId::Return, KnobId::Xfade, KnobId::StereoDiv] {
                 self.draw_axis_slider(&mut d, id);
             }

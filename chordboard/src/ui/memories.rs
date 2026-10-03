@@ -3,7 +3,7 @@ use super::*;
 #[derive(Default)]
 pub(super) struct MemoryUi {
     pub(super) armed: bool,
-    pub(super) flash: [f32; 8],
+    pub(super) flash: [f32; MEMORY_COUNT],
     pending: Option<PendingCapture>,
 }
 
@@ -55,13 +55,13 @@ impl MemoryDrag {
 }
 
 fn memory_at(x: f32, y: f32) -> Option<usize> {
-    (0..8).find(|&i| hit(memory_rect(i), x, y))
+    (0..MEMORY_COUNT).find(|&i| hit(memory_rect(i), x, y))
 }
 
 // Use the persisted slot atomics, just as capture does. Refuse stale drags if
 // a capture or state restore has replaced the source since the mouse went down.
 fn move_memory(params: &ChordboardParams, drag: MemoryDrag, target: usize) -> bool {
-    if target >= 8 || target == drag.source || SavedChord::decode(drag.word).is_none() {
+    if target >= MEMORY_COUNT || target == drag.source || SavedChord::decode(drag.word).is_none() {
         return false;
     }
     if params
@@ -100,6 +100,7 @@ impl ChordboardView {
         SavedChord::decode(self.snapshot.captured).is_some()
     }
 
+    #[cfg(test)]
     pub(super) fn toggle_memory_save(&mut self) {
         if self.memory_ui.armed {
             self.memory_ui.armed = false;
@@ -113,7 +114,7 @@ impl ChordboardView {
     }
 
     pub(super) fn request_capture(&mut self, slot: usize) {
-        if slot >= 8 {
+        if slot >= MEMORY_COUNT {
             return;
         }
         self.memory_ui.armed = false;
@@ -236,23 +237,11 @@ impl ChordboardView {
     }
 
     pub(super) fn draw_memories(&self, d: &mut Draw) {
-        d.text(32.0, 459.0, "Mem", 11.0, MUTED);
-        self.button(
-            d,
-            SAVE_MEMORY,
-            if self.memory_ui.armed {
-                "Cancel"
-            } else {
-                "Save chord"
-            },
-            self.memory_ui.armed,
-            if self.can_capture() { GOLD } else { MUTED },
-        );
         let drag = match self.drag {
             Some(Drag::Memory(drag)) if drag.active => Some(drag),
             _ => None,
         };
-        let hovered = self.pointer.and_then(|(x, y)| memory_at(x, y));
+        let hovered = self.hover_pointer().and_then(|(x, y)| memory_at(x, y));
         for (i, shortcut) in MEMORY_HINTS.iter().enumerate() {
             let r = memory_rect(i);
             let chord = SavedChord::decode(self.params.slot(i).load(Ordering::Relaxed));
@@ -320,7 +309,7 @@ impl ChordboardView {
             );
             if chord.is_some() && hovered == Some(i) && drag.is_none() {
                 let close = memory_delete_rect(i);
-                let hot = self.pointer.is_some_and(|(x, y)| hit(close, x, y));
+                let hot = self.hover_pointer().is_some_and(|(x, y)| hit(close, x, y));
                 d.rect(close.0, close.1, close.2, close.3, PANEL);
                 d.text_centered(
                     close.0 + close.2 / 2.0,
@@ -344,7 +333,7 @@ impl ChordboardView {
                     d.text_centered(
                         x + 42.0,
                         y + 21.0,
-                        &harmony::chord_name(chord),
+                        &self.named_chord(chord),
                         TEXT_LABEL,
                         GOLD,
                     );
@@ -495,7 +484,7 @@ mod tests {
         assert_eq!(drag.action(), Some(MemoryAction::Move(1)));
         drag.update(x, y);
         assert_eq!(drag.action(), None);
-        drag.update(590.0, y);
+        drag.update(CHORDS_SURFACE.0 + CHORDS_SURFACE.2 - 10.0, y);
         assert_eq!(drag.action(), None);
     }
     #[test]
@@ -521,7 +510,7 @@ mod tests {
         assert!(!move_memory(&params, stale, 1));
         let current = MemoryDrag::new(0, chord(64), 50.0, 530.0);
         assert!(!move_memory(&params, current, 0));
-        assert!(!move_memory(&params, current, 8));
+        assert!(!move_memory(&params, current, MEMORY_COUNT));
         assert_eq!(params.slot(0).load(Ordering::Relaxed), chord(64));
         assert_eq!(params.slot(1).load(Ordering::Relaxed), chord(67));
     }

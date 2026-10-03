@@ -18,7 +18,7 @@ pub struct ScdPlugin {
     hihat_tracker: HiHatTracker,
     kick_sine: KickSine,
     sample_rate: f32,
-    rr_counter: [u8; 128],
+    rr_counter: [[u8; 128]; KitPieceId::COUNT],
 }
 
 impl Default for ScdPlugin {
@@ -29,7 +29,7 @@ impl Default for ScdPlugin {
             hihat_tracker: HiHatTracker::new(),
             kick_sine: KickSine::default(),
             sample_rate: 44100.0,
-            rr_counter: [0; 128],
+            rr_counter: [[0; 128]; KitPieceId::COUNT],
         }
     }
 }
@@ -204,6 +204,49 @@ impl ScdPlugin {
         }
     }
 
+    fn trigger_note(
+        &mut self,
+        note: u8,
+        velocity: f32,
+        vel_u8: u8,
+        piece: Option<KitPieceId>,
+        fallback_art: usize,
+    ) {
+        let Some(pack) = self.voice_pool.pack() else {
+            return;
+        };
+        let art = piece
+            .and_then(|piece| {
+                scd_core::kit::stonehouse()
+                    .arts(piece)
+                    .iter()
+                    .position(|art| art.note1 == note || art.note2 == Some(note))
+            })
+            .unwrap_or(fallback_art);
+        let depth = pack.max_rr_for_piece(note, piece).max(1);
+        let counter =
+            &mut self.rr_counter[piece.unwrap_or(KitPieceId::Kick) as usize][note as usize];
+        let rr = (*counter % depth) + 1;
+        *counter = rr;
+        let lookup = piece
+            .map(|p| self.params.vel_maps.lookup(p, art, vel_u8))
+            .unwrap_or(vel_u8);
+        if let Some(strike) = pack.find_strike_for_piece(note, lookup, rr, piece).cloned() {
+            let strip = self.params.get_strip(strike.kit_piece);
+            if let Some(slot) = self.params.midi_velocities[strike.kit_piece as usize].get(art) {
+                slot.store(vel_u8, std::sync::atomic::Ordering::Relaxed);
+            }
+            self.voice_pool.trigger_strike(
+                &strike,
+                velocity,
+                strip.pitch.value(),
+                strip.punch.value(),
+                strip.pan.value(),
+                self.sample_rate,
+            );
+        }
+    }
+
     fn handle_midi(&mut self, event: NoteEvent<()>) {
         match event {
             NoteEvent::NoteOn { note, velocity, .. } => {
@@ -216,18 +259,6 @@ impl ScdPlugin {
                 } else {
                     resolved.pack_note
                 };
-
-                if let Some(piece) = resolved.kit_piece.or_else(|| {
-                    self.voice_pool
-                        .pack()
-                        .and_then(|pack| pack.kit_piece_for_note(pack_note))
-                }) {
-                    if let Some(slot) =
-                        self.params.midi_velocities[piece as usize].get(resolved.art)
-                    {
-                        slot.store(vel_u8, std::sync::atomic::Ordering::Relaxed);
-                    }
-                }
 
                 if self
                     .voice_pool
@@ -247,34 +278,30 @@ impl ScdPlugin {
                     self.voice_pool.choke_hihat(150.0, self.sample_rate);
                 }
 
-                let depth = self
-                    .voice_pool
-                    .pack()
-                    .map(|pack| pack.max_rr(pack_note))
-                    .unwrap_or(3)
-                    .max(1);
-                let rr = (self.rr_counter[pack_note as usize] % depth) + 1;
-                self.rr_counter[pack_note as usize] = rr;
-
-                if let Some(pack) = self.voice_pool.pack() {
-                    let lookup = resolved
-                        .kit_piece
-                        .or_else(|| pack.kit_piece_for_note(pack_note))
-                        .map(|kit_piece| {
-                            self.params.vel_maps.lookup(kit_piece, resolved.art, vel_u8)
-                        })
-                        .unwrap_or(vel_u8);
-                    if let Some(strike) = pack.find_strike(pack_note, lookup, rr).cloned() {
-                        let strip = self.params.get_strip(strike.kit_piece);
-                        self.voice_pool.trigger_strike(
-                            &strike,
-                            velocity,
-                            strip.pitch.value(),
-                            strip.punch.value(),
-                            strip.pan.value(),
-                            self.sample_rate,
-                        );
+                let piece = resolved.kit_piece.or_else(|| {
+                    self.voice_pool
+                        .pack()
+                        .and_then(|pack| pack.kit_piece_for_note(pack_note))
+                });
+                if matches!(piece, Some(KitPieceId::Snare | KitPieceId::OpenSnare)) {
+                    let selected = if self.params.snare_wires_off.value() {
+                        KitPieceId::OpenSnare
+                    } else {
+                        KitPieceId::Snare
+                    };
+                    for candidate in [KitPieceId::Snare, KitPieceId::OpenSnare] {
+                        if self.params.snare_mixed.value() || candidate == selected {
+                            self.trigger_note(
+                                pack_note,
+                                velocity,
+                                vel_u8,
+                                Some(candidate),
+                                resolved.art,
+                            );
+                        }
                     }
+                } else {
+                    self.trigger_note(pack_note, velocity, vel_u8, piece, resolved.art);
                 }
             }
             NoteEvent::MidiCC { cc, value, .. } if cc as i32 == self.params.cc_number.value() => {
@@ -379,5 +406,101 @@ mod note_resolution_tests {
         let mapped = plugin.resolve_note(5);
         assert!(!mapped.silenced);
         assert_eq!(mapped.pack_note, 42);
+    }
+}
+
+#[cfg(test)]
+mod snare_tests {
+    use super::*;
+    use scd_core::{PackIndex, SampleSlice, StrikeEntry, SCD_MAGIC};
+    use std::io::Write;
+
+    #[test]
+    fn snare_modes_select_and_layer_separate_voices() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snare.scdpack");
+        let strikes = [KitPieceId::Snare, KitPieceId::OpenSnare]
+            .into_iter()
+            .map(|piece| {
+                StrikeEntry::new(
+                    38,
+                    1,
+                    127,
+                    1,
+                    0,
+                    piece,
+                    [
+                        Some(SampleSlice {
+                            offset_bytes: 0,
+                            length_frames: 16,
+                            sample_rate: 44100,
+                            channels: 1,
+                        }),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    ],
+                )
+            })
+            .collect();
+        let bytes = rkyv::to_bytes::<_, 256>(&PackIndex { strikes }).unwrap();
+        let mut file = std::fs::File::create(&path).unwrap();
+        file.write_all(SCD_MAGIC).unwrap();
+        file.write_all(&(bytes.len() as u64).to_le_bytes()).unwrap();
+        file.write_all(&bytes).unwrap();
+        for _ in 0..16 {
+            file.write_all(&8192i16.to_le_bytes()).unwrap();
+        }
+        file.flush().unwrap();
+        for (off, mixed, expected) in [
+            (false, false, [true, false]),
+            (true, false, [false, true]),
+            (false, true, [true, true]),
+            (true, true, [true, true]),
+        ] {
+            let mut plugin = ScdPlugin::default();
+            let params = Arc::get_mut(&mut plugin.params).unwrap();
+            params.snare_wires_off = BoolParam::new("Wires Off", off);
+            params.snare_mixed = BoolParam::new("Mixed", mixed);
+            plugin.voice_pool.set_pack(ScdPack::open(&path).unwrap());
+            plugin.handle_midi(NoteEvent::NoteOn {
+                timing: 0,
+                voice_id: None,
+                channel: 0,
+                note: 38,
+                velocity: 0.5,
+            });
+            let mut peaks = [0.0; KitPieceId::COUNT];
+            plugin.voice_pool.process_sample(
+                &mut [[0.0; 2]; MicChannel::COUNT],
+                &plugin.params.mix_gain_table(),
+                &mut peaks,
+            );
+            for (piece, expected) in [KitPieceId::Snare, KitPieceId::OpenSnare]
+                .into_iter()
+                .zip(expected)
+            {
+                let art = scd_core::kit::stonehouse()
+                    .arts(piece)
+                    .iter()
+                    .position(|art| art.note1 == 38)
+                    .unwrap();
+                assert_eq!(
+                    plugin.params.midi_velocities[piece as usize][art]
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                        > 0,
+                    expected,
+                    "off={off}, mixed={mixed}, piece={piece:?}"
+                );
+                assert_eq!(plugin.rr_counter[piece as usize][38] > 0, expected);
+                assert_eq!(
+                    peaks[piece as usize] > 0.0,
+                    expected,
+                    "audible voice for {piece:?}"
+                );
+            }
+        }
     }
 }

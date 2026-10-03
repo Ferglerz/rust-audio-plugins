@@ -1,4 +1,9 @@
 //! Fixed-capacity harmonic resolution. No allocation or host/UI dependencies.
+mod keyboard;
+mod spelling;
+pub use keyboard::*;
+pub use spelling::*;
+
 pub const QUALITY_NAMES: [&str; 12] = [
     "Major", "Minor", "7", "Maj7", "Min7", "Dim", "Aug", "6", "Min6", "Dim7", "Half dim", "Power",
 ];
@@ -133,6 +138,8 @@ pub fn intervals(quality: u8, alteration: Option<u8>) -> Notes {
     out
 }
 
+pub const VOICING_NAMES: [&str; 5] = ["Close", "Open", "Wide", "Drop 2", "Drop 3"];
+
 pub fn voice(
     root: u8,
     quality: u8,
@@ -150,12 +157,12 @@ pub fn voice(
     for i in 0..tones.len {
         let source = (i + inv) % tones.len;
         let shift = if source < inv { 12 } else { 0 };
-        let open = if spread == 1 && i % 2 == 1 {
-            12
-        } else if spread == 2 {
-            (i / 2) as i16 * 12
-        } else {
-            0
+        let open = match spread.min((VOICING_NAMES.len() - 1) as u8) {
+            1 if i % 2 == 1 => 12,
+            2 => (i / 2) as i16 * 12,
+            3 if tones.len >= 3 && i == tones.len - 2 => -12,
+            4 if tones.len >= 3 && i == tones.len - 3 => -12,
+            _ => 0,
         };
         out.push(root as i16 + transpose as i16 + tones.values[source] as i16 + shift + open);
     }
@@ -259,7 +266,7 @@ mod tests {
         let previous_notes = voice(67, 2, None, 0, 0, 0);
         for root in 0..=127 {
             for quality in 0..12 {
-                for spread in 0..3 {
+                for spread in 0..VOICING_NAMES.len() as u8 {
                     let chord = SavedChord {
                         root,
                         quality,
@@ -426,7 +433,8 @@ impl SavedChord {
             | ((self.second.unwrap_or(128) as u64) << 7)
             | ((self.quality as u64) << 15)
             | ((self.inversion as u64) << 19)
-            | ((self.spread as u64) << 22)
+            | (((self.spread as u64) & 3) << 22)
+            | (((self.spread as u64) >> 2) << 30)
             | (((self.transpose as i16 + 24) as u64) << 24)
     }
     pub fn decode(n: u64) -> Option<Self> {
@@ -439,7 +447,8 @@ impl SavedChord {
             second: (second < 128).then_some(second),
             quality: ((n >> 15) & 15).min(11) as u8,
             inversion: ((n >> 19) & 7).min(5) as u8,
-            spread: ((n >> 22) & 3).min(2) as u8,
+            spread: (((n >> 22) & 3) | (((n >> 30) & 3) << 2)).min((VOICING_NAMES.len() - 1) as u64)
+                as u8,
             transpose: (((n >> 24) & 63).min(48) as i16 - 24) as i8,
         })
     }
@@ -447,6 +456,16 @@ impl SavedChord {
 
 /// Derive the label from the resolved recipe rather than losing extensions in UI labels.
 pub fn chord_name(chord: SavedChord) -> String {
+    chord_name_with_root(
+        chord,
+        NOTE_NAMES[(chord.root as i16 + chord.transpose as i16).rem_euclid(12) as usize],
+    )
+}
+pub fn chord_name_in_key(chord: SavedChord, key: u8, scale: u8, preference: i32) -> String {
+    let pitch = (chord.root as i16 + chord.transpose as i16).rem_euclid(12) as u8;
+    chord_name_with_root(chord, &note_name_in_key(pitch, key, scale, preference))
+}
+fn chord_name_with_root(chord: SavedChord, root: &str) -> String {
     let tones = intervals(
         chord.quality,
         chord
@@ -486,9 +505,105 @@ pub fn chord_name(chord: SavedChord) -> String {
     if has(13) {
         suffix.push_str("(b9)");
     }
-    format!(
-        "{}{}",
-        NOTE_NAMES[(chord.root as i16 + chord.transpose as i16).rem_euclid(12) as usize],
-        suffix
-    )
+    format!("{}{}", root, suffix)
+}
+
+/// Incorporate held melody pitch classes within one octave of the chord register.
+/// Never double a melody's exact MIDI note, even on another output channel.
+pub fn melody_harmony(base: Notes, melody: &[[bool; 128]; 16]) -> Notes {
+    if base.len == 0 {
+        return base;
+    }
+    let held = |n: u8| melody.iter().any(|channel| channel[n as usize]);
+    let low = base
+        .as_slice()
+        .iter()
+        .copied()
+        .min()
+        .unwrap_or(0)
+        .saturating_sub(12);
+    let high = base
+        .as_slice()
+        .iter()
+        .copied()
+        .max()
+        .unwrap_or(127)
+        .saturating_add(12)
+        .min(127);
+    let center = base.as_slice().iter().map(|&n| n as i16).sum::<i16>() / base.len as i16;
+    let mut result = Notes::default();
+    for &note in base.as_slice() {
+        if !held(note) {
+            result.push(note as i16);
+        }
+    }
+    // Chord tones get capacity priority over new melody extensions.
+    for pitch in base
+        .as_slice()
+        .iter()
+        .map(|n| n % 12)
+        .chain((0..12).filter(|&pc| (0..128u8).any(|n| n % 12 == pc && held(n))))
+    {
+        if result.as_slice().iter().any(|n| n % 12 == pitch) {
+            continue;
+        }
+        if let Some(note) = (low..=high)
+            .filter(|&n| n % 12 == pitch && !held(n) && !result.as_slice().contains(&n))
+            .min_by_key(|&n| (n as i16 - center).abs())
+        {
+            result.push(note as i16);
+        }
+    }
+    result.values[..result.len].sort_unstable();
+    result
+}
+
+#[cfg(test)]
+mod voicing_variation_tests {
+    use super::*;
+    #[test]
+    fn additional_voicings_resolve_expected_chord_tones() {
+        assert_eq!(voice(60, 0, None, 0, 0, 3).as_slice(), &[52, 60, 67]);
+        assert_eq!(voice(60, 0, None, 0, 0, 4).as_slice(), &[48, 64, 67]);
+    }
+    #[test]
+    fn retired_octave_voicing_clamps_to_drop_three_without_corrupting_memory() {
+        let legacy = SavedChord {
+            root: 60,
+            second: Some(62),
+            quality: 3,
+            inversion: 2,
+            spread: 5,
+            transpose: 7,
+        };
+        let decoded = SavedChord::decode(legacy.encode()).unwrap();
+        assert_eq!(
+            decoded,
+            SavedChord {
+                spread: 4,
+                ..legacy
+            }
+        );
+        assert_eq!(voice(60, 0, None, 0, 0, 5).as_slice(), &[48, 64, 67]);
+    }
+    #[test]
+    fn all_voicings_round_trip_without_corrupting_transpose() {
+        for spread in 0..VOICING_NAMES.len() as u8 {
+            for transpose in -24..=24 {
+                let chord = SavedChord {
+                    root: 60,
+                    second: Some(62),
+                    quality: 3,
+                    inversion: 2,
+                    spread,
+                    transpose,
+                };
+                assert_eq!(SavedChord::decode(chord.encode()), Some(chord));
+            }
+        }
+        // A pre-extension Wide memory retains its old voicing and transpose.
+        let legacy = (1u64 << 63) | 60 | (128 << 7) | (2 << 22) | (31 << 24);
+        let decoded = SavedChord::decode(legacy).unwrap();
+        assert_eq!((decoded.spread, decoded.transpose), (2, 7));
+    }
 }

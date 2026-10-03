@@ -374,13 +374,25 @@ impl ScdPack {
 
     /// Match a MIDI note + velocity + RR group to strike entry
     pub fn find_strike(&self, note: u8, velocity: u8, rr_group: u8) -> Option<&StrikeEntry> {
+        self.find_strike_for_piece(note, velocity, rr_group, None)
+    }
+
+    /// Restrict overlapping snare notes to the selected wire variant.
+    pub fn find_strike_for_piece(
+        &self,
+        note: u8,
+        velocity: u8,
+        rr_group: u8,
+        piece: Option<KitPieceId>,
+    ) -> Option<&StrikeEntry> {
         let note = note as usize;
         if note >= 128 {
             return None;
         }
         self.note_index.by_note[note].iter().find_map(|&idx| {
             let strike = &self.index.strikes[idx as usize];
-            if velocity >= strike.lo_vel
+            if piece.is_none_or(|piece| strike.kit_piece == piece)
+                && velocity >= strike.lo_vel
                 && velocity <= strike.hi_vel
                 && (strike.rr_group == rr_group || strike.rr_group == 0)
             {
@@ -397,6 +409,19 @@ impl ScdPack {
             .max_rr
             .get(note as usize)
             .copied()
+            .unwrap_or(0)
+    }
+
+    pub fn max_rr_for_piece(&self, note: u8, piece: Option<KitPieceId>) -> u8 {
+        self.note_index
+            .by_note
+            .get(note as usize)
+            .into_iter()
+            .flatten()
+            .map(|&idx| &self.index.strikes[idx as usize])
+            .filter(|strike| piece.is_none_or(|piece| strike.kit_piece == piece))
+            .map(|strike| strike.rr_group)
+            .max()
             .unwrap_or(0)
     }
 

@@ -64,6 +64,36 @@ impl KnobLayout {
 }
 
 impl Draw<'_> {
+    /// Shared small-radius button face and curved selection accent.
+    /// Animation amounts are in 0..=1. Reserve the lower 2 px for the offset
+    /// backing so the highlight stays visible inside clipped widget bounds.
+    pub fn button_surface(
+        &mut self,
+        r: (f32, f32, f32, f32),
+        color: Color,
+        selected: f32,
+        hover: f32,
+        press: f32,
+    ) {
+        let selected = selected.clamp(0.0, 1.0);
+        let offset = 2.0_f32.min(r.3 * 0.5);
+        let height = r.3 - offset;
+        if selected > 0.0 {
+            let mut accent = color;
+            accent.a *= selected;
+            self.rect(r.0, r.1 + offset, r.2, height, accent);
+        }
+        // The opaque face hides the backing except around its lower corners.
+        self.rect(r.0, r.1, r.2, height, LINE);
+        let mut tint = if selected > 0.0 && color != MUTED {
+            color
+        } else {
+            TEXT
+        };
+        tint.a *= hover.clamp(0.0, 1.0) * 0.08 + press.clamp(0.0, 1.0) * 0.07 + selected * 0.08;
+        self.rect(r.0, r.1, r.2, height, tint);
+    }
+
     pub fn button(&mut self, r: (f32, f32, f32, f32), label: &str, on: bool, color: Color) {
         self.button_aligned(r, label, on, color, true);
     }
@@ -84,7 +114,7 @@ impl Draw<'_> {
             .unwrap_or(label.len() as f32 * TEXT_SIZE * 0.6);
         let left = r.0 + (r.2 - ICON_WIDTH - GAP - text_width) * 0.5;
         let center_y = r.1 + r.3 * 0.5;
-        self.rect(r.0, r.1, r.2, r.3, PANEL);
+        self.button_surface(r, MUTED, 0.0, self.is_hovered(r) as u8 as f32, 0.0);
         self.palette_icon(left + ICON_WIDTH * 0.5, center_y, MUTED);
         self.text_middle(left + ICON_WIDTH + GAP, center_y, label, TEXT_SIZE, MUTED);
     }
@@ -101,10 +131,63 @@ impl Draw<'_> {
         color: Color,
         centered: bool,
     ) {
-        self.rect(r.0, r.1, r.2, r.3, PANEL);
-        if on {
-            self.rect(r.0, r.1 + r.3 - 2.0, r.2, 2.0, color);
+        let hovered = self.is_hovered(r);
+        self.button_surface(
+            r,
+            if !on && color == MUTED { TEXT } else { color },
+            if on {
+                1.0
+            } else if hovered {
+                0.5
+            } else {
+                0.0
+            },
+            hovered as u8 as f32,
+            0.0,
+        );
+        let label_color = if on { color } else { MUTED };
+        if centered {
+            self.text_centered(
+                r.0 + r.2 * 0.5,
+                r.1 + r.3 / 2.0 + 4.0,
+                label,
+                11.0,
+                label_color,
+            );
+        } else {
+            self.text(r.0 + 10.0, r.1 + r.3 / 2.0 + 4.0, label, 11.0, label_color);
         }
+    }
+
+    pub fn button_tinted(&mut self, r: (f32, f32, f32, f32), label: &str, on: bool, color: Color) {
+        self.button_tinted_aligned(r, label, on, color, true);
+    }
+
+    pub fn button_tinted_left(
+        &mut self,
+        r: (f32, f32, f32, f32),
+        label: &str,
+        on: bool,
+        color: Color,
+    ) {
+        self.button_tinted_aligned(r, label, on, color, false);
+    }
+
+    fn button_tinted_aligned(
+        &mut self,
+        r: (f32, f32, f32, f32),
+        label: &str,
+        on: bool,
+        color: Color,
+        centered: bool,
+    ) {
+        self.button_surface(
+            r,
+            color,
+            on as u8 as f32,
+            self.is_hovered(r) as u8 as f32,
+            0.0,
+        );
         let label_color = if on { color } else { MUTED };
         if centered {
             self.text_centered(
@@ -120,17 +203,7 @@ impl Draw<'_> {
     }
 
     pub fn tab_button(&mut self, r: (f32, f32, f32, f32), label: &str, on: bool, color: Color) {
-        self.rect(r.0, r.1, r.2, r.3, PANEL);
-        if on {
-            self.rect(r.0, r.1 + r.3 - 2.0, r.2, 2.0, color);
-        }
-        self.text_centered(
-            r.0 + r.2 * 0.5,
-            r.1 + r.3 / 2.0 + 4.0,
-            label,
-            11.0,
-            if on { color } else { MUTED },
-        );
+        self.button_aligned(r, label, on, color, true);
     }
 
     pub fn bypass_button(

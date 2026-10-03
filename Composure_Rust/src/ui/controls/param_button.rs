@@ -5,9 +5,11 @@ use nih_plug_vizia::vizia::prelude::*;
 use nih_plug_vizia::widgets::param_base::ParamWidgetBase;
 use std::sync::Arc;
 
+#[allow(dead_code)]
 pub struct ParamButton {
     param_base: ParamWidgetBase,
 }
+#[allow(dead_code)]
 impl ParamButton {
     pub fn new<L, P, F>(cx: &mut Context, params: L, map: F) -> Handle<'_, Self>
     where
@@ -38,12 +40,16 @@ impl View for ParamButton {
         ) {
             return;
         }
-        event.map(|e, meta| {
-            if matches!(e, WindowEvent::MouseDown(MouseButton::Left)) {
+        event.map(|e, meta| match e {
+            WindowEvent::MouseEnter | WindowEvent::MouseLeave | WindowEvent::MouseMove(..) => {
+                cx.needs_redraw();
+            }
+            WindowEvent::MouseDown(MouseButton::Left) => {
                 param_widget_ext::toggle_bool_param(cx, &self.param_base);
                 cx.needs_redraw();
                 meta.consume();
             }
+            _ => {}
         });
     }
 }

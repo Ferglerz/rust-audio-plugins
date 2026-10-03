@@ -138,7 +138,9 @@ impl Draw<'_> {
 
     /// Shared EQ handle: solid node with an optional full selection ring.
     pub fn eq_node(&mut self, x: f32, y: f32, color: Color, selected: bool) {
-        if selected { self.circle(x, y, 12.0, color, false); }
+        if selected {
+            self.circle(x, y, 12.0, color, false);
+        }
         self.circle(x, y, 7.0, color, true);
     }
 
@@ -242,7 +244,10 @@ impl Draw<'_> {
         self.c.stroke_path(&path, &paint);
     }
 
-    #[expect(clippy::too_many_arguments, reason = "Drawing primitives use separate coordinates and style values")]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Drawing primitives use separate coordinates and style values"
+    )]
     pub fn outline_rounded(
         &mut self,
         x: f32,
@@ -390,7 +395,10 @@ impl Draw<'_> {
         self.c.stroke_path(&p, &paint);
     }
 
-    #[expect(clippy::too_many_arguments, reason = "Drawing primitives use separate coordinates and style values")]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Drawing primitives use separate coordinates and style values"
+    )]
     pub fn poly_gradient_above(
         &mut self,
         points: &[(f32, f32)],

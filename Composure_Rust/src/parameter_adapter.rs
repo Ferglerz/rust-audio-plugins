@@ -35,10 +35,21 @@ fn capture_envelope(params: &ComposureParams) -> EnvelopeParams {
         release_curve: params.release_curve.value() as f64,
         hold_ms: params.hold_ms.value() as f64,
         strength: params.strength.value() as f64,
-        prog_release_inverse: params.prog_release_inverse.value(),
-        input_dependence: params.input_dependence.value() as f64,
-        gr_dependence: params.gr_dependence.value() as f64,
-        input_rate_amount: params.input_rate_amount.value() as f64,
+        input_dependence: if params.program_on.value() {
+            params.input_dependence.value() as f64
+        } else {
+            0.0
+        },
+        gr_dependence: if params.program_on.value() {
+            params.gr_dependence.value() as f64
+        } else {
+            0.0
+        },
+        input_rate_amount: if params.program_on.value() {
+            params.input_rate_amount.value() as f64
+        } else {
+            0.0
+        },
         input_level_threshold_db: params.input_level_threshold_db.value() as f64,
         input_level_threshold_2_db: params.input_level_threshold_2_db.value() as f64,
         gr_blend_threshold_reduction_db: params.gr_blend_threshold_reduction_db.value() as f64,
@@ -85,20 +96,20 @@ mod tests {
     fn program_influences_capture_independent_percentages() {
         use nih_plug::prelude::{FloatParam, FloatRange};
         let mut params = ComposureParams::default();
-        for (input, gr) in [(0.0, 0.0), (25.0, 75.0), (100.0, 100.0)] {
+        for (input, gr) in [(-100.0, -100.0), (0.0, 0.0), (25.0, 75.0), (100.0, 100.0)] {
             params.input_dependence = FloatParam::new(
-                "Input Dep",
+                "Input Threshold",
                 input,
                 FloatRange::Linear {
-                    min: 0.0,
+                    min: -100.0,
                     max: 100.0,
                 },
             );
             params.gr_dependence = FloatParam::new(
-                "GR Dep",
+                "Gain Threshold",
                 gr,
                 FloatRange::Linear {
-                    min: 0.0,
+                    min: -100.0,
                     max: 100.0,
                 },
             );
@@ -108,5 +119,40 @@ mod tests {
                 (input as f64, gr as f64)
             );
         }
+    }
+
+    #[test]
+    fn program_bypass_zeroes_influences() {
+        use nih_plug::prelude::{BoolParam, FloatParam, FloatRange};
+        let mut params = ComposureParams::default();
+        params.input_dependence = FloatParam::new(
+            "Input Threshold",
+            50.0,
+            FloatRange::Linear {
+                min: -100.0,
+                max: 100.0,
+            },
+        );
+        params.gr_dependence = FloatParam::new(
+            "Gain Threshold",
+            50.0,
+            FloatRange::Linear {
+                min: -100.0,
+                max: 100.0,
+            },
+        );
+        params.input_rate_amount = FloatParam::new(
+            "Input Slew Rate",
+            2.0,
+            FloatRange::Linear {
+                min: -5.0,
+                max: 5.0,
+            },
+        );
+        params.program_on = BoolParam::new("Program Dependence", false);
+        let captured = capture_envelope(&params);
+        assert_eq!(captured.input_dependence, 0.0);
+        assert_eq!(captured.gr_dependence, 0.0);
+        assert_eq!(captured.input_rate_amount, 0.0);
     }
 }

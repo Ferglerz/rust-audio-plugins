@@ -21,7 +21,10 @@ impl ScdEditorView {
                 })
             });
         }
-        for &piece in &KitPieceId::ALL {
+        for piece in KitPieceId::ALL
+            .into_iter()
+            .filter(|p| *p != KitPieceId::OpenSnare)
+        {
             let sx = Self::strip_x(piece);
             if !(sx..=sx + STRIP_W).contains(&x) {
                 continue;
@@ -58,9 +61,18 @@ impl ScdEditorView {
                 return false;
             }
         }
-        let Some(target) = Self::reset_target_at(x, y, self.sub_kick_open) else {
+        let Some(mut target) = Self::reset_target_at(x, y, self.sub_kick_open) else {
             return false;
         };
+        if self.params.snare_wires_off.value() {
+            target = match target {
+                DragTarget::Pitch(KitPieceId::Snare) => DragTarget::Pitch(KitPieceId::OpenSnare),
+                DragTarget::Pan(KitPieceId::Snare) => DragTarget::Pan(KitPieceId::OpenSnare),
+                DragTarget::Fader(KitPieceId::Snare) => DragTarget::Fader(KitPieceId::OpenSnare),
+                DragTarget::Punch(KitPieceId::Snare) => DragTarget::Punch(KitPieceId::OpenSnare),
+                other => other,
+            };
+        }
         if matches!(target, DragTarget::Fader(piece) if self.omitted(piece)) {
             return false;
         }
@@ -139,7 +151,6 @@ impl ScdEditorView {
     }
 
     pub(super) fn draw_mixer(&self, draw: &mut Draw<'_>, kit_vu: &[f32; KitPieceId::COUNT]) {
-        let mixer_x = Self::mixer_x();
         draw.text(LABEL_X, MIXER_Y + 12.0, "PITCH:", 12.0, THEME);
         draw.text(LABEL_X + 12.0, MIXER_Y + 32.0, "PAN:", 12.0, THEME);
         draw.text(LABEL_X, MIXER_Y + 352.0, "PUNCH:", 12.0, THEME);
@@ -165,8 +176,42 @@ impl ScdEditorView {
 
         draw.text(SUB_KICK.0, SUB_KICK.1 + 14.0, "Sub Kick", 12.0, THEME);
 
-        for (idx, &kit_piece) in KitPieceId::ALL.iter().enumerate() {
-            let sx = mixer_x + idx as f32 * STRIP_W;
+        for kit_piece in self.visible_pieces() {
+            let idx = kit_piece as usize;
+            let sx = Self::strip_x(kit_piece);
+            if let Some(id) = self.icons[idx].get() {
+                if let Ok((w, h)) = draw.c.image_size(id) {
+                    let scale = ((STRIP_W - 16.0) / w as f32).min(40.0 / h as f32);
+                    let (w, h) = (w as f32 * scale, h as f32 * scale);
+                    blit(
+                        draw,
+                        id,
+                        sx + (STRIP_W - w) * 0.5,
+                        34.0 + (40.0 - h) * 0.5,
+                        w,
+                        h,
+                    );
+                }
+            }
+            if matches!(kit_piece, KitPieceId::Snare | KitPieceId::OpenSnare) {
+                for mixed in [false, true] {
+                    let (x, y, w, h) = Self::snare_toggle_rect(mixed);
+                    let on = if mixed {
+                        self.params.snare_mixed.value()
+                    } else {
+                        self.params.snare_wires_off.value()
+                    };
+                    draw.rounded_rect(x, y, w, h, 4.0, if on { STAGE_ON } else { SOF_OFF });
+                    let label = if mixed {
+                        "Mixed"
+                    } else if on {
+                        "Wires Off"
+                    } else {
+                        "Wires On"
+                    };
+                    draw.text_centered(x + w * 0.5, y + 13.0, label, 10.0, THEME);
+                }
+            }
             let strip = self.params.get_strip(kit_piece);
             let omitted = self.omitted(kit_piece);
             let slider_x = sx + 5.0;
@@ -189,7 +234,17 @@ impl ScdEditorView {
                 strip.pan.unmodulated_normalized_value(),
             );
 
-            draw_chan_meter(draw, sx, kit_vu[idx]);
+            draw_chan_meter(
+                draw,
+                sx,
+                if matches!(kit_piece, KitPieceId::Snare | KitPieceId::OpenSnare)
+                    && self.params.snare_mixed.value()
+                {
+                    kit_vu[KitPieceId::Snare as usize].max(kit_vu[KitPieceId::OpenSnare as usize])
+                } else {
+                    kit_vu[idx]
+                },
+            );
             draw.rect(sx + STRIP_W * 0.5 - 1.0, FADER_Y, 2.0, FADER_H, FADER_LINE);
 
             let gain_db =
@@ -225,7 +280,11 @@ impl ScdEditorView {
                 handle_color,
             );
 
-            let name = kit_piece.name();
+            let name = if kit_piece == KitPieceId::OpenSnare {
+                "Snare"
+            } else {
+                kit_piece.name()
+            };
             let split = name.split_once(' ').filter(|_| name.len() > 6);
             if let Some((a, b)) = split {
                 draw.text_centered(sx + STRIP_W * 0.5, handle_y + 11.0, a, 10.0, FADER_TEXT);

@@ -1,12 +1,13 @@
 use crate::engine::{Command, Snapshot};
 use crossbeam_queue::ArrayQueue;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 pub struct Bridge {
     pub commands: ArrayQueue<Command>,
     pub snapshots: ArrayQueue<Snapshot>,
     pub panic: AtomicBool,
     pub reset: AtomicBool,
     pub visible: AtomicBool,
+    pub learned_split: AtomicU32,
 }
 impl Default for Bridge {
     fn default() -> Self {
@@ -16,6 +17,7 @@ impl Default for Bridge {
             panic: AtomicBool::new(false),
             reset: AtomicBool::new(false),
             visible: AtomicBool::new(false),
+            learned_split: AtomicU32::new(0),
         }
     }
 }

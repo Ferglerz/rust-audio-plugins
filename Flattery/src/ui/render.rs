@@ -14,7 +14,8 @@ impl FlatteryView {
             bounds.x,
             bounds.y,
             self.font.get(),
-        );
+        )
+        .with_hover(self.idle_hover());
 
         d.rounded_rect(0.0, 0.0, WINDOW_W, WINDOW_H, 0.0, BG);
         d.rounded_rect(0.0, 0.0, WINDOW_W, HEADER_HEIGHT, 0.0, PANEL);
@@ -225,7 +226,7 @@ impl FlatteryView {
                 && self
                     .idle_hover()
                     .is_some_and(|(hx, hy)| Self::inside(hx, hy, r));
-            draw_corner_icon(&mut d, r, true, hot, can_zoom_in);
+            d.graph_zoom_button(r, true, hot, can_zoom_in);
             if hot {
                 d.text_right(cluster_left - 6.0, r.1 + 15.0, "Zoom to area", 10.0, MUTED);
             }
@@ -234,7 +235,7 @@ impl FlatteryView {
             let hot = self
                 .idle_hover()
                 .is_some_and(|(hx, hy)| Self::inside(hx, hy, r));
-            draw_corner_icon(&mut d, r, false, hot, true);
+            d.graph_zoom_button(r, false, hot, true);
             if hot {
                 d.text_right(cluster_left - 6.0, r.1 + 15.0, "Reset zoom", 10.0, MUTED);
             }
@@ -246,7 +247,7 @@ impl FlatteryView {
             ProcessDomain::LR => "L/R",
             ProcessDomain::MS => "M/S",
         };
-        d.button(self.domain_button_rect(), domain_label, false, TEAL);
+        d.button_tinted(self.domain_button_rect(), domain_label, true, TEAL);
 
         for &id in STACKED_SLIDERS {
             let r = Self::slider_rect(id);
@@ -331,98 +332,5 @@ impl FlatteryView {
                 d.rect(bar_x, bar_y, bar_w * n.clamp(0.0, 1.0), 5.0, color);
             }
         }
-    }
-}
-
-fn draw_corner_icon(d: &mut Draw, r: (f32, f32, f32, f32), inward: bool, hot: bool, enabled: bool) {
-    let fade = if enabled { 1.0 } else { 0.32 };
-    let mut panel = PANEL;
-    panel.a *= fade;
-    let mut line = LINE;
-    line.a *= fade;
-    d.rounded_rect(r.0, r.1, r.2, r.3, 4.0, panel);
-    d.outline(r, line);
-    let color = if !enabled {
-        Color { a: fade, ..MUTED }
-    } else if hot {
-        TEXT
-    } else {
-        MUTED
-    };
-    let (x, y, w, h) = r;
-    let arm = 5.0;
-    if inward {
-        let m = 4.5;
-        d.poly(
-            &[(x + m, y + m + arm), (x + m, y + m), (x + m + arm, y + m)],
-            color,
-            1.3,
-        );
-        d.poly(
-            &[
-                (x + w - m - arm, y + m),
-                (x + w - m, y + m),
-                (x + w - m, y + m + arm),
-            ],
-            color,
-            1.3,
-        );
-        d.poly(
-            &[
-                (x + m, y + h - m - arm),
-                (x + m, y + h - m),
-                (x + m + arm, y + h - m),
-            ],
-            color,
-            1.3,
-        );
-        d.poly(
-            &[
-                (x + w - m - arm, y + h - m),
-                (x + w - m, y + h - m),
-                (x + w - m, y + h - m - arm),
-            ],
-            color,
-            1.3,
-        );
-    } else {
-        let m = 3.0;
-        let inset = 8.0;
-        d.poly(
-            &[
-                (x + m, y + inset),
-                (x + inset, y + inset),
-                (x + inset, y + m),
-            ],
-            color,
-            1.3,
-        );
-        d.poly(
-            &[
-                (x + w - inset, y + m),
-                (x + w - inset, y + inset),
-                (x + w - m, y + inset),
-            ],
-            color,
-            1.3,
-        );
-        d.poly(
-            &[
-                (x + inset, y + h - m),
-                (x + inset, y + h - inset),
-                (x + m, y + h - inset),
-            ],
-            color,
-            1.3,
-        );
-        d.poly(
-            &[
-                (x + w - m, y + h - inset),
-                (x + w - inset, y + h - inset),
-                (x + w - inset, y + h - m),
-            ],
-            color,
-            1.3,
-        );
     }
 }

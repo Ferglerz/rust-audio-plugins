@@ -93,6 +93,30 @@ fn output(event: Out, timing: u32) -> NoteEvent<()> {
     }
 }
 impl Chordboard {
+    fn current_config(&self) -> engine::Config {
+        let mut config = self.params.config();
+        let encoded = self.bridge.learned_split.load(Ordering::Acquire);
+        if let Some(learned) = engine::LearnedSplit::decode(encoded) {
+            if config.bass_split == learned.bass as i16
+                && config.split_note == learned.melody
+                && (if learned.target == 5 {
+                    config.bass_enabled
+                } else {
+                    config.key_split
+                })
+            {
+                let _ = self.bridge.learned_split.compare_exchange(
+                    encoded,
+                    0,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                );
+            } else {
+                learned.apply(&mut config);
+            }
+        }
+        config
+    }
     fn playback_tempo(&self, host_tempo: Option<f64>) -> f64 {
         if self.params.tempo_sync.value() {
             host_tempo.unwrap_or(120.0)
@@ -132,7 +156,7 @@ impl Chordboard {
     fn input(&mut self, event: NoteEvent<()>, out: &mut impl FnMut(Out)) {
         if let Some(detected) = self.detect_mpe_input(&event) {
             self.params.detected_mpe.store(detected, Ordering::Relaxed);
-            self.engine.configure(self.params.config(), out);
+            self.engine.configure(self.current_config(), out);
         }
         match event {
             NoteEvent::NoteOn {
@@ -169,7 +193,10 @@ impl Chordboard {
                 ..
             } => {
                 if self.engine.melody_note_held(channel, note)
-                    || self.engine.root.is_some_and(|s| s.held && s.channel == channel && s.note == note)
+                    || self
+                        .engine
+                        .root
+                        .is_some_and(|s| s.held && s.channel == channel && s.note == note)
                 {
                     let range = self.engine.input_bend[channel as usize].max(1.0);
                     self.engine
@@ -183,13 +210,21 @@ impl Chordboard {
                 ..
             } => {
                 if self.engine.melody_note_held(channel, note)
-                    || self.engine.root.is_some_and(|s| s.held && s.channel == channel && s.note == note)
+                    || self
+                        .engine
+                        .root
+                        .is_some_and(|s| s.held && s.channel == channel && s.note == note)
                 {
                     self.engine.control(channel, 74, brightness, out);
                 }
             }
             NoteEvent::Choke { .. } => self.engine.panic(out),
             _ => {}
+        }
+        if let Some(learned) = self.engine.learned_split.take() {
+            self.bridge
+                .learned_split
+                .store(learned.encode(), Ordering::Release);
         }
         // Publish learning before another event can reconfigure the engine (MPE
         // detection also reads these parameters within the current audio block).
@@ -203,6 +238,52 @@ impl Chordboard {
 impl Plugin for Chordboard {
     fn filter_state(state: &mut PluginState) {
         use nih_plug::wrapper::state::ParamValue;
+        state
+            .params
+            .entry("bass_split".into())
+            .or_insert(ParamValue::I32(-1));
+        if state
+            .fields
+            .get("schema-version")
+            .is_none_or(|v| !v.parse::<u32>().is_ok_and(|version| version >= 2))
+        {
+            let destination = engine::routing::default_routes()[0].target as i32;
+            let existing = (1..=engine::routing::ROUTE_COUNT).any(|slot| {
+                matches!(state.params.get(&format!("route_target_{slot}")), Some(ParamValue::I32(v)) if *v == destination)
+            });
+            if existing {
+                state.fields.insert("schema-version".into(), "2".into());
+            } else if let Some(slot) = (1..=engine::routing::ROUTE_COUNT).find(|slot| {
+                state
+                    .params
+                    .get(&format!("route_source_{slot}"))
+                    .is_none_or(|v| matches!(v, ParamValue::I32(0)))
+            }) {
+                state
+                    .params
+                    .insert(format!("route_source_{slot}"), ParamValue::I32(8));
+                state
+                    .params
+                    .insert(format!("route_target_{slot}"), ParamValue::I32(destination));
+                state
+                    .params
+                    .insert(format!("route_enabled_{slot}"), ParamValue::Bool(true));
+                state
+                    .params
+                    .insert(format!("route_min_{slot}"), ParamValue::F32(0.0));
+                state
+                    .params
+                    .insert(format!("route_max_{slot}"), ParamValue::F32(1.0));
+                state
+                    .params
+                    .insert(format!("route_curve_{slot}"), ParamValue::F32(0.0));
+                state.fields.insert("schema-version".into(), "2".into());
+            } else {
+                // A full legacy matrix retains its direct X behavior until a
+                // slot is freed, without replacing any saved assignments.
+                state.fields.insert("schema-version".into(), "1".into());
+            }
+        }
         if !state.params.contains_key("output_mode") {
             if let Some(ParamValue::Bool(enabled)) = state.params.get("mpe") {
                 state.params.insert(
@@ -244,6 +325,7 @@ impl Plugin for Chordboard {
         true
     }
     fn reset(&mut self) {
+        self.bridge.learned_split.store(0, Ordering::Release);
         self.pending_reset = true;
         self.engine.quality = self.params.selected_quality.load(Ordering::Relaxed).min(11) as u8;
         self.expected_position = None;
@@ -287,7 +369,7 @@ impl Plugin for Chordboard {
             }
         }
         self.engine
-            .configure(self.params.config(), &mut |e| emitted.push(0, e));
+            .configure(self.current_config(), &mut |e| emitted.push(0, e));
         self.engine
             .transport(playing, tempo, jump, &mut |e| emitted.push(0, e));
         let axes = [self.params.x.value(), self.params.y.value()];
@@ -344,7 +426,11 @@ impl Plugin for Chordboard {
             for channel in 0..16 {
                 context.send_event(output(Out::Cc(channel, 64, 0.0), 0));
             }
-            let owned_count = starting_notes.iter().flatten().filter(|&&owned| owned).count();
+            let owned_count = starting_notes
+                .iter()
+                .flatten()
+                .filter(|&&owned| owned)
+                .count();
             if owned_count > 480 {
                 // Bound emergency recovery even after many transparent notes
                 // accumulated across prior blocks.
@@ -419,24 +505,57 @@ mod protocol_tests {
         };
         plugin.engine.configure(plugin.params.config(), &mut |_| {});
         for (channel, note) in [(0, 48), (1, 72), (2, 76)] {
-            plugin.input(NoteEvent::NoteOn { timing: 0, voice_id: None, channel, note, velocity: 0.8 }, &mut |_| {});
+            plugin.input(
+                NoteEvent::NoteOn {
+                    timing: 0,
+                    voice_id: None,
+                    channel,
+                    note,
+                    velocity: 0.8,
+                },
+                &mut |_| {},
+            );
         }
         let mut events = Vec::new();
-        plugin.input(NoteEvent::PolyTuning { timing: 0, voice_id: None, channel: 1, note: 72, tuning: 2.0 }, &mut |e| events.push(e));
+        plugin.input(
+            NoteEvent::PolyTuning {
+                timing: 0,
+                voice_id: None,
+                channel: 1,
+                note: 72,
+                tuning: 2.0,
+            },
+            &mut |e| events.push(e),
+        );
         assert!(plugin.engine.config.mpe);
         assert!(plugin.engine.melody_note_held(1, 72));
         assert!(plugin.engine.melody_note_held(2, 76));
-        assert!(!events.iter().any(|e| matches!(e, Out::Off(1, 72, _) | Out::Off(2, 76, _))));
-        assert!(events.iter().any(|e| matches!(e, Out::Bend(1, value) if *value > 0.5)));
+        assert!(!events
+            .iter()
+            .any(|e| matches!(e, Out::Off(1, 72, _) | Out::Off(2, 76, _))));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, Out::Bend(1, value) if *value > 0.5)));
         events.clear();
-        plugin.input(NoteEvent::PolyBrightness { timing: 0, voice_id: None, channel: 2, note: 76, brightness: 0.8 }, &mut |e| events.push(e));
+        plugin.input(
+            NoteEvent::PolyBrightness {
+                timing: 0,
+                voice_id: None,
+                channel: 2,
+                note: 76,
+                brightness: 0.8,
+            },
+            &mut |e| events.push(e),
+        );
         assert!(events.contains(&Out::Cc(2, 74, 0.8)));
     }
 
     #[test]
     fn learned_control_octave_survives_same_block_mpe_configuration() {
         let mut plugin = Chordboard::default();
-        plugin.engine.command(engine::Command::Learn(4), &mut |_| {});
+        plugin
+            .engine
+            .command(engine::Command::Learn(4), &mut |_| {});
         plugin.input(
             NoteEvent::NoteOn {
                 timing: 0,
@@ -549,6 +668,64 @@ mod protocol_tests {
         }
     }
     #[test]
+    fn legacy_strumfield_migration_preserves_links_and_is_idempotent() {
+        let mut state = PluginState {
+            version: "0.1.0".into(),
+            params: Default::default(),
+            fields: Default::default(),
+        };
+        state
+            .params
+            .insert("route_source_1".into(), ParamValue::I32(2));
+        state
+            .params
+            .insert("route_target_1".into(), ParamValue::I32(0));
+        Chordboard::filter_state(&mut state);
+        assert!(matches!(state.params["route_source_1"], ParamValue::I32(2)));
+        assert!(matches!(state.params["route_target_1"], ParamValue::I32(0)));
+        assert!(matches!(state.params["route_source_2"], ParamValue::I32(8)));
+        assert!(
+            matches!(state.params["route_target_2"], ParamValue::I32(v) if v == engine::routing::default_routes()[0].target as i32)
+        );
+        assert_eq!(state.fields["schema-version"], "2");
+        state
+            .params
+            .insert("route_source_2".into(), ParamValue::I32(0));
+        Chordboard::filter_state(&mut state);
+        assert!(matches!(state.params["route_source_2"], ParamValue::I32(0)));
+    }
+
+    #[test]
+    fn full_legacy_matrix_keeps_every_link_and_its_direct_strumfield_behavior() {
+        let mut state = PluginState {
+            version: "0.1.0".into(),
+            params: Default::default(),
+            fields: Default::default(),
+        };
+        for slot in 1..=engine::routing::ROUTE_COUNT {
+            state
+                .params
+                .insert(format!("route_source_{slot}"), ParamValue::I32(2));
+            state
+                .params
+                .insert(format!("route_target_{slot}"), ParamValue::I32(0));
+        }
+        Chordboard::filter_state(&mut state);
+        assert_eq!(state.fields["schema-version"], "1");
+        assert_eq!(state.params.len(), engine::routing::ROUTE_COUNT * 2 + 1);
+        let mut config = engine::Config {
+            mode: engine::MANUAL,
+            legacy_direct_x: true,
+            ..engine::Config::default()
+        };
+        config.routes = [engine::routing::Route::default(); engine::routing::ROUTE_COUNT];
+        let mut engine = engine::Engine::default();
+        engine.configure(config, &mut |_| {});
+        engine.position(0.7, 0, &mut |_| {});
+        assert_eq!(engine.x, 0.7);
+    }
+
+    #[test]
     fn tempo_source_switches_between_host_and_manual_bpm() {
         let mut plugin = Chordboard::default();
         assert_eq!(plugin.playback_tempo(Some(93.0)), 93.0);
@@ -566,5 +743,37 @@ mod protocol_tests {
             ..ChordboardParams::default()
         });
         assert_eq!(plugin.playback_tempo(Some(93.0)), 87.0);
+    }
+    #[test]
+    fn learned_split_stays_active_until_host_parameters_acknowledge_it() {
+        let mut plugin = Chordboard::default();
+        plugin
+            .engine
+            .configure(plugin.current_config(), &mut |_| {});
+        plugin
+            .engine
+            .command(engine::Command::Learn(6), &mut |_| {});
+        plugin.input(
+            NoteEvent::NoteOn {
+                timing: 0,
+                voice_id: None,
+                channel: 0,
+                note: 20,
+                velocity: 0.8,
+            },
+            &mut |_| {},
+        );
+        let config = plugin.current_config();
+        assert_eq!((config.bass_split, config.split_note), (12, 20));
+        assert!(config.key_split);
+        assert_ne!(plugin.bridge.learned_split.load(Ordering::Acquire), 0);
+        plugin.params = Arc::new(ChordboardParams {
+            bass_split: IntParam::new("Bass", 12, IntRange::Linear { min: -1, max: 127 }),
+            split_note: IntParam::new("Melody", 20, IntRange::Linear { min: 0, max: 127 }),
+            key_split: BoolParam::new("Melody enabled", true),
+            ..ChordboardParams::default()
+        });
+        assert_eq!(plugin.current_config().split_note, 20);
+        assert_eq!(plugin.bridge.learned_split.load(Ordering::Acquire), 0);
     }
 }
