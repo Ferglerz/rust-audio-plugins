@@ -67,7 +67,7 @@ pub struct TapeStopParams {
 impl Default for TapeStopParams {
     fn default() -> Self {
         Self {
-            editor_state: ViziaState::new_screen_sized("Tape Stop", || (902, 425)),
+            editor_state: crate::ui::default_editor_state(),
 
             drop_time: FloatParam::new(
                 "Drop Time",

@@ -2,7 +2,10 @@ use crate::params::OpenWurliUiParams;
 use nih_plug::prelude::*;
 use nih_plug_vizia::{
     create_vizia_editor,
-    vizia::{prelude::*, vg::FontId},
+    vizia::{
+        prelude::*,
+        vg::{Color, FontId},
+    },
     widgets::RawParamEvent,
     ViziaTheming,
 };
@@ -20,16 +23,12 @@ use std::{
 
 const WIDTH: f32 = 720.0;
 const HEIGHT: f32 = 550.0;
-const KNOB_Y: f32 = 95.0;
-const KNOB_W: f32 = 198.0;
-const KNOB_H: f32 = 168.0;
-const KNOB_GAP: f32 = 18.0;
-const KNOB_X: f32 = 45.0;
-const CPU_BUTTON: (f32, f32, f32, f32) = (45.0, 477.0, 172.0, 36.0);
+const KNOB_W: f32 = 150.0;
+const KNOB_H: f32 = 140.0;
+const CPU_BUTTON: (f32, f32, f32, f32) = (551.0, 328.0, 104.0, 42.0);
+const EXTENDED_BUTTON: (f32, f32, f32, f32) = (551.0, 384.0, 104.0, 42.0);
+const SAG_BUTTON: (f32, f32, f32, f32) = (551.0, 440.0, 104.0, 42.0);
 const THEME_BUTTON: (f32, f32, f32, f32) = (601.0, 21.0, 80.0, 30.0);
-const COG_BUTTON: (f32, f32, f32, f32) = (541.0, 21.0, 32.0, 30.0);
-const EXTENDED_BUTTON: (f32, f32, f32, f32) = (45.0, 187.0, 238.0, 50.0);
-const SAG_BUTTON: (f32, f32, f32, f32) = (531.0, 187.0, 144.0, 50.0);
 
 static PREFS: OnceLock<AppearanceStore> = OnceLock::new();
 
@@ -49,45 +48,39 @@ enum Knob {
 }
 
 impl Knob {
-    const MAIN: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::Volume,
         Self::Tremolo,
+        Self::TremoloResponse,
         Self::Speaker,
         Self::ReedDecay,
         Self::HammerHardness,
         Self::PickupDrive,
     ];
-    const ADVANCED: [Self; 1] = [Self::TremoloResponse];
 
     fn rect(self) -> (f32, f32, f32, f32) {
-        match self {
-            Self::Volume => (KNOB_X, KNOB_Y, KNOB_W, KNOB_H),
-            Self::Tremolo => (KNOB_X + KNOB_W + KNOB_GAP, KNOB_Y, KNOB_W, KNOB_H),
-            Self::Speaker => (KNOB_X + 2.0 * (KNOB_W + KNOB_GAP), KNOB_Y, KNOB_W, KNOB_H),
-            Self::ReedDecay => (KNOB_X, KNOB_Y + KNOB_H + KNOB_GAP, KNOB_W, KNOB_H),
-            Self::HammerHardness => (
-                KNOB_X + KNOB_W + KNOB_GAP,
-                KNOB_Y + KNOB_H + KNOB_GAP,
-                KNOB_W,
-                KNOB_H,
-            ),
-            Self::PickupDrive => (
-                KNOB_X + 2.0 * (KNOB_W + KNOB_GAP),
-                KNOB_Y + KNOB_H + KNOB_GAP,
-                KNOB_W,
-                KNOB_H,
-            ),
-            Self::TremoloResponse => (
-                45.0,
-                101.0,
-                630.0,
-                57.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA,
-            ),
-        }
+        let (column, y) = match self {
+            Self::Volume => (0, 125.0),
+            Self::Tremolo => (1, 125.0),
+            Self::TremoloResponse => (2, 125.0),
+            Self::Speaker => (3, 125.0),
+            Self::ReedDecay => (0, 330.0),
+            Self::HammerHardness => (1, 330.0),
+            Self::PickupDrive => (2, 330.0),
+        };
+        (45.0 + column as f32 * 160.0, y, KNOB_W, KNOB_H)
     }
 
-    fn is_advanced(self) -> bool {
-        !Self::MAIN.contains(&self)
+    fn label(self) -> &'static str {
+        match self {
+            Self::Volume => "VOLUME",
+            Self::Tremolo => "TREMOLO DEPTH",
+            Self::Speaker => "SPEAKER CHARACTER",
+            Self::ReedDecay => "REED DECAY",
+            Self::HammerHardness => "HAMMER HARDNESS",
+            Self::PickupDrive => "PICKUP DRIVE",
+            Self::TremoloResponse => "TREMOLO RESPONSE",
+        }
     }
 }
 
@@ -102,7 +95,6 @@ struct OpenWurliView {
     font: Cell<Option<FontId>>,
     drag: Option<Drag>,
     hover: Option<(f32, f32)>,
-    show_advanced: bool,
 }
 
 impl OpenWurliView {
@@ -123,20 +115,10 @@ impl OpenWurliView {
     }
 
     fn knob_at(&self, x: f32, y: f32) -> Option<Knob> {
-        let choices: &[Knob] = if self.show_advanced {
-            &Knob::ADVANCED
-        } else {
-            &Knob::MAIN
-        };
-        choices
+        Knob::ALL
             .iter()
             .copied()
             .find(|knob| Self::hit(x, y, knob.rect()))
-    }
-
-    fn slider_norm(knob: Knob, x: f32) -> f32 {
-        let rect = knob.rect();
-        ((x - (rect.0 + 12.0)) / (rect.2 - 24.0)).clamp(0.0, 1.0)
     }
 
     fn emit_once(cx: &mut EventContext, ptr: ParamPtr, norm: f32) {
@@ -156,25 +138,68 @@ impl OpenWurliView {
         }
     }
 
-    fn draw_advanced_slider(&self, d: &mut Draw, knob: Knob) {
-        let (label, color) = match knob {
-            Knob::TremoloResponse => ("TREMOLO RESPONSE", TEAL),
-            _ => return,
-        };
-        let rect = knob.rect();
+    fn draw_faceplate(d: &mut Draw) {
+        let rim = [(22.0, 92.0), (698.0, 92.0), (670.0, 516.0), (50.0, 516.0)];
+        let face = [(30.0, 100.0), (690.0, 100.0), (662.0, 508.0), (58.0, 508.0)];
+        d.fill_rounded_poly(&rim, 2.0, LINE);
+        d.fill_poly(&face, PANEL);
+        d.stroke_rounded_poly(&rim, 2.0, LINE, 1.0);
+        d.stroke_rounded_poly(&face, 0.0, MUTED, 1.5);
+        d.line(55.0, 296.0, 665.0, 296.0, MUTED, 2.0);
+        d.line(567.0, 277.0, 511.0, 482.0, MUTED, 1.5);
+    }
+
+    fn draw_knob(&self, d: &mut Draw, knob: Knob) {
         let param = self.param(knob);
-        let norm = param.unmodulated_normalized_value();
-        let value = format!("{:.2}×", param.value());
-        d.rect(rect.0, rect.1, rect.2, rect.3, PANEL);
-        d.outline(rect, LINE);
-        d.text(rect.0 + 12.0, rect.1 + 20.0, label, 11.0, TEXT);
-        d.text_right(rect.0 + rect.2 - 12.0, rect.1 + 20.0, &value, 12.0, color);
-        let bar_x = rect.0 + 12.0;
-        let bar_y = rect.1 + rect.3 - 13.0;
-        let bar_w = rect.2 - 24.0;
-        d.rect(bar_x, bar_y, bar_w, 5.0, LINE);
-        d.rect(bar_x, bar_y, bar_w * norm, 5.0, color);
-        d.circle(bar_x + bar_w * norm, bar_y + 2.5, 5.0, color, true);
+        let value = match knob {
+            Knob::Volume | Knob::Tremolo | Knob::Speaker => {
+                format!("{:.0}%", param.value() * 100.0)
+            }
+            _ => format!("{:.2}×", param.value()),
+        };
+        let color = match knob {
+            Knob::Tremolo | Knob::TremoloResponse | Knob::HammerHardness => TEAL,
+            _ => GOLD,
+        };
+        d.knob(
+            knob.rect(),
+            knob.label(),
+            &value,
+            param.unmodulated_normalized_value(),
+            color,
+            false,
+        );
+    }
+
+    fn draw_switch(
+        d: &mut Draw,
+        rect: (f32, f32, f32, f32),
+        label: &str,
+        on: bool,
+        state: &str,
+        color: Color,
+    ) {
+        let (x, y, w, _) = rect;
+        d.text_centered(x + w * 0.5, y + 10.0, label, 9.0, TEXT);
+        d.rounded_rect(
+            x + 18.0,
+            y + 21.0,
+            28.0,
+            13.0,
+            6.5,
+            if on { color } else { LINE },
+        );
+        d.circle(x + if on { 39.5 } else { 24.5 }, y + 27.5, 4.5, TEXT, true);
+        d.text(
+            x + 55.0,
+            y + 31.0,
+            state,
+            9.0,
+            if on { color } else { MUTED },
+        );
+        if d.is_hovered(rect) {
+            d.line(x + 18.0, y + 39.0, x + w - 13.0, y + 39.0, color, 1.0);
+        }
     }
 }
 
@@ -197,10 +222,7 @@ impl View for OpenWurliView {
                 WindowEvent::MouseDown(MouseButton::Left) => {
                     if Self::hit(x, y, THEME_BUTTON) {
                         prefs().toggle();
-                    } else if Self::hit(x, y, COG_BUTTON) {
-                        self.end_drag(cx);
-                        self.show_advanced = !self.show_advanced;
-                    } else if !self.show_advanced && Self::hit(x, y, CPU_BUTTON) {
+                    } else if Self::hit(x, y, CPU_BUTTON) {
                         self.end_drag(cx);
                         let next = if self.params.cpu_mode.value() == crate::params::CpuMode::Fast {
                             1.0
@@ -208,7 +230,7 @@ impl View for OpenWurliView {
                             0.0
                         };
                         Self::emit_once(cx, self.params.cpu_mode.as_ptr(), next);
-                    } else if self.show_advanced && Self::hit(x, y, EXTENDED_BUTTON) {
+                    } else if Self::hit(x, y, EXTENDED_BUTTON) {
                         Self::emit_once(
                             cx,
                             self.params.extended_notes.as_ptr(),
@@ -218,7 +240,7 @@ impl View for OpenWurliView {
                                 1.0
                             },
                         );
-                    } else if self.show_advanced && Self::hit(x, y, SAG_BUTTON) {
+                    } else if Self::hit(x, y, SAG_BUTTON) {
                         let next = if self.params.rail_sag.value() {
                             0.0
                         } else {
@@ -231,12 +253,6 @@ impl View for OpenWurliView {
                         let ptr = param.as_ptr();
                         let start_norm = param.unmodulated_normalized_value();
                         cx.emit(RawParamEvent::BeginSetParameter(ptr));
-                        if knob.is_advanced() {
-                            cx.emit(RawParamEvent::SetParameterNormalized(
-                                ptr,
-                                Self::slider_norm(knob, x),
-                            ));
-                        }
                         self.drag = Some(Drag {
                             knob,
                             start_y: y,
@@ -256,11 +272,7 @@ impl View for OpenWurliView {
                 WindowEvent::MouseMove(_, _) => {
                     self.hover = Some((x, y));
                     if let Some(drag) = &self.drag {
-                        let next = if drag.knob.is_advanced() {
-                            Self::slider_norm(drag.knob, x)
-                        } else {
-                            (drag.start_norm + (drag.start_y - y) / 130.0).clamp(0.0, 1.0)
-                        };
+                        let next = (drag.start_norm + (drag.start_y - y) / 130.0).clamp(0.0, 1.0);
                         cx.emit(RawParamEvent::SetParameterNormalized(
                             self.param(drag.knob).as_ptr(),
                             next,
@@ -302,100 +314,39 @@ impl View for OpenWurliView {
         d.rounded_rect(0.0, 0.0, WIDTH, 74.0, 0.0, PANEL);
         d.rect(0.0, 73.0, WIDTH, 1.0, LINE);
         d.text(40.0, 45.0, "OPENWURLI", 25.0, GOLD);
-        d.rect(
-            COG_BUTTON.0,
-            COG_BUTTON.1,
-            COG_BUTTON.2,
-            COG_BUTTON.3,
-            PANEL,
-        );
-        d.outline(COG_BUTTON, if self.show_advanced { GOLD } else { LINE });
-        d.cog_icon(
-            COG_BUTTON.0 + COG_BUTTON.2 * 0.5,
-            COG_BUTTON.1 + COG_BUTTON.3 * 0.5,
-            if self.show_advanced { GOLD } else { MUTED },
-        );
         d.appearance_button(THEME_BUTTON, prefs().label());
 
-        if self.show_advanced {
-            for knob in Knob::ADVANCED {
-                self.draw_advanced_slider(&mut d, knob);
-            }
-            d.button(
-                EXTENDED_BUTTON,
-                "EXTENDED NOTES",
-                self.params.extended_notes.value(),
-                TEAL,
-            );
-            d.button(SAG_BUTTON, "EXTRA SAG", self.params.rail_sag.value(), GOLD);
-            for (index, line) in [
-                "Learned voicing is always active.",
-                "Uses recorded piano references to adjust overtone tuning, decay",
-                "and pickup response on new notes.",
-            ]
-            .iter()
-            .enumerate()
-            {
-                d.text(45.0, 278.0 + index as f32 * 22.0, line, 11.0, TEXT);
-            }
-            d.text(
-                45.0,
-                354.0,
-                "TREMOLO RESPONSE AND EXTRA SAG APPLY LIVE",
-                10.0,
-                MUTED,
-            );
-        } else {
-            for knob in Knob::MAIN {
-                let param = self.param(knob);
-                let label = match knob {
-                    Knob::Volume => "VOLUME",
-                    Knob::Tremolo => "TREMOLO DEPTH",
-                    Knob::Speaker => "SPEAKER CHARACTER",
-                    Knob::ReedDecay => "REED DECAY",
-                    Knob::HammerHardness => "HAMMER HARDNESS",
-                    Knob::PickupDrive => "PICKUP DRIVE",
-                    _ => unreachable!(),
-                };
-                let color = match knob {
-                    Knob::Volume | Knob::Speaker | Knob::ReedDecay | Knob::PickupDrive => GOLD,
-                    Knob::Tremolo | Knob::HammerHardness => TEAL,
-                    _ => unreachable!(),
-                };
-                let value = match knob {
-                    Knob::ReedDecay | Knob::HammerHardness | Knob::PickupDrive => {
-                        format!("{:.2}×", param.value())
-                    }
-                    _ => format!("{:.0}%", param.value() * 100.0),
-                };
-                let r = knob.rect();
-                d.rect(r.0, r.1, r.2, r.3, PANEL);
-                d.outline(r, LINE);
-                d.knob(
-                    r,
-                    label,
-                    &value,
-                    param.unmodulated_normalized_value(),
-                    color,
-                    false,
-                );
-            }
-            d.text(
-                45.0,
-                466.0,
-                "VOICING CONTROLS APPLY TO NEW NOTES",
-                9.0,
-                MUTED,
-            );
-            let heavy = self.params.cpu_mode.value() == crate::params::CpuMode::Heavy;
-            d.button_tinted(
-                CPU_BUTTON,
-                if heavy { "CPU: HEAVY" } else { "CPU: FAST" },
-                heavy,
-                GOLD,
-            );
-            d.text(573.0, 500.0, "64 VOICES", 11.0, TEXT);
+        Self::draw_faceplate(&mut d);
+        for knob in Knob::ALL {
+            self.draw_knob(&mut d, knob);
         }
+        let heavy = self.params.cpu_mode.value() == crate::params::CpuMode::Heavy;
+        Self::draw_switch(
+            &mut d,
+            CPU_BUTTON,
+            "CPU MODE",
+            heavy,
+            if heavy { "HEAVY" } else { "FAST" },
+            GOLD,
+        );
+        let extended = self.params.extended_notes.value();
+        Self::draw_switch(
+            &mut d,
+            EXTENDED_BUTTON,
+            "EXTENDED NOTES",
+            extended,
+            if extended { "ON" } else { "OFF" },
+            TEAL,
+        );
+        let sag = self.params.rail_sag.value();
+        Self::draw_switch(
+            &mut d,
+            SAG_BUTTON,
+            "EXTRA SAG",
+            sag,
+            if sag { "ON" } else { "OFF" },
+            GOLD,
+        );
         d.text(
             45.0,
             544.0,
@@ -417,7 +368,6 @@ pub fn create(params: Arc<OpenWurliUiParams>) -> Option<Box<dyn Editor>> {
                 font: Cell::new(None),
                 drag: None,
                 hover: None,
-                show_advanced: false,
             }
             .build(cx, |cx| {
                 let timer = cx.add_timer(Duration::from_millis(33), None, |cx, action| {
@@ -438,39 +388,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn promoted_knobs_remain_reachable_in_short_hosts_and_settings_hide_them() {
-        let mut view = OpenWurliView {
+    fn all_controls_remain_reachable_together_in_short_hosts() {
+        let view = OpenWurliView {
             params: Arc::new(OpenWurliUiParams::default()),
             font: Cell::new(None),
             drag: None,
             hover: None,
-            show_advanced: false,
         };
-        let viewport = EditorViewport::fit((0.0, 0.0, 720.0, 340.0), (WIDTH, HEIGHT)).unwrap();
-        for knob in Knob::MAIN {
-            let (x, y, w, h) = knob.rect();
-            let screen_x = viewport.x + (x + w * 0.5) * viewport.scale;
-            let screen_y = viewport.y + (y + h * 0.5) * viewport.scale;
-            assert!(screen_y < 340.0);
-            let local = viewport.to_local(screen_x, screen_y);
-            assert_eq!(view.knob_at(local.0, local.1), Some(knob));
-            assert!(
-                !knob.is_advanced(),
-                "promoted knobs must use vertical dragging"
-            );
-            assert!(y + h < CPU_BUTTON.1);
+        let buttons = [CPU_BUTTON, EXTENDED_BUTTON, SAG_BUTTON, THEME_BUTTON];
+        for (width, height) in [(WIDTH, HEIGHT), (720.0, 340.0), (360.0, 550.0)] {
+            let viewport = EditorViewport::fit((0.0, 0.0, width, height), (WIDTH, HEIGHT)).unwrap();
+            for knob in Knob::ALL {
+                let (x, y, w, h) = knob.rect();
+                let screen_x = viewport.x + (x + w * 0.5) * viewport.scale;
+                let screen_y = viewport.y + (y + h * 0.5) * viewport.scale;
+                let local = viewport.to_local(screen_x, screen_y);
+                assert_eq!(view.knob_at(local.0, local.1), Some(knob));
+                assert!(viewport.x + (x + w) * viewport.scale <= width);
+                assert!(viewport.y + (y + h) * viewport.scale <= height);
+                for button in buttons {
+                    assert!(
+                        x + w < button.0
+                            || x > button.0 + button.2
+                            || y + h < button.1
+                            || y > button.1 + button.3,
+                        "{knob:?} overlaps a switch"
+                    );
+                }
+            }
+            for rect in buttons {
+                let screen_x = viewport.x + (rect.0 + rect.2 * 0.5) * viewport.scale;
+                let screen_y = viewport.y + (rect.1 + rect.3 * 0.5) * viewport.scale;
+                let local = viewport.to_local(screen_x, screen_y);
+                assert!(OpenWurliView::hit(local.0, local.1, rect));
+                assert_eq!(view.knob_at(local.0, local.1), None);
+                assert!(viewport.x + (rect.0 + rect.2) * viewport.scale <= width);
+                assert!(viewport.y + (rect.1 + rect.3) * viewport.scale <= height);
+            }
         }
-        view.show_advanced = true;
-        for knob in [Knob::ReedDecay, Knob::HammerHardness, Knob::PickupDrive] {
-            let (x, y, w, h) = knob.rect();
-            assert_eq!(view.knob_at(x + w * 0.5, y + h * 0.5), None);
-        }
-        let (x, y, w, h) = Knob::TremoloResponse.rect();
-        assert_eq!(
-            view.knob_at(x + w * 0.5, y + h * 0.5),
-            Some(Knob::TremoloResponse)
-        );
-        assert!(y + h < EXTENDED_BUTTON.1);
-        assert!(y + h < SAG_BUTTON.1);
     }
 }
