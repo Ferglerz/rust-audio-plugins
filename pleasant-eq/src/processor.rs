@@ -5,7 +5,7 @@ use pleasant_dsp::{
 };
 use std::f64::consts::PI;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BandCoefficients {
     stages: [BiquadCoefficients; 4],
     length: usize,

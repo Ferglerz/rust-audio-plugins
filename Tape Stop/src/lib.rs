@@ -131,6 +131,16 @@ impl Plugin for TapeStop {
         let auto_restart = self.params.auto_restart.value();
         let auto_restart_thresh = self.params.auto_restart_thresh.value();
         let power = self.params.power.value();
+        let prepared_tape_settings = self
+            .engine
+            .prepare_block(drop_time, stereo_div, auto_restart_thresh)
+            .with_processing_settings(
+                xfade_ms,
+                return_sec,
+                drop_curve,
+                auto_restart,
+                power,
+            );
 
         let mut max_in_peak: f32 = 0.0;
         let mut max_out_peak: f32 = 0.0;
@@ -170,18 +180,9 @@ impl Plugin for TapeStop {
             max_in_peak = max_in_peak.max(in_l.abs()).max(in_r.abs());
 
             // Process through tape stop DSP engine
-            let (out_l, out_r) = self.engine.process_sample(
-                in_l,
-                in_r,
-                drop_time,
-                xfade_ms,
-                return_sec,
-                drop_curve,
-                stereo_div,
-                auto_restart,
-                auto_restart_thresh,
-                power,
-            );
+            let (out_l, out_r) = self
+                .engine
+                .process_sample_prepared([in_l, in_r], prepared_tape_settings);
 
             max_out_peak = max_out_peak.max(out_l.abs()).max(out_r.abs());
 

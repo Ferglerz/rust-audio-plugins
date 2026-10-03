@@ -1,4 +1,4 @@
-use nih_plug_vizia::vizia::prelude::Code;
+pub(super) use pleasant_ui::typed_char;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum ValueTarget {
@@ -6,69 +6,6 @@ pub(super) enum ValueTarget {
     // Frequency, gain, Q, threshold, ratio, attack, release, range.
     Band(usize),
     Lift(usize),
-}
-
-pub(super) fn typed_char(code: Code, shift: bool) -> Option<char> {
-    Some(match code {
-        Code::Digit0 | Code::Numpad0 => '0',
-        Code::Digit1 | Code::Numpad1 => '1',
-        Code::Digit2 | Code::Numpad2 => '2',
-        Code::Digit3 | Code::Numpad3 => '3',
-        Code::Digit4 | Code::Numpad4 => '4',
-        Code::Digit5 | Code::Numpad5 => '5',
-        Code::Digit6 | Code::Numpad6 => '6',
-        Code::Digit7 | Code::Numpad7 => '7',
-        Code::Digit8 | Code::Numpad8 => '8',
-        Code::Digit9 | Code::Numpad9 => '9',
-        Code::Period | Code::NumpadDecimal => '.',
-        Code::Comma => ',',
-        Code::Minus | Code::NumpadSubtract => '-',
-        Code::Equal => {
-            if shift {
-                '+'
-            } else {
-                '='
-            }
-        }
-        Code::NumpadAdd => '+',
-        Code::Slash | Code::NumpadDivide => '/',
-        Code::Space => ' ',
-        Code::KeyA => letter(shift, 'a'),
-        Code::KeyB => letter(shift, 'b'),
-        Code::KeyC => letter(shift, 'c'),
-        Code::KeyD => letter(shift, 'd'),
-        Code::KeyE => letter(shift, 'e'),
-        Code::KeyF => letter(shift, 'f'),
-        Code::KeyG => letter(shift, 'g'),
-        Code::KeyH => letter(shift, 'h'),
-        Code::KeyI => letter(shift, 'i'),
-        Code::KeyJ => letter(shift, 'j'),
-        Code::KeyK => letter(shift, 'k'),
-        Code::KeyL => letter(shift, 'l'),
-        Code::KeyM => letter(shift, 'm'),
-        Code::KeyN => letter(shift, 'n'),
-        Code::KeyO => letter(shift, 'o'),
-        Code::KeyP => letter(shift, 'p'),
-        Code::KeyQ => letter(shift, 'q'),
-        Code::KeyR => letter(shift, 'r'),
-        Code::KeyS => letter(shift, 's'),
-        Code::KeyT => letter(shift, 't'),
-        Code::KeyU => letter(shift, 'u'),
-        Code::KeyV => letter(shift, 'v'),
-        Code::KeyW => letter(shift, 'w'),
-        Code::KeyX => letter(shift, 'x'),
-        Code::KeyY => letter(shift, 'y'),
-        Code::KeyZ => letter(shift, 'z'),
-        _ => return None,
-    })
-}
-
-fn letter(shift: bool, c: char) -> char {
-    if shift {
-        c.to_ascii_uppercase()
-    } else {
-        c
-    }
 }
 
 pub(super) fn parse_value(text: &str, target: ValueTarget) -> Option<f64> {

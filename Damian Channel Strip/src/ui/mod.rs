@@ -47,7 +47,7 @@ use pleasant_ui::{
     ButtonAnim, Draw, ValueEdit, FONT_JETBRAINS_MONO,
 };
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     sync::{atomic::Ordering, Arc},
     time::{Duration, Instant},
 };
@@ -152,6 +152,7 @@ pub fn create(params: Arc<StripParams>, shared: Arc<Shared>) -> Option<Box<dyn E
                 params: params.clone(),
                 shared: shared.clone(),
                 selected: None,
+                eq_response_caches: std::array::from_fn(|_| RefCell::default()),
                 dyn_page: Cell::new(DynPage::Main),
                 pse_page: Cell::new(PsePage::Main),
                 wall_page: Cell::new(WallPage::Main),
@@ -220,6 +221,7 @@ struct StripView {
     params: Arc<StripParams>,
     shared: Arc<Shared>,
     selected: Option<u64>,
+    eq_response_caches: [RefCell<pleasant_eq::ResponseCache>; 3],
     drag: Option<Target>,
     hover: Option<(f32, f32)>,
     shift_down: bool,

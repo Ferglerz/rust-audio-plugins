@@ -481,12 +481,7 @@ impl ChordboardView {
         )
     }
     fn emit(cx: &mut EventContext, ptr: ParamPtr, norm: f32) {
-        cx.emit(RawParamEvent::BeginSetParameter(ptr));
-        cx.emit(RawParamEvent::SetParameterNormalized(
-            ptr,
-            norm.clamp(0.0, 1.0),
-        ));
-        cx.emit(RawParamEvent::EndSetParameter(ptr));
+        pleasant_ui::param::set_normalized_once(cx, ptr, norm);
     }
     fn set(&self, cx: &mut EventContext, id: &str, norm: f32) {
         if let Some(c) = self.control(id) {
@@ -782,21 +777,17 @@ impl ChordboardView {
     }
     fn set_pad_xy(&self, cx: &mut EventContext, x: f32, y: f32) {
         let (px, py) = self.pad_norm(x, y);
-        cx.emit(RawParamEvent::SetParameterNormalized(
-            self.params.x.as_ptr(),
-            px,
-        ));
-        cx.emit(RawParamEvent::SetParameterNormalized(
-            self.params.y.as_ptr(),
-            py,
-        ));
+        pleasant_ui::param::set_normalized(cx, self.params.x.as_ptr(),
+            px);
+        pleasant_ui::param::set_normalized(cx, self.params.y.as_ptr(),
+            py);
     }
     fn begin_pad(&mut self, cx: &mut EventContext, x: f32, y: f32, capture: bool) {
         let starting = !self.pad_hover && !matches!(self.drag, Some(Drag::Pad));
         let (px, py) = self.pad_norm(x, y);
         if starting {
             for ptr in [self.params.x.as_ptr(), self.params.y.as_ptr()] {
-                cx.emit(RawParamEvent::BeginSetParameter(ptr));
+                pleasant_ui::param::begin(cx, ptr);
             }
             self.bridge.send(Command::BeginGesture(px, py));
         }
@@ -815,7 +806,7 @@ impl ChordboardView {
         }
         self.pad_hover = false;
         for ptr in [self.params.x.as_ptr(), self.params.y.as_ptr()] {
-            cx.emit(RawParamEvent::EndSetParameter(ptr));
+            pleasant_ui::param::end(cx, ptr);
         }
         self.bridge.send(Command::EndGesture);
     }
@@ -839,34 +830,24 @@ impl ChordboardView {
             match drag {
                 Drag::Pad => {
                     for ptr in [self.params.x.as_ptr(), self.params.y.as_ptr()] {
-                        cx.emit(RawParamEvent::EndSetParameter(ptr));
+                        pleasant_ui::param::end(cx, ptr);
                     }
                     self.bridge.send(Command::EndGesture);
                 }
                 Drag::StrumBound(y_axis, right) => {
-                    cx.emit(RawParamEvent::EndSetParameter(
-                        self.bound_param(y_axis, right).as_ptr(),
-                    ));
+                    pleasant_ui::param::end(cx, self.bound_param(y_axis, right).as_ptr());
                 }
                 Drag::RouteContour { slot, .. } => {
-                    cx.emit(RawParamEvent::EndSetParameter(
-                        self.params.routes[slot].min.as_ptr(),
-                    ));
-                    cx.emit(RawParamEvent::EndSetParameter(
-                        self.params.routes[slot].max.as_ptr(),
-                    ));
+                    pleasant_ui::param::end(cx, self.params.routes[slot].min.as_ptr());
+                    pleasant_ui::param::end(cx, self.params.routes[slot].max.as_ptr());
                 }
-                Drag::RouteNode(_, ptr) => cx.emit(RawParamEvent::EndSetParameter(ptr)),
-                Drag::BassSplit => cx.emit(RawParamEvent::EndSetParameter(
-                    self.params.bass_split.as_ptr(),
-                )),
-                Drag::Split => cx.emit(RawParamEvent::EndSetParameter(
-                    self.params.split_note.as_ptr(),
-                )),
+                Drag::RouteNode(_, ptr) => pleasant_ui::param::end(cx, ptr),
+                Drag::BassSplit => pleasant_ui::param::end(cx, self.params.bass_split.as_ptr()),
+                Drag::Split => pleasant_ui::param::end(cx, self.params.split_note.as_ptr()),
                 Drag::Memory(_) | Drag::Route(_) => {}
                 Drag::Control(drag) => {
                     if drag.started {
-                        cx.emit(RawParamEvent::EndSetParameter(drag.ptr));
+                        pleasant_ui::param::end(cx, drag.ptr);
                     }
                 }
                 Drag::Key(key) => {

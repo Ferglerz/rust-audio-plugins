@@ -2,9 +2,8 @@
 use super::*;
 
 impl ScdEditorView {
-    pub(super) fn open_vel_map(&mut self, kit_piece: KitPieceId) {
-        self.samples_open = false;
-        self.close_preset_menus();
+    pub(super) fn open_vel_map(&mut self, cx: &mut EventContext, kit_piece: KitPieceId) {
+        self.prepare_modal(cx);
         self.sub_kick_open = false;
         self.vel_hits.clear();
         for arts in &self.params.midi_velocities {
@@ -183,50 +182,33 @@ impl ScdEditorView {
             modal_h,
         );
         draw_all_chan_meters(draw, kit_vu);
-        draw.text_centered(
-            modal_x + modal_w * 0.5,
-            modal_y + 26.0,
+        draw.text(
+            modal_x + 24.0,
+            modal_y + 31.0,
             &format!("{} velocity map", kit_piece.name()),
             14.0,
             THEME,
         );
         draw.text(
             modal_x + 24.0,
-            modal_y + 48.0,
+            modal_y + 58.0,
             "Maps incoming MIDI velocity to sample layers.",
             11.0,
             THEME,
         );
         draw.text(
             modal_x + 24.0,
-            modal_y + 64.0,
+            modal_y + 74.0,
             "Click the curve to add a point. Drag nodes and handles to shape it.",
             11.0,
             THEME,
         );
-        let arts = stonehouse().arts(kit_piece);
         let members = Self::vel_art_members(kit_piece, self.vel_art);
-        let art_layers: u32 = members
-            .iter()
-            .filter_map(|i| arts.get(*i))
-            .map(|a| a.layers)
-            .sum();
-        let piece_layers: u32 = arts.iter().map(|a| a.layers).sum();
         let art_label = Self::vel_art_options(kit_piece)
             .into_iter()
             .find(|(art, _)| *art == self.vel_art)
             .map(|(_, label)| label)
             .unwrap_or_else(|| "Hit".to_string());
-        draw.text(
-            modal_x + 24.0,
-            modal_y + 88.0,
-            &format!(
-                "{art_layers} samples in {art_label}  ·  {piece_layers} in {}",
-                kit_piece.name()
-            ),
-            11.0,
-            THEME,
-        );
         let options = Self::vel_art_options(kit_piece);
         let (tx, ty, tw, th) = Self::vel_art_dropdown_rect();
         draw.rounded_rect(tx, ty, tw, th, 4.0, SOF_OFF);

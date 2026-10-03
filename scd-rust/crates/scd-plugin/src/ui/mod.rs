@@ -377,10 +377,7 @@ impl ScdEditorView {
     }
 
     fn emit_norm(&self, cx: &mut EventContext, ptr: ParamPtr, norm: f32) {
-        let norm = norm.clamp(0.0, 1.0);
-        cx.emit(RawParamEvent::BeginSetParameter(ptr));
-        cx.emit(RawParamEvent::SetParameterNormalized(ptr, norm));
-        cx.emit(RawParamEvent::EndSetParameter(ptr));
+        pleasant_ui::param::set_normalized_once(cx, ptr, norm);
     }
 
     fn emit_plain(&self, cx: &mut EventContext, param: &FloatParam, plain: f32) {
@@ -392,38 +389,54 @@ impl ScdEditorView {
     }
 
     fn set_live(&self, cx: &mut EventContext, ptr: ParamPtr, norm: f32) {
-        cx.emit(RawParamEvent::SetParameterNormalized(
-            ptr,
-            norm.clamp(0.0, 1.0),
-        ));
+        pleasant_ui::param::set_normalized(cx, ptr, norm);
     }
 
     fn begin_ptr(&mut self, cx: &mut EventContext, ptr: ParamPtr, slot: usize) {
         if slot < self.gesture.len() {
             self.gesture[slot] = Some(ptr);
         }
-        cx.emit(RawParamEvent::BeginSetParameter(ptr));
+        pleasant_ui::param::begin(cx, ptr);
     }
 
     fn end_gesture(&mut self, cx: &mut EventContext) {
-        for slot in &mut self.gesture {
-            if let Some(ptr) = slot.take() {
-                cx.emit(RawParamEvent::EndSetParameter(ptr));
-            }
-        }
+        pleasant_ui::param::end_all(cx, &mut self.gesture);
     }
 
     fn begin_one(&mut self, cx: &mut EventContext, ptr: ParamPtr) {
         self.begin_ptr(cx, ptr, 0);
     }
 
+    fn modal_open(&self) -> bool {
+        self.sub_kick_open || self.vel_map_open.is_some() || self.add_preset_open
+    }
+
+    fn prepare_modal(&mut self, cx: &mut EventContext) {
+        self.commit_note_edit();
+        self.close_preset_menus();
+        self.samples_open = false;
+        self.cc_menu_open = false;
+        self.press_invert = false;
+        self.press_note = None;
+        self.hover_sof = None;
+        self.hover_lock = false;
+        self.hover_invert = false;
+        self.hover_note = None;
+        if self.drag.take().is_some() {
+            self.end_gesture(cx);
+            cx.release();
+        }
+    }
+
     fn update_hover(&mut self, cx: &mut EventContext) {
         let (x, y) = self.mouse;
-        let hover_sof = Self::sof_at(x, y);
+        let background_active = !self.modal_open();
+        let hover_sof = Self::sof_at(x, y).filter(|_| background_active);
         let lock = Self::lock_rect();
-        let hover_lock = Self::hit(x, y, lock.0, lock.1, lock.2, lock.3);
-        let hover_invert = Self::hit(x, y, CC_INVERT.0, CC_INVERT.1, CC_INVERT.2, CC_INVERT.3);
-        let hover_note = self.note_target_at(x, y);
+        let hover_lock = background_active && Self::hit(x, y, lock.0, lock.1, lock.2, lock.3);
+        let hover_invert = background_active
+            && Self::hit(x, y, CC_INVERT.0, CC_INVERT.1, CC_INVERT.2, CC_INVERT.3);
+        let hover_note = self.note_target_at(x, y).filter(|_| background_active);
         if hover_sof != self.hover_sof
             || hover_lock != self.hover_lock
             || hover_invert != self.hover_invert

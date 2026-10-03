@@ -62,6 +62,10 @@ impl BandCoeffs {
         Self(BandCoefficients::prepare(&b.into(), sr))
     }
 
+    pub(crate) fn coefficients(self) -> BandCoefficients {
+        self.0
+    }
+
     pub fn response(self, f: f64, sr: f64) -> f64 {
         self.0.response_db(f, sr)
     }

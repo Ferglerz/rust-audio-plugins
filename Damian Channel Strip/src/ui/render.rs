@@ -310,40 +310,7 @@ impl StripView {
             }
         }
         if let Some(edit) = &self.edit {
-            let accent = self.value_color(edit.target);
-            let r = edit.rect;
-            d.rect(r.0, r.1, r.2, r.3, PANEL);
-            d.outline(
-                r,
-                if edit.invalid {
-                    rgb(238, 110, 95)
-                } else {
-                    accent
-                },
-            );
-            // Keep a long entry's caret in the field while editing.
-            let capacity = ((r.2 - 8.0) / 6.6) as usize;
-            let start = edit.cursor.saturating_sub(capacity);
-            let end = (start + capacity).min(edit.text.len());
-            let selection = edit.selection();
-            let left = selection.start.max(start).min(end);
-            let right = selection.end.min(end).max(left);
-            d.rect(
-                r.0 + 4.0 + (left - start) as f32 * 6.6,
-                r.1 + 2.0,
-                (right - left) as f32 * 6.6,
-                r.3 - 4.0,
-                C { a: 0.25, ..accent },
-            );
-            d.text(
-                r.0 + 4.0,
-                r.1 + r.3 * 0.5 + 4.0,
-                &edit.text[start..end],
-                11.0,
-                TEXT,
-            );
-            let caret_x = r.0 + 4.0 + (edit.cursor - start) as f32 * 6.6;
-            d.line(caret_x, r.1 + 3.0, caret_x, r.1 + r.3 - 3.0, accent, 1.0);
+            d.value_edit(edit, self.value_color(edit.target));
         }
     }
 }

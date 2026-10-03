@@ -6,7 +6,6 @@ use nih_plug_vizia::{
         prelude::*,
         vg::{Color, FontId},
     },
-    widgets::RawParamEvent,
     ViziaTheming,
 };
 use pleasant_ui::{
@@ -122,19 +121,12 @@ impl OpenWurliView {
     }
 
     fn emit_once(cx: &mut EventContext, ptr: ParamPtr, norm: f32) {
-        cx.emit(RawParamEvent::BeginSetParameter(ptr));
-        cx.emit(RawParamEvent::SetParameterNormalized(
-            ptr,
-            norm.clamp(0.0, 1.0),
-        ));
-        cx.emit(RawParamEvent::EndSetParameter(ptr));
+        pleasant_ui::param::set_normalized_once(cx, ptr, norm);
     }
 
     fn end_drag(&mut self, cx: &mut EventContext) {
         if let Some(drag) = self.drag.take() {
-            cx.emit(RawParamEvent::EndSetParameter(
-                self.param(drag.knob).as_ptr(),
-            ));
+            pleasant_ui::param::end(cx, self.param(drag.knob).as_ptr());
         }
     }
 
@@ -252,7 +244,7 @@ impl View for OpenWurliView {
                         let param = self.param(knob);
                         let ptr = param.as_ptr();
                         let start_norm = param.unmodulated_normalized_value();
-                        cx.emit(RawParamEvent::BeginSetParameter(ptr));
+                        pleasant_ui::param::begin(cx, ptr);
                         self.drag = Some(Drag {
                             knob,
                             start_y: y,
@@ -273,10 +265,11 @@ impl View for OpenWurliView {
                     self.hover = Some((x, y));
                     if let Some(drag) = &self.drag {
                         let next = (drag.start_norm + (drag.start_y - y) / 130.0).clamp(0.0, 1.0);
-                        cx.emit(RawParamEvent::SetParameterNormalized(
+                        pleasant_ui::param::set_normalized(
+                            cx,
                             self.param(drag.knob).as_ptr(),
                             next,
-                        ));
+                        );
                     }
                     cx.needs_redraw();
                 }

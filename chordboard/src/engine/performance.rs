@@ -338,6 +338,38 @@ impl Engine {
         self.arp_next = self.now;
         self.arp_fraction = 0.0;
     }
+
+    /// Advance a span without scanning every voice and pending strike per sample.
+    /// Output offsets are relative to this span. Inputs at an offset must be
+    /// applied before advancing the sample at that offset.
+    pub fn advance(&mut self, samples: usize, out: &mut impl FnMut(usize, Out)) {
+        let mut offset = 0;
+        while offset < samples {
+            let deadline = self
+                .voices
+                .iter()
+                .flatten()
+                .filter(|voice| !voice.layer)
+                .map(|voice| voice.off)
+                .chain(self.scheduled.iter().flatten().map(|event| event.at))
+                // The arp clock and RNG also advance in the other modes.
+                .chain((self.notes.len > 0).then_some(self.arp_next))
+                .min()
+                .unwrap_or(u64::MAX);
+            // Stop at MAX even when idle: tick owns the wrapping clock and
+            // processes deadlines there before moving to zero.
+            let quiet = deadline.saturating_sub(self.now).min(u64::MAX - self.now);
+            let skip = quiet.min((samples - offset) as u64) as usize;
+            self.now += skip as u64;
+            offset += skip;
+            if offset < samples {
+                // Retain voice-off, arp, and scheduled-slot ordering exactly.
+                self.tick(&mut |event| out(offset, event));
+                offset += 1;
+            }
+        }
+    }
+
     pub fn tick(&mut self, out: &mut impl FnMut(Out)) {
         for i in 0..15 {
             if self.voices[i].is_some_and(|v| !v.layer && v.off <= self.now) {

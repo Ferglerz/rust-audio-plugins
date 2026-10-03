@@ -7,6 +7,61 @@ use super::trajectory::{
 /// Shortest crossfade when pre/post channels do not match.
 const XFADE_FLOOR_MS: f32 = 5.0;
 
+/// Settings derived once for an audio block and reused by its sample loop.
+#[derive(Debug, Clone, Copy)]
+pub struct PreparedTapeSettings {
+    stop_samples_l: f64,
+    stop_samples_r: f64,
+    max_stop_samples: f64,
+    auto_restart_thresh_lin: f32,
+    xfade_ms: f32,
+    return_sec: f32,
+    drop_curve: f32,
+    auto_restart: bool,
+    power: bool,
+}
+
+impl PreparedTapeSettings {
+    fn new(
+        drop_time_sec: f32,
+        stereo_div_pct: f32,
+        auto_restart_thresh_db: f32,
+        sample_rate: f32,
+    ) -> Self {
+        let stop_samples_base = (drop_time_sec as f64 * sample_rate as f64) / SEMI_DROP;
+        let div_mult = stereo_div_pct as f64 / 200.0;
+        let stop_samples_l = (stop_samples_base * (1.0 - div_mult).max(0.1)).max(1.0);
+        let stop_samples_r = (stop_samples_base * (1.0 + div_mult).max(0.1)).max(1.0);
+        Self {
+            stop_samples_l,
+            stop_samples_r,
+            max_stop_samples: stop_samples_l.max(stop_samples_r),
+            auto_restart_thresh_lin: 10.0f32.powf(auto_restart_thresh_db / 20.0),
+            xfade_ms: 0.0,
+            return_sec: 0.0,
+            drop_curve: 1.0,
+            auto_restart: false,
+            power: true,
+        }
+    }
+
+    pub fn with_processing_settings(
+        mut self,
+        xfade_ms: f32,
+        return_sec: f32,
+        drop_curve: f32,
+        auto_restart: bool,
+        power: bool,
+    ) -> Self {
+        self.xfade_ms = xfade_ms;
+        self.return_sec = return_sec;
+        self.drop_curve = drop_curve;
+        self.auto_restart = auto_restart;
+        self.power = power;
+        self
+    }
+}
+
 fn channel_match(a: &[f32], b: &[f32]) -> f32 {
     let n = a.len().min(b.len());
     if n == 0 {
@@ -167,6 +222,20 @@ impl TapeStopEngine {
         self.reset();
     }
 
+    pub fn prepare_block(
+        &self,
+        drop_time_sec: f32,
+        stereo_div_pct: f32,
+        auto_restart_thresh_db: f32,
+    ) -> PreparedTapeSettings {
+        PreparedTapeSettings::new(
+            drop_time_sec,
+            stereo_div_pct,
+            auto_restart_thresh_db,
+            self.sample_rate,
+        )
+    }
+
     pub fn reset(&mut self) {
         self.ring_buffer.reset();
         self.play_pos_l = 0.0;
@@ -308,6 +377,19 @@ impl TapeStopEngine {
         auto_restart_thresh_db: f32,
         power: bool,
     ) -> (f32, f32) {
+        let prepared = self
+            .prepare_block(drop_time_sec, stereo_div_pct, auto_restart_thresh_db)
+            .with_processing_settings(xfade_ms, return_sec, drop_curve, auto_restart, power);
+        self.process_sample_prepared([in_l, in_r], prepared)
+    }
+
+    #[inline(always)]
+    pub fn process_sample_prepared(
+        &mut self,
+        input: [f32; 2],
+        prepared: PreparedTapeSettings,
+    ) -> (f32, f32) {
+        let [in_l, in_r] = input;
         // 1. Always record incoming audio into the ring buffer
         self.ring_buffer.push(in_l, in_r);
 
@@ -324,18 +406,17 @@ impl TapeStopEngine {
         self.transient_flash = (self.transient_flash - flash_decay).max(0.0);
 
         // If plugin is bypassed/powered off, pass clean input
-        if !power {
+        if !prepared.power {
             self.speed_l = 1.0;
             self.speed_r = 1.0;
             return (in_l, in_r);
         }
 
-        // 2. Compute deceleration parameters
-        let stop_samples_base = (drop_time_sec as f64 * self.sample_rate as f64) / SEMI_DROP;
-        let div_mult = (stereo_div_pct as f64) / 200.0;
-        self.stop_samples_l = (stop_samples_base * (1.0 - div_mult).max(0.1)).max(1.0);
-        self.stop_samples_r = (stop_samples_base * (1.0 + div_mult).max(0.1)).max(1.0);
-        self.max_stop_samples = self.stop_samples_l.max(self.stop_samples_r);
+        // 2. Apply the block's prepared deceleration parameters. Keep these
+        // engine fields current for telemetry and preserve power-off behavior.
+        self.stop_samples_l = prepared.stop_samples_l;
+        self.stop_samples_r = prepared.stop_samples_r;
+        self.max_stop_samples = prepared.max_stop_samples;
 
         // 3. Update continuous CC speed smoothing if active
         if self.cc_override_active {
@@ -347,8 +428,8 @@ impl TapeStopEngine {
         if self.is_braking {
             if self.lockout_samples > 0.0 {
                 self.lockout_samples -= 1.0;
-            } else if auto_restart {
-                let thresh_lin = 10.0f32.powf(auto_restart_thresh_db / 20.0);
+            } else if prepared.auto_restart {
+                let thresh_lin = prepared.auto_restart_thresh_lin;
                 if in_peak >= thresh_lin || self.envelope >= thresh_lin {
                     // Transient triggered auto restart.
                     self.is_braking = false;
@@ -364,7 +445,7 @@ impl TapeStopEngine {
         }
 
         if self.pending_release {
-            self.begin_return(xfade_ms, return_sec);
+            self.begin_return(prepared.xfade_ms, prepared.return_sec);
         }
 
         // 5. State evaluation & speed computation
@@ -377,8 +458,8 @@ impl TapeStopEngine {
             let prog_l = (self.brake_pos_samples / self.stop_samples_l).min(1.0);
             let prog_r = (self.brake_pos_samples / self.stop_samples_r).min(1.0);
 
-            let curved_l = s_curve(prog_l as f32, drop_curve) as f64;
-            let curved_r = s_curve(prog_r as f32, drop_curve) as f64;
+            let curved_l = s_curve(prog_l as f32, prepared.drop_curve) as f64;
+            let curved_r = s_curve(prog_r as f32, prepared.drop_curve) as f64;
 
             let mut speed_l = (1.0 - curved_l).max(0.0);
             let mut speed_r = (1.0 - curved_r).max(0.0);

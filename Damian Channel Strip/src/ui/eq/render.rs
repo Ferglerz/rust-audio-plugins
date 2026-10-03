@@ -262,24 +262,25 @@ impl StripView {
 
             let extras = bands.iter().filter(|b| b.enabled).map(|b| b.freq);
             let xs = eq_curve_xs(gx, gw, extras);
-            let mut sum = vec![0.0; xs.len()];
+            let mut response_cache = self.eq_response_caches[0].borrow_mut();
+            update_eq_response_cache(
+                &mut response_cache,
+                &bands,
+                &dyn_uncapped,
+                &xs,
+                (gx, gw),
+                (sr, eq_sr),
+            );
             let mut selected_curve: Option<(Vec<(f32, f32)>, C, bool)> = None;
-            for b in &bands {
-                if !b.enabled {
-                    continue;
-                }
-                let coeff = BandCoeffs::make(&plot_band(b, &dyn_uncapped), eq_sr);
+            for (index, b) in bands.iter().filter(|b| b.enabled).enumerate() {
                 let color = if eq1_bypassed {
                     MUTED
                 } else {
                     BAND_COLORS[(b.id as usize - 1) % BAND_COLORS.len()]
                 };
-                let dbs = eq_db_on_xs(&coeff, &xs, gx, gw, sr, eq_sr);
-                for (i, db) in dbs.iter().enumerate() {
-                    sum[i] += db;
-                }
+                let dbs = response_cache.band(index);
                 if Some(b.id) == self.selected {
-                    let points = eq_points(&xs, &dbs, self.graph_db);
+                    let points = eq_points(&xs, dbs, self.graph_db);
                     let mut fill = color;
                     fill.a = if eq1_bypassed { 0.02 } else { 0.07 };
                     let between = b.dynamic && b.shape.has_gain();
@@ -297,7 +298,7 @@ impl StripView {
                     selected_curve = Some((fill_points, color, between));
                 }
             }
-            let points = eq_points(&xs, &sum, self.graph_db);
+            let points = eq_points(&xs, response_cache.sum(), self.graph_db);
             let sum_color = if eq1_bypassed { MUTED } else { GOLD };
             d.poly(&points, sum_color, 2.2);
             if let Some(b) = bands
@@ -458,25 +459,27 @@ impl StripView {
 
             let extras = page_bands.iter().filter(|b| b.enabled).map(|b| b.freq);
             let xs = eq_curve_xs(gx, gw, extras);
-            let mut sum = vec![0.0; xs.len()];
+            let cache_index = if page_idx == EQ_PAGE_2 { 1 } else { 2 };
+            let mut response_cache = self.eq_response_caches[cache_index].borrow_mut();
+            update_eq_response_cache(
+                &mut response_cache,
+                page_bands,
+                &dyn_uncapped,
+                &xs,
+                (gx, gw),
+                (sr, eq_sr),
+            );
             let mut selected_curve: Option<(Vec<(f32, f32)>, C, bool)> = None;
-            for b in page_bands {
-                if !b.enabled {
-                    continue;
-                }
-                let coeff = BandCoeffs::make(&plot_band(b, &dyn_uncapped), eq_sr);
+            for (index, b) in page_bands.iter().filter(|b| b.enabled).enumerate() {
                 let num = band_display_num(b.id);
                 let color = if page_bypassed {
                     MUTED
                 } else {
                     BAND_COLORS[(num as usize - 1) % BAND_COLORS.len()]
                 };
-                let dbs = eq_db_on_xs(&coeff, &xs, gx, gw, sr, eq_sr);
-                for (i, db) in dbs.iter().enumerate() {
-                    sum[i] += db;
-                }
+                let dbs = response_cache.band(index);
                 if Some(b.id) == self.selected {
-                    let points = eq_points(&xs, &dbs, self.graph_db);
+                    let points = eq_points(&xs, dbs, self.graph_db);
                     let mut fill = color;
                     fill.a = if page_bypassed { 0.02 } else { 0.07 };
                     let between = allow_dyn && b.dynamic && b.shape.has_gain();
@@ -494,7 +497,7 @@ impl StripView {
                     selected_curve = Some((fill_points, color, between));
                 }
             }
-            let points = eq_points(&xs, &sum, self.graph_db);
+            let points = eq_points(&xs, response_cache.sum(), self.graph_db);
             let sum_color = if page_bypassed { MUTED } else { GOLD };
             d.poly(&points, sum_color, 2.2);
             if let Some(b) = page_bands

@@ -82,7 +82,7 @@ impl ScdEditorView {
     }
 
     pub(super) fn open_add_preset(&mut self, cx: &mut EventContext) {
-        self.close_preset_menus();
+        self.prepare_modal(cx);
         self.add_preset_open = true;
         self.add_name = next_preset_name(&self.params.user_presets.list());
         self.add_scope = PresetScope::all();

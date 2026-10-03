@@ -151,9 +151,22 @@ impl ScdEditorView {
     }
 
     pub(super) fn draw_mixer(&self, draw: &mut Draw<'_>, kit_vu: &[f32; KitPieceId::COUNT]) {
-        draw.text(LABEL_X, MIXER_Y + 12.0, "PITCH:", 12.0, THEME);
-        draw.text(LABEL_X + 12.0, MIXER_Y + 32.0, "PAN:", 12.0, THEME);
-        draw.text(LABEL_X, MIXER_Y + 352.0, "PUNCH:", 12.0, THEME);
+        let label_size = 12.0 * MIXER_SCALE;
+        draw.text(LABEL_X, PITCH_Y + label_size, "PITCH:", label_size, THEME);
+        draw.text(
+            LABEL_X + label_size,
+            PAN_Y + label_size,
+            "PAN:",
+            label_size,
+            THEME,
+        );
+        draw.text(
+            LABEL_X,
+            PUNCH_Y + PUNCH_SIZE * 0.5 + label_size * 0.35,
+            "PUNCH:",
+            label_size,
+            THEME,
+        );
 
         let sc = Self::logo_sc_rect();
         if let Some(id) = self.logo_img.get() {
@@ -174,20 +187,26 @@ impl ScdEditorView {
             self.hover_lock,
         );
 
-        draw.text(SUB_KICK.0, SUB_KICK.1 + 14.0, "Sub Kick", 12.0, THEME);
+        draw.text(
+            SUB_KICK.0,
+            SUB_KICK.1 + 14.0 * MIXER_SCALE,
+            "Sub Kick",
+            label_size,
+            THEME,
+        );
 
         for kit_piece in self.visible_pieces() {
             let idx = kit_piece as usize;
             let sx = Self::strip_x(kit_piece);
             if let Some(id) = self.icons[idx].get() {
                 if let Ok((w, h)) = draw.c.image_size(id) {
-                    let scale = ((STRIP_W - 16.0) / w as f32).min(40.0 / h as f32);
+                    let scale = ((STRIP_W - 16.0 * MIXER_SCALE) / w as f32).min(ICON_H / h as f32);
                     let (w, h) = (w as f32 * scale, h as f32 * scale);
                     blit(
                         draw,
                         id,
                         sx + (STRIP_W - w) * 0.5,
-                        34.0 + (40.0 - h) * 0.5,
+                        ICON_Y + (ICON_H - h) * 0.5,
                         w,
                         h,
                     );
@@ -209,13 +228,19 @@ impl ScdEditorView {
                     } else {
                         "Wires On"
                     };
-                    draw.text_centered(x + w * 0.5, y + 13.0, label, 10.0, THEME);
+                    draw.text_centered(
+                        x + w * 0.5,
+                        y + 13.0 * MIXER_SCALE,
+                        label,
+                        10.0 * MIXER_SCALE,
+                        THEME,
+                    );
                 }
             }
             let strip = self.params.get_strip(kit_piece);
             let omitted = self.omitted(kit_piece);
-            let slider_x = sx + 5.0;
-            let slider_w = STRIP_W - 10.0;
+            let slider_x = sx + SLIDER_INSET;
+            let slider_w = STRIP_W - SLIDER_INSET * 2.0;
 
             bipolar_slider(
                 draw,
@@ -287,10 +312,28 @@ impl ScdEditorView {
             };
             let split = name.split_once(' ').filter(|_| name.len() > 6);
             if let Some((a, b)) = split {
-                draw.text_centered(sx + STRIP_W * 0.5, handle_y + 11.0, a, 10.0, FADER_TEXT);
-                draw.text_centered(sx + STRIP_W * 0.5, handle_y + 21.0, b, 10.0, FADER_TEXT);
+                draw.text_centered(
+                    sx + STRIP_W * 0.5,
+                    handle_y + 11.0 * MIXER_SCALE,
+                    a,
+                    10.0 * MIXER_SCALE,
+                    FADER_TEXT,
+                );
+                draw.text_centered(
+                    sx + STRIP_W * 0.5,
+                    handle_y + 21.0 * MIXER_SCALE,
+                    b,
+                    10.0 * MIXER_SCALE,
+                    FADER_TEXT,
+                );
             } else {
-                draw.text_centered(sx + STRIP_W * 0.5, handle_y + 17.0, name, 11.0, FADER_TEXT);
+                draw.text_centered(
+                    sx + STRIP_W * 0.5,
+                    handle_y + 17.0 * MIXER_SCALE,
+                    name,
+                    11.0 * MIXER_SCALE,
+                    FADER_TEXT,
+                );
             }
 
             hise_knob(
@@ -359,9 +402,9 @@ impl ScdEditorView {
             draw.rounded_rect(bx, by, bw, bh, 5.0, bg);
             draw.text_centered(
                 bx + bw * 0.5,
-                by + bh * 0.5 + 4.0,
+                by + bh * 0.5 + 4.0 * MIXER_SCALE,
                 mic.name(),
-                11.0,
+                11.0 * MIXER_SCALE,
                 if is_active { FADER_TEXT } else { THEME },
             );
         }

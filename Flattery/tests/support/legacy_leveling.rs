@@ -1,12 +1,9 @@
-use crate::dsp::constants::MAX_DISPLAY_BINS;
+// Frozen reference from commit 3009591: preserve arithmetic for regression tests and benchmarks.
+use flattery::dsp::constants::MAX_DISPLAY_BINS;
 use pleasant_dsp::units::{db_to_linear, linear_to_db};
-
-const MAX_NEIGHBOR_RADIUS: usize = 12;
 
 pub struct LevelingProcessor {
     median_buf: Vec<f64>,
-    magnitude_db_l: Vec<f64>,
-    magnitude_db_r: Vec<f64>,
     pub smoothed_gain_db_l: Vec<f64>,
     pub smoothed_gain_db_r: Vec<f64>,
     pub smoothed_gain_db_link: Vec<f64>,
@@ -22,10 +19,6 @@ impl LevelingProcessor {
     pub fn new() -> Self {
         Self {
             median_buf: Vec::with_capacity(32),
-            // The public process method permits magnitude slices longer than the
-            // processed range. Preserve its upper-edge neighbors as well.
-            magnitude_db_l: vec![0.0; MAX_DISPLAY_BINS + MAX_NEIGHBOR_RADIUS],
-            magnitude_db_r: vec![0.0; MAX_DISPLAY_BINS + MAX_NEIGHBOR_RADIUS],
             smoothed_gain_db_l: vec![0.0; MAX_DISPLAY_BINS],
             smoothed_gain_db_r: vec![0.0; MAX_DISPLAY_BINS],
             smoothed_gain_db_link: vec![0.0; MAX_DISPLAY_BINS],
@@ -38,32 +31,28 @@ impl LevelingProcessor {
         self.smoothed_gain_db_link.fill(0.0);
     }
 
-    fn median(median_buf: &mut [f64]) -> f64 {
-        let len = median_buf.len();
+    fn median(&mut self) -> f64 {
+        let len = self.median_buf.len();
         if len == 0 {
             return 0.0;
         }
-        median_buf.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        median_buf[len / 2]
+        self.median_buf
+            .sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        self.median_buf[len / 2]
     }
 
-    fn collect_neighbor_median_target(
-        median_buf: &mut Vec<f64>,
-        magnitude_db: &[f64],
-        bin: usize,
-        radius: usize,
-    ) -> f64 {
-        let n = magnitude_db.len();
-        let r = radius.clamp(1, MAX_NEIGHBOR_RADIUS);
-        median_buf.clear();
+    fn collect_neighbor_median_target(&mut self, mags: &[f64], bin: usize, radius: usize) -> f64 {
+        let n = mags.len();
+        let r = radius.clamp(1, 12);
+        self.median_buf.clear();
 
         for d in -(r as isize)..=(r as isize) {
             if d != 0 {
                 let idx = (bin as isize + d).clamp(0, n as isize - 1) as usize;
-                median_buf.push(magnitude_db[idx]);
+                self.median_buf.push(linear_to_db(mags[idx]));
             }
         }
-        let med_db = Self::median(median_buf);
+        let med_db = self.median();
         db_to_linear(med_db)
     }
 
@@ -92,16 +81,6 @@ impl LevelingProcessor {
         cut_weights: &[f64],
     ) {
         let pos_bin_count = pos_bin_count.min(MAX_DISPLAY_BINS);
-        let needed_l = mag_l.len().min(pos_bin_count + MAX_NEIGHBOR_RADIUS);
-        let needed_r = mag_r.len().min(pos_bin_count + MAX_NEIGHBOR_RADIUS);
-        for (db, &mag) in self.magnitude_db_l[..needed_l].iter_mut().zip(mag_l) {
-            *db = linear_to_db(mag);
-        }
-        for (db, &mag) in self.magnitude_db_r[..needed_r].iter_mut().zip(mag_r) {
-            *db = linear_to_db(mag);
-        }
-        let magnitude_db_l = &self.magnitude_db_l[..needed_l];
-        let magnitude_db_r = &self.magnitude_db_r[..needed_r];
         let link_factor = (stereo_link_pct * 0.01).clamp(0.0, 1.0);
         let att_coeff = (-frame_dt / (attack_ms * 0.001).max(1e-6)).exp();
         let rel_coeff = (-frame_dt / (release_ms * 0.001).max(1e-6)).exp();
@@ -137,32 +116,12 @@ impl LevelingProcessor {
 
             let (target_l, target_r) = if r_b == r_c {
                 (
-                    Self::collect_neighbor_median_target(
-                        &mut self.median_buf,
-                        magnitude_db_l,
-                        k,
-                        r_b,
-                    ),
-                    Self::collect_neighbor_median_target(
-                        &mut self.median_buf,
-                        magnitude_db_r,
-                        k,
-                        r_b,
-                    ),
+                    self.collect_neighbor_median_target(mag_l, k, r_b),
+                    self.collect_neighbor_median_target(mag_r, k, r_b),
                 )
             } else {
-                let tb_l = Self::collect_neighbor_median_target(
-                    &mut self.median_buf,
-                    magnitude_db_l,
-                    k,
-                    r_b,
-                );
-                let tc_l = Self::collect_neighbor_median_target(
-                    &mut self.median_buf,
-                    magnitude_db_l,
-                    k,
-                    r_c,
-                );
+                let tb_l = self.collect_neighbor_median_target(mag_l, k, r_b);
+                let tc_l = self.collect_neighbor_median_target(mag_l, k, r_c);
                 let tl = if tb_l > ml {
                     tb_l
                 } else if tc_l < ml {
@@ -171,18 +130,8 @@ impl LevelingProcessor {
                     ml
                 };
 
-                let tb_r = Self::collect_neighbor_median_target(
-                    &mut self.median_buf,
-                    magnitude_db_r,
-                    k,
-                    r_b,
-                );
-                let tc_r = Self::collect_neighbor_median_target(
-                    &mut self.median_buf,
-                    magnitude_db_r,
-                    k,
-                    r_c,
-                );
+                let tb_r = self.collect_neighbor_median_target(mag_r, k, r_b);
+                let tc_r = self.collect_neighbor_median_target(mag_r, k, r_c);
                 let tr = if tb_r > mr {
                     tb_r
                 } else if tc_r < mr {

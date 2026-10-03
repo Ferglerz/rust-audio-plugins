@@ -155,6 +155,129 @@ impl ScdEditorView {
                         }
                     }
 
+                    if self.sub_kick_open {
+                        let (modal_x, modal_y, modal_w, modal_h) = Self::sub_kick_modal();
+
+                        if Self::hit(x, y, modal_x, modal_y, modal_w, modal_h) {
+                            if cx.modifiers().alt() && self.reset_control_at(cx, x, y) {
+                                cx.needs_redraw();
+                                nih_plug_vizia::consume_window_event(cx, window_event, meta);
+                                return;
+                            }
+                            let knob_y = modal_y + 55.0;
+                            let knob_radius: f32 = 30.0;
+
+                            for k_idx in 0..5 {
+                                let kx = Self::sub_kick_knob_x(modal_x, k_idx);
+                                let dist_sq = (x - kx).powi(2) + (y - knob_y).powi(2);
+                                if dist_sq <= knob_radius.powi(2) {
+                                    let ptr = match k_idx {
+                                        0 => self.params.sub_kick.vol.as_ptr(),
+                                        1 => self.params.sub_kick.length.as_ptr(),
+                                        2 => self.params.sub_kick.dive.as_ptr(),
+                                        3 => self.params.sub_kick.speed.as_ptr(),
+                                        _ => self.params.sub_kick.offset.as_ptr(),
+                                    };
+                                    self.drag = Some(match k_idx {
+                                        0 => DragTarget::SubKickVol,
+                                        1 => DragTarget::SubKickLength,
+                                        2 => DragTarget::SubKickDive,
+                                        3 => DragTarget::SubKickSpeed,
+                                        _ => DragTarget::SubKickOffset,
+                                    });
+                                    self.begin_one(cx, ptr);
+                                    cx.capture();
+                                    nih_plug_vizia::consume_window_event(cx, window_event, meta);
+                                    return;
+                                }
+                            }
+                            // Empty modal space must not fall through to the mixer.
+                            nih_plug_vizia::consume_window_event(cx, window_event, meta);
+                            return;
+                        } else {
+                            self.sub_kick_open = false;
+                            cx.needs_redraw();
+                            nih_plug_vizia::consume_window_event(cx, window_event, meta);
+                            return;
+                        }
+                    }
+
+                    if self.vel_map_open.is_some() {
+                        let (modal_x, modal_y, modal_w, modal_h) = Self::vel_map_modal();
+                        if Self::hit(x, y, modal_x, modal_y, modal_w, modal_h) {
+                            if let Some(kit_piece) = self.vel_map_open {
+                                let (dx, dy, dw, dh) = Self::vel_art_dropdown_rect();
+                                if Self::hit(x, y, dx, dy, dw, dh) {
+                                    self.vel_art_menu_open = !self.vel_art_menu_open;
+                                    self.vel_ignore_up = true;
+                                    cx.needs_redraw();
+                                    nih_plug_vizia::consume_window_event(cx, window_event, meta);
+                                    return;
+                                }
+                                if self.vel_art_menu_open {
+                                    for (i, (art, _)) in
+                                        Self::vel_art_options(kit_piece).iter().enumerate()
+                                    {
+                                        let (sx, sy, sw, sh) = Self::vel_art_item_rect(i);
+                                        if Self::hit(x, y, sx, sy, sw, sh) {
+                                            self.vel_art = *art;
+                                            self.vel_selected_node = None;
+                                            break;
+                                        }
+                                    }
+                                    self.vel_art_menu_open = false;
+                                    self.vel_ignore_up = true;
+                                    cx.needs_redraw();
+                                    nih_plug_vizia::consume_window_event(cx, window_event, meta);
+                                    return;
+                                }
+                            }
+                            if let Some(curve) = self.vel_curve() {
+                                if let Some(i) = self.hit_vel_delete_x(&curve, x, y) {
+                                    self.vel_ignore_up = true;
+                                    let mut curve = curve;
+                                    if curve.delete(i) {
+                                        self.vel_selected_node = None;
+                                        self.commit_vel_curve(curve);
+                                    }
+                                    cx.needs_redraw();
+                                    nih_plug_vizia::consume_window_event(cx, window_event, meta);
+                                    return;
+                                }
+                                if let Some((i, is_out)) = self.hit_vel_handle(&curve, x, y) {
+                                    self.drag = Some(if is_out {
+                                        DragTarget::VelMapHandleOut
+                                    } else {
+                                        DragTarget::VelMapHandleIn
+                                    });
+                                    self.vel_selected_node = Some(i);
+                                    self.vel_just_inserted = false;
+                                    cx.capture();
+                                    nih_plug_vizia::consume_window_event(cx, window_event, meta);
+                                    return;
+                                }
+                                if let Some(i) = self.hit_vel_node(&curve, x, y) {
+                                    self.drag = Some(DragTarget::VelMapNode);
+                                    self.vel_selected_node = Some(i);
+                                    self.vel_just_inserted = false;
+                                    cx.capture();
+                                    nih_plug_vizia::consume_window_event(cx, window_event, meta);
+                                    return;
+                                }
+                            }
+                            self.commit_note_edit();
+                            nih_plug_vizia::consume_window_event(cx, window_event, meta);
+                            return;
+                        } else {
+                            self.commit_note_edit();
+                            self.vel_map_open = None;
+                            self.vel_selected_node = None;
+                            cx.needs_redraw();
+                            nih_plug_vizia::consume_window_event(cx, window_event, meta);
+                            return;
+                        }
+                    }
+
                     if self.cc_menu_open {
                         let (mx, my, mw, mh) = Self::cc_menu_rect();
                         if Self::hit(x, y, mx, my, mw, mh) {
@@ -246,7 +369,7 @@ impl ScdEditorView {
                             let (ix, iy, iw, ih) = Self::mapping_name_rect(i);
                             if Self::hit(x, y, ix, iy, iw, ih) {
                                 self.commit_note_edit();
-                                self.open_vel_map(*kit_piece);
+                                self.open_vel_map(cx, *kit_piece);
                                 cx.needs_redraw();
                                 nih_plug_vizia::consume_window_event(cx, window_event, meta);
                                 return;
@@ -318,11 +441,9 @@ impl ScdEditorView {
                     }
 
                     if Self::hit(x, y, SUB_KICK.0, SUB_KICK.1, SUB_KICK.2, SUB_KICK.3) {
-                        self.sub_kick_open = !self.sub_kick_open;
-                        if self.sub_kick_open {
-                            self.vel_map_open = None;
-                            self.blur_dirty.set(true);
-                        }
+                        self.prepare_modal(cx);
+                        self.sub_kick_open = true;
+                        self.blur_dirty.set(true);
                         cx.needs_redraw();
                         nih_plug_vizia::consume_window_event(cx, window_event, meta);
                         return;
@@ -345,121 +466,6 @@ impl ScdEditorView {
                         cx.needs_redraw();
                         nih_plug_vizia::consume_window_event(cx, window_event, meta);
                         return;
-                    }
-
-                    if self.sub_kick_open {
-                        let (modal_x, modal_y, modal_w, modal_h) = Self::sub_kick_modal();
-
-                        if Self::hit(x, y, modal_x, modal_y, modal_w, modal_h) {
-                            let knob_y = modal_y + 55.0;
-                            let knob_radius: f32 = 30.0;
-
-                            for k_idx in 0..5 {
-                                let kx = Self::sub_kick_knob_x(modal_x, k_idx);
-                                let dist_sq = (x - kx).powi(2) + (y - knob_y).powi(2);
-                                if dist_sq <= knob_radius.powi(2) {
-                                    let ptr = match k_idx {
-                                        0 => self.params.sub_kick.vol.as_ptr(),
-                                        1 => self.params.sub_kick.length.as_ptr(),
-                                        2 => self.params.sub_kick.dive.as_ptr(),
-                                        3 => self.params.sub_kick.speed.as_ptr(),
-                                        _ => self.params.sub_kick.offset.as_ptr(),
-                                    };
-                                    self.drag = Some(match k_idx {
-                                        0 => DragTarget::SubKickVol,
-                                        1 => DragTarget::SubKickLength,
-                                        2 => DragTarget::SubKickDive,
-                                        3 => DragTarget::SubKickSpeed,
-                                        _ => DragTarget::SubKickOffset,
-                                    });
-                                    self.begin_one(cx, ptr);
-                                    cx.capture();
-                                    nih_plug_vizia::consume_window_event(cx, window_event, meta);
-                                    return;
-                                }
-                            }
-                        } else {
-                            self.sub_kick_open = false;
-                            cx.needs_redraw();
-                            nih_plug_vizia::consume_window_event(cx, window_event, meta);
-                            return;
-                        }
-                    }
-
-                    if self.vel_map_open.is_some() {
-                        let (modal_x, modal_y, modal_w, modal_h) = Self::vel_map_modal();
-                        if Self::hit(x, y, modal_x, modal_y, modal_w, modal_h) {
-                            if let Some(kit_piece) = self.vel_map_open {
-                                let (dx, dy, dw, dh) = Self::vel_art_dropdown_rect();
-                                if Self::hit(x, y, dx, dy, dw, dh) {
-                                    self.vel_art_menu_open = !self.vel_art_menu_open;
-                                    self.vel_ignore_up = true;
-                                    cx.needs_redraw();
-                                    nih_plug_vizia::consume_window_event(cx, window_event, meta);
-                                    return;
-                                }
-                                if self.vel_art_menu_open {
-                                    for (i, (art, _)) in
-                                        Self::vel_art_options(kit_piece).iter().enumerate()
-                                    {
-                                        let (sx, sy, sw, sh) = Self::vel_art_item_rect(i);
-                                        if Self::hit(x, y, sx, sy, sw, sh) {
-                                            self.vel_art = *art;
-                                            self.vel_selected_node = None;
-                                            break;
-                                        }
-                                    }
-                                    self.vel_art_menu_open = false;
-                                    self.vel_ignore_up = true;
-                                    cx.needs_redraw();
-                                    nih_plug_vizia::consume_window_event(cx, window_event, meta);
-                                    return;
-                                }
-                            }
-                            if let Some(curve) = self.vel_curve() {
-                                if let Some(i) = self.hit_vel_delete_x(&curve, x, y) {
-                                    self.vel_ignore_up = true;
-                                    let mut curve = curve;
-                                    if curve.delete(i) {
-                                        self.vel_selected_node = None;
-                                        self.commit_vel_curve(curve);
-                                    }
-                                    cx.needs_redraw();
-                                    nih_plug_vizia::consume_window_event(cx, window_event, meta);
-                                    return;
-                                }
-                                if let Some((i, is_out)) = self.hit_vel_handle(&curve, x, y) {
-                                    self.drag = Some(if is_out {
-                                        DragTarget::VelMapHandleOut
-                                    } else {
-                                        DragTarget::VelMapHandleIn
-                                    });
-                                    self.vel_selected_node = Some(i);
-                                    self.vel_just_inserted = false;
-                                    cx.capture();
-                                    nih_plug_vizia::consume_window_event(cx, window_event, meta);
-                                    return;
-                                }
-                                if let Some(i) = self.hit_vel_node(&curve, x, y) {
-                                    self.drag = Some(DragTarget::VelMapNode);
-                                    self.vel_selected_node = Some(i);
-                                    self.vel_just_inserted = false;
-                                    cx.capture();
-                                    nih_plug_vizia::consume_window_event(cx, window_event, meta);
-                                    return;
-                                }
-                            }
-                            self.commit_note_edit();
-                            nih_plug_vizia::consume_window_event(cx, window_event, meta);
-                            return;
-                        } else {
-                            self.commit_note_edit();
-                            self.vel_map_open = None;
-                            self.vel_selected_node = None;
-                            cx.needs_redraw();
-                            nih_plug_vizia::consume_window_event(cx, window_event, meta);
-                            return;
-                        }
                     }
 
                     for mixed in [false, true] {
@@ -743,6 +749,9 @@ impl ScdEditorView {
                         self.hover_note = None;
                         cx.needs_redraw();
                     }
+                }
+                WindowEvent::MouseScroll(..) if self.modal_open() => {
+                    nih_plug_vizia::consume_window_event(cx, window_event, meta);
                 }
                 WindowEvent::MouseScroll(_, dy)
                     if *dy != 0.0

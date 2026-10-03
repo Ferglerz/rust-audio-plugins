@@ -66,13 +66,7 @@ impl StripView {
                     }
                     WindowEvent::MouseDown(MouseButton::Left) => {
                         if inside(x, y, self.edit.as_ref().unwrap().rect) {
-                            let edit = self.edit.as_mut().unwrap();
-                            let capacity = ((edit.rect.2 - 8.0) / 6.6) as usize;
-                            let start = edit.cursor.saturating_sub(capacity);
-                            edit.cursor = (start
-                                + (((x - edit.rect.0 - 4.0) / 6.6).round().max(0.0) as usize))
-                                .min(edit.text.len());
-                            edit.anchor = edit.cursor;
+                            self.edit.as_mut().unwrap().handle_mouse_down(x);
                             cx.needs_redraw();
                             return;
                         }
@@ -87,9 +81,7 @@ impl StripView {
                         }
                     }
                     WindowEvent::MouseDoubleClick(MouseButton::Left) => {
-                        let edit = self.edit.as_mut().unwrap();
-                        edit.anchor = 0;
-                        edit.cursor = edit.text.len();
+                        self.edit.as_mut().unwrap().select_all();
                         cx.needs_redraw();
                         return;
                     }

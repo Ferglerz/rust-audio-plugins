@@ -34,101 +34,50 @@ impl TapeStopView {
                 }
             }
 
-            if let Some(mut press) = self.value_press {
-                match window_event {
-                    WindowEvent::MouseMove(_, _) => {
-                        if press.update(mouse_x, mouse_y) {
-                            self.value_press = None;
-                            self.drag = Some(DragState::Value {
-                                id: press.target,
-                                start_x: press.origin.0,
-                                start_y: press.origin.1,
-                                start_norm: self.get_knob_norm(press.target),
-                            });
-                        } else {
-                            self.value_press = Some(press);
-                            return;
-                        }
-                    }
-                    WindowEvent::MouseUp(MouseButton::Left) => {
-                        self.value_press = None;
-                        cx.release();
-                        if press.released_as_click(mouse_x, mouse_y) {
-                            let (_, value, _) = self.knob_info(press.target);
-                            self.start_edit(cx, press.target, press.rect, value);
-                        }
-                        nih_plug_vizia::consume_window_event(cx, window_event, meta);
-                        cx.needs_redraw();
-                        return;
-                    }
-                    WindowEvent::FocusOut
-                    | WindowEvent::KeyDown(Code::Escape, _)
-                    | WindowEvent::MouseDown(MouseButton::Right) => {
-                        self.value_press = None;
-                        cx.release();
-                        cx.needs_redraw();
-                        return;
-                    }
-                    _ => return,
+            use pleasant_ui::readout::{self, EditAction, PressAction};
+            match readout::handle_press(&mut self.value_press, window_event, (mouse_x, mouse_y)) {
+                PressAction::Inactive => {}
+                PressAction::Blocked => return,
+                PressAction::BeginDrag(press) => {
+                    self.drag = Some(DragState::Value {
+                        id: press.target,
+                        start_x: press.origin.0,
+                        start_y: press.origin.1,
+                        start_norm: self.get_knob_norm(press.target),
+                    });
+                }
+                PressAction::BeginEdit(press) => {
+                    cx.release();
+                    let (_, value, _) = self.knob_info(press.target);
+                    self.start_edit(cx, press.target, press.rect, value);
+                    nih_plug_vizia::consume_window_event(cx, window_event, meta);
+                    cx.needs_redraw();
+                    return;
+                }
+                PressAction::Released => {
+                    cx.release();
+                    nih_plug_vizia::consume_window_event(cx, window_event, meta);
+                    cx.needs_redraw();
+                    return;
+                }
+                PressAction::Cancelled => {
+                    cx.release();
+                    cx.needs_redraw();
+                    return;
                 }
             }
-            if self.edit.is_some() {
-                match window_event {
-                    WindowEvent::CharInput(c) => {
-                        if !cx.modifiers().command() && c.is_ascii() && !c.is_control() {
-                            if let Some(edit) = self.edit.as_mut() {
-                                edit.insert(&c.to_string());
-                            }
-                        }
-                        nih_plug_vizia::consume_window_event(cx, window_event, meta);
-                        cx.needs_redraw();
-                        return;
-                    }
-                    WindowEvent::KeyDown(code, key) => {
-                        match code {
-                            Code::Enter | Code::NumpadEnter => {
-                                self.commit_edit(cx);
-                            }
-                            Code::Escape => {
-                                self.edit = None;
-                            }
-                            _ => {
-                                self.edit.as_mut().unwrap().handle_key(cx, *code);
-                                let has_char = matches!(key, Some(Key::Character(_)));
-                                if !has_char && !cx.modifiers().command() {
-                                    if let Some(c) = typed_char(*code, cx.modifiers().shift()) {
-                                        self.edit.as_mut().unwrap().insert(&c.to_string());
-                                    }
-                                }
-                            }
-                        }
-                        nih_plug_vizia::consume_window_event(cx, window_event, meta);
-                        cx.needs_redraw();
-                        return;
-                    }
-                    WindowEvent::MouseDown(MouseButton::Left) => {
-                        let edit_rect = self.edit.as_ref().unwrap().rect;
-                        if Self::inside(mouse_x, mouse_y, edit_rect) {
-                            self.edit.as_mut().unwrap().handle_mouse_down(mouse_x);
-                            nih_plug_vizia::consume_window_event(cx, window_event, meta);
-                            cx.needs_redraw();
-                            return;
-                        }
-                        self.commit_edit(cx);
-                        nih_plug_vizia::consume_window_event(cx, window_event, meta);
-                        cx.needs_redraw();
-                        return;
-                    }
-                    WindowEvent::MouseDoubleClick(MouseButton::Left) => {
-                        self.edit.as_mut().unwrap().select_all();
-                        nih_plug_vizia::consume_window_event(cx, window_event, meta);
-                        cx.needs_redraw();
-                        return;
-                    }
-                    WindowEvent::FocusOut => {
-                        self.commit_edit(cx);
-                    }
-                    _ => return,
+            if let Some(edit) = self.edit.as_mut() {
+                let action = readout::handle_edit(edit, cx, window_event, (mouse_x, mouse_y));
+                match action {
+                    EditAction::Blocked => return,
+                    EditAction::Handled => {}
+                    EditAction::Commit | EditAction::CommitAndContinue => self.commit_edit(cx),
+                    EditAction::Cancel => self.edit = None,
+                }
+                if action != EditAction::CommitAndContinue {
+                    nih_plug_vizia::consume_window_event(cx, window_event, meta);
+                    cx.needs_redraw();
+                    return;
                 }
             }
 

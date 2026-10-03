@@ -16,6 +16,134 @@ fn isolated_shared() -> Arc<Shared> {
 }
 
 #[test]
+fn hidden_display_preserves_audio_peaks_and_meter_cadence_and_reopens_fresh() {
+    let visible_shared = isolated_shared();
+    let hidden_shared = isolated_shared();
+    let mut visible = Engine::new(visible_shared.clone(), 48000.0);
+    let mut hidden = Engine::new(hidden_shared.clone(), 48000.0);
+    let settings = CompSettings::default();
+    let frozen: [f32; 128] =
+        std::array::from_fn(|i| hidden_shared.spectrum[i].load(Ordering::Relaxed));
+    hidden.set_display_enabled(false);
+    for i in 0..5000 {
+        let input = [(i as f64 * 0.13).sin() * 0.7, (i as f64 * 0.17).cos() * 0.5];
+        assert_eq!(
+            visible.tick(input, settings, true, true, true, false, true, false, false),
+            hidden.tick(input, settings, true, true, true, false, true, false, false),
+        );
+        assert_eq!(visible.position, hidden.position);
+        assert_eq!(
+            (visible.in_peak, visible.out_peak, visible.wall_peak),
+            (hidden.in_peak, hidden.out_peak, hidden.wall_peak)
+        );
+        for (left, right) in [
+            (&visible_shared.input, &hidden_shared.input),
+            (&visible_shared.output, &hidden_shared.output),
+            (&visible_shared.gr, &hidden_shared.gr),
+            (&visible_shared.gr_uncapped, &hidden_shared.gr_uncapped),
+            (&visible_shared.pse_gr, &hidden_shared.pse_gr),
+            (&visible_shared.sc_level, &hidden_shared.sc_level),
+            (&visible_shared.wall_level, &hidden_shared.wall_level),
+        ] {
+            assert_eq!(
+                left.load(Ordering::Relaxed),
+                right.load(Ordering::Relaxed),
+                "sample {i}"
+            );
+        }
+    }
+    assert_eq!(hidden.spectrum_position, 0);
+    for (index, expected) in frozen.into_iter().enumerate() {
+        assert_eq!(
+            hidden_shared.spectrum[index].load(Ordering::Relaxed),
+            expected
+        );
+    }
+    // Hide after a partial live window, then reopen: pre-close samples must not
+    // enter the new display frame, nor may reopening move the meter clock.
+    hidden.set_display_enabled(true);
+    for _ in 0..53 {
+        hidden.tick(
+            [0.9, -0.9],
+            settings,
+            true,
+            true,
+            true,
+            false,
+            true,
+            false,
+            false,
+        );
+    }
+    hidden.set_display_enabled(false);
+    hidden.set_display_enabled(true);
+    let meter_position = hidden.position;
+    for i in 0..2048 {
+        hidden.tick(
+            [0.0; 2], settings, true, true, true, false, true, false, false,
+        );
+        assert_eq!(hidden.position, (meter_position + i + 1) % 2048);
+        assert!(hidden_shared
+            .spectrum
+            .iter()
+            .all(|bin| bin.load(Ordering::Relaxed) == -90.0));
+    }
+    assert_eq!(hidden.spectrum_position, 0);
+}
+
+#[test]
+fn visible_spectrum_matches_original_window_fft_and_peak_hold() {
+    let shared = isolated_shared();
+    let mut engine = Engine::new(shared.clone(), 48000.0);
+    let mut samples = vec![Complex::default(); 2048];
+    let mut expected: [f32; 128] =
+        std::array::from_fn(|i| shared.spectrum[i].load(Ordering::Relaxed));
+    for frame in 0..3 {
+        for (i, sample) in samples.iter_mut().enumerate() {
+            let t = (frame * 2048 + i) as f64;
+            let input = [(t * 0.13).sin() * 0.7, (t * 0.17).cos() * 0.5];
+            let loudest = if input[0].abs() > input[1].abs() {
+                input[0]
+            } else {
+                input[1]
+            };
+            *sample = Complex::new(loudest as f32 * engine.window[i], 0.0);
+            engine.tick(
+                input,
+                CompSettings::default(),
+                true,
+                true,
+                true,
+                false,
+                true,
+                false,
+                false,
+            );
+            if i < 2047 {
+                for (bin, &value) in shared.spectrum.iter().zip(&expected) {
+                    assert_eq!(bin.load(Ordering::Relaxed), value);
+                }
+            }
+        }
+        engine
+            .fft
+            .process_with_scratch(&mut samples, &mut engine.scratch);
+        for (i, value) in expected.iter_mut().enumerate() {
+            let (start, end) = engine.spectrum_bin_ranges[i];
+            let mut magnitude = 0.0_f32;
+            if start <= end {
+                for bin in start.max(1)..=end {
+                    magnitude = magnitude.max(samples[bin].norm() / 512.0);
+                }
+            }
+            let db = (20.0 * magnitude.max(0.0000316).log10()).max(-90.0);
+            *value = peak_hold(*value, db, SPECTRUM_FALL_DB_PER_FRAME);
+            assert_eq!(shared.spectrum[i].load(Ordering::Relaxed), *value);
+        }
+    }
+}
+
+#[test]
 fn wall_clips_with_zero_harmonics_in_the_audio_path() {
     let mut engine = Engine::new(isolated_shared(), 48000.0);
     let settings = CompSettings {

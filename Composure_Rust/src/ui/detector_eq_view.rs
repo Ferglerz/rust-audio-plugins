@@ -1,10 +1,13 @@
 //! Detector equalizer, using the same response model and node artwork as Damian.
-use std::sync::{atomic::Ordering, Arc};
+use std::{
+    cell::RefCell,
+    sync::{atomic::Ordering, Arc},
+};
 
 use nih_plug::prelude::*;
 use nih_plug_vizia::vizia::prelude::*;
-use nih_plug_vizia::widgets::{util::ModifiersExt, RawParamEvent};
-use pleasant_eq::{BandCoefficients, BandSettings, EqShape};
+use nih_plug_vizia::widgets::util::ModifiersExt;
+use pleasant_eq::{BandCoefficients, BandSettings, EqShape, ResponseCache};
 use pleasant_ui::theme::EQ_COLORS as COLORS;
 use pleasant_ui::{
     pointer::ValuePress, ButtonAnim, Draw, ValueEdit, GOLD, LINE, MUTED, PANEL, TEXT,
@@ -85,6 +88,7 @@ pub struct DetectorEqView {
     hover: Option<(f32, f32)>,
     shape_menu: bool,
     bypass_anim: ButtonAnim,
+    response_cache: RefCell<ResponseCache>,
 }
 
 fn contains(r: (f32, f32, f32, f32), p: (f32, f32)) -> bool {
@@ -135,12 +139,7 @@ fn node_color(node: Node) -> nih_plug_vizia::vizia::vg::Color {
     } % COLORS.len()]
 }
 fn set_once<P: Param>(cx: &mut EventContext, param: &P, normalized: f32) {
-    cx.emit(RawParamEvent::BeginSetParameter(param.as_ptr()));
-    cx.emit(RawParamEvent::SetParameterNormalized(
-        param.as_ptr(),
-        normalized.clamp(0.0, 1.0),
-    ));
-    cx.emit(RawParamEvent::EndSetParameter(param.as_ptr()));
+    pleasant_ui::param::set_normalized_once(cx, param.as_ptr(), normalized);
 }
 
 impl DetectorEqView {
@@ -159,6 +158,7 @@ impl DetectorEqView {
             hover: None,
             shape_menu: false,
             bypass_anim: ButtonAnim::new(),
+            response_cache: RefCell::new(ResponseCache::default()),
         }
         .build(cx, |cx| {
             let timer = cx.add_timer(std::time::Duration::from_millis(16), None, |cx, action| {
@@ -272,9 +272,7 @@ impl DetectorEqView {
     ) {
         let fields = node_fields(node, b.shape);
         for &field in &fields {
-            cx.emit(RawParamEvent::BeginSetParameter(
-                self.param(Target { node, field }).as_ptr(),
-            ));
+            pleasant_ui::param::begin(cx, self.param(Target { node, field }).as_ptr());
         }
         self.drag = Some(NodeDrag {
             node,
@@ -292,20 +290,19 @@ impl DetectorEqView {
         let captured = self.drag.is_some() || self.press.is_some();
         if let Some(drag) = self.drag.take() {
             for field in drag.fields {
-                cx.emit(RawParamEvent::EndSetParameter(
+                pleasant_ui::param::end(
+                    cx,
                     self.param(Target {
                         node: drag.node,
                         field,
                     })
                     .as_ptr(),
-                ));
+                );
             }
         }
         if let Some(press) = self.press.take() {
             if press.active {
-                cx.emit(RawParamEvent::EndSetParameter(
-                    self.param(press.press.target).as_ptr(),
-                ));
+                pleasant_ui::param::end(cx, self.param(press.press.target).as_ptr());
             }
         }
         if captured {
@@ -395,15 +392,13 @@ impl DetectorEqView {
     }
     fn draw_curve(
         d: &mut Draw,
-        coeffs: &[BandCoefficients],
-        rate: f64,
+        response: &[f64],
         color: nih_plug_vizia::vizia::vg::Color,
         width: f32,
     ) {
         let points: [(f32, f32); 513] = std::array::from_fn(|i| {
             let x = GRAPH.0 + GRAPH.2 * i as f32 / 512.0;
-            let frequency = response_frequency(x, rate);
-            let value: f64 = coeffs.iter().map(|c| c.response_db(frequency, rate)).sum();
+            let value = response[i];
             let y = GRAPH.1 + GRAPH.3 * (0.5 - value as f32 / (GAIN_DB * 2.0));
             (x, y)
         });
@@ -469,7 +464,23 @@ impl View for DetectorEqView {
         let rate = (self.display.sample_rate.load(Ordering::Relaxed) as f64).max(1.0);
         let mut nodes = self.nodes();
         nodes.sort_by_key(|node| Some(*node) == self.selected);
-        let mut total = Vec::new();
+        let enabled: Vec<_> = nodes
+            .iter()
+            .filter_map(|&node| {
+                let settings = self.settings(node);
+                settings
+                    .enabled
+                    .then(|| (node, BandCoefficients::prepare(&settings, rate)))
+            })
+            .collect();
+        let coefficients: Vec<_> = enabled
+            .iter()
+            .map(|(_, coefficients)| *coefficients)
+            .collect();
+        let frequencies: [f64; 513] =
+            std::array::from_fn(|i| response_frequency(GRAPH.0 + GRAPH.2 * i as f32 / 512.0, rate));
+        let mut response_cache = self.response_cache.borrow_mut();
+        response_cache.update(&coefficients, &frequencies, rate);
         d.c.save();
         d.c.intersect_scissor(
             d.ox + (GRAPH.0 + d.offset_x) * d.s,
@@ -477,17 +488,12 @@ impl View for DetectorEqView {
             GRAPH.2 * d.s,
             GRAPH.3 * d.s,
         );
-        for node in &nodes {
-            let settings = self.settings(*node);
-            if settings.enabled {
-                let coeffs = BandCoefficients::prepare(&settings, rate);
-                let mut color = node_color(*node);
-                color.a = 0.5;
-                Self::draw_curve(&mut d, &[coeffs], rate, color, 1.0);
-                total.push(coeffs);
-            }
+        for (index, (node, _)) in enabled.iter().enumerate() {
+            let mut color = node_color(*node);
+            color.a = 0.5;
+            Self::draw_curve(&mut d, response_cache.band(index), color, 1.0);
         }
-        Self::draw_curve(&mut d, &total, rate, GOLD, 1.7);
+        Self::draw_curve(&mut d, response_cache.sum(), GOLD, 1.7);
         d.c.restore();
         for node in nodes {
             let settings = self.settings(node);
@@ -703,10 +709,11 @@ impl View for DetectorEqView {
                                 field: Field::Q,
                             });
                             let q = drag.q * 2.0_f32.powf((drag.origin.1 - point.1) / 60.0);
-                            cx.emit(RawParamEvent::SetParameterNormalized(
+                            pleasant_ui::param::set_normalized(
+                                cx,
                                 p.as_ptr(),
                                 p.preview_normalized(q),
-                            ));
+                            );
                         } else {
                             let p = self.param(Target {
                                 node,
@@ -714,10 +721,11 @@ impl View for DetectorEqView {
                             });
                             let frequency =
                                 x_frequency(frequency_x(drag.frequency) + point.0 - drag.origin.0);
-                            cx.emit(RawParamEvent::SetParameterNormalized(
+                            pleasant_ui::param::set_normalized(
+                                cx,
                                 p.as_ptr(),
                                 p.preview_normalized(frequency),
-                            ));
+                            );
                             if drag.fields.contains(&Field::Q) && self.settings(node).shape.is_cut()
                             {
                                 let param = self.param(Target {
@@ -725,10 +733,11 @@ impl View for DetectorEqView {
                                     field: Field::Q,
                                 });
                                 let q = drag.q * 2.0_f32.powf((point.1 - drag.origin.1) / 60.0);
-                                cx.emit(RawParamEvent::SetParameterNormalized(
+                                pleasant_ui::param::set_normalized(
+                                    cx,
                                     param.as_ptr(),
                                     param.preview_normalized(q),
-                                ));
+                                );
                             }
                             if drag.fields.contains(&Field::Gain)
                                 && self.settings(node).shape.has_gain()
@@ -738,10 +747,11 @@ impl View for DetectorEqView {
                                     field: Field::Gain,
                                 });
                                 let gain = y_gain(gain_y(drag.gain) + point.1 - drag.origin.1);
-                                cx.emit(RawParamEvent::SetParameterNormalized(
+                                pleasant_ui::param::set_normalized(
+                                    cx,
                                     p.as_ptr(),
                                     p.preview_normalized(gain),
-                                ));
+                                );
                             }
                         }
                         nih_plug_vizia::consume_window_event(cx, e, meta);
@@ -750,7 +760,7 @@ impl View for DetectorEqView {
                         if press.press.update(point.0, point.1) {
                             let p = self.param(press.press.target);
                             if !press.active {
-                                cx.emit(RawParamEvent::BeginSetParameter(p.as_ptr()));
+                                pleasant_ui::param::begin(cx, p.as_ptr());
                                 press.active = true;
                                 self.display.set_filter_preview_drag(true);
                             }
@@ -759,10 +769,11 @@ impl View for DetectorEqView {
                                 point.1 - press.press.origin.1,
                                 cx.modifiers().shift(),
                             );
-                            cx.emit(RawParamEvent::SetParameterNormalized(
+                            pleasant_ui::param::set_normalized(
+                                cx,
                                 p.as_ptr(),
                                 (press.start + delta).clamp(0.0, 1.0),
-                            ));
+                            );
                         }
                         self.press = Some(press);
                         nih_plug_vizia::consume_window_event(cx, e, meta);

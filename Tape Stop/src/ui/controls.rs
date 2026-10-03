@@ -39,11 +39,11 @@ pub(super) const STOP_BUTTON: (f32, f32, f32, f32) = (
     STOP_SIZE,
 );
 
-const MIDI_SLOT_W: f32 = 96.0;
+const MIDI_SLOT_W: f32 = 66.0;
 
 pub(super) const TRIGGER_BYPASS: f32 = 22.0;
 const COG_SIZE: f32 = 22.0;
-const AXIS_GAP: f32 = 12.0;
+const AXIS_GAP: f32 = 8.0;
 const AXIS_VALUE_W: f32 = 60.0;
 
 pub(super) fn trigger_column() -> (f32, f32, f32, f32) {
@@ -69,7 +69,7 @@ pub(super) fn midi_slot() -> (f32, f32, f32, f32) {
 
 pub(super) fn midi_label_rect() -> (f32, f32, f32, f32) {
     let slot = midi_slot();
-    (slot.0, slot.1, 46.0, slot.3)
+    (slot.0, slot.1, 42.0, slot.3)
 }
 
 pub(super) fn midi_value_rect() -> (f32, f32, f32, f32) {
@@ -89,20 +89,27 @@ pub(super) fn cog_rect() -> (f32, f32, f32, f32) {
 }
 
 pub(super) fn axis_slot(index: usize) -> (f32, f32, f32, f32) {
-    let trigger_width = 204.0;
-    let width = (MODULE_RIGHT - GRAPH_X - trigger_width - AXIS_GAP * 3.0) / 3.0;
+    let midi = midi_slot();
+    let start = midi.0 + midi.2 + AXIS_GAP;
+    // Preserve the trigger's extra label space while shortening all four sliders equally.
+    let trigger_extra = 40.0;
+    let width = (cog_rect().0 - AXIS_GAP - start - AXIS_GAP * 3.0 - trigger_extra) / 4.0;
     (
-        GRAPH_X + index as f32 * (width + AXIS_GAP),
-        DROP_TIME_READOUT.1 + DROP_READOUT_H + 12.0,
-        if index == 3 { trigger_width } else { width },
-        36.0,
+        start + index as f32 * (width + AXIS_GAP),
+        DROP_TIME_READOUT.1,
+        if index == 3 {
+            width + trigger_extra
+        } else {
+            width
+        },
+        44.0,
     )
 }
 
 pub(super) fn axis_bar_rect(slot: (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
     (
         slot.0 + 8.0,
-        slot.1 + 24.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA,
+        slot.1 + 34.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA,
         slot.2 - 16.0,
         5.0,
     )
@@ -110,8 +117,8 @@ pub(super) fn axis_bar_rect(slot: (f32, f32, f32, f32)) -> (f32, f32, f32, f32) 
 
 pub(super) fn axis_value_rect(slot: (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
     (
-        slot.0 + slot.2 - 8.0 - AXIS_VALUE_W,
-        slot.1,
+        slot.0 + (slot.2 - AXIS_VALUE_W) * 0.5,
+        slot.1 + 14.0,
         AXIS_VALUE_W,
         20.0,
     )
@@ -214,10 +221,7 @@ impl TapeStopView {
     }
 
     pub(super) fn emit_param_norm(&self, cx: &mut EventContext, ptr: ParamPtr, norm: f32) {
-        let norm = norm.clamp(0.0, 1.0);
-        cx.emit(RawParamEvent::BeginSetParameter(ptr));
-        cx.emit(RawParamEvent::SetParameterNormalized(ptr, norm));
-        cx.emit(RawParamEvent::EndSetParameter(ptr));
+        pleasant_ui::param::set_normalized_once(cx, ptr, norm);
     }
 
     pub(super) fn reset_knob(&self, cx: &mut EventContext, id: KnobId) {
@@ -370,9 +374,6 @@ impl TapeStopView {
         if fill_h > 0.5 {
             d.rect(bar.0, bar.1 + bar.3 - fill_h, bar.2, fill_h, color);
         }
-        let thumb_y = bar.1 + bar.3 * (1.0 - n.clamp(0.0, 1.0));
-        d.rect(bar.0 - 3.0, thumb_y - 3.0, bar.2 + 6.0, 6.0, color);
-
         if let Some(edit) = &self.edit {
             if edit.target == KnobId::DropTime {
                 d.value_edit(edit, color);
@@ -467,7 +468,7 @@ impl TapeStopView {
         let n = self.get_knob_norm(id).clamp(0.0, 1.0);
         let bar = axis_bar_rect(slot);
         let val_r = axis_value_rect(slot);
-        let baseline = slot.1 + 16.0;
+        let baseline = slot.1 + 30.0;
         let label_x = slot.0
             + 8.0
             + if id == KnobId::RestartThresh {
@@ -483,7 +484,17 @@ impl TapeStopView {
         } else {
             MUTED
         };
-        d.text(label_x, baseline, label, 12.0, label_color);
+        if id == KnobId::RestartThresh {
+            d.text(label_x, slot.1 + 12.0, label, 12.0, label_color);
+        } else {
+            d.text_centered(
+                slot.0 + slot.2 * 0.5,
+                slot.1 + 12.0,
+                label,
+                12.0,
+                label_color,
+            );
+        }
         d.rounded_rect(bar.0, bar.1, bar.2, bar.3, 2.5, LINE);
         let (fill_x, fill_w) = if id == KnobId::StereoDiv {
             let mid = bar.0 + bar.2 * 0.5;

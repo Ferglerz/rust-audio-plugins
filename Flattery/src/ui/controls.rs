@@ -139,10 +139,7 @@ impl FlatteryView {
     }
 
     pub(super) fn emit_param_norm(&self, cx: &mut EventContext, ptr: ParamPtr, norm: f32) {
-        let norm = norm.clamp(0.0, 1.0);
-        cx.emit(RawParamEvent::BeginSetParameter(ptr));
-        cx.emit(RawParamEvent::SetParameterNormalized(ptr, norm));
-        cx.emit(RawParamEvent::EndSetParameter(ptr));
+        pleasant_ui::param::set_normalized_once(cx, ptr, norm);
     }
 
     pub(super) fn reset_float_param(&self, cx: &mut EventContext, p: &FloatParam) {

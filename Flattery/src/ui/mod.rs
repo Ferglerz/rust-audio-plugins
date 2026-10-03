@@ -27,7 +27,6 @@ use nih_plug_vizia::{
         prelude::*,
         vg::{Color, FontId},
     },
-    widgets::RawParamEvent,
     ViziaTheming,
 };
 use pleasant_ui::{
@@ -35,7 +34,7 @@ use pleasant_ui::{
     math::{flattery_freq_to_pos, flattery_pos_to_freq},
     preferences::AppearanceStore,
     theme::{BG, COLORS, GOLD, LINE, MUTED, PANEL, TEAL, TEXT},
-    value_edit::{parse_number_with_units, slider_value_rect, typed_char, ValueEdit},
+    value_edit::{parse_number_with_units, slider_value_rect, ValueEdit},
     FONT_JETBRAINS_MONO,
 };
 use std::{

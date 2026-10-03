@@ -829,3 +829,50 @@ fn band_meter_padding_clears_inline_nodes_and_matches_detached_edges() {
         assert!((gap - DYN_METER_PAD).abs() < 0.01);
     }
 }
+
+#[test]
+fn response_cache_matches_exact_notches_dynamic_updates_and_processing_rates() {
+    let mut bands = vec![
+        Band {
+            id: 1,
+            shape: Shape::Notch,
+            freq: 2345.0,
+            q: 18.0,
+            ..Band::default()
+        },
+        Band {
+            id: 2,
+            gain: 12.0,
+            dynamic: true,
+            range: -9.0,
+            ..Band::default()
+        },
+    ];
+    let mut cache = pleasant_eq::ResponseCache::default();
+    for (host_rate, eq_rate) in [(22050.0, 88200.0), (48000.0, 48000.0), (48000.0, 192000.0)] {
+        for reduction in [0.0, 3.0, 7.0, -2.0] {
+            let meters = [(2, reduction)];
+            let xs = eq_curve_xs(GX, GW, bands.iter().filter(|b| b.enabled).map(|b| b.freq));
+            update_eq_response_cache(
+                &mut cache,
+                &bands,
+                &meters,
+                &xs,
+                (GX, GW),
+                (host_rate, eq_rate),
+            );
+            let mut expected = vec![0.0; xs.len()];
+            for (index, band) in bands.iter().filter(|b| b.enabled).enumerate() {
+                let coefficient = BandCoeffs::make(&plot_band(band, &meters), eq_rate);
+                let direct = eq_db_on_xs(&coefficient, &xs, GX, GW, host_rate, eq_rate);
+                assert_eq!(cache.band(index), direct);
+                for (sum, value) in expected.iter_mut().zip(direct) {
+                    *sum += value;
+                }
+            }
+            assert_eq!(cache.sum(), expected);
+        }
+        bands[0].freq += 12.0;
+        bands[1].enabled = !bands[1].enabled;
+    }
+}

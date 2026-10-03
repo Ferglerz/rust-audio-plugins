@@ -159,6 +159,129 @@ fn test_auto_restart_transient_detection() {
 }
 
 #[test]
+fn prepared_block_processing_matches_compatibility_api_across_updates() {
+    let mut prepared_engine = TapeStopEngine::new();
+    let mut compatibility_engine = TapeStopEngine::new();
+    prepared_engine.set_sample_rate(44100.0);
+    compatibility_engine.set_sample_rate(44100.0);
+    prepared_engine.note_on(60, 1.0);
+    compatibility_engine.note_on(60, 1.0);
+
+    let blocks = [
+        (44100.0, 0.12, 0.0, -18.0),
+        (44100.0, 0.08, 35.0, -24.0),
+        (96000.0, 0.2, -25.0, -12.0),
+    ];
+    let mut current_sample_rate = 44100.0;
+    for (sample_rate, drop_time, stereo_div, threshold) in blocks {
+        if sample_rate != current_sample_rate {
+            prepared_engine.set_sample_rate(sample_rate);
+            compatibility_engine.set_sample_rate(sample_rate);
+            current_sample_rate = sample_rate;
+        }
+        let settings = prepared_engine
+            .prepare_block(drop_time, stereo_div, threshold)
+            .with_processing_settings(12.0, 0.05, 2.0, true, true);
+        for frame in 0..512 {
+            let input = (frame as f32 * 0.037).sin() * 0.8;
+            let prepared = prepared_engine.process_sample_prepared(
+                [input, -input],
+                settings,
+            );
+            let compatibility = compatibility_engine.process_sample(
+                input,
+                -input,
+                drop_time,
+                12.0,
+                0.05,
+                2.0,
+                stereo_div,
+                true,
+                threshold,
+                true,
+            );
+            assert_eq!(prepared, compatibility);
+            assert_eq!(prepared_engine.speed_left(), compatibility_engine.speed_left());
+            assert_eq!(prepared_engine.speed_right(), compatibility_engine.speed_right());
+            assert_eq!(prepared_engine.brake_progress(), compatibility_engine.brake_progress());
+            assert_eq!(prepared_engine.is_returning(), compatibility_engine.is_returning());
+        }
+    }
+}
+
+#[test]
+fn prepared_processing_matches_legacy_golden_mid_return_and_power_off() {
+    // Golden landmarks captured by running this same input sequence through
+    // the pre-optimization engine at commit 3009591.
+    let mut engine = TapeStopEngine::new();
+    engine.set_sample_rate(1000.0);
+    let settings_a = engine
+        .prepare_block(0.2, 30.0, -18.0)
+        .with_processing_settings(40.0, 0.08, 1.7, false, true);
+    for i in 0..128 {
+        let x = (i as f32 * 0.11).sin() * 0.4;
+        engine.process_sample_prepared([x, -x], settings_a);
+    }
+
+    engine.note_on(60, 1.0);
+    let mut output = (0.0, 0.0);
+    for i in 0..80 {
+        let x = (i as f32 * 0.17).sin() * 0.7;
+        output = engine.process_sample_prepared([x, -x], settings_a);
+    }
+    assert!((output.0 - 0.5270776).abs() < 1e-6);
+    assert!((output.1 + 0.5292928).abs() < 1e-6);
+    assert!((engine.brake_progress() - 0.019521978).abs() < 1e-7);
+    assert!((engine.brake_progress_l() - 0.026412088).abs() < 1e-7);
+    assert!((engine.brake_progress_r() - 0.019521978).abs() < 1e-7);
+
+    engine.note_off(60);
+    for i in 0..5 {
+        let x = (i as f32 * 0.17).sin() * 0.7;
+        output = engine.process_sample_prepared([x, -x], settings_a);
+    }
+    assert!((output.0 - 0.43330872).abs() < 1e-6);
+    assert!((output.1 + 0.4363323).abs() < 1e-6);
+    assert!((engine.latched_xfade_ms() - 39.009823).abs() < 1e-5);
+
+    let settings_b = engine
+        .prepare_block(0.05, -60.0, -6.0)
+        .with_processing_settings(400.0, 1.0, 4.0, false, true);
+    for i in 0..16 {
+        let x = (i as f32 * 0.13).cos() * 0.6;
+        output = engine.process_sample_prepared([x, -x], settings_b);
+    }
+    assert!((output.0 + 0.21652651).abs() < 1e-6);
+    assert!((output.1 - 0.21900803).abs() < 1e-6);
+    assert!(engine.is_returning());
+    assert!((engine.latched_xfade_ms() - 39.009823).abs() < 1e-5);
+
+    let frozen_progress = (
+        engine.brake_progress(),
+        engine.brake_progress_l(),
+        engine.brake_progress_r(),
+    );
+    let powered_off = engine
+        .prepare_block(20.0, 80.0, -3.0)
+        .with_processing_settings(5.0, 0.01, 0.5, true, false);
+    assert_eq!(
+        engine.process_sample_prepared([0.2, -0.3], powered_off),
+        (0.2, -0.3)
+    );
+    assert_eq!(
+        frozen_progress,
+        (
+            engine.brake_progress(),
+            engine.brake_progress_l(),
+            engine.brake_progress_r(),
+        )
+    );
+    assert!(engine.is_returning());
+    assert_eq!(engine.speed_left(), 1.0);
+    assert_eq!(engine.speed_right(), 1.0);
+}
+
+#[test]
 fn test_s_curve_deceleration_matches_ui() {
     use tape_stop::dsp::s_curve;
 
@@ -223,6 +346,70 @@ fn test_clear_held_notes_releases_brake() {
     engine.clear_held_notes();
     assert!(!engine.is_braking());
     assert!(engine.is_returning());
+}
+
+#[test]
+#[ignore = "manual release timing benchmark; run with --release --ignored --nocapture"]
+fn tape_stop_prepared_release_benchmark() {
+    use std::hint::black_box;
+    use std::time::Instant;
+
+    const SAMPLES: usize = 1_000_000;
+    let mut prepared_engine = TapeStopEngine::new();
+    let mut compatibility_engine = TapeStopEngine::new();
+    prepared_engine.set_sample_rate(48_000.0);
+    compatibility_engine.set_sample_rate(48_000.0);
+    prepared_engine.note_on(60, 1.0);
+    compatibility_engine.note_on(60, 1.0);
+
+    let settings = prepared_engine
+        .prepare_block(10.0, 25.0, -18.0)
+        .with_processing_settings(12.0, 0.05, 2.0, false, true);
+    for _ in 0..4_096 {
+        let prepared = prepared_engine.process_sample_prepared([0.31, -0.27], settings);
+        let compatibility = compatibility_engine.process_sample(
+            0.31, -0.27, 10.0, 12.0, 0.05, 2.0, 25.0, false, -18.0, true,
+        );
+        assert_eq!(prepared, compatibility);
+    }
+
+    let mut prepared_checksum = [0.0_f64; 2];
+    let prepared_start = Instant::now();
+    for _ in 0..SAMPLES {
+        let input = black_box([0.31, -0.27]);
+        let output = prepared_engine.process_sample_prepared(input, black_box(settings));
+        prepared_checksum[0] += black_box(output.0) as f64;
+        prepared_checksum[1] += black_box(output.1) as f64;
+    }
+    let prepared_elapsed = prepared_start.elapsed();
+
+    let mut compatibility_checksum = [0.0_f64; 2];
+    let compatibility_start = Instant::now();
+    for _ in 0..SAMPLES {
+        let input = black_box([0.31, -0.27]);
+        let output = compatibility_engine.process_sample(
+            input[0],
+            input[1],
+            black_box(10.0),
+            black_box(12.0),
+            black_box(0.05),
+            black_box(2.0),
+            black_box(25.0),
+            black_box(false),
+            black_box(-18.0),
+            black_box(true),
+        );
+        compatibility_checksum[0] += black_box(output.0) as f64;
+        compatibility_checksum[1] += black_box(output.1) as f64;
+    }
+    let compatibility_elapsed = compatibility_start.elapsed();
+
+    assert_eq!(prepared_checksum, compatibility_checksum);
+    assert_eq!(prepared_engine.speed_left(), compatibility_engine.speed_left());
+    assert_eq!(prepared_engine.speed_right(), compatibility_engine.speed_right());
+    println!(
+        "Tape Stop samples={SAMPLES}: prepared={prepared_elapsed:?}, compatibility={compatibility_elapsed:?}"
+    );
 }
 
 fn tone(i: usize) -> f32 {

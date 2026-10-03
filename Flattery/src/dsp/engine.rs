@@ -8,7 +8,7 @@ use crate::{
         telemetry::Shared,
         tilt::{apply_tilt_compensation, calculate_tilt_multiplier_scaled},
     },
-    strength::{fill_bin_radii, fill_bin_weights, StrengthNode},
+    strength::PreparedStrengthCurve,
 };
 use pleasant_dsp::{
     spectrum::{peak_hold, spectrum_fall_db},
@@ -66,8 +66,13 @@ pub struct Engine {
     cut_weights: Vec<f64>,
     boost_radii: Vec<usize>,
     cut_radii: Vec<usize>,
-    boost_nodes: Arc<[StrengthNode]>,
-    cut_nodes: Arc<[StrengthNode]>,
+    boost_nodes: Arc<PreparedStrengthCurve>,
+    cut_nodes: Arc<PreparedStrengthCurve>,
+    curve_grid: Option<(usize, u64)>,
+    curve_default_radius: Option<usize>,
+    display_enabled: bool,
+    display_fresh_samples_remaining: usize,
+    spectrum_reset_pending: bool,
     last_output_gain_db: f64,
     output_gain_linear: f64,
     mid_side: bool,
@@ -88,8 +93,8 @@ impl Engine {
             .filter(|size| *size != fft_size)
             .map(FftAnalyzer::new)
             .collect();
-        let boost_nodes = shared.node_snapshot(true).unwrap_or_else(|| Arc::from([]));
-        let cut_nodes = shared.node_snapshot(false).unwrap_or_else(|| Arc::from([]));
+        let boost_nodes = shared.node_snapshot(true).unwrap_or_default();
+        let cut_nodes = shared.node_snapshot(false).unwrap_or_default();
 
         Self {
             shared,
@@ -117,6 +122,11 @@ impl Engine {
             cut_radii: vec![1; MAX_FFT_SIZE / 2],
             boost_nodes,
             cut_nodes,
+            curve_grid: None,
+            curve_default_radius: None,
+            display_enabled: true,
+            display_fresh_samples_remaining: 0,
+            spectrum_reset_pending: true,
             last_output_gain_db: 0.0,
             output_gain_linear: 1.0,
             mid_side: false,
@@ -133,6 +143,8 @@ impl Engine {
         self.filter_bank.reset();
         self.filter_bank_r.reset();
         self.hop_counter = 0;
+        self.spectrum_reset_pending = true;
+        self.display_fresh_samples_remaining = self.fft_size;
         if let Ok(mut lock) = self.shared.spectrum_mags_db.try_write() {
             lock.fill(-120.0);
         }
@@ -140,6 +152,56 @@ impl Engine {
 
     pub fn latency(&self) -> u32 {
         self.analysis_delay as u32
+    }
+
+    /// Called once per host block; spectral processing continues with the editor closed.
+    pub fn set_display_enabled(&mut self, enabled: bool) {
+        if enabled && !self.display_enabled {
+            self.spectrum_reset_pending = true;
+            self.display_fresh_samples_remaining = self.fft_size;
+            if let Ok(mut spectrum) = self.shared.spectrum_mags_db.try_write() {
+                spectrum.fill(-120.0);
+                self.spectrum_reset_pending = false;
+            }
+        }
+        self.display_enabled = enabled;
+    }
+
+    fn update_strength_curves(&mut self, default_radius: usize) {
+        let boost_changed = self
+            .shared
+            .refresh_node_snapshot(true, &mut self.boost_nodes);
+        let cut_changed = self
+            .shared
+            .refresh_node_snapshot(false, &mut self.cut_nodes);
+        let grid = (self.fft_size, self.sample_rate.to_bits());
+        let grid_changed = self.curve_grid != Some(grid);
+        let radius_changed = self.curve_default_radius != Some(default_radius);
+        let half = self.fft_size / 2;
+        let bin_hz = self.sample_rate / self.fft_size as f64;
+        for (curve, changed, weights, radii) in [
+            (
+                &self.boost_nodes,
+                boost_changed,
+                &mut self.boost_weights,
+                &mut self.boost_radii,
+            ),
+            (
+                &self.cut_nodes,
+                cut_changed,
+                &mut self.cut_weights,
+                &mut self.cut_radii,
+            ),
+        ] {
+            if changed || grid_changed {
+                curve.fill_bin_weights(half, bin_hz, weights);
+            }
+            if changed || grid_changed || radius_changed {
+                curve.fill_bin_radii(half, bin_hz, default_radius, radii);
+            }
+        }
+        self.curve_grid = Some(grid);
+        self.curve_default_radius = Some(default_radius);
     }
 
     pub fn set_fft_size(&mut self, new_size: usize) {
@@ -156,6 +218,8 @@ impl Engine {
         std::mem::swap(&mut self.analyzer, &mut self.prepared_analyzers[index]);
         self.analyzer.reset();
         self.fft_size = new_size;
+        self.spectrum_reset_pending = true;
+        self.display_fresh_samples_remaining = new_size;
         self.hop_size = new_size / 2;
         self.analysis_delay = self.hop_size;
         self.hop_counter = 0;
@@ -167,6 +231,10 @@ impl Engine {
     }
 
     pub fn set_sample_rate(&mut self, srate: f64) {
+        if self.sample_rate != srate {
+            self.spectrum_reset_pending = true;
+            self.display_fresh_samples_remaining = self.fft_size;
+        }
         self.sample_rate = srate;
         self.filter_bank.init_frequencies(self.fft_size, srate);
         self.filter_bank_r.init_frequencies(self.fft_size, srate);
@@ -201,6 +269,10 @@ impl Engine {
         // Push to analysis rings
         self.ring_l.push(in_l);
         self.ring_r.push(in_r);
+        if self.display_enabled {
+            self.display_fresh_samples_remaining =
+                self.display_fresh_samples_remaining.saturating_sub(1);
+        }
 
         // Delayed dry audio aligned to analysis window
         let delayed_l = self.delay_l.write_and_read(in_l, self.analysis_delay);
@@ -242,40 +314,7 @@ impl Engine {
             let att_ms = settings.attack_ms;
             let rel_ms = settings.release_ms;
 
-            self.shared
-                .refresh_node_snapshot(true, &mut self.boost_nodes);
-            self.shared
-                .refresh_node_snapshot(false, &mut self.cut_nodes);
-            fill_bin_weights(
-                &self.boost_nodes,
-                half,
-                bin_hz,
-                10.0,
-                22050.0,
-                &mut self.boost_weights,
-            );
-            fill_bin_weights(
-                &self.cut_nodes,
-                half,
-                bin_hz,
-                10.0,
-                22050.0,
-                &mut self.cut_weights,
-            );
-            fill_bin_radii(
-                &self.boost_nodes,
-                half,
-                bin_hz,
-                default_radius,
-                &mut self.boost_radii,
-            );
-            fill_bin_radii(
-                &self.cut_nodes,
-                half,
-                bin_hz,
-                default_radius,
-                &mut self.cut_radii,
-            );
+            self.update_strength_curves(default_radius);
 
             self.leveler.process(
                 &self.analyzer.mag_l,
@@ -353,29 +392,37 @@ impl Engine {
                 high_cut_hz,
             );
 
-            // Update UI telemetry lock-free. Peak-hold matches Damian Channel Strip.
-            if let Ok(mut lock) = self.shared.spectrum_mags_db.try_write() {
-                if lock.len() != half {
+            // Only display publication is optional: the FFT above drives the audio.
+            if self.display_enabled {
+                if let Ok(mut lock) = self.shared.spectrum_mags_db.try_write() {
+                    if self.spectrum_reset_pending {
+                        lock.fill(-120.0);
+                        self.spectrum_reset_pending = false;
+                    }
+                    if self.display_fresh_samples_remaining == 0 {
+                        if lock.len() != half {
+                            lock.clear();
+                            lock.resize(half, -120.0);
+                        }
+                        let fall = spectrum_fall_db(self.hop_size as f32);
+                        for k in 0..half {
+                            let avg = 0.5 * (self.analyzer.mag_l[k] + self.analyzer.mag_r[k]);
+                            let db = linear_to_db(avg) as f32;
+                            lock[k] = peak_hold(lock[k], db, fall);
+                        }
+                    }
+                }
+                if let Ok(mut lock) = self.shared.filter_display.try_write() {
                     lock.clear();
-                    lock.resize(half, -120.0);
-                }
-                let fall = spectrum_fall_db(self.hop_size as f32);
-                for k in 0..half {
-                    let avg = 0.5 * (self.analyzer.mag_l[k] + self.analyzer.mag_r[k]);
-                    let db = linear_to_db(avg) as f32;
-                    lock[k] = peak_hold(lock[k], db, fall);
-                }
-            }
-            if let Ok(mut lock) = self.shared.filter_display.try_write() {
-                lock.clear();
-                for (l, r) in self
-                    .filter_bank
-                    .filters
-                    .iter()
-                    .zip(&self.filter_bank_r.filters)
-                {
-                    let db = 0.5 * (linear_to_db(l.gain_linear) + linear_to_db(r.gain_linear));
-                    lock.push((l.center_hz as f32, db as f32));
+                    for (l, r) in self
+                        .filter_bank
+                        .filters
+                        .iter()
+                        .zip(&self.filter_bank_r.filters)
+                    {
+                        let db = 0.5 * (linear_to_db(l.gain_linear) + linear_to_db(r.gain_linear));
+                        lock.push((l.center_hz as f32, db as f32));
+                    }
                 }
             }
         }
@@ -404,5 +451,66 @@ impl Engine {
             wet_l * self.output_gain_linear,
             wet_r * self.output_gain_linear,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::strength::{radius_at, weight_at, StrengthNode};
+
+    fn assert_cached_curves(engine: &Engine, default_radius: usize) {
+        let bin_hz = engine.sample_rate / engine.fft_size as f64;
+        for (curve, weights, radii) in [
+            (
+                &engine.boost_nodes,
+                &engine.boost_weights,
+                &engine.boost_radii,
+            ),
+            (&engine.cut_nodes, &engine.cut_weights, &engine.cut_radii),
+        ] {
+            for k in 0..engine.fft_size / 2 {
+                let freq = (k as f64 + 0.5) * bin_hz;
+                assert_eq!(weights[k], weight_at(curve.nodes(), freq, 10.0, 22050.0));
+                assert_eq!(
+                    radii[k],
+                    (radius_at(curve.nodes(), freq, default_radius).round() as usize).clamp(1, 12)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cached_curves_follow_nodes_fft_sample_rate_and_default_radius() {
+        let shared = Arc::new(Shared::new());
+        let mut engine = Engine::new(Arc::clone(&shared), 44100.0);
+        engine.update_strength_curves(3);
+        assert_cached_curves(&engine, 3);
+        let mut high = StrengthNode::new(1, 6000.0, 2.0);
+        high.radius = 11;
+        let mut low = StrengthNode::new(2, 500.0, 0.5);
+        low.radius = 2;
+        shared.publish_nodes(true, Arc::from([high.clone(), low.clone()]));
+        for fft_size in FFT_SIZES {
+            engine.set_fft_size(fft_size);
+            for sample_rate in [44100.0, 96000.0] {
+                engine.set_sample_rate(sample_rate);
+                for default_radius in [1, 7, 12] {
+                    engine.update_strength_curves(default_radius);
+                    assert_cached_curves(&engine, default_radius);
+                    engine.update_strength_curves(default_radius);
+                    assert_cached_curves(&engine, default_radius);
+                }
+            }
+        }
+        low.weight = 0.0;
+        low.radius = 9;
+        shared.publish_nodes(true, Arc::from([high, low]));
+        shared.publish_nodes(false, Arc::from([StrengthNode::new(3, 1200.0, 3.0)]));
+        engine.update_strength_curves(4);
+        assert_cached_curves(&engine, 4);
+        shared.publish_nodes(true, Arc::from([]));
+        engine.update_strength_curves(4);
+        assert_cached_curves(&engine, 4);
     }
 }

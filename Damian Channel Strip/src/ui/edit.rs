@@ -314,46 +314,7 @@ impl StripView {
             }
             return;
         }
-        let edit = self.edit.as_mut().unwrap();
-        let command = cx.modifiers().command();
-        match code {
-            Code::KeyA if command => {
-                edit.anchor = 0;
-                edit.cursor = edit.text.len();
-            }
-            Code::KeyC | Code::KeyX if command => {
-                let _ = cx.set_clipboard(edit.text[edit.selection()].to_string());
-                if code == Code::KeyX {
-                    edit.insert("");
-                }
-            }
-            Code::KeyV if command => {
-                if let Ok(text) = cx.get_clipboard() {
-                    edit.insert(&text);
-                }
-            }
-            Code::Backspace => edit.erase(true),
-            Code::Delete => edit.erase(false),
-            Code::ArrowLeft | Code::ArrowRight | Code::Home | Code::End => {
-                let selecting = cx.modifiers().shift();
-                edit.cursor = match code {
-                    Code::Home => 0,
-                    Code::End => edit.text.len(),
-                    Code::ArrowLeft if !selecting && edit.cursor != edit.anchor => {
-                        edit.selection().start
-                    }
-                    Code::ArrowRight if !selecting && edit.cursor != edit.anchor => {
-                        edit.selection().end
-                    }
-                    Code::ArrowLeft => edit.cursor.saturating_sub(1),
-                    _ => (edit.cursor + 1).min(edit.text.len()),
-                };
-                if !selecting {
-                    edit.anchor = edit.cursor;
-                }
-            }
-            _ => {}
-        }
+        self.edit.as_mut().unwrap().handle_key(cx, code);
     }
 
     pub(super) fn global_controls(&self) -> &'static [usize] {

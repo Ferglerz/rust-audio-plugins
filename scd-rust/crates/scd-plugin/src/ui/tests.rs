@@ -1,5 +1,166 @@
 use super::*;
 
+mod modal_input {
+    use super::*;
+    use nih_plug_vizia::vizia::backend::BackendContext;
+    use std::rc::Rc;
+
+    fn editor(modal: usize) -> (Context, Entity, Rc<Cell<usize>>) {
+        let mut cx = Context::default();
+        let writes = Rc::new(Cell::new(0));
+        let observed = writes.clone();
+        cx.add_global_listener(move |_, event| {
+            event.map(|event: &RawParamEvent, _| {
+                if matches!(event, RawParamEvent::SetParameterNormalized(..)) {
+                    observed.set(observed.get() + 1);
+                }
+            });
+        });
+        let target = ScdEditorView::new(&mut cx, Arc::new(ScdParams::default()))
+            .modify(|view| match modal {
+                0 => view.sub_kick_open = true,
+                1 => view.vel_map_open = Some(KitPieceId::Tom1),
+                _ => view.add_preset_open = true,
+            })
+            .entity();
+        EventContext::new_with_current(&mut cx, target)
+            .set_bounds(BoundingBox::from_min_max(0.0, 0.0, WINDOW_W, WINDOW_H));
+        (cx, target, writes)
+    }
+
+    fn send(cx: &mut Context, target: Entity, x: f32, y: f32, event: WindowEvent) {
+        let mut backend = BackendContext::new_with_event_manager(cx);
+        backend.send_event(Event::new(WindowEvent::MouseMove(x, y)).origin(Entity::root()));
+        backend.process_events();
+        // Deliver to the view after updating the real cursor state, without
+        // synthesizing a double-click when the test sends adjacent clicks.
+        backend.send_event(Event::new(event).origin(target).direct(target));
+        backend.process_events();
+    }
+
+    #[test]
+    fn modal_clicks_do_not_reach_background_controls() {
+        let (sx, sy, sw, sh) = ScdEditorView::sof_rect(0);
+        let lock = ScdEditorView::lock_rect();
+        for modal in 0..3 {
+            for (x, y) in [
+                (sx + sw * 0.5, sy + sh * 0.5),
+                (lock.0 + lock.2 * 0.5, lock.1 + lock.3 * 0.5),
+                (PRESET_X + 10.0, PRESET_Y + 10.0),
+                (SAMPLES_X + 10.0, SAMPLES_Y + 10.0),
+                (CC_INVERT.0 + 10.0, CC_INVERT.1 + 10.0),
+                (CC_SELECT.0 + 10.0, CC_SELECT.1 + 10.0),
+                (SUB_KICK.0 + 10.0, SUB_KICK.1 + 10.0),
+            ] {
+                let (mut cx, target, writes) = editor(modal);
+                send(
+                    &mut cx,
+                    target,
+                    x,
+                    y,
+                    WindowEvent::MouseDown(MouseButton::Left),
+                );
+                send(
+                    &mut cx,
+                    target,
+                    x,
+                    y,
+                    WindowEvent::MouseUp(MouseButton::Left),
+                );
+                let event_cx = EventContext::new_with_current(&mut cx, target);
+                let view = event_cx.get_view::<ScdEditorView>().unwrap();
+                assert_eq!(writes.get(), 0, "modal {modal}, click at ({x}, {y})");
+                assert!(
+                    view.active_sof.is_none(),
+                    "background mic selection changed"
+                );
+                assert!(!view.preset_open && !view.samples_open && !view.cc_menu_open);
+                assert!(!view.sub_kick_open, "background Sub Kick button activated");
+            }
+        }
+    }
+
+    #[test]
+    fn modal_blocks_cc_scroll_and_background_hover() {
+        for modal in 0..3 {
+            let (mut cx, target, writes) = editor(modal);
+            send(
+                &mut cx,
+                target,
+                CC_SELECT.0 + 10.0,
+                CC_SELECT.1 + 10.0,
+                WindowEvent::MouseScroll(0.0, 1.0),
+            );
+            assert_eq!(
+                writes.get(),
+                0,
+                "modal {modal} allowed a background CC change"
+            );
+            let lock = ScdEditorView::lock_rect();
+            send(
+                &mut cx,
+                target,
+                lock.0 + lock.2 * 0.5,
+                lock.1 + lock.3 * 0.5,
+                WindowEvent::MouseMove(lock.0, lock.1),
+            );
+            let event_cx = EventContext::new_with_current(&mut cx, target);
+            assert!(!event_cx.get_view::<ScdEditorView>().unwrap().hover_lock);
+        }
+    }
+
+    #[test]
+    fn sub_kick_blank_space_does_not_start_background_fader_drag() {
+        let (mut cx, target, writes) = editor(0);
+        let (mx, my, _, _) = ScdEditorView::sub_kick_modal();
+        send(
+            &mut cx,
+            target,
+            mx + 10.0,
+            my + 110.0,
+            WindowEvent::MouseDown(MouseButton::Left),
+        );
+        let event_cx = EventContext::new_with_current(&mut cx, target);
+        assert!(event_cx.get_view::<ScdEditorView>().unwrap().drag.is_none());
+        assert_eq!(writes.get(), 0);
+    }
+
+    #[test]
+    fn modal_controls_still_receive_clicks() {
+        let (mut cx, target, _) = editor(0);
+        let (mx, my, _, _) = ScdEditorView::sub_kick_modal();
+        send(
+            &mut cx,
+            target,
+            ScdEditorView::sub_kick_knob_x(mx, 0),
+            my + 55.0,
+            WindowEvent::MouseDown(MouseButton::Left),
+        );
+        let event_cx = EventContext::new_with_current(&mut cx, target);
+        assert_eq!(
+            event_cx.get_view::<ScdEditorView>().unwrap().drag,
+            Some(DragTarget::SubKickVol)
+        );
+
+        let (mut cx, target, _) = editor(1);
+        let (x, y, _, _) = ScdEditorView::vel_art_dropdown_rect();
+        send(
+            &mut cx,
+            target,
+            x + 10.0,
+            y + 10.0,
+            WindowEvent::MouseDown(MouseButton::Left),
+        );
+        let event_cx = EventContext::new_with_current(&mut cx, target);
+        assert!(
+            event_cx
+                .get_view::<ScdEditorView>()
+                .unwrap()
+                .vel_art_menu_open
+        );
+    }
+}
+
 #[test]
 fn mapping_dropdown_keeps_all_articulation_names() {
     for piece in KitPieceId::ALL {

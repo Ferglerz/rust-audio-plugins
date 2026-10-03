@@ -47,6 +47,28 @@ pub(in crate::ui) fn eq_curve_xs(
     xs
 }
 
+/// Preserve the exact graph grid and host Nyquist clamp while evaluating at
+/// the processing rate. Each EQ page owns its independent cache.
+pub(in crate::ui) fn update_eq_response_cache(
+    cache: &mut pleasant_eq::ResponseCache,
+    bands: &[Band],
+    meters: &[(u64, f32)],
+    xs: &[f32],
+    (gx, gw): (f32, f32),
+    (sr, eq_sr): (f64, f64),
+) {
+    let coefficients: Vec<_> = bands
+        .iter()
+        .filter(|b| b.enabled)
+        .map(|b| BandCoeffs::make(&plot_band(b, meters), eq_sr).coefficients())
+        .collect();
+    let frequencies: Vec<_> = xs
+        .iter()
+        .map(|&x| x_freq_at(x, gx, gw).min(sr * 0.49))
+        .collect();
+    cache.update(&coefficients, &frequencies, eq_sr);
+}
+
 pub(in crate::ui) fn eq_db_on_xs(
     coeff: &BandCoeffs,
     xs: &[f32],

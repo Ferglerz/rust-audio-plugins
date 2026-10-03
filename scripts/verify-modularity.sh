@@ -13,6 +13,8 @@ cargo check -p damian-channel-strip
 cargo check -p flattery
 cargo check -p tape_stop
 cargo check -p composure
+cargo check -p chordboard
+cargo check -p openwurli-ui
 
 cargo test -p pleasant-dsp --quiet
 cargo test -p pleasant-curves --quiet
@@ -22,6 +24,8 @@ cargo test -p damian-channel-strip --quiet
 cargo test -p flattery --quiet
 cargo test -p tape_stop --quiet
 cargo test -p composure --quiet
+cargo test -p chordboard --quiet
+cargo test -p openwurli-ui --quiet
 
 cargo check -p pleasant-dsp-headless
 cargo check -p pleasant-curves-headless

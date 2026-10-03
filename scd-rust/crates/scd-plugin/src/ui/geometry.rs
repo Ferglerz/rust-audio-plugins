@@ -1,23 +1,33 @@
 //! Artwork-space layout and coordinate transforms shared by drawing and input.
 use super::*;
 
-// Original HISE layout (UI_MakeInterface.js at 85% zoom of 1390×719).
+// Enlarge the mixer within the existing window and use the former icon row
+// above the controls to make room for the icons below Punch.
+pub(super) const MIXER_SCALE: f32 = 1.1;
 pub(super) const HEADER_H: f32 = 30.0;
-pub(super) const STRIP_W: f32 = 72.0;
-pub(super) const MIXER_Y: f32 = 120.0;
-pub(super) const FADER_Y: f32 = MIXER_Y + 55.0;
-pub(super) const FADER_H: f32 = 250.0;
+pub(super) const STRIP_W: f32 = 72.0 * MIXER_SCALE;
+pub(super) const MIXER_Y: f32 = 86.0;
+pub(super) const FADER_Y: f32 = MIXER_Y + 55.0 * MIXER_SCALE;
+pub(super) const FADER_H: f32 = 250.0 * MIXER_SCALE;
 pub(super) const PITCH_Y: f32 = MIXER_Y;
-pub(super) const PAN_Y: f32 = MIXER_Y + 22.0;
-pub(super) const PUNCH_Y: f32 = MIXER_Y + 322.0;
-pub(super) const SLIDER_H: f32 = 14.0;
-pub(super) const PUNCH_SIZE: f32 = 50.0;
-pub(super) const SOF_Y: f32 = MIXER_Y + 55.0 + FADER_H + 98.0;
-pub(super) const SOF_W: f32 = 65.0;
-pub(super) const SOF_H: f32 = 30.0;
-pub(super) const SOF_PAD: f32 = 14.0;
-pub(super) const LOCK_SIZE: f32 = 26.0;
-pub(super) const SUB_KICK: (f32, f32, f32, f32) = (40.0, 400.0, 70.0, 20.0);
+pub(super) const PAN_Y: f32 = MIXER_Y + 22.0 * MIXER_SCALE;
+pub(super) const PUNCH_Y: f32 = FADER_Y + FADER_H + 12.0 * MIXER_SCALE;
+pub(super) const SLIDER_H: f32 = 14.0 * MIXER_SCALE;
+pub(super) const SLIDER_INSET: f32 = 5.0 * MIXER_SCALE;
+pub(super) const PUNCH_SIZE: f32 = 50.0 * MIXER_SCALE;
+pub(super) const ICON_Y: f32 = PUNCH_Y + PUNCH_SIZE + 8.0 * MIXER_SCALE;
+pub(super) const ICON_H: f32 = 40.0 * MIXER_SCALE;
+pub(super) const SOF_Y: f32 = ICON_Y + ICON_H + 18.0 * MIXER_SCALE;
+pub(super) const SOF_W: f32 = 65.0 * MIXER_SCALE;
+pub(super) const SOF_H: f32 = 30.0 * MIXER_SCALE;
+pub(super) const SOF_PAD: f32 = 14.0 * MIXER_SCALE;
+pub(super) const LOCK_SIZE: f32 = 26.0 * MIXER_SCALE;
+pub(super) const SUB_KICK: (f32, f32, f32, f32) = (
+    24.0,
+    FADER_Y + FADER_H - 22.0 * MIXER_SCALE,
+    70.0 * MIXER_SCALE,
+    20.0 * MIXER_SCALE,
+);
 pub(super) const PRESET_X: f32 = 8.0;
 pub(super) const PRESET_Y: f32 = 0.0;
 pub(super) const PRESET_W: f32 = 82.0;
@@ -41,24 +51,23 @@ pub(super) const CC_CELL_W: f32 = 28.0;
 pub(super) const CC_CELL_H: f32 = 18.0;
 pub(super) const CC_COLS: usize = 8;
 pub(super) const CC_ROWS: usize = 16;
-pub(super) const LOGO_SC: (f32, f32, f32, f32) =
-    (0.0, MIXER_Y + 55.0 + FADER_H + 75.0, 150.0, 60.0);
+pub(super) const LOGO_SC: (f32, f32, f32, f32) = (0.0, ICON_Y + ICON_H + 8.0, 150.0, 60.0);
 pub(super) const LOGO_SH: (f32, f32, f32, f32) = (
     0.0,
-    MIXER_Y + 55.0 + FADER_H + 100.0,
+    SOF_Y + (SOF_H - 175.0 / 7.0) * 0.5,
     1074.0 / 7.0,
     175.0 / 7.0,
 );
-pub(super) const LABEL_X: f32 = 68.0;
-pub(super) const FADER_HANDLE_H: f32 = 26.0;
-pub(super) const FADER_HANDLE_INSET: f32 = 10.0;
+pub(super) const LABEL_X: f32 = 20.0;
+pub(super) const FADER_HANDLE_H: f32 = 26.0 * MIXER_SCALE;
+pub(super) const FADER_HANDLE_INSET: f32 = 10.0 * MIXER_SCALE;
 
 const SUB_MODAL_W: f32 = 420.0;
 const SUB_MODAL_H: f32 = 160.0;
 const ADD_MODAL_W: f32 = 360.0;
 const ADD_MODAL_H: f32 = 248.0;
-const VEL_MODAL_W: f32 = 1040.0;
-const VEL_MODAL_H: f32 = 448.0;
+const VEL_MODAL_W: f32 = 760.0;
+const VEL_MODAL_H: f32 = 352.0;
 
 pub(super) fn artwork_scale(width: f32) -> f32 {
     width / WINDOW_W
@@ -81,10 +90,10 @@ impl ScdEditorView {
 
     pub(super) fn snare_toggle_rect(mixed: bool) -> (f32, f32, f32, f32) {
         (
-            Self::strip_x(KitPieceId::Snare) + 2.0,
-            if mixed { 96.0 } else { 76.0 },
-            STRIP_W - 4.0,
-            18.0,
+            Self::strip_x(KitPieceId::Snare) + 2.0 * MIXER_SCALE,
+            MIXER_Y - if mixed { 24.0 } else { 44.0 } * MIXER_SCALE,
+            STRIP_W - 4.0 * MIXER_SCALE,
+            18.0 * MIXER_SCALE,
         )
     }
 
@@ -94,8 +103,8 @@ impl ScdEditorView {
 
     pub(super) fn lock_rect() -> (f32, f32, f32, f32) {
         (
-            Self::mixer_x() - 35.0,
-            MIXER_Y + 120.0,
+            Self::mixer_x() - 35.0 * MIXER_SCALE,
+            FADER_Y + 65.0 * MIXER_SCALE,
             LOCK_SIZE,
             LOCK_SIZE,
         )
@@ -263,12 +272,12 @@ impl ScdEditorView {
 
     pub(super) fn vel_map_graph() -> (f32, f32, f32, f32) {
         let (x, y, w, h) = Self::vel_map_modal();
-        (x + 24.0, y + 186.0, w - 48.0, h - 210.0)
+        (x + 24.0, y + 94.0, w - 48.0, h - 118.0)
     }
 
     pub(super) fn vel_art_dropdown_rect() -> (f32, f32, f32, f32) {
         let (x, y, w, _) = Self::vel_map_modal();
-        (x + 24.0, y + 126.0, w - 48.0, 32.0)
+        (x + w - 244.0, y + 12.0, 220.0, 28.0)
     }
 
     pub(super) fn vel_art_item_rect(i: usize) -> (f32, f32, f32, f32) {
@@ -320,8 +329,8 @@ impl ScdEditorView {
     }
 
     pub(super) fn slider_norm_at(x: f32, strip_x: f32) -> f32 {
-        let sx = strip_x + 5.0;
-        let sw = STRIP_W - 10.0;
+        let sx = strip_x + SLIDER_INSET;
+        let sw = STRIP_W - SLIDER_INSET * 2.0;
         ((x - sx) / sw).clamp(0.0, 1.0)
     }
 

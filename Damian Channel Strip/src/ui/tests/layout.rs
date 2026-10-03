@@ -305,6 +305,7 @@ fn test_view() -> StripView {
         params.lift_bands.clone(),
     );
     StripView {
+        eq_response_caches: std::array::from_fn(|_| RefCell::default()),
         params: params.clone(),
         shared,
         selected: None,

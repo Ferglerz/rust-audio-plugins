@@ -1,5 +1,6 @@
 use pleasant_dsp::axis::bell_influence;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 pub const STRENGTH_REST_PX: f32 = 10.0;
 pub const NODE_HIT_R: f32 = 16.0;
@@ -117,8 +118,77 @@ pub fn fill_bin_weights(
     }
 }
 
+/// A published curve keeps weight summation in persisted order and prepares a
+/// separate, stable frequency order for radius interpolation off the audio thread.
+#[derive(Debug, Default)]
+pub struct PreparedStrengthCurve {
+    nodes: Arc<[StrengthNode]>,
+    radius_order: Box<[usize]>,
+}
+
+impl PreparedStrengthCurve {
+    pub fn new(nodes: Arc<[StrengthNode]>) -> Self {
+        let radius_order = sorted_radius_indices(&nodes);
+        Self {
+            nodes,
+            radius_order,
+        }
+    }
+
+    pub fn nodes(&self) -> &[StrengthNode] {
+        &self.nodes
+    }
+
+    pub fn fill_bin_weights(&self, bin_count: usize, bin_hz: f64, out: &mut [f64]) {
+        fill_bin_weights(&self.nodes, bin_count, bin_hz, 10.0, 22050.0, out);
+    }
+
+    pub fn radius_at(&self, freq: f64, default_radius: usize) -> f64 {
+        radius_at_ordered(&self.nodes, &self.radius_order, freq, default_radius)
+    }
+
+    pub fn fill_bin_radii(
+        &self,
+        bin_count: usize,
+        bin_hz: f64,
+        default_radius: usize,
+        out: &mut [usize],
+    ) {
+        fill_ordered_bin_radii(
+            &self.nodes,
+            &self.radius_order,
+            bin_count,
+            bin_hz,
+            default_radius,
+            out,
+        );
+    }
+}
+
+fn sorted_radius_indices(nodes: &[StrengthNode]) -> Box<[usize]> {
+    let mut order: Vec<_> = (0..nodes.len()).collect();
+    // Stable sorting preserves the old interpolation behavior at duplicate frequencies.
+    order.sort_by(|&a, &b| {
+        nodes[a]
+            .freq
+            .partial_cmp(&nodes[b].freq)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    order.into_boxed_slice()
+}
+
 /// Interpolate radius between nodes in log-frequency space using smoothstep.
+/// For repeated evaluation, prepare a `PreparedStrengthCurve` off the audio thread.
 pub fn radius_at(nodes: &[StrengthNode], freq: f64, default_radius: usize) -> f64 {
+    radius_at_ordered(nodes, &sorted_radius_indices(nodes), freq, default_radius)
+}
+
+fn radius_at_ordered(
+    nodes: &[StrengthNode],
+    order: &[usize],
+    freq: f64,
+    default_radius: usize,
+) -> f64 {
     if nodes.is_empty() {
         return default_radius as f64;
     }
@@ -126,23 +196,18 @@ pub fn radius_at(nodes: &[StrengthNode], freq: f64, default_radius: usize) -> f6
         return nodes[0].radius as f64;
     }
 
-    let mut sorted: Vec<&StrengthNode> = nodes.iter().collect();
-    sorted.sort_by(|a, b| {
-        a.freq
-            .partial_cmp(&b.freq)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    if freq <= sorted[0].freq {
-        return sorted[0].radius as f64;
+    let first = &nodes[order[0]];
+    let last = &nodes[order[order.len() - 1]];
+    if freq <= first.freq {
+        return first.radius as f64;
     }
-    if freq >= sorted.last().unwrap().freq {
-        return sorted.last().unwrap().radius as f64;
+    if freq >= last.freq {
+        return last.radius as f64;
     }
 
-    for i in 0..sorted.len() - 1 {
-        let n0 = sorted[i];
-        let n1 = sorted[i + 1];
+    for pair in order.windows(2) {
+        let n0 = &nodes[pair[0]];
+        let n1 = &nodes[pair[1]];
         if freq >= n0.freq && freq <= n1.freq {
             let f0_ln = n0.freq.ln();
             let f1_ln = n1.freq.ln();
@@ -156,7 +221,7 @@ pub fn radius_at(nodes: &[StrengthNode], freq: f64, default_radius: usize) -> f6
         }
     }
 
-    sorted.last().unwrap().radius as f64
+    last.radius as f64
 }
 
 pub fn fill_bin_radii(
@@ -166,10 +231,28 @@ pub fn fill_bin_radii(
     default_radius: usize,
     out: &mut [usize],
 ) {
+    fill_ordered_bin_radii(
+        nodes,
+        &sorted_radius_indices(nodes),
+        bin_count,
+        bin_hz,
+        default_radius,
+        out,
+    );
+}
+
+fn fill_ordered_bin_radii(
+    nodes: &[StrengthNode],
+    order: &[usize],
+    bin_count: usize,
+    bin_hz: f64,
+    default_radius: usize,
+    out: &mut [usize],
+) {
     let n = bin_count.min(out.len());
     for (k, slot) in out.iter_mut().enumerate().take(n) {
         let freq = (k as f64 + 0.5) * bin_hz;
-        let r = radius_at(nodes, freq, default_radius).round();
+        let r = radius_at_ordered(nodes, order, freq, default_radius).round();
         *slot = (r as usize).clamp(1, 12);
     }
 }

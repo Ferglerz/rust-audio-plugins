@@ -91,6 +91,8 @@ impl Plugin for Damian {
             self.params.processing_config().encode(),
             std::sync::atomic::Ordering::Relaxed,
         );
+        self.engine
+            .set_display_enabled(self.params.editor_state.is_open());
         self.engine.sync();
         context.set_latency_samples(self.engine.latency());
         let speech_env = self.engine.speech_env() as f64;

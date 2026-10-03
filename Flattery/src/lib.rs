@@ -101,6 +101,8 @@ impl Plugin for Flattery {
     ) -> ProcessStatus {
         context.set_latency_samples(self.engine.latency());
 
+        self.engine
+            .set_display_enabled(self.params.editor_state.is_open());
         for mut frame in buffer.iter_samples() {
             let mut x = [0.0; 2];
             for (i, s) in frame.iter_mut().enumerate() {

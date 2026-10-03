@@ -11,14 +11,13 @@ use nih_plug_vizia::{
         prelude::*,
         vg::{Color, FontId},
     },
-    widgets::RawParamEvent,
     ViziaState, ViziaTheming,
 };
 use pleasant_ui::{
     draw::{ButtonAnim, Draw, EditorViewport},
     preferences::AppearanceStore,
     theme::{rgb, COLORS, GOLD, LINE, MUTED, PANEL, TEAL, TEXT},
-    value_edit::{parse_number_with_units, typed_char, ValueEdit},
+    value_edit::{parse_number_with_units, ValueEdit},
     FONT_JETBRAINS_MONO,
 };
 use std::{
@@ -40,8 +39,8 @@ fn prefs() -> &'static AppearanceStore {
 // Outer margin matches y-axis % label left edge (GRAPH_X - 40 = 20).
 // Align the outer edge with the remaining drop-time module.
 const UI_W: f32 = 812.0;
-// Leave room beneath the graph for the cog section’s horizontal slider row.
-const UI_H: f32 = 473.0;
+// The expanded cog controls share the graph's readout row.
+const UI_H: f32 = 430.0;
 const HEADER_HEIGHT: f32 = 70.0;
 
 pub fn format_ms(seconds: f32) -> String {
@@ -196,10 +195,11 @@ mod tests {
         assert!(STOP_BUTTON.1 + STOP_BUTTON.3 <= GRAPH_Y + GRAPH_H);
         let midi = midi_slot();
         let ret = axis_slot(0);
-        assert!(midi.1 + midi.3 < ret.1);
+        assert_eq!(midi.1, ret.1);
+        assert!(midi.0 + midi.2 < ret.0);
         assert!(midi.1 >= GRAPH_Y + GRAPH_H);
-        assert_eq!(midi.2, 96.0);
-        assert!(midi_value_rect().2 >= 50.0);
+        assert_eq!(midi.2, 66.0);
+        assert!(midi_value_rect().2 >= 24.0);
         assert!(midi_value_rect().0 >= midi_label_rect().0 + midi_label_rect().2 - 0.5);
     }
 
@@ -220,13 +220,16 @@ mod tests {
         let cog = cog_rect();
         assert!(cog.0 + cog.2 <= DROP_TIME_READOUT.0);
         let slots = [axis_slot(0), axis_slot(1), axis_slot(2), trigger_column()];
+        assert_eq!(slots[0].2, slots[1].2);
+        assert_eq!(slots[1].2, slots[2].2);
+        assert!((slots[3].2 - slots[2].2 - 40.0).abs() < 1.0e-3);
         for (i, slot) in slots.iter().enumerate() {
-            assert!(slot.1 > DROP_TIME_READOUT.1 + DROP_TIME_READOUT.3);
+            assert_eq!(slot.1, DROP_TIME_READOUT.1);
             assert!(slot.1 + slot.3 < UI_H);
-            assert!(slot.0 + slot.2 <= MODULE_RIGHT);
+            assert!(slot.0 + slot.2 < cog.0);
             let bar = axis_bar_rect(*slot);
             let value = axis_value_rect(*slot);
-            assert!(bar.2 > 100.0);
+            assert!(bar.2 > 95.0);
             assert!(bar.1 > value.1 + value.3);
             assert!(bar.1 + bar.3 <= slot.1 + slot.3);
             if i > 0 {
@@ -266,6 +269,30 @@ mod tests {
         let end_r = right.last().copied().unwrap();
         assert!((end_r.0 - (GRAPH_X + GRAPH_W)).abs() < 1.0e-2);
         assert!(end_r.1 < end_l.1 - 4.0);
+    }
+
+    #[test]
+    fn stereo_playheads_follow_their_channel_curves() {
+        for div in [-100.0, -44.7, 0.0, 50.0, 100.0] {
+            for right in [false, true] {
+                let scale = stereo_time_scale(div, right);
+                for exponent in [0.25, 1.0, 4.0] {
+                    for graph_time in [0.0_f32, 0.1, 0.25, 0.5, 0.75, 1.0] {
+                        if graph_time > scale {
+                            continue;
+                        }
+                        let progress = graph_time / scale;
+                        let speed = 1.0 - crate::dsp::s_curve(progress, exponent);
+                        let (x, y) = TapeStopView::live_playhead(speed, exponent, scale);
+                        assert!((x - (GRAPH_X + graph_time * GRAPH_W)).abs() < 0.1);
+                        assert!((y - (GRAPH_Y + (1.0 - speed) * GRAPH_H)).abs() < 1.0e-3);
+                    }
+                }
+                let (x, y) = TapeStopView::live_playhead(0.0, 1.0, scale);
+                assert!((x - (GRAPH_X + GRAPH_W * scale.min(1.0))).abs() < 1.0e-3);
+                assert!((y - (GRAPH_Y + GRAPH_H * (1.0 / scale).min(1.0))).abs() < 1.0e-3);
+            }
+        }
     }
 
     #[test]

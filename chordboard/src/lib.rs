@@ -93,6 +93,38 @@ fn output(event: Out, timing: u32) -> NoteEvent<()> {
     }
 }
 impl Chordboard {
+    fn process_events(
+        &mut self,
+        count: usize,
+        mut next_event: impl FnMut() -> Option<NoteEvent<()>>,
+        out: &mut impl FnMut(u32, Out),
+    ) {
+        let mut next = next_event();
+        let mut sample = 0;
+        while sample < count {
+            // Host MIDI wins ties with scheduled note-offs and strikes.
+            while next.is_some_and(|event| event.timing() as usize <= sample) {
+                if let Some(event) = next.take() {
+                    self.input(event, &mut |event| out(sample as u32, event));
+                }
+                next = next_event();
+            }
+            let end = next.map_or(count, |event| (event.timing() as usize).min(count));
+            self.engine.advance(end - sample, &mut |offset, event| {
+                out((sample + offset) as u32, event);
+            });
+            sample = end;
+        }
+        // Preserve zero-length buffers and hosts' end-boundary/trailing MIDI:
+        // apply those inputs after the span, clamping only their output timing.
+        while let Some(event) = next.take() {
+            self.input(event, &mut |event| {
+                out(count.saturating_sub(1) as u32, event);
+            });
+            next = next_event();
+        }
+    }
+
     fn current_config(&self) -> engine::Config {
         let mut config = self.params.config();
         let encoded = self.bridge.learned_split.load(Ordering::Acquire);
@@ -387,25 +419,9 @@ impl Plugin for Chordboard {
             };
             self.engine.command(command, &mut |e| emitted.push(0, e));
         }
-        let mut next = context.next_event();
-        for sample in 0..count.max(1) {
-            while next.is_some_and(|e| e.timing() <= sample as u32) {
-                if let Some(e) = next.take() {
-                    self.input(e, &mut |e| emitted.push(sample as u32, e));
-                }
-                next = context.next_event();
-            }
-            if count > 0 {
-                self.engine.tick(&mut |e| emitted.push(sample as u32, e));
-            }
-        }
-        // Some hosts place an event on the end boundary. Do not lose its Note Off.
-        while let Some(event) = next.take() {
-            self.input(event, &mut |e| {
-                emitted.push(count.saturating_sub(1) as u32, e)
-            });
-            next = context.next_event();
-        }
+        self.process_events(count, || context.next_event(), &mut |timing, event| {
+            emitted.push(timing, event);
+        });
         if let Some((axis, mapping)) = self.engine.learned.take() {
             self.params
                 .mapping(axis)

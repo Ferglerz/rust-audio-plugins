@@ -244,7 +244,10 @@ pub struct Engine {
     scratch: Vec<Complex<f32>>,
     window: [f32; 2048],
     spectrum_bin_ranges: [(usize, usize); 128],
+    // Meter cadence remains independent of the optional display FFT.
     position: usize,
+    spectrum_position: usize,
+    display_enabled: bool,
     in_peak: f64,
     out_peak: f64,
     wall_peak: f64,
@@ -351,6 +354,8 @@ impl Engine {
                 )
             }),
             position: 0,
+            spectrum_position: 0,
+            display_enabled: true,
             in_peak: 0.0,
             out_peak: 0.0,
             wall_peak: 0.0,
@@ -377,6 +382,20 @@ impl Engine {
             band_input: aux.band_input,
         }
     }
+    /// Called once per host block. Reopening starts a complete fresh FFT window
+    /// without moving the always-on peak/meter clock.
+    pub fn set_display_enabled(&mut self, enabled: bool) {
+        if self.display_enabled != enabled {
+            self.display_enabled = enabled;
+            self.spectrum_position = 0;
+            if enabled {
+                for bin in &self.shared.spectrum {
+                    bin.store(-90.0, Ordering::Relaxed);
+                }
+            }
+        }
+    }
+
     pub fn reset(&mut self) {
         self.bank.reset();
         if let Some(previous) = &mut self.previous {
@@ -385,6 +404,7 @@ impl Engine {
         self.transition = 0;
         self.comp = VocalComp::new();
         self.position = 0;
+        self.spectrum_position = 0;
         self.samples.fill(Complex::default());
         self.in_peak = 0.0;
         self.out_peak = 0.0;
@@ -743,13 +763,17 @@ impl Engine {
         }
         self.in_peak = self.in_peak.max(input[0].abs()).max(input[1].abs());
         self.out_peak = self.out_peak.max(x[0].abs()).max(x[1].abs());
-        // Input spectrum. Pick the louder channel to avoid mono cancellation.
-        let sample = if input[0].abs() > input[1].abs() {
-            input[0]
-        } else {
-            input[1]
-        };
-        self.samples[self.position] = Complex::new(sample as f32 * self.window[self.position], 0.0);
+        if self.display_enabled {
+            // Pick the louder channel to avoid mono cancellation.
+            let sample = if input[0].abs() > input[1].abs() {
+                input[0]
+            } else {
+                input[1]
+            };
+            self.samples[self.spectrum_position] =
+                Complex::new(sample as f32 * self.window[self.spectrum_position], 0.0);
+            self.spectrum_position += 1;
+        }
         self.position += 1;
         if self.position.is_multiple_of(256) {
             self.band_input.sync(
@@ -791,8 +815,8 @@ impl Engine {
                 Ordering::Relaxed,
             );
         }
-        if self.position == 2048 {
-            self.position = 0;
+        if self.spectrum_position == 2048 {
+            self.spectrum_position = 0;
             self.fft
                 .process_with_scratch(&mut self.samples, &mut self.scratch);
             for i in 0..128 {
@@ -810,6 +834,9 @@ impl Engine {
                     Ordering::Relaxed,
                 );
             }
+        }
+        if self.position == 2048 {
+            self.position = 0;
             self.shared
                 .input
                 .store(gain_db(self.in_peak) as f32, Ordering::Relaxed);

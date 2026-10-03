@@ -15,10 +15,19 @@ impl TapeStopView {
         (GRAPH_X + GRAPH_W * 0.5, GRAPH_Y + GRAPH_H * 0.5)
     }
 
-    pub(super) fn live_playhead(speed: f32, curve_exp: f32) -> (f32, f32) {
+    pub(super) fn live_playhead(speed: f32, curve_exp: f32, time_scale: f32) -> (f32, f32) {
         let y_n = 1.0 - speed.clamp(0.0, 1.0);
-        let t = inv_s_curve(y_n, curve_exp);
-        (GRAPH_X + t * GRAPH_W, GRAPH_Y + y_n * GRAPH_H)
+        let graph_time = inv_s_curve(y_n, curve_exp) * time_scale;
+        // The slower channel's curve ends at the graph edge before it reaches zero speed.
+        let visible_drop = if graph_time > 1.0 {
+            s_curve(1.0 / time_scale, curve_exp)
+        } else {
+            y_n
+        };
+        (
+            GRAPH_X + graph_time.min(1.0) * GRAPH_W,
+            GRAPH_Y + visible_drop * GRAPH_H,
+        )
     }
 
     pub(super) fn hit_curve_node(px: f32, py: f32) -> bool {
@@ -148,11 +157,13 @@ impl TapeStopView {
         }
 
         if braking || speed_l < 0.99 || speed_r < 0.99 {
-            let (live_x_l, y_l) = Self::live_playhead(speed_l, curve_exp);
+            let (live_x_l, y_l) =
+                Self::live_playhead(speed_l, curve_exp, stereo_time_scale(div, false));
             d.circle(live_x_l, y_l, 6.0, TEAL, false);
             d.circle(live_x_l, y_l, 3.0, TEXT, true);
             if (speed_l - speed_r).abs() > 0.01 || (prog_l - prog_r).abs() > 0.01 {
-                let (live_x_r, y_r) = Self::live_playhead(speed_r, curve_exp);
+                let (live_x_r, y_r) =
+                    Self::live_playhead(speed_r, curve_exp, stereo_time_scale(div, true));
                 d.circle(live_x_r, y_r, 6.0, COLORS[4], false);
                 d.circle(live_x_r, y_r, 3.0, TEXT, true);
             }
