@@ -4,7 +4,6 @@ use nih_plug::{midi::control_change, prelude::*};
 use openwurli_dsp::{CircuitMode, WurliEngine};
 use std::sync::Arc;
 
-mod engine_info;
 pub mod params;
 pub mod ui;
 
@@ -86,7 +85,8 @@ impl OpenWurliUi {
             .set_tremolo_depth(self.params.tremolo_depth.value() as f64);
         self.engine
             .set_speaker_character(self.params.speaker_character.value() as f64);
-        self.engine.set_mlp_enabled(self.params.mlp_enabled.value());
+        // The legacy mlp parameter is hidden and inert, including old saved false values.
+        self.engine.set_mlp_enabled(true);
         // Hiss is removed, including native preamp noise in both circuit modes.
         self.engine.set_noise_enabled(false);
         self.engine
@@ -377,6 +377,7 @@ mod tests {
                 ));
                 assert_eq!(plugin.engine.circuit_mode(), expected);
                 let mut reference = WurliEngine::new_with_circuit_mode(48_000.0, expected);
+                reference.set_mlp_enabled(true);
                 reference.warm_up();
                 plugin.engine.note_on(60, 0.8);
                 reference.note_on(60, 0.8);
@@ -636,7 +637,85 @@ mod tests {
     }
 
     #[test]
-    fn host_parameter_ids_and_upstream_defaults_are_stable() {
+    fn legacy_mlp_states_use_the_same_corrected_audio_in_both_modes() {
+        with_circuit_stack(|| {
+            for saved_mode in ["fast", "heavy"] {
+                let render = |saved_mlp| {
+                    let mut plugin = OpenWurliUi::default();
+                    let mut state = PluginState {
+                        version: "0.1.1".into(),
+                        params: Default::default(),
+                        fields: Default::default(),
+                    };
+                    state.params.insert(
+                        "cpu_mode".into(),
+                        nih_plug::wrapper::state::ParamValue::String(saved_mode.into()),
+                    );
+                    state.params.insert(
+                        "mlp".into(),
+                        nih_plug::wrapper::state::ParamValue::Bool(saved_mlp),
+                    );
+                    restore_cpu_mode(&plugin, &mut state);
+                    let nih_plug::wrapper::state::ParamValue::Bool(mlp) = state.params["mlp"]
+                    else {
+                        panic!("MLP state must remain a bool");
+                    };
+                    // Parameter setters are private to NIH-plug. Restore this
+                    // bool as a plain value, as the wrapper does when loading.
+                    Arc::get_mut(&mut plugin.params).unwrap().mlp_enabled =
+                        BoolParam::new("MLP Corrections (always enabled)", mlp).hide();
+                    assert_eq!(plugin.params.mlp_enabled.value(), saved_mlp);
+                    assert!(plugin.initialize(
+                        &OpenWurliUi::AUDIO_IO_LAYOUTS[0],
+                        &BufferConfig {
+                            sample_rate: 48_000.0,
+                            min_buffer_size: None,
+                            max_buffer_size: 256,
+                            process_mode: ProcessMode::Realtime,
+                        },
+                        &mut TestInitContext,
+                    ));
+                    // Repeated sync must ignore old state and automation alike.
+                    plugin.sync_params();
+                    let mut reference =
+                        WurliEngine::new_with_circuit_mode(48_000.0, plugin.engine.circuit_mode());
+                    reference.set_mlp_enabled(true);
+                    reference.warm_up();
+                    plugin.handle_event(&note_on(0, 72));
+                    reference.note_on_extended(72, 0.8);
+                    let mut actual = vec![0.0; 2048];
+                    let mut expected = vec![0.0; 2048];
+                    for (actual, expected) in actual.chunks_mut(256).zip(expected.chunks_mut(256)) {
+                        plugin.render_block(actual, || None);
+                        reference.render(expected);
+                    }
+                    assert!(actual.iter().any(|s| s.abs() > 1e-6));
+                    assert!(actual.iter().all(|s| s.is_finite()));
+                    assert_eq!(actual, expected, "{saved_mode}: must use corrected engine");
+                    actual
+                };
+                assert_eq!(
+                    render(false),
+                    render(true),
+                    "{saved_mode}: legacy MLP value changed audio"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn restored_editor_scale_keeps_the_new_artwork_dimensions() {
+        let params = OpenWurliUiParams::default();
+        let mut fields = params.serialize_fields();
+        fields.insert("editor-state".into(), r#"{"scale_factor":0.91}"#.into());
+        params.deserialize_fields(&fields);
+        assert_eq!(params.editor_state.inner_logical_size(), (720, 550));
+        assert_eq!(params.editor_state.user_scale_factor(), 0.91);
+        assert_eq!(params.editor_state.scaled_logical_size(), (655, 501));
+    }
+
+    #[test]
+    fn host_parameter_ids_and_control_defaults_are_stable() {
         let params = OpenWurliUiParams::default();
         let ids: Vec<_> = params
             .param_map()
@@ -664,7 +743,8 @@ mod tests {
         assert_eq!(params.volume.default_plain_value(), 0.5);
         assert_eq!(params.tremolo_depth.default_plain_value(), 0.5);
         assert_eq!(params.speaker_character.default_plain_value(), 0.0);
-        assert!(!params.mlp_enabled.default_plain_value());
+        assert!(params.mlp_enabled.default_plain_value());
+        assert!(params.mlp_enabled.flags().contains(ParamFlags::HIDDEN));
         assert_eq!(params.cpu_mode.default_plain_value(), CpuMode::Fast);
         assert_eq!(params.reed_decay.default_plain_value(), 1.0);
         assert_eq!(params.hammer_hardness.default_plain_value(), 1.0);

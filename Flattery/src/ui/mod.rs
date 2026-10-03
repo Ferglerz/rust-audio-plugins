@@ -15,8 +15,8 @@ use crate::{
     },
     ui::graph::{
         snap_to_bin_center, GraphLayout, AXIS_STRIP_H, COLOR_BOOST, COLOR_BOOST_HOVER, COLOR_CUT,
-        COLOR_CUT_HOVER, CURVE_HIT_DIST, EDGE_PAD, GRAPH_H, GRAPH_W, GRAPH_X, GRAPH_Y,
-        NODE_ROW_GAP, SIDE_W, SIDE_X, SIDE_Y, WINDOW_H, WINDOW_W,
+        COLOR_CUT_HOVER, CURVE_HIT_DIST, EDGE_PAD, FREQ_LABEL_BASELINE_OFFSET, GRAPH_H, GRAPH_W,
+        GRAPH_X, GRAPH_Y, NODE_ROW_GAP, SIDE_W, SIDE_X, SIDE_Y, WINDOW_H, WINDOW_W,
     },
 };
 use nih_plug::prelude::*;

@@ -9,7 +9,7 @@ use pleasant_ui::{
     theme::{rgb, LINE, MUTED},
 };
 
-pub const WINDOW_W: f32 = 1040.0;
+pub const WINDOW_W: f32 = 1240.0;
 pub const WINDOW_H: f32 = 860.0;
 /// Matches header-to-graph gap (`GRAPH_Y - 70`).
 pub const EDGE_PAD: f32 = 72.0;
@@ -22,6 +22,7 @@ pub const DB_LABEL_GUTTER: f32 = 40.0;
 pub const SIDE_GAP: f32 = 8.0;
 pub const GRAPH_W: f32 = WINDOW_W - GRAPH_X - DB_LABEL_GUTTER - SIDE_GAP - SIDE_W - RIGHT_PAD;
 pub const FREQ_LABEL_SPACE: f32 = 26.0;
+pub const FREQ_LABEL_BASELINE_OFFSET: f32 = 18.0;
 /// Selected-node strip that replaces the frequency-axis labels.
 pub const AXIS_STRIP_H: f32 = 40.0;
 pub const NODE_SLIDER_H: f32 = 50.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA;

@@ -44,10 +44,13 @@ impl FlatteryView {
     }
 
     pub(super) fn output_knob_rect() -> (f32, f32, f32, f32) {
-        let node = Self::node_slider_rect(0);
+        // Anchor the readout to the frequency labels; the controls above follow
+        // this position through footer_button_row() and side_rect().
+        let value_offset =
+            pleasant_ui::draw::KnobLayout::new((0.0, 0.0, KNOB_SIZE, KNOB_SIZE)).value_y;
         (
             SIDE_X + (SIDE_W - KNOB_SIZE) * 0.5,
-            node.1 + node.3 - KNOB_SIZE,
+            GRAPH_Y + GRAPH_H + FREQ_LABEL_BASELINE_OFFSET - value_offset,
             KNOB_SIZE,
             KNOB_SIZE,
         )
@@ -421,11 +424,11 @@ mod tests {
         let right_padding = WINDOW_W - 16.0 - (output.0 + output.2);
         let bottom_padding = WINDOW_H - 16.0 - (output.1 + output.3);
         assert_eq!(right_padding, 20.0);
-        assert_eq!(bottom_padding, 20.0);
+        assert!(bottom_padding >= 20.0);
     }
 
     #[test]
-    fn vertical_knobs_and_buttons_clear_each_other_and_align_with_band_controls() {
+    fn vertical_knobs_and_buttons_clear_each_other_and_align_with_frequency_labels() {
         let fft = FlatteryView::footer_button_row();
         let output = FlatteryView::output_knob_rect();
         let mut bottom = SIDE_Y - 8.0;
@@ -440,8 +443,11 @@ mod tests {
         }
         assert!(fft.1 >= bottom + 12.0);
         assert!(fft.1 + SIDE_BTN_H * 2.0 + FOOTER_BTN_GAP + 12.0 <= output.1);
-        let band = FlatteryView::node_slider_rect(0);
-        assert_eq!(output.1 + output.3, band.1 + band.3);
+        let output_layout = pleasant_ui::draw::KnobLayout::new(output);
+        assert_eq!(
+            output_layout.value_y,
+            GRAPH_Y + GRAPH_H + FREQ_LABEL_BASELINE_OFFSET
+        );
         assert!(output.1 + output.3 < WINDOW_H - 32.0);
     }
 }

@@ -13,6 +13,40 @@ use nih_plug_vizia::vizia::{
     vg::{Color, FontId},
 };
 
+/// Fits fixed-size editor artwork inside the host's current bounds. Rendering
+/// and pointer handling must use the same transform, including the margins.
+#[derive(Clone, Copy, Debug)]
+pub struct EditorViewport {
+    pub scale: f32,
+    pub x: f32,
+    pub y: f32,
+}
+
+impl EditorViewport {
+    pub fn fit(bounds: (f32, f32, f32, f32), artwork: (f32, f32)) -> Option<Self> {
+        let (x, y, w, h) = bounds;
+        let (aw, ah) = artwork;
+        if ![x, y, w, h, aw, ah].iter().all(|v| v.is_finite())
+            || w <= 0.0
+            || h <= 0.0
+            || aw <= 0.0
+            || ah <= 0.0
+        {
+            return None;
+        }
+        let scale = (w / aw).min(h / ah);
+        Some(Self {
+            scale,
+            x: x + (w - aw * scale) * 0.5,
+            y: y + (h - ah * scale) * 0.5,
+        })
+    }
+
+    pub fn to_local(self, x: f32, y: f32) -> (f32, f32) {
+        ((x - self.x) / self.scale, (y - self.y) / self.scale)
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct ButtonAnim {
     click: std::cell::Cell<f32>,
@@ -51,6 +85,24 @@ pub struct Draw<'a> {
 }
 
 impl<'a> Draw<'a> {
+    /// Paints an opaque, square background across all host bounds, then fits
+    /// artwork to both axes. Other controls keep their existing rounded faces.
+    pub fn new_fitted(
+        c: &'a mut Canvas,
+        light: bool,
+        bounds: (f32, f32, f32, f32),
+        artwork: (f32, f32),
+        font: Option<FontId>,
+    ) -> Option<Self> {
+        let viewport = EditorViewport::fit(bounds, artwork)?;
+        let draw = Self::new(c, light, viewport.scale, viewport.x, viewport.y, font);
+        let mut background = nih_plug_vizia::vizia::vg::Path::new();
+        background.rect(bounds.0, bounds.1, bounds.2, bounds.3);
+        let paint = nih_plug_vizia::vizia::vg::Paint::color(draw.color(theme::BG));
+        draw.c.fill_path(&background, &paint);
+        Some(draw)
+    }
+
     pub fn new(
         c: &'a mut Canvas,
         light: bool,
@@ -115,6 +167,33 @@ impl<'a> Draw<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn editor_viewport_fits_short_and_narrow_hosts_and_maps_pointer_positions() {
+        for artwork in [(720.0, 550.0), (812.0, 473.0)] {
+            for (w, h) in [artwork, (720.0, 340.0), (812.0, 380.0), (300.0, 900.0)] {
+                let bounds = (17.0, 23.0, w, h);
+                let viewport = EditorViewport::fit(bounds, artwork).unwrap();
+                let right = viewport.x + artwork.0 * viewport.scale;
+                let bottom = viewport.y + artwork.1 * viewport.scale;
+                assert!(viewport.x >= bounds.0 - 1e-3);
+                assert!(viewport.y >= bounds.1 - 1e-3);
+                assert!(right <= bounds.0 + w + 1e-3, "right edge clipped");
+                assert!(bottom <= bounds.1 + h + 1e-3, "bottom edge clipped");
+                for (x, y) in [(0.0, 0.0), (artwork.0 * 0.75, artwork.1 * 0.95)] {
+                    let local = viewport.to_local(
+                        viewport.x + x * viewport.scale,
+                        viewport.y + y * viewport.scale,
+                    );
+                    assert!((local.0 - x).abs() < 1e-3);
+                    assert!((local.1 - y).abs() < 1e-3);
+                }
+            }
+        }
+        for bounds in [(0.0, 0.0, 0.0, 100.0), (0.0, 0.0, 100.0, f32::NAN)] {
+            assert!(EditorViewport::fit(bounds, (720.0, 550.0)).is_none());
+        }
+    }
 
     #[test]
     fn test_button_anim_trigger_and_decay() {

@@ -60,13 +60,12 @@ pub struct OpenWurliUiParams {
 impl Default for OpenWurliUiParams {
     fn default() -> Self {
         Self {
-            editor_state: ViziaState::new_screen_sized("OpenWurli UI", || (720, 340)),
+            editor_state: ViziaState::new_screen_sized("OpenWurli UI", || (720, 550)),
             volume: percent_param("Volume", 0.5, 5.0),
             tremolo_depth: percent_param("Tremolo Depth", 0.5, 50.0),
             speaker_character: percent_param("Speaker Character", 0.0, 50.0),
-            // Current upstream (v0.7.0) defaults this off. Its README's older
-            // parameter table still says on.
-            mlp_enabled: BoolParam::new("MLP Corrections", false),
+            // Retain the saved ID, but learned voicing is now always active.
+            mlp_enabled: BoolParam::new("MLP Corrections (always enabled)", true).hide(),
             // Old presets omit this parameter and retain the previous Fast sound.
             cpu_mode: EnumParam::new("CPU Mode", CpuMode::Fast),
             reed_decay: FloatParam::new(

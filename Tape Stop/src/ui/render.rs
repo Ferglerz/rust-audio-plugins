@@ -10,19 +10,19 @@ impl TapeStopView {
             self.font.set(canvas.add_font_mem(FONT_JETBRAINS_MONO).ok());
         }
 
-        let mut d = Draw::new(
+        let Some(mut d) = Draw::new_fitted(
             canvas,
             prefs().light(),
-            bounds.w / UI_W,
-            bounds.x,
-            bounds.y,
+            (bounds.x, bounds.y, bounds.w, bounds.h),
+            (UI_W, UI_H),
             self.font.get(),
-        );
+        ) else {
+            return;
+        };
 
         let braking = self.telemetry.is_braking.load(Ordering::Relaxed);
 
-        d.rect(0.0, 0.0, UI_W, UI_H, BG);
-        d.rect(0.0, 0.0, UI_W, HEADER_HEIGHT, PANEL);
+        d.rounded_rect(0.0, 0.0, UI_W, HEADER_HEIGHT, 0.0, PANEL);
         d.text(36.0, 44.0, "TAPE STOP", 24.0, GOLD);
         d.text(200.0, 44.0, "MIDI TAPE BRAKE", 13.0, TEXT);
 

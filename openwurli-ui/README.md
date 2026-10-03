@@ -2,7 +2,11 @@
 
 An independent CLAP/VST3 instrument with the [OpenWurli](https://github.com/hal0zer0/openwurli) synthesis engine and a Pleasant UI editor. Its plugin IDs are distinct from upstream OpenWurli so both can be installed in one host.
 
-The main panel exposes Volume, Tremolo Depth, Speaker Character, and MLP Corrections. The cog opens sound settings for Reed Decay, Hammer Hardness, Pickup Drive, Tremolo Response, and Extra Sag. Reed Decay spans 0.5–20× (ten times the previous maximum). The four voicing multipliers are neutral at 1.0×; the first three affect newly started notes. OpenWurli v0.7.0 defaults MLP Corrections to **off**; this wrapper follows that source default.
+The 720 × 550 main panel has two rows of knobs: Volume, Tremolo Depth and Speaker Character above Reed Decay, Hammer Hardness and Pickup Drive. The cog opens sound settings for Tremolo Response, Extra Sag and Extended Notes. Reed Decay spans 0.5–20×; Hammer Hardness, Pickup Drive and Tremolo Response span 0.5–2×. These multipliers are neutral at 1.0×. Reed, hammer and pickup settings affect newly started notes; tremolo response and extra sag apply live. Main knobs use vertical dragging and double-click reset.
+
+Learned voicing (MLP corrections) is **always active**. A small neural network uses recorded piano references to adjust overtone tuning, decay and pickup response once at note-on. The cog panel explains this behavior. The old `mlp` automation ID remains hidden and inert for saved-session compatibility: loading a project saved with corrections off now uses the corrected sound. The engine's correction model and source revision are unchanged.
+
+Both drawing and pointer input fit the artwork to the host's available width and height. The background fills the complete editor with square corners, including any margins around the fitted artwork.
 
 ## Upstream source
 
@@ -14,8 +18,8 @@ and merged into the controls branch. The pinned revision adds the exact Heavy re
 [`codex/heavy-recovery-shortcut`](https://github.com/Ferglerz/openwurli/tree/codex/heavy-recovery-shortcut).
 The local copy preserves the original clamped API and adds explicit full-range note-on/off APIs.
 
-The **ENGINE** page describes the active native processing and measured CPU/audio
-results. See [the implementation and evidence report](docs/cpu-optimization-results.md)
+The Engine information page has been removed from the editor. See
+[the implementation and evidence report](docs/cpu-optimization-results.md)
 for before/after timings, bitwise audio comparisons, rejected lookup candidates,
 reproduction commands and limitations. Original analytical equations remain
 permanent reference code; experimental tables are generated from those equations

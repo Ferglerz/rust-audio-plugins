@@ -15,9 +15,9 @@ use nih_plug_vizia::{
     ViziaState, ViziaTheming,
 };
 use pleasant_ui::{
-    draw::{ButtonAnim, Draw},
+    draw::{ButtonAnim, Draw, EditorViewport},
     preferences::AppearanceStore,
-    theme::{rgb, BG, COLORS, GOLD, LINE, MUTED, PANEL, TEAL, TEXT},
+    theme::{rgb, COLORS, GOLD, LINE, MUTED, PANEL, TEAL, TEXT},
     value_edit::{parse_number_with_units, typed_char, ValueEdit},
     FONT_JETBRAINS_MONO,
 };

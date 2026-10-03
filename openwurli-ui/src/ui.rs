@@ -7,9 +7,9 @@ use nih_plug_vizia::{
     ViziaTheming,
 };
 use pleasant_ui::{
-    draw::Draw,
+    draw::{Draw, EditorViewport},
     preferences::AppearanceStore,
-    theme::{BG, GOLD, LINE, MUTED, PANEL, TEAL, TEXT},
+    theme::{GOLD, LINE, MUTED, PANEL, TEAL, TEXT},
     FONT_JETBRAINS_MONO,
 };
 use std::{
@@ -19,19 +19,17 @@ use std::{
 };
 
 const WIDTH: f32 = 720.0;
-const HEIGHT: f32 = 340.0;
+const HEIGHT: f32 = 550.0;
 const KNOB_Y: f32 = 95.0;
 const KNOB_W: f32 = 198.0;
 const KNOB_H: f32 = 168.0;
 const KNOB_GAP: f32 = 18.0;
 const KNOB_X: f32 = 45.0;
-const MLP_BUTTON: (f32, f32, f32, f32) = (45.0, 284.0, 238.0, 36.0);
-const CPU_BUTTON: (f32, f32, f32, f32) = (307.0, 284.0, 172.0, 36.0);
+const CPU_BUTTON: (f32, f32, f32, f32) = (45.0, 477.0, 172.0, 36.0);
 const THEME_BUTTON: (f32, f32, f32, f32) = (601.0, 21.0, 80.0, 30.0);
 const COG_BUTTON: (f32, f32, f32, f32) = (541.0, 21.0, 32.0, 30.0);
-const ENGINE_BUTTON: (f32, f32, f32, f32) = (426.0, 21.0, 94.0, 30.0);
-const EXTENDED_BUTTON: (f32, f32, f32, f32) = (45.0, 241.0, 238.0, 50.0);
-const SAG_BUTTON: (f32, f32, f32, f32) = (531.0, 241.0, 144.0, 50.0);
+const EXTENDED_BUTTON: (f32, f32, f32, f32) = (45.0, 187.0, 238.0, 50.0);
+const SAG_BUTTON: (f32, f32, f32, f32) = (531.0, 187.0, 144.0, 50.0);
 
 static PREFS: OnceLock<AppearanceStore> = OnceLock::new();
 
@@ -51,41 +49,38 @@ enum Knob {
 }
 
 impl Knob {
-    const MAIN: [Self; 3] = [Self::Volume, Self::Tremolo, Self::Speaker];
-    const ADVANCED: [Self; 4] = [
+    const MAIN: [Self; 6] = [
+        Self::Volume,
+        Self::Tremolo,
+        Self::Speaker,
         Self::ReedDecay,
         Self::HammerHardness,
         Self::PickupDrive,
-        Self::TremoloResponse,
     ];
+    const ADVANCED: [Self; 1] = [Self::TremoloResponse];
 
     fn rect(self) -> (f32, f32, f32, f32) {
         match self {
             Self::Volume => (KNOB_X, KNOB_Y, KNOB_W, KNOB_H),
             Self::Tremolo => (KNOB_X + KNOB_W + KNOB_GAP, KNOB_Y, KNOB_W, KNOB_H),
             Self::Speaker => (KNOB_X + 2.0 * (KNOB_W + KNOB_GAP), KNOB_Y, KNOB_W, KNOB_H),
-            Self::ReedDecay => (
-                45.0,
-                101.0,
-                300.0,
-                57.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA,
-            ),
+            Self::ReedDecay => (KNOB_X, KNOB_Y + KNOB_H + KNOB_GAP, KNOB_W, KNOB_H),
             Self::HammerHardness => (
-                375.0,
-                101.0,
-                300.0,
-                57.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA,
+                KNOB_X + KNOB_W + KNOB_GAP,
+                KNOB_Y + KNOB_H + KNOB_GAP,
+                KNOB_W,
+                KNOB_H,
             ),
             Self::PickupDrive => (
-                45.0,
-                171.0,
-                300.0,
-                57.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA,
+                KNOB_X + 2.0 * (KNOB_W + KNOB_GAP),
+                KNOB_Y + KNOB_H + KNOB_GAP,
+                KNOB_W,
+                KNOB_H,
             ),
             Self::TremoloResponse => (
-                375.0,
-                171.0,
-                300.0,
+                45.0,
+                101.0,
+                630.0,
                 57.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA,
             ),
         }
@@ -108,7 +103,6 @@ struct OpenWurliView {
     drag: Option<Drag>,
     hover: Option<(f32, f32)>,
     show_advanced: bool,
-    show_engine: bool,
 }
 
 impl OpenWurliView {
@@ -129,9 +123,6 @@ impl OpenWurliView {
     }
 
     fn knob_at(&self, x: f32, y: f32) -> Option<Knob> {
-        if self.show_engine {
-            return None;
-        }
         let choices: &[Knob] = if self.show_advanced {
             &Knob::ADVANCED
         } else {
@@ -167,9 +158,6 @@ impl OpenWurliView {
 
     fn draw_advanced_slider(&self, d: &mut Draw, knob: Knob) {
         let (label, color) = match knob {
-            Knob::ReedDecay => ("REED DECAY", GOLD),
-            Knob::HammerHardness => ("HAMMER HARDNESS", TEAL),
-            Knob::PickupDrive => ("PICKUP DRIVE", GOLD),
             Knob::TremoloResponse => ("TREMOLO RESPONSE", TEAL),
             _ => return,
         };
@@ -198,26 +186,20 @@ impl View for OpenWurliView {
     fn event(&mut self, cx: &mut EventContext, event: &mut Event) {
         event.map(|window_event, _| {
             let bounds = cx.bounds();
-            if bounds.w <= 0.0 {
+            let Some(viewport) =
+                EditorViewport::fit((bounds.x, bounds.y, bounds.w, bounds.h), (WIDTH, HEIGHT))
+            else {
                 return;
-            }
-            let scale = bounds.w / WIDTH;
-            let x = (cx.mouse().cursorx - bounds.x) / scale;
-            let y = (cx.mouse().cursory - bounds.y) / scale;
+            };
+            let (x, y) = viewport.to_local(cx.mouse().cursorx, cx.mouse().cursory);
 
             match window_event {
                 WindowEvent::MouseDown(MouseButton::Left) => {
                     if Self::hit(x, y, THEME_BUTTON) {
                         prefs().toggle();
-                    } else if Self::hit(x, y, ENGINE_BUTTON) {
-                        self.end_drag(cx);
-                        self.show_engine = !self.show_engine;
                     } else if Self::hit(x, y, COG_BUTTON) {
                         self.end_drag(cx);
-                        self.show_advanced = self.show_engine || !self.show_advanced;
-                        self.show_engine = false;
-                    } else if self.show_engine {
-                        // The information page has no sound controls.
+                        self.show_advanced = !self.show_advanced;
                     } else if !self.show_advanced && Self::hit(x, y, CPU_BUTTON) {
                         self.end_drag(cx);
                         let next = if self.params.cpu_mode.value() == crate::params::CpuMode::Fast {
@@ -226,13 +208,6 @@ impl View for OpenWurliView {
                             0.0
                         };
                         Self::emit_once(cx, self.params.cpu_mode.as_ptr(), next);
-                    } else if !self.show_advanced && Self::hit(x, y, MLP_BUTTON) {
-                        let next = if self.params.mlp_enabled.value() {
-                            0.0
-                        } else {
-                            1.0
-                        };
-                        Self::emit_once(cx, self.params.mlp_enabled.as_ptr(), next);
                     } else if self.show_advanced && Self::hit(x, y, EXTENDED_BUTTON) {
                         Self::emit_once(
                             cx,
@@ -314,20 +289,19 @@ impl View for OpenWurliView {
         if self.font.get().is_none() {
             self.font.set(canvas.add_font_mem(FONT_JETBRAINS_MONO).ok());
         }
-        let mut d = Draw::new(
+        let Some(mut d) = Draw::new_fitted(
             canvas,
             prefs().light(),
-            bounds.w / WIDTH,
-            bounds.x,
-            bounds.y,
+            (bounds.x, bounds.y, bounds.w, bounds.h),
+            (WIDTH, HEIGHT),
             self.font.get(),
-        )
-        .with_hover(self.hover);
-        d.rect(0.0, 0.0, WIDTH, HEIGHT, BG);
-        d.rect(0.0, 0.0, WIDTH, 74.0, PANEL);
+        ) else {
+            return;
+        };
+        d.hover = self.hover;
+        d.rounded_rect(0.0, 0.0, WIDTH, 74.0, 0.0, PANEL);
         d.rect(0.0, 73.0, WIDTH, 1.0, LINE);
         d.text(40.0, 45.0, "OPENWURLI", 25.0, GOLD);
-        d.text(230.0, 45.0, "PLEASANT UI", 12.0, MUTED);
         d.rect(
             COG_BUTTON.0,
             COG_BUTTON.1,
@@ -342,20 +316,8 @@ impl View for OpenWurliView {
             if self.show_advanced { GOLD } else { MUTED },
         );
         d.appearance_button(THEME_BUTTON, prefs().label());
-        d.button(ENGINE_BUTTON, "ENGINE", self.show_engine, TEAL);
 
-        if self.show_engine {
-            let info = crate::engine_info::for_mode(self.params.cpu_mode.value());
-            d.text(45.0, 103.0, info.title, 15.0, GOLD);
-            d.text(45.0, 125.0, info.model, 11.0, MUTED);
-            for (index, line) in info.changes.iter().enumerate() {
-                d.text(45.0, 157.0 + index as f32 * 21.0, line, 11.0, TEXT);
-            }
-            d.rect(45.0, 218.0, 630.0, 1.0, LINE);
-            d.text(45.0, 244.0, info.cpu_result, 12.0, TEAL);
-            d.text(45.0, 268.0, info.audio_result, 12.0, GOLD);
-            d.text(45.0, 307.0, info.conditions, 10.0, MUTED);
-        } else if self.show_advanced {
+        if self.show_advanced {
             for knob in Knob::ADVANCED {
                 self.draw_advanced_slider(&mut d, knob);
             }
@@ -366,10 +328,20 @@ impl View for OpenWurliView {
                 TEAL,
             );
             d.button(SAG_BUTTON, "EXTRA SAG", self.params.rail_sag.value(), GOLD);
+            for (index, line) in [
+                "Learned voicing is always active.",
+                "Uses recorded piano references to adjust overtone tuning, decay",
+                "and pickup response on new notes.",
+            ]
+            .iter()
+            .enumerate()
+            {
+                d.text(45.0, 278.0 + index as f32 * 22.0, line, 11.0, TEXT);
+            }
             d.text(
                 45.0,
-                318.0,
-                "VOICING: NEW NOTES  /  EFFECTS: LIVE",
+                354.0,
+                "TREMOLO RESPONSE AND EXTRA SAG APPLY LIVE",
                 10.0,
                 MUTED,
             );
@@ -380,15 +352,22 @@ impl View for OpenWurliView {
                     Knob::Volume => "VOLUME",
                     Knob::Tremolo => "TREMOLO DEPTH",
                     Knob::Speaker => "SPEAKER CHARACTER",
+                    Knob::ReedDecay => "REED DECAY",
+                    Knob::HammerHardness => "HAMMER HARDNESS",
+                    Knob::PickupDrive => "PICKUP DRIVE",
                     _ => unreachable!(),
                 };
                 let color = match knob {
-                    Knob::Volume => GOLD,
-                    Knob::Tremolo => TEAL,
-                    Knob::Speaker => GOLD,
+                    Knob::Volume | Knob::Speaker | Knob::ReedDecay | Knob::PickupDrive => GOLD,
+                    Knob::Tremolo | Knob::HammerHardness => TEAL,
                     _ => unreachable!(),
                 };
-                let value = format!("{:.0}%", param.value() * 100.0);
+                let value = match knob {
+                    Knob::ReedDecay | Knob::HammerHardness | Knob::PickupDrive => {
+                        format!("{:.2}×", param.value())
+                    }
+                    _ => format!("{:.0}%", param.value() * 100.0),
+                };
                 let r = knob.rect();
                 d.rect(r.0, r.1, r.2, r.3, PANEL);
                 d.outline(r, LINE);
@@ -401,11 +380,12 @@ impl View for OpenWurliView {
                     false,
                 );
             }
-            d.button(
-                MLP_BUTTON,
-                "MLP CORRECTIONS",
-                self.params.mlp_enabled.value(),
-                TEAL,
+            d.text(
+                45.0,
+                466.0,
+                "VOICING CONTROLS APPLY TO NEW NOTES",
+                9.0,
+                MUTED,
             );
             let heavy = self.params.cpu_mode.value() == crate::params::CpuMode::Heavy;
             d.button_tinted(
@@ -414,11 +394,11 @@ impl View for OpenWurliView {
                 heavy,
                 GOLD,
             );
-            d.text(509.0, 307.0, "64 VOICES", 11.0, TEXT);
+            d.text(573.0, 500.0, "64 VOICES", 11.0, TEXT);
         }
         d.text(
             45.0,
-            334.0,
+            544.0,
             "DSP: HAL0ZER0 / OPENWURLI  •  GPL-3.0-OR-LATER",
             8.0,
             MUTED,
@@ -438,7 +418,6 @@ pub fn create(params: Arc<OpenWurliUiParams>) -> Option<Box<dyn Editor>> {
                 drag: None,
                 hover: None,
                 show_advanced: false,
-                show_engine: false,
             }
             .build(cx, |cx| {
                 let timer = cx.add_timer(Duration::from_millis(33), None, |cx, action| {
@@ -452,4 +431,46 @@ pub fn create(params: Arc<OpenWurliUiParams>) -> Option<Box<dyn Editor>> {
             .height(Stretch(1.0));
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn promoted_knobs_remain_reachable_in_short_hosts_and_settings_hide_them() {
+        let mut view = OpenWurliView {
+            params: Arc::new(OpenWurliUiParams::default()),
+            font: Cell::new(None),
+            drag: None,
+            hover: None,
+            show_advanced: false,
+        };
+        let viewport = EditorViewport::fit((0.0, 0.0, 720.0, 340.0), (WIDTH, HEIGHT)).unwrap();
+        for knob in Knob::MAIN {
+            let (x, y, w, h) = knob.rect();
+            let screen_x = viewport.x + (x + w * 0.5) * viewport.scale;
+            let screen_y = viewport.y + (y + h * 0.5) * viewport.scale;
+            assert!(screen_y < 340.0);
+            let local = viewport.to_local(screen_x, screen_y);
+            assert_eq!(view.knob_at(local.0, local.1), Some(knob));
+            assert!(
+                !knob.is_advanced(),
+                "promoted knobs must use vertical dragging"
+            );
+            assert!(y + h < CPU_BUTTON.1);
+        }
+        view.show_advanced = true;
+        for knob in [Knob::ReedDecay, Knob::HammerHardness, Knob::PickupDrive] {
+            let (x, y, w, h) = knob.rect();
+            assert_eq!(view.knob_at(x + w * 0.5, y + h * 0.5), None);
+        }
+        let (x, y, w, h) = Knob::TremoloResponse.rect();
+        assert_eq!(
+            view.knob_at(x + w * 0.5, y + h * 0.5),
+            Some(Knob::TremoloResponse)
+        );
+        assert!(y + h < EXTENDED_BUTTON.1);
+        assert!(y + h < SAG_BUTTON.1);
+    }
 }

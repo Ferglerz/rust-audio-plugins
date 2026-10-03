@@ -132,7 +132,13 @@ impl GraphLayout {
                     let x = self.freq_to_x(freq);
                     d.line(x, self.gy, x, self.gy + self.gh, LINE, 1.0);
                     if show_freq_labels && !label.is_empty() {
-                        d.text(x - 9.0, self.gy + self.gh + 18.0, label, 10.5, MUTED);
+                        d.text(
+                            x - 9.0,
+                            self.gy + self.gh + FREQ_LABEL_BASELINE_OFFSET,
+                            label,
+                            10.5,
+                            MUTED,
+                        );
                     }
                 }
             }
@@ -175,7 +181,13 @@ impl GraphLayout {
             } else {
                 format!("{}", freq.round() as i32)
             };
-            d.text(x - 9.0, self.gy + self.gh + 18.0, &label, 10.5, MUTED);
+            d.text(
+                x - 9.0,
+                self.gy + self.gh + FREQ_LABEL_BASELINE_OFFSET,
+                &label,
+                10.5,
+                MUTED,
+            );
         }
     }
 

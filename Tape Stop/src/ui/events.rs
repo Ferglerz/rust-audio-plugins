@@ -4,9 +4,12 @@ impl TapeStopView {
     pub(super) fn handle_event(&mut self, cx: &mut EventContext, event: &mut Event) {
         event.map(|window_event, meta| {
             let bounds = cx.bounds();
-            let scale = bounds.w / UI_W;
-            let mouse_x = (cx.mouse().cursorx - bounds.x) / scale;
-            let mouse_y = (cx.mouse().cursory - bounds.y) / scale;
+            let Some(viewport) =
+                EditorViewport::fit((bounds.x, bounds.y, bounds.w, bounds.h), (UI_W, UI_H))
+            else {
+                return;
+            };
+            let (mouse_x, mouse_y) = viewport.to_local(cx.mouse().cursorx, cx.mouse().cursory);
 
             if let WindowEvent::MouseScroll(_, dy) = window_event {
                 if *dy != 0.0 {
