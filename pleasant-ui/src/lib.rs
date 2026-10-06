@@ -12,7 +12,7 @@ pub mod spectrum;
 pub mod theme;
 pub mod value_edit;
 
-pub use draw::{ButtonAnim, Draw, TRACE_REST_PX};
+pub use draw::{ButtonAnim, Draw, KnobLayout, TRACE_REST_PX};
 pub use handles::{tag_contains, tag_hit_rect, TagPointer};
 pub use pointer::{idle_hover, local_xy};
 pub use preferences::AppearanceStore;

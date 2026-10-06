@@ -336,6 +336,20 @@ pub const TARGETS: &[Target] = &[
         max: 1.0,
         discrete: false,
     },
+    Target {
+        name: "Loop begin",
+        id: "loop_start",
+        min: 1.0,
+        max: 32.0,
+        discrete: true,
+    },
+    Target {
+        name: "Loop end",
+        id: "loop_end",
+        min: 0.0,
+        max: 32.0,
+        discrete: true,
+    },
 ];
 impl Target {
     // Keep saved destination indices stable; touch bounds are no longer routable.
@@ -411,6 +425,8 @@ impl Target {
             "bend_range" | "master_range" => format!("{v:.0} st"),
             "output_channel" | "bass_channel" | "upper_channel" => format!("{:.0}", v + 1.0),
             "velocity" | "humanize" | "gate" | "contour" | "swing" => format!("{:.0}%", v * 100.0),
+            "loop_start" => format!("{v:.0}"),
+            "loop_end" => if v == 0.0 { "Auto".into() } else { format!("{v:.0}") },
             _ if self.discrete => format!("{v:.0}"),
             _ => format!("{v:.2}"),
         }
@@ -444,6 +460,8 @@ impl Target {
             "gate" => c.gate = v,
             "swing" => c.swing = v,
             "octaves" => c.octaves = v as u8,
+            "loop_start" => c.loop_start = v as u8,
+            "loop_end" => c.loop_end = v as u8,
             "humanize" => c.humanize = v,
             "root_on_select" => c.root_on_select = v >= 0.5,
             "latch" => c.latch = v >= 0.5,
@@ -728,25 +746,24 @@ mod tests {
         assert!(e.voices.iter().all(Option::is_none));
     }
     #[test]
-    fn modwheel_controls_strings_played_without_changing_total() {
+    fn modwheel_controls_octaves_in_once_mode() {
         let mut e = Engine::default();
         let mut c = Config {
             mode: AUTO,
-            strings: 12,
+            octaves: 1,
             strum_ms: 0.0,
             strum_sync: false,
             ..Config::default()
         };
-        c.routes[0] = route(2, "strings_played");
+        c.routes[0] = route(2, "octaves");
         e.configure(c, &mut |_| {});
-        for (value, count) in [(0.0, 1), (0.5, 7), (1.0, 12)] {
+        for (value, octaves, count) in [(0.0, 1, 3), (1.0, 4, 12)] {
             e.control(0, 1, value, &mut |_| {});
-            assert_eq!(e.config.strings, 12);
-            assert_eq!(e.config.strings_played, count);
+            assert_eq!(e.config.octaves, octaves);
             e.midi_note(true, 0, 63, 0.8, &mut |_| {});
             let mut events = Vec::new();
             e.tick(&mut |v| events.push(v));
-            assert_eq!(ons(&events).len(), count as usize);
+            assert_eq!(ons(&events).len(), count);
             e.midi_note(false, 0, 63, 0.0, &mut |_| {});
         }
     }

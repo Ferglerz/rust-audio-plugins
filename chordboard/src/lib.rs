@@ -3,9 +3,10 @@ mod bridge;
 pub mod engine;
 pub mod harmony;
 pub mod params;
+pub mod sound;
 mod ui;
 use bridge::Bridge;
-use engine::{Engine, Out};
+use engine::{Engine, Lane, Out};
 use nih_plug::prelude::*;
 use params::ChordboardParams;
 use std::sync::{atomic::Ordering, Arc};
@@ -41,9 +42,12 @@ impl EventBatch {
 pub struct Chordboard {
     params: Arc<ChordboardParams>,
     bridge: Arc<Bridge>,
-    engine: Engine,
+    engine: Box<Engine>,
+    pub sound: sound::LaneDispatcher,
     expected_position: Option<i64>,
     last_axes: [f32; 2],
+    last_pitch_bend: f32,
+    last_mod_wheel: f32,
     pending_reset: bool,
 }
 impl Default for Chordboard {
@@ -51,9 +55,12 @@ impl Default for Chordboard {
         Self {
             params: Arc::new(ChordboardParams::default()),
             bridge: Arc::new(Bridge::default()),
-            engine: Engine::default(),
+            engine: Box::new(Engine::default()),
+            sound: sound::LaneDispatcher::new(44100.0),
             expected_position: None,
             last_axes: [0.0, 0.8],
+            last_pitch_bend: 0.0,
+            last_mod_wheel: 0.0,
             pending_reset: false,
         }
     }
@@ -205,7 +212,10 @@ impl Chordboard {
             } => self.engine.midi_note(false, channel, note, velocity, out),
             NoteEvent::MidiCC {
                 channel, cc, value, ..
-            } => self.engine.control(channel, cc, value, out),
+            } => {
+                self.sound.handle_cc(channel, cc, value);
+                self.engine.control(channel, cc, value, out);
+            }
             NoteEvent::MidiChannelPressure {
                 channel, pressure, ..
             } => self.engine.pressure(channel, None, pressure, out),
@@ -324,17 +334,43 @@ impl Plugin for Chordboard {
                 );
             }
         }
+        if !state.fields.contains_key("lanes-schema-version") {
+            state
+                .params
+                .entry("lane_bass_engine".into())
+                .or_insert(ParamValue::I32(1));
+            state
+                .params
+                .entry("lane_comp_engine".into())
+                .or_insert(ParamValue::I32(2));
+            state
+                .params
+                .entry("lane_arp_engine".into())
+                .or_insert(ParamValue::I32(1));
+            state
+                .params
+                .entry("lane_lead_engine".into())
+                .or_insert(ParamValue::I32(1));
+            state.fields.insert("lanes-schema-version".into(), "1".into());
+        }
     }
     const NAME: &'static str = "Chordboard";
     const VENDOR: &'static str = "Fergler";
     const URL: &'static str = "https://github.com/Ferglerz/Chordboard";
     const EMAIL: &'static str = "";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
-    const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[AudioIOLayout {
-        main_input_channels: NonZeroU32::new(2),
-        main_output_channels: NonZeroU32::new(2),
-        ..AudioIOLayout::const_default()
-    }];
+    const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[
+        AudioIOLayout {
+            main_input_channels: None,
+            main_output_channels: NonZeroU32::new(2),
+            ..AudioIOLayout::const_default()
+        },
+        AudioIOLayout {
+            main_input_channels: NonZeroU32::new(2),
+            main_output_channels: NonZeroU32::new(2),
+            ..AudioIOLayout::const_default()
+        },
+    ];
     const MIDI_INPUT: MidiConfig = MidiConfig::MidiCCs;
     const MIDI_OUTPUT: MidiConfig = MidiConfig::MidiCCs;
     const SAMPLE_ACCURATE_AUTOMATION: bool = true;
@@ -352,13 +388,16 @@ impl Plugin for Chordboard {
         config: &BufferConfig,
         _: &mut impl InitContext<Self>,
     ) -> bool {
-        self.engine.sample_rate = config.sample_rate;
-        self.pending_reset = true;
+        self.engine.set_sample_rate(config.sample_rate);
+        self.sound.set_sample_rate(config.sample_rate);
+        self.sound.prewarm(config.sample_rate, config.max_buffer_size as usize);
+        self.pending_reset = false;
         true
     }
     fn reset(&mut self) {
         self.bridge.learned_split.store(0, Ordering::Release);
-        self.pending_reset = true;
+        self.pending_reset = false;
+        self.sound.reset();
         self.engine.quality = self.params.selected_quality.load(Ordering::Relaxed).min(11) as u8;
         self.expected_position = None;
     }
@@ -387,19 +426,83 @@ impl Plugin for Chordboard {
         };
         let panic_requested = self.bridge.panic.swap(false, Ordering::AcqRel);
         let reset_requested = self.bridge.reset.swap(false, Ordering::AcqRel);
-        if self.pending_reset || panic_requested || reset_requested {
+        if panic_requested || reset_requested {
+            self.sound.panic();
             self.engine.panic(&mut |e| emitted.push(0, e));
             if reset_requested {
                 self.engine.quality = self.params.quality.value() as u8;
                 self.engine.inversion = self.params.inversion.value() as u8;
             }
-            self.pending_reset = false;
             for _ in 0..128 {
                 if self.bridge.commands.pop().is_none() {
                     break;
                 }
             }
         }
+
+        // Sync parameters to internal sound lanes
+        let auto_mutes = [
+            self.params.lane_auto_mute_bass.value(),
+            self.params.lane_auto_mute_comp.value(),
+            self.params.lane_auto_mute_arp.value(),
+            self.params.lane_auto_mute_lead.value(),
+        ];
+        self.sound.set_pad_swell_source(self.params.pad_swell_source.value() as u8);
+        for &lane in &Lane::ALL {
+            let lp = self.params.lane_params(lane);
+            let engine_type = sound::LaneEngineType::from_index(lp.engine.value());
+            self.sound.set_lane_engine(lane, engine_type);
+            self.sound.set_lane_level(lane, lp.level.value());
+            self.sound.set_lane_pan(lane, lp.pan.value());
+            self.sound.set_lane_mute(lane, lp.mute.value());
+            self.sound.set_lane_auto_mute(lane, auto_mutes[lane.index()]);
+            self.sound.set_lane_param(lane, 0, lp.m1.value());
+            self.sound.set_lane_param(lane, 1, lp.m2.value());
+            self.sound.set_lane_param(lane, 2, lp.m3.value());
+            self.sound.set_lane_param(lane, 3, lp.m4.value());
+            self.sound.set_lane_param(lane, 4, lp.m5.value());
+            self.sound.set_lane_param(lane, 5, lp.m6.value());
+            self.sound.set_lane_opt_a(lane, lp.opt_a.value());
+            self.sound.set_lane_opt_b(lane, lp.opt_b.value());
+        }
+
+        // Apply pad crossfader between Comp (chords/pad) and Lead lanes
+        let pad_cross = self.params.pad_crossfade.value();
+        let comp_scale = ((1.0 - pad_cross) * 2.0).clamp(0.0, 1.0);
+        let lead_scale = (pad_cross * 2.0).clamp(0.0, 1.0);
+        let comp_level = self.params.lane_params(Lane::Comp).level.value() * comp_scale;
+        let lead_level = self.params.lane_params(Lane::Lead).level.value() * lead_scale;
+        self.sound.set_lane_level(Lane::Comp, comp_level);
+        self.sound.set_lane_level(Lane::Lead, lead_level);
+
+        // Apply FX Drive to pickup drive if active
+        let fx_drive_val = self.params.fx_drive.value();
+        if self.params.fx_tape.value() || fx_drive_val > 0.01 {
+            let base_drive = self.params.lane_params(Lane::Comp).m6.value();
+            self.sound.set_lane_param(Lane::Comp, 6, (base_drive + fx_drive_val * 0.5).clamp(0.0, 1.0));
+        }
+
+        // Dispatch hardware pitch bend parameter
+        let cur_bend = self.params.pitch_bend.value();
+        if (cur_bend - self.last_pitch_bend).abs() > 0.001 {
+            self.last_pitch_bend = cur_bend;
+            let norm_bend = (cur_bend + 1.0) * 0.5;
+            for ch in 0..16 {
+                self.sound.handle_bend(ch, cur_bend);
+                emitted.push(0, Out::Bend(ch, norm_bend));
+            }
+        }
+
+        // Dispatch hardware modulation wheel parameter
+        let cur_mod = self.params.mod_wheel.value();
+        if (cur_mod - self.last_mod_wheel).abs() > 0.001 {
+            self.last_mod_wheel = cur_mod;
+            for ch in 0..16 {
+                self.sound.handle_cc(ch, 1, cur_mod);
+                emitted.push(0, Out::Cc(ch, 1, cur_mod));
+            }
+        }
+
         self.engine
             .configure(self.current_config(), &mut |e| emitted.push(0, e));
         self.engine
@@ -422,6 +525,24 @@ impl Plugin for Chordboard {
         self.process_events(count, || context.next_event(), &mut |timing, event| {
             emitted.push(timing, event);
         });
+
+        // Drain note events into sound engines
+        for event in self.engine.tap.drain() {
+            self.sound.handle_lane_event(event);
+        }
+
+        // Route expression events to sound engines
+        for &entry in &emitted.events[..emitted.len] {
+            if let Some((_, event)) = entry {
+                match event {
+                    Out::Bend(ch, val) => self.sound.handle_bend(ch, val),
+                    Out::Pressure(ch, val) => self.sound.handle_pressure(ch, val),
+                    Out::Cc(ch, cc, val) => self.sound.handle_cc(ch, cc, val),
+                    _ => {}
+                }
+            }
+        }
+
         if let Some((axis, mapping)) = self.engine.learned.take() {
             self.params
                 .mapping(axis)
@@ -436,6 +557,7 @@ impl Plugin for Chordboard {
                 .store(base as i32, Ordering::Relaxed);
         }
         if emitted.overflow {
+            self.sound.panic();
             self.engine.panic(&mut |_| {});
             // A pedal-up earlier in the dropped batch may have cleared the
             // internal flag already. Release sustain on every output channel.
@@ -467,6 +589,22 @@ impl Plugin for Chordboard {
                 context.send_event(output(event, timing));
             }
         }
+
+        // Render audio from sound lanes into host buffer
+        let slices = buffer.as_slice();
+        if slices.len() >= 2 {
+            let (left_slice, right_slice) = slices.split_at_mut(1);
+            self.sound.render(&mut left_slice[0], &mut right_slice[0]);
+        } else if !slices.is_empty() {
+            let len = slices[0].len();
+            let mut dummy = [0.0f32; 1024];
+            let right = if len <= 1024 { &mut dummy[..len] } else { &mut [] };
+            self.sound.render(&mut slices[0], right);
+        }
+        for (i, strip) in self.sound.lanes.iter().enumerate() {
+            self.bridge.store_lane_peak(i, strip.peak);
+        }
+
         self.params
             .selected_quality
             .store(self.engine.quality as u32, Ordering::Relaxed);
@@ -480,12 +618,20 @@ impl ClapPlugin for Chordboard {
         Some("Expressive harmony and gesture-driven MIDI strumming");
     const CLAP_MANUAL_URL: Option<&'static str> = Some("https://github.com/Ferglerz/Chordboard");
     const CLAP_SUPPORT_URL: Option<&'static str> = None;
-    const CLAP_FEATURES: &'static [ClapFeature] = &[ClapFeature::NoteEffect, ClapFeature::Utility];
+    const CLAP_FEATURES: &'static [ClapFeature] = &[
+        ClapFeature::Instrument,
+        ClapFeature::Synthesizer,
+        ClapFeature::NoteEffect,
+        ClapFeature::Utility,
+    ];
 }
 impl Vst3Plugin for Chordboard {
     const VST3_CLASS_ID: [u8; 16] = *b"FergChordboard01";
-    const VST3_SUBCATEGORIES: &'static [Vst3SubCategory] =
-        &[Vst3SubCategory::Fx, Vst3SubCategory::Tools];
+    const VST3_SUBCATEGORIES: &'static [Vst3SubCategory] = &[
+        Vst3SubCategory::Instrument,
+        Vst3SubCategory::Synth,
+        Vst3SubCategory::Tools,
+    ];
 }
 nih_export_clap!(Chordboard);
 nih_export_vst3!(Chordboard);
@@ -728,7 +874,12 @@ mod protocol_tests {
         }
         Chordboard::filter_state(&mut state);
         assert_eq!(state.fields["schema-version"], "1");
-        assert_eq!(state.params.len(), engine::routing::ROUTE_COUNT * 2 + 1);
+        assert_eq!(state.fields["lanes-schema-version"], "1");
+        assert_eq!(state.params.len(), engine::routing::ROUTE_COUNT * 2 + 1 + 4);
+        assert!(matches!(state.params["lane_bass_engine"], ParamValue::I32(1)));
+        assert!(matches!(state.params["lane_comp_engine"], ParamValue::I32(2)));
+        assert!(matches!(state.params["lane_arp_engine"], ParamValue::I32(1)));
+        assert!(matches!(state.params["lane_lead_engine"], ParamValue::I32(1)));
         let mut config = engine::Config {
             mode: engine::MANUAL,
             legacy_direct_x: true,

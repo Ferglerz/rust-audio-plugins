@@ -683,15 +683,22 @@ impl ChordboardView {
         let target = &TARGETS[route.target as usize];
         d.font = self.font.get();
         d.text(
-            Panel::Routes.rect().0 + 10.0,
+            Panel::Routes.rect().0 + 16.0,
             module_title_y(Panel::Routes.rect().1, MODULE_TITLE_SIZE),
-            &self.selected_modulator.map_or_else(
-                || "MODULATION".into(),
-                |source| format!("{} ROUTES", SOURCES[source + 1].to_uppercase()),
-            ),
+            "MODULATION",
             MODULE_TITLE_SIZE,
             TEXT,
         );
+        if let Some(source) = self.selected_modulator {
+            d.text(
+                Panel::Routes.rect().0 + 120.0,
+                module_title_y(Panel::Routes.rect().1, MODULE_TITLE_SIZE),
+                &format!("· {} ROUTES", SOURCES[source + 1].to_uppercase()),
+                MODULE_TITLE_SIZE,
+                TEAL,
+            );
+        }
+        d.font = self.ui_font.get();
         self.button(d, ROUTE_CLEAR, "Clear", false, MUTED);
         for (slot, r) in self.editor_route_chips() {
             let assigned = self.params.routes[slot].route();

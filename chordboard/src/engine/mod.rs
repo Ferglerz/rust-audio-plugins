@@ -27,14 +27,14 @@ pub struct Engine {
     pub notes: Notes,
     pub expression: Expression,
     pub channels: [Expression; 16],
-    pub voices: [Option<Voice>; 15],
+    pub voices: [Option<Voice>; VOICE_CAPACITY],
     pub scheduled: [Option<Scheduled>; 128],
     pub quality: u8,
     control_alteration: Option<u8>,
     pub inversion: u8,
     pub pedal: bool,
     pub down: [bool; 2048 + KEY_TOKEN_COUNT],
-    held_inputs: [Option<(Slot, Option<u8>)>; 2048 + KEY_TOKEN_COUNT],
+    held_inputs: Box<[Option<(Slot, Option<u8>)>; 2048 + KEY_TOKEN_COUNT]>,
     melody: [[bool; 128]; 16],
     bass: [[Option<u8>; 128]; 16],
     bass_sustain: [bool; 16],
@@ -71,6 +71,12 @@ pub struct Engine {
     pub rng: u32,
     pub tempo: f64,
     pub playing: bool,
+    pub tap: LaneTap,
+    pub hysteresis_tracker: ExtensionHysteresisTracker,
+    pub lookahead_buffer: LookaheadBuffer,
+    pub topology: DualCoreTopology,
+    pub last_pedal_tap_time: u64,
+    pub zone_b_mapped: [[Option<u8>; 128]; 16],
 }
 impl Default for Engine {
     fn default() -> Self {
@@ -95,14 +101,14 @@ impl Default for Engine {
             notes: Notes::default(),
             expression: Expression::default(),
             channels: [Expression::default(); 16],
-            voices: [None; 15],
+            voices: [None; VOICE_CAPACITY],
             scheduled: [None; 128],
             quality: 0,
             control_alteration: None,
             inversion: 0,
             pedal: false,
             down: [false; 2048 + KEY_TOKEN_COUNT],
-            held_inputs: [None; 2048 + KEY_TOKEN_COUNT],
+            held_inputs: vec![None; 2048 + KEY_TOKEN_COUNT].into_boxed_slice().try_into().unwrap(),
             melody: [[false; 128]; 16],
             bass: [[None; 128]; 16],
             bass_sustain: [false; 16],
@@ -143,10 +149,21 @@ impl Default for Engine {
             rng: 0x43484f52,
             tempo: 120.0,
             playing: false,
+            tap: LaneTap::default(),
+            hysteresis_tracker: ExtensionHysteresisTracker::new(44100.0),
+            lookahead_buffer: LookaheadBuffer::new(44100.0),
+            topology: DualCoreTopology::KEYS_61,
+            last_pedal_tap_time: 0,
+            zone_b_mapped: [[None; 128]; 16],
         }
     }
 }
 impl Engine {
+    pub fn set_sample_rate(&mut self, sample_rate: f32) {
+        self.sample_rate = sample_rate;
+        self.hysteresis_tracker = ExtensionHysteresisTracker::new(sample_rate);
+        self.lookahead_buffer = LookaheadBuffer::new(sample_rate);
+    }
     pub fn configure(&mut self, config: Config, out: &mut impl FnMut(Out)) {
         self.configure_inner(config, true, out);
     }
@@ -203,7 +220,7 @@ impl Engine {
         }
         if old.strum_hold && !config.strum_hold && self.config.mode == AUTO {
             let duration = self.duration();
-            for i in 0..15 {
+            for i in 0..self.voices.len() {
                 if let Some(voice) = self.voices[i].as_mut() {
                     if !voice.layer && voice.off == u64::MAX {
                         voice.off = self.now.saturating_add(duration);
@@ -241,6 +258,7 @@ impl Engine {
             || old.inversion != config.inversion
             || old.transpose != config.transpose
             || old.spread != config.spread
+            || old.harmonization_mode != config.harmonization_mode
             || mode
         {
             self.leading_history = None;
@@ -252,7 +270,12 @@ impl Engine {
             || old.transpose != config.transpose
             || old.spread != config.spread
             || old.filter != config.filter
-            || old.root_on_select != config.root_on_select;
+            || old.root_on_select != config.root_on_select
+            || old.harmonization_mode != config.harmonization_mode
+            || old.chromatic_flavor != config.chromatic_flavor
+            || old.key != config.key
+            || old.scale != config.scale
+            || old.extensions != config.extensions;
         if restart {
             if revoice || mode {
                 self.rebuild_harmony(mode || self.config.mode != ARP, out);
@@ -269,6 +292,12 @@ impl Engine {
             && (old.always_bass != config.always_bass
                 || old.always_chord != config.always_chord
                 || old.latch != config.latch
+                || old.bass_mode != config.bass_mode
+                || old.bass_octave != config.bass_octave
+                || old.comp_mode != config.comp_mode
+                || old.comp_octave != config.comp_octave
+                || old.comp_guide_tone != config.comp_guide_tone
+                || old.legato_retention != config.legato_retention
                 || route
                 || mode
                 || revoice)
@@ -329,9 +358,21 @@ impl Engine {
         if self.root.is_none() {
             self.scheduled.fill(None);
             self.root = Some(slot);
-            self.quality = quality.unwrap_or(self.quality);
-            if quality.is_some() {
+            if self.config.harmonization_mode > 0 {
+                let harmonized = harmony::harmonize(
+                    harmony::HarmonizationEngineMode::from(self.config.harmonization_mode),
+                    harmony::ChromaticFlavor::from(self.config.chromatic_flavor),
+                    self.config.key,
+                    self.config.scale,
+                    note,
+                );
+                self.quality = harmonized.quality;
                 self.control_alteration = None;
+            } else {
+                self.quality = quality.unwrap_or(self.quality);
+                if quality.is_some() {
+                    self.control_alteration = None;
+                }
             }
             self.expression = if channel < 16 {
                 self.channels[channel as usize]
@@ -345,6 +386,26 @@ impl Engine {
         self.input_velocity = velocity.clamp(0.0, 1.0);
         self.configure_inner(self.host_config, false, out);
         self.rebuild(out);
+        if self.config.harmonization_mode > 0 {
+            let mut pending = [PendingNote::default(); 8];
+            let n = self.lookahead_buffer.drain_all(&mut pending);
+            for p in &pending[..n] {
+                let b_vel_f32 = (p.velocity as f32 / 127.0).clamp(0.01, 1.0);
+                if let Some(white_idx) = harmony::white_key_degree(p.note % 12) {
+                    let root_pc = self.selected_root().unwrap_or(60) % 12;
+                    let rel_semi = (root_pc as i16 - self.config.key as i16).rem_euclid(12) as u8;
+                    let tuple = harmony::matrix_interval_tuple(self.config.scale, rel_semi);
+                    let octave_offset = (p.note.saturating_sub(self.topology.zone_b_min) / 12) as u8;
+                    let root_pitch = (self.topology.zone_b_min + root_pc).min(127);
+                    let mapped = harmony::map_zone_b_white_key(white_idx, octave_offset, root_pitch, &tuple, self.config.extensions * 4.0);
+                    self.zone_b_mapped[p.channel as usize][p.note as usize] = Some(mapped);
+                    self.melody_note(true, p.channel, mapped, b_vel_f32, out);
+                } else {
+                    self.zone_b_mapped[p.channel as usize][p.note as usize] = Some(p.note);
+                    self.melody_note(true, p.channel, p.note, b_vel_f32, out);
+                }
+            }
+        }
     }
     pub fn note_off(&mut self, id: u16, velocity: f32, out: &mut impl FnMut(Out)) {
         if id as usize >= self.down.len() {
@@ -585,19 +646,58 @@ impl Engine {
         self.rebuild_harmony(true, out);
     }
     fn rebuild_harmony(&mut self, play: bool, out: &mut impl FnMut(Out)) {
-        let Some(root_note) = self.root.map(|s| s.note).or(self.memory.map(|m| m.root)) else {
+        let Some(raw_root) = self.root.map(|s| s.note).or(self.memory.map(|m| m.root)) else {
             return;
         };
-        let second = if self.root.is_some() {
-            self.second.map(|s| s.note).or_else(|| {
-                self.control_alteration
-                    .map(|interval| (root_note % 12 + interval) % 12)
-            })
+        let (root_note, quality, second) = if self.config.harmonization_mode > 0 && self.root.is_some() {
+            let harmonized = harmony::harmonize(
+                harmony::HarmonizationEngineMode::from(self.config.harmonization_mode),
+                harmony::ChromaticFlavor::from(self.config.chromatic_flavor),
+                self.config.key,
+                self.config.scale,
+                raw_root,
+            );
+            let second = self.second.map(|s| {
+                let alt = (s.note as i16 - raw_root as i16).rem_euclid(12) as u8;
+                let mut note = harmonized.root as i16 + alt as i16;
+                if note > 127 {
+                    note -= 12;
+                }
+                if note < 0 {
+                    note += 12;
+                }
+                note.clamp(0, 127) as u8
+            }).or_else(|| {
+                self.control_alteration.map(|interval| {
+                    let mut note = harmonized.root as i16 + interval as i16;
+                    if note > 127 {
+                        note -= 12;
+                    }
+                    if note < 0 {
+                        note += 12;
+                    }
+                    note.clamp(0, 127) as u8
+                })
+            }).or(harmonized.second);
+            (
+                harmonized.root,
+                harmonized.quality,
+                second,
+            )
         } else {
-            self.control_alteration
-                .map(|interval| (root_note % 12 + interval) % 12)
-                .or(self.memory.and_then(|m| m.second))
+            let second = if self.root.is_some() {
+                self.second.map(|s| s.note).or_else(|| {
+                    self.control_alteration
+                        .map(|interval| (raw_root % 12 + interval) % 12)
+                })
+            } else {
+                self.control_alteration
+                    .map(|interval| (raw_root % 12 + interval) % 12)
+                    .or(self.memory.and_then(|m| m.second))
+            };
+            (raw_root, self.quality, second)
         };
+        self.quality = quality;
         let recipe = harmony::SavedChord {
             root: root_note,
             second,
@@ -658,7 +758,12 @@ impl Engine {
                 }
             }
         }
-        self.notes = harmony::filter_notes(self.full_notes, self.config.filter);
+        let extended_notes = if self.config.extensions < 0.85 {
+            harmony::apply_extensions(&self.full_notes, self.config.extensions, self.quality)
+        } else {
+            self.full_notes
+        };
+        self.notes = harmony::filter_notes(extended_notes, self.config.filter);
         self.memory = Some(recipe);
         let count = harmony::intervals(
             self.quality,
@@ -681,7 +786,7 @@ impl Engine {
         }
         match self.config.mode {
             CHORD => {
-                for i in 0..15 {
+                for i in 0..self.voices.len() {
                     if self.voices[i].is_some_and(|v| !self.notes.as_slice().contains(&v.note)) {
                         let end = self.now.saturating_add(self.duration());
                         if let Some(voice) = self.voices[i].as_mut() {
@@ -700,28 +805,20 @@ impl Engine {
             }
             AUTO => {
                 if self.config.strum_hold {
-                    for i in 0..15 {
+                    for i in 0..self.voices.len() {
                         if self.voices[i].is_some_and(|v| !v.layer) {
                             self.end_voice(i, 0.0, out);
                         }
                     }
                 }
-                let count = self.config.strings.clamp(3, 12) as usize;
-                let played = (self.config.strings_played as usize).clamp(1, count);
                 let octaves = self.config.octaves.clamp(1, 4) as usize;
                 let pattern = self.config.arp_pattern;
-                let strikes = Self::pattern_length(pattern, played * octaves);
-                let total = played * octaves;
-                let offset = if matches!(pattern, 1 | 4) {
-                    count - played
-                } else {
-                    0
-                };
+                let total = self.notes.len * octaves;
+                let strikes = Self::pattern_length(pattern, total);
                 let base = self.rate_samples();
                 let mut at = 0.0;
                 for step in 0..strikes {
                     let index = self.arp_index(pattern, step, total);
-                    let string = offset + index % played + index / played * self.notes.len;
                     let ratio = step as f32 / (strikes - 1).max(1) as f32;
                     let random = self.random() as f32 / u32::MAX as f32;
                     let swing = if step.is_multiple_of(2) {
@@ -732,7 +829,7 @@ impl Engine {
                     let spacing = base * swing;
                     let strike_at = at;
                     at += spacing;
-                    let Some(note) = self.notes.string(string) else {
+                    let Some(note) = self.notes.string(index) else {
                         continue;
                     };
                     self.schedule(Scheduled {
@@ -755,6 +852,8 @@ impl Engine {
                         } else {
                             self.duration()
                         },
+                        channel: self.config.output_channel,
+                        kind: KIND_ARP,
                     });
                 }
             }
@@ -844,11 +943,23 @@ impl Engine {
             learning: self.learn,
             output_mpe: self.config.mpe,
             tempo: self.tempo as f32,
+            arp_cycle_step: self.arp_cycle_step,
         }
     }
     pub(super) fn selected_root(&self) -> Option<u8> {
-        let root = self.root.map(|s| s.note).or(self.memory.map(|m| m.root))? as i16
-            + self.config.transpose as i16;
+        let raw = self.root.map(|s| s.note).or(self.memory.map(|m| m.root))?;
+        let root = if self.config.harmonization_mode > 0 && self.root.is_some() {
+            harmony::harmonize(
+                harmony::HarmonizationEngineMode::from(self.config.harmonization_mode),
+                harmony::ChromaticFlavor::from(self.config.chromatic_flavor),
+                self.config.key,
+                self.config.scale,
+                raw,
+            )
+            .root as i16
+        } else {
+            raw as i16
+        } + self.config.transpose as i16;
         (0..=127).contains(&root).then_some(root as u8)
     }
     fn rate_samples(&self) -> f64 {

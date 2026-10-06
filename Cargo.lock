@@ -792,6 +792,7 @@ dependencies = [
  "crossbeam-queue",
  "nih_plug",
  "nih_plug_vizia",
+ "openwurli-dsp",
  "pleasant-ui",
 ]
 

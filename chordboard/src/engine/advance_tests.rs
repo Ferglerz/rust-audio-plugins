@@ -131,6 +131,7 @@ fn overdue_simultaneous_slots_and_voice_stealing_keep_tick_order() {
                 started: 0,
                 off,
                 layer,
+                kind: KIND_ARP,
             });
         }
         for (index, at, note, duration) in [
@@ -145,6 +146,8 @@ fn overdue_simultaneous_slots_and_voice_stealing_keep_tick_order() {
                 velocity: 0.75,
                 duration,
                 gate_step: None,
+                channel: 0,
+                kind: KIND_ARP,
             });
         }
         engine
@@ -192,6 +195,8 @@ fn full_scheduler_and_arp_share_the_original_capacity_and_slot_order() {
                 velocity: 0.8,
                 duration: 3,
                 gate_step: None,
+                channel: 0,
+                kind: KIND_ARP,
             });
         }
         engine
@@ -262,6 +267,7 @@ fn clock_wrap_and_saturated_note_deadlines_match_reference_tick() {
             started: 0,
             off: u64::MAX,
             layer: false,
+            kind: KIND_ARP,
         });
         engine.voices[1] = Some(Voice {
             note: 64,
@@ -269,6 +275,7 @@ fn clock_wrap_and_saturated_note_deadlines_match_reference_tick() {
             started: 0,
             off: 0,
             layer: true,
+            kind: KIND_ARP,
         });
         engine.scheduled[90] = Some(Scheduled {
             at: u64::MAX,
@@ -276,6 +283,8 @@ fn clock_wrap_and_saturated_note_deadlines_match_reference_tick() {
             velocity: 0.8,
             duration: 2,
             gate_step: None,
+            channel: 0,
+            kind: KIND_ARP,
         });
         engine
     }
@@ -314,6 +323,8 @@ fn deterministic_sparse_schedules_match_across_block_partitions() {
                 velocity: 0.7,
                 duration: (random % 29) as u64,
                 gate_step: Some(13),
+                channel: 0,
+                kind: KIND_ARP,
             });
         }
         engine
@@ -377,37 +388,43 @@ fn reference_inputs(
     emitted
 }
 
+fn check_midi_span(count: usize, mode: u8) {
+    let mut actual = Box::new(crate::Chordboard {
+        engine: Box::new(engine(mode, 6)),
+        ..crate::Chordboard::default()
+    });
+    let mut reference = Box::new(crate::Chordboard {
+        engine: Box::new(engine(mode, 6)),
+        ..crate::Chordboard::default()
+    });
+    let inputs = [
+        note(0, false, 60),
+        note(0, true, 62),
+        note(3, true, 66),
+        note(3, false, 66),
+        note(count as u32, false, 62),
+        note(count as u32 + 20, true, 60),
+        note(0, false, 60),
+    ];
+    let expected = reference_inputs(&mut reference, count, &inputs);
+    let mut observed = Vec::new();
+    let mut input = inputs.into_iter();
+    actual.process_events(count, || input.next(), &mut |offset, event| {
+        observed.push((offset, event))
+    });
+    assert_eq!(observed, expected);
+    assert!(observed
+        .iter()
+        .all(|(offset, _)| *offset <= count.saturating_sub(1) as u32));
+    assert_state(&actual.engine, &reference.engine);
+    compare_span(&mut actual.engine, &mut reference.engine, 100);
+}
+
 #[test]
 fn midi_spans_preserve_zero_buffers_ties_end_boundaries_and_trailing_order() {
     for count in [0, 1, 8, 64] {
         for mode in [CHORD, AUTO, MANUAL, ARP] {
-            let fixture = || crate::Chordboard {
-                engine: engine(mode, 6),
-                ..crate::Chordboard::default()
-            };
-            let mut actual = fixture();
-            let mut reference = fixture();
-            let inputs = [
-                note(0, false, 60),
-                note(0, true, 62),
-                note(3, true, 66),
-                note(3, false, 66),
-                note(count as u32, false, 62),
-                note(count as u32 + 20, true, 60),
-                note(0, false, 60),
-            ];
-            let expected = reference_inputs(&mut reference, count, &inputs);
-            let mut observed = Vec::new();
-            let mut input = inputs.into_iter();
-            actual.process_events(count, || input.next(), &mut |offset, event| {
-                observed.push((offset, event))
-            });
-            assert_eq!(observed, expected);
-            assert!(observed
-                .iter()
-                .all(|(offset, _)| *offset <= count.saturating_sub(1) as u32));
-            assert_state(&actual.engine, &reference.engine);
-            compare_span(&mut actual.engine, &mut reference.engine, 100);
+            check_midi_span(count, mode);
         }
     }
 }
@@ -415,10 +432,10 @@ fn midi_spans_preserve_zero_buffers_ties_end_boundaries_and_trailing_order() {
 #[test]
 fn incoming_midi_release_cancels_a_strike_due_at_the_same_sample() {
     let fixture = || {
-        let mut plugin = crate::Chordboard {
-            engine: engine(AUTO, 0),
+        let mut plugin = Box::new(crate::Chordboard {
+            engine: Box::new(engine(AUTO, 0)),
             ..crate::Chordboard::default()
-        };
+        });
         plugin.engine.voices.fill(None);
         plugin.engine.scheduled.fill(None);
         plugin.engine.scheduled[127] = Some(Scheduled {
@@ -427,6 +444,8 @@ fn incoming_midi_release_cancels_a_strike_due_at_the_same_sample() {
             velocity: 0.8,
             duration: 5,
             gate_step: None,
+            channel: 0,
+            kind: KIND_ARP,
         });
         plugin
     };

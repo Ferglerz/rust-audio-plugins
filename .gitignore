@@ -3,3 +3,5 @@
 
 # Original Composure repository metadata, preserved during workspace migration.
 /.composure-git-backup/
+nopia_full_transcript.txt
+.agents/

@@ -22,6 +22,10 @@ impl ChordboardView {
             bounds.y,
             self.ui_font.get(),
         );
+        if self.params.console_view.value() == 1 {
+            self.draw_live_console(&mut d);
+            return;
+        }
         d.rounded_rect(0.0, 0.0, W, H, 0.0, BG);
         d.rounded_rect(0.0, 0.0, W, 76.0, 0.0, PANEL);
         d.line(0.0, 75.0, W, 75.0, LINE, 1.0);
@@ -31,6 +35,7 @@ impl ChordboardView {
         d.appearance_button(APPEARANCE, prefs().label());
         d.font = self.ui_font.get();
         self.draw_tempo_header(&mut d);
+        self.draw_surface_tabs(&mut d);
         let expand = self.expand_t();
         let chords = shrink_width(CHORDS_SURFACE, expand);
         let modulation = MOD_SURFACE;
@@ -46,7 +51,11 @@ impl ChordboardView {
             d.scissor(chords.0, chords.1, chords.2.max(0.0), CHORDS_SURFACE.3);
             d.offset_x = -self.route_progress * CHORDS_SURFACE.2;
             if self.route_progress < 1.0 {
-                self.draw_chords(&mut d);
+                if self.panel == Some(Panel::Sound) {
+                    self.draw_sound(&mut d);
+                } else {
+                    self.draw_chords(&mut d);
+                }
             }
             if self.route_progress > 0.0 {
                 d.offset_x = (1.0 - self.route_progress) * CHORDS_SURFACE.2;
@@ -154,8 +163,12 @@ impl ChordboardView {
             11.0,
             if feedback { GOLD } else { MUTED },
         );
+        self.draw_menu_overlay(&mut d);
+    }
+
+    pub(super) fn draw_menu_overlay(&self, d: &mut Draw) {
         if let Some(menu) = self.menu {
-            self.surface(&mut d, self.menu_bounds(menu));
+            self.surface(d, self.menu_bounds(menu));
             let r = self.menu_bounds(menu);
             d.text(r.0 + 12.0, r.1 + 24.0, menu.title(), 12.0, MUTED);
             for (label, heading) in menu.group_heading_rects(r) {
@@ -165,7 +178,7 @@ impl ChordboardView {
                 let r = self.menu_option_rect(menu, i);
                 let allowed = self.route_menu_allowed(menu, i);
                 self.button(
-                    &mut d,
+                    d,
                     r,
                     label,
                     allowed && i == self.menu_selection(menu),
@@ -196,6 +209,18 @@ impl ChordboardView {
         let (x, y) = self.hover_pointer()?;
         if self.menu.is_some() {
             return None;
+        }
+        if hit(sound::SURFACE_TAB_CHORDS, x, y) {
+            return Some("Switch to Chords harmony matrix".into());
+        }
+        if hit(sound::SURFACE_TAB_SOUND, x, y) {
+            return Some("Switch to Sound Instrument Lanes (OpenWurli multi-lane mixer)".into());
+        }
+        if hit(sound::SURFACE_TAB_ROUTES, x, y) {
+            return Some("Switch to Modulation Routing matrix".into());
+        }
+        if hit(sound::SURFACE_TAB_LIVE, x, y) {
+            return Some("Switch to Nopia MK1 Universal Live Performance Console".into());
         }
         if self.panel == Some(Panel::Routes) && hit(self.panel_rect(Panel::Routes), x, y) {
             if hit(ROUTE_GRAPH, x, y) {
@@ -473,6 +498,8 @@ impl ChordboardView {
         let name = match c.id {
             "velocity" => "Velocity",
             "length_ms" => "Length",
+            "loop_start" => "Loop begin",
+            "loop_end" => "Loop end",
             "strings_played" => "Played",
             "output_channel" => "MIDI channel",
             "upper" => "Upper zone",

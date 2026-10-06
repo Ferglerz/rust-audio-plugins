@@ -1848,7 +1848,7 @@ fn route_drag_cancel_jitter_and_focus_loss_never_assign_or_strum() {
 #[test]
 fn route_drag_reuses_existing_destination_and_preserves_range_and_curve() {
     for source in [0, 3] {
-        let mut view = view(1, false);
+        let mut view = view(2, false);
         let route = &mut Arc::get_mut(&mut view.params).unwrap().routes[6];
         route.source = IntParam::new("Source", 1, IntRange::Linear { min: 0, max: 9 });
         route.min = FloatParam::new("Minimum", 0.25, FloatRange::Linear { min: 0.0, max: 1.0 });
@@ -1861,7 +1861,7 @@ fn route_drag_reuses_existing_destination_and_preserves_range_and_curve() {
             },
         );
         let (mut cx, entity, changes) = context();
-        let rect = output_controls(1)
+        let rect = output_controls(2)
             .into_iter()
             .find(|(id, _)| *id == "strings")
             .unwrap()
@@ -1902,7 +1902,7 @@ fn route_drag_exposes_keyboard_output_destinations() {
         .any(|(p, _)| *p == view.params.routes[view.route_slot].source.as_ptr()));
     changes.borrow_mut().clear();
     // Starting a new drag folds the route editor away so Strings is reachable.
-    let rect = output_controls(1)
+    let rect = output_controls(2)
         .into_iter()
         .find(|(id, _)| *id == "strings")
         .unwrap()
@@ -1949,7 +1949,7 @@ fn auto_strum_cannot_expand_and_collapses_the_manual_field() {
 
 #[test]
 fn modulator_drop_targets_include_auto_amount_and_manual_sweep() {
-    for (mode, id) in [(1, "strings_played"), (2, "x")] {
+    for (mode, id) in [(1, "length_ms"), (2, "x")] {
         let mut view = view(mode, false);
         let (mut cx, entity, changes) = context();
         let target = crate::engine::routing::TARGETS
@@ -3182,8 +3182,10 @@ fn output_controls_are_on_the_playback_pages_without_a_settings_page() {
         let ids: Vec<_> = v.base_controls().into_iter().map(|(c, _)| c.id).collect();
         assert!(ids.contains(&"velocity"));
         assert_eq!(ids.contains(&"length_ms"), mode != 3);
-        assert_eq!(ids.contains(&"strings"), mode != 3);
-        assert_eq!(ids.contains(&"strings_played"), mode == 1);
+        assert_eq!(ids.contains(&"strings"), mode == 2);
+        assert_eq!(ids.contains(&"loop_start"), mode == 3);
+        assert_eq!(ids.contains(&"loop_end"), mode == 3);
+        assert!(!ids.contains(&"strings_played"));
         assert!(!ids.contains(&"contour"));
     }
 }
@@ -3285,7 +3287,7 @@ fn arp_strings_cover_octaves_and_flash_short_notes_after_they_end() {
         IntParam::new("Octaves", 4, IntRange::Linear { min: 1, max: 4 });
     v.snapshot.notes = harmony::voice(60, 0, None, 0, 0, 0);
     assert_eq!(v.arp_string_count(3), 12);
-    assert_eq!(v.arp_string_count(1), 17);
+    assert_eq!(v.arp_string_count(1), 12);
     let (mut cx, target, _) = context();
     let mut snapshot = v.snapshot;
     snapshot.note_strikes[96] = 1;
@@ -3295,3 +3297,732 @@ fn arp_strings_cover_octaves_and_flash_short_notes_after_they_end() {
     v.tick(&mut EventContext::new_with_current(&mut cx, target));
     assert!(v.note_anim[96] > 0.0);
 }
+
+#[test]
+fn arp_loop_bound_drag_updates_loop_start_and_end() {
+    let mut v = view(3, false);
+    Arc::get_mut(&mut v.params).unwrap().octaves =
+        IntParam::new("Octaves", 4, IntRange::Linear { min: 1, max: 4 });
+    v.snapshot.notes = harmony::voice(60, 0, None, 0, 0, 0);
+    let count = 12;
+    let r = ARP_STRINGS;
+    let (mut cx, target, changes) = context();
+
+    // Click near the end string (string 12) -> grabs loop_end
+    let x_end = arp_string_pos(r, 11, count).0;
+    event(
+        &mut v,
+        &mut cx,
+        target,
+        x_end,
+        r.1 + 10.0,
+        WindowEvent::MouseDown(MouseButton::Left),
+    );
+    assert!(matches!(v.drag, Some(Drag::ArpLoopBound(true))));
+
+    // Drag to string 9 (index 8)
+    let x_9 = arp_string_pos(r, 8, count).0;
+    event(
+        &mut v,
+        &mut cx,
+        target,
+        x_9,
+        r.1 + 10.0,
+        WindowEvent::MouseMove(x_9, r.1 + 10.0),
+    );
+    let (ptr, norm) = changes.borrow().last().copied().unwrap();
+    assert_eq!(ptr, v.params.loop_end.as_ptr());
+    assert_eq!(v.params.loop_end.preview_plain(norm) as i32, 9);
+
+    // Release
+    event(
+        &mut v,
+        &mut cx,
+        target,
+        x_9,
+        r.1 + 10.0,
+        WindowEvent::MouseUp(MouseButton::Left),
+    );
+    assert!(v.drag.is_none());
+
+    // Click near start string (string 1) -> grabs loop_start
+    let x_start = arp_string_pos(r, 0, count).0;
+    event(
+        &mut v,
+        &mut cx,
+        target,
+        x_start,
+        r.1 + 10.0,
+        WindowEvent::MouseDown(MouseButton::Left),
+    );
+    assert!(matches!(v.drag, Some(Drag::ArpLoopBound(false))));
+
+    // Drag to string 3 (index 2)
+    let x_3 = arp_string_pos(r, 2, count).0;
+    event(
+        &mut v,
+        &mut cx,
+        target,
+        x_3,
+        r.1 + 10.0,
+        WindowEvent::MouseMove(x_3, r.1 + 10.0),
+    );
+    let (ptr, norm) = changes.borrow().last().copied().unwrap();
+    assert_eq!(ptr, v.params.loop_start.as_ptr());
+    assert_eq!(v.params.loop_start.preview_plain(norm) as i32, 3);
+}
+
+#[test]
+fn arp_volume_ramp_sweep_and_mute_skip_interactions() {
+    let mut v = view(3, false);
+    Arc::get_mut(&mut v.params).unwrap().octaves =
+        IntParam::new("Octaves", 4, IntRange::Linear { min: 1, max: 4 });
+    v.snapshot.notes = harmony::voice(60, 0, None, 0, 0, 0);
+    let count = 12;
+    let r = ARP_STRINGS;
+    let (mut cx, target, _) = context();
+
+    let (x_0, sy, sbottom) = arp_string_pos(r, 0, count);
+    let (x_1, _, _) = arp_string_pos(r, 1, count);
+    let (x_3, _, _) = arp_string_pos(r, 3, count);
+
+    // 1. Shift-drag crescendo ramp from string 0 (vol 0.2) to string 3 (vol 0.8)
+    let y_start = sbottom - 0.2 * (sbottom - sy);
+    let y_end = sbottom - 0.8 * (sbottom - sy);
+
+    BackendContext::new(&mut cx)
+        .modifiers()
+        .set(Modifiers::SHIFT, true);
+
+    event(
+        &mut v,
+        &mut cx,
+        target,
+        x_0,
+        y_start,
+        WindowEvent::MouseDown(MouseButton::Left),
+    );
+    assert!(matches!(v.drag, Some(Drag::ArpVolumeSweep { is_ramp: true, .. })));
+
+    event(
+        &mut v,
+        &mut cx,
+        target,
+        x_3,
+        y_end,
+        WindowEvent::MouseMove(x_3, y_end),
+    );
+
+    // Verify crescendo ramp
+    assert!((v.params.string_volume(0) - 0.2).abs() < 0.02);
+    assert!((v.params.string_volume(1) - 0.4).abs() < 0.02);
+    assert!((v.params.string_volume(2) - 0.6).abs() < 0.02);
+    assert!((v.params.string_volume(3) - 0.8).abs() < 0.02);
+
+    event(
+        &mut v,
+        &mut cx,
+        target,
+        x_3,
+        y_end,
+        WindowEvent::MouseUp(MouseButton::Left),
+    );
+    assert!(v.drag.is_none());
+
+    BackendContext::new(&mut cx)
+        .modifiers()
+        .set(Modifiers::SHIFT, false);
+
+    // 2. Double-click to reset volume
+    event(
+        &mut v,
+        &mut cx,
+        target,
+        x_0,
+        (sy + sbottom) * 0.5,
+        WindowEvent::MouseDoubleClick(MouseButton::Left),
+    );
+    assert!((v.params.string_volume(0) - 1.0).abs() < 0.01);
+
+    // 3. Shift + double-click resets all volumes
+    BackendContext::new(&mut cx)
+        .modifiers()
+        .set(Modifiers::SHIFT, true);
+    event(
+        &mut v,
+        &mut cx,
+        target,
+        x_1,
+        (sy + sbottom) * 0.5,
+        WindowEvent::MouseDoubleClick(MouseButton::Left),
+    );
+    BackendContext::new(&mut cx)
+        .modifiers()
+        .set(Modifiers::SHIFT, false);
+    for i in 0..4 {
+        assert_eq!(v.params.string_volume(i), 1.0);
+    }
+
+    // 4. Mute toggle via Zone 3 click (y >= sbottom - 2.0)
+    let y_badge = sbottom + 5.0;
+    assert!(!v.params.is_string_muted(0));
+    event(
+        &mut v,
+        &mut cx,
+        target,
+        x_0,
+        y_badge,
+        WindowEvent::MouseDown(MouseButton::Left),
+    );
+    assert!(v.params.is_string_muted(0));
+
+    // 5. Skip toggle via right-click
+    assert!(!v.params.is_string_skipped(1));
+    event(
+        &mut v,
+        &mut cx,
+        target,
+        arp_string_pos(r, 1, count).0,
+        y_badge,
+        WindowEvent::MouseDown(MouseButton::Right),
+    );
+    assert!(v.params.is_string_skipped(1));
+
+    // 6. Skip toggle via Alt + left-click
+    BackendContext::new(&mut cx)
+        .modifiers()
+        .set(Modifiers::ALT, true);
+    assert!(!v.params.is_string_skipped(2));
+    event(
+        &mut v,
+        &mut cx,
+        target,
+        arp_string_pos(r, 2, count).0,
+        y_badge,
+        WindowEvent::MouseDown(MouseButton::Left),
+    );
+    assert!(v.params.is_string_skipped(2));
+    BackendContext::new(&mut cx)
+        .modifiers()
+        .set(Modifiers::ALT, false);
+}
+
+#[test]
+fn arp_volume_lane_and_loop_handles_do_not_interfere() {
+    let mut v = view(3, false);
+    Arc::get_mut(&mut v.params).unwrap().octaves =
+        IntParam::new("Octaves", 4, IntRange::Linear { min: 1, max: 4 });
+    v.snapshot.notes = harmony::voice(60, 0, None, 0, 0, 0);
+    let count = 12;
+    let r = ARP_STRINGS;
+    let (mut cx, target, _) = context();
+
+    let (x_0, sy, _) = arp_string_pos(r, 0, count);
+    let end_idx = 11;
+    let (x_end, _, _) = arp_string_pos(r, end_idx, count);
+
+    // 1. Click at top of string 0 (x_0, sy): sets volume to 1.0 (100%), does NOT grab handle S
+    v.params.set_string_volume(0, 0.3);
+    event(
+        &mut v,
+        &mut cx,
+        target,
+        x_0,
+        sy,
+        WindowEvent::MouseDown(MouseButton::Left),
+    );
+    assert!(matches!(v.drag, Some(Drag::ArpVolumeSweep { .. })));
+    assert!(!matches!(v.drag, Some(Drag::ArpLoopBound(_))));
+    assert!((v.params.string_volume(0) - 1.0).abs() < 0.05);
+
+    event(
+        &mut v,
+        &mut cx,
+        target,
+        x_0,
+        sy,
+        WindowEvent::MouseUp(MouseButton::Left),
+    );
+    assert!(v.drag.is_none());
+
+    // 2. Click at top of end string (x_end, sy): sets volume to 1.0 (100%), does NOT grab handle E
+    v.params.set_string_volume(end_idx, 0.3);
+    event(
+        &mut v,
+        &mut cx,
+        target,
+        x_end,
+        sy,
+        WindowEvent::MouseDown(MouseButton::Left),
+    );
+    assert!(matches!(v.drag, Some(Drag::ArpVolumeSweep { .. })));
+    assert!(!matches!(v.drag, Some(Drag::ArpLoopBound(_))));
+    assert!((v.params.string_volume(end_idx) - 1.0).abs() < 0.05);
+
+    event(
+        &mut v,
+        &mut cx,
+        target,
+        x_end,
+        sy,
+        WindowEvent::MouseUp(MouseButton::Left),
+    );
+    assert!(v.drag.is_none());
+
+    // 3. Click above string 0 in handle lane (x_0, r.1 + 8.0): grabs handle S
+    event(
+        &mut v,
+        &mut cx,
+        target,
+        x_0,
+        r.1 + 8.0,
+        WindowEvent::MouseDown(MouseButton::Left),
+    );
+    assert!(matches!(v.drag, Some(Drag::ArpLoopBound(false))));
+
+    event(
+        &mut v,
+        &mut cx,
+        target,
+        x_0,
+        r.1 + 8.0,
+        WindowEvent::MouseUp(MouseButton::Left),
+    );
+    assert!(v.drag.is_none());
+
+    // 4. Click above end string in handle lane (x_end, r.1 + 8.0): grabs handle E
+    event(
+        &mut v,
+        &mut cx,
+        target,
+        x_end,
+        r.1 + 8.0,
+        WindowEvent::MouseDown(MouseButton::Left),
+    );
+    assert!(matches!(v.drag, Some(Drag::ArpLoopBound(true))));
+}
+
+#[test]
+fn loop_reset_button_clears_volumes_mutes_skips_and_bounds() {
+    let mut v = view(3, false);
+    v.snapshot.notes = harmony::voice(60, 0, None, 0, 0, 0);
+    v.params.set_string_volume(0, 0.2);
+    v.params.set_string_volume(1, 0.5);
+    v.params.toggle_string_muted(2);
+    v.params.toggle_string_skipped(3);
+
+    let (mut cx, target, changes) = context();
+    let r_reset = loop_reset_rect();
+
+    // Click Reset button
+    event(
+        &mut v,
+        &mut cx,
+        target,
+        r_reset.0 + r_reset.2 * 0.5,
+        r_reset.1 + r_reset.3 * 0.5,
+        WindowEvent::MouseDown(MouseButton::Left),
+    );
+
+    assert!((v.params.string_volume(0) - 1.0).abs() < 0.001);
+    assert!((v.params.string_volume(1) - 1.0).abs() < 0.001);
+    assert!(!v.params.is_string_muted(2));
+    assert!(!v.params.is_string_skipped(3));
+
+    let events = changes.borrow().clone();
+    assert!(events.iter().any(|(ptr, val)|
+        *ptr == v.params.loop_start.as_ptr() && (*val - v.params.loop_start.preview_normalized(1)).abs() < 0.001
+    ));
+    assert!(events.iter().any(|(ptr, val)|
+        *ptr == v.params.loop_end.as_ptr() && (*val - v.params.loop_end.preview_normalized(0)).abs() < 0.001
+    ));
+}
+
+#[test]
+fn loop_handles_and_volumes_double_click_reset() {
+    let mut v = view(3, false);
+    v.snapshot.notes = harmony::voice(60, 0, None, 0, 0, 0);
+    let r = ARP_STRINGS;
+    let count = 4;
+    let (x_0, sy, sbottom) = arp_string_pos(r, 0, count);
+    let (x_end, _, _) = arp_string_pos(r, 3, count);
+
+    // 1. Double-click handle S (in handle zone y < sy - 2.0)
+    let (mut cx, target, changes) = context();
+    event(
+        &mut v,
+        &mut cx,
+        target,
+        x_0,
+        r.1 + 8.0,
+        WindowEvent::MouseDoubleClick(MouseButton::Left),
+    );
+    let events = changes.borrow().clone();
+    assert!(events.iter().any(|(ptr, val)|
+        *ptr == v.params.loop_start.as_ptr() && (*val - v.params.loop_start.preview_normalized(1)).abs() < 0.001
+    ));
+
+    // 2. Double-click handle E
+    event(
+        &mut v,
+        &mut cx,
+        target,
+        x_end,
+        r.1 + 8.0,
+        WindowEvent::MouseDoubleClick(MouseButton::Left),
+    );
+    let events = changes.borrow().clone();
+    assert!(events.iter().any(|(ptr, val)|
+        *ptr == v.params.loop_end.as_ptr() && (*val - v.params.loop_end.preview_normalized(0)).abs() < 0.001
+    ));
+
+    // 3. Double-click in volume lane resets single note volume
+    v.params.set_string_volume(0, 0.3);
+    v.params.set_string_volume(1, 0.3);
+    let vol_y = (sy + sbottom) * 0.5;
+    event(
+        &mut v,
+        &mut cx,
+        target,
+        x_0,
+        vol_y,
+        WindowEvent::MouseDoubleClick(MouseButton::Left),
+    );
+    assert!((v.params.string_volume(0) - 1.0).abs() < 0.001);
+    assert!((v.params.string_volume(1) - 0.3).abs() < 0.001);
+
+    // 4. Shift + double-click in volume lane resets all note volumes
+    BackendContext::new(&mut cx)
+        .modifiers()
+        .set(Modifiers::SHIFT, true);
+    event(
+        &mut v,
+        &mut cx,
+        target,
+        x_0,
+        vol_y,
+        WindowEvent::MouseDoubleClick(MouseButton::Left),
+    );
+    assert!((v.params.string_volume(1) - 1.0).abs() < 0.001);
+}
+
+#[test]
+fn piano_displays_all_arp_octave_notes_in_loop_mode() {
+    let mut v = view(3, false);
+    // Setup a 4-note chord: C3 (48), E3 (52), G3 (55), B3 (59) via Maj7 (quality 2)
+    v.snapshot.notes = harmony::voice(48, 2, None, 0, 0, 0);
+    assert_eq!(v.snapshot.notes.len, 4);
+    // 3 octaves = 12 notes total
+    Arc::get_mut(&mut v.params).unwrap().octaves =
+        IntParam::new("Octaves", 3, IntRange::Linear { min: 1, max: 4 });
+    Arc::get_mut(&mut v.params).unwrap().loop_start =
+        IntParam::new("Loop Start", 3, IntRange::Linear { min: 1, max: 32 });
+    Arc::get_mut(&mut v.params).unwrap().loop_end =
+        IntParam::new("Loop End", 10, IntRange::Linear { min: 0, max: 32 });
+
+    let notes = v.piano_display_notes(3);
+    assert_eq!(notes.len(), 12, "Should display all 12 notes across 3 octaves");
+
+    // String 0: C3 (48), out of loop (str 1 < 3)
+    assert_eq!(notes[0].note, 48);
+    assert_eq!(notes[0].string_idx, 0);
+    assert!(!notes[0].is_in_loop);
+
+    // String 2: G3 (55), in loop (str 3 in [3..10])
+    assert_eq!(notes[2].note, 55);
+    assert_eq!(notes[2].string_idx, 2);
+    assert!(notes[2].is_in_loop);
+
+    // String 4: Octave 1, C4 (48 + 12 = 60), in loop
+    assert_eq!(notes[4].note, 60);
+    assert_eq!(notes[4].string_idx, 4);
+    assert!(notes[4].is_in_loop);
+
+    // String 8: Octave 2, C5 (48 + 24 = 72), in loop
+    assert_eq!(notes[8].note, 72);
+    assert_eq!(notes[8].string_idx, 8);
+    assert!(notes[8].is_in_loop);
+
+    // String 10: Octave 2, G5 (55 + 24 = 79), out of loop (str 11 > 10)
+    assert_eq!(notes[10].note, 79);
+    assert_eq!(notes[10].string_idx, 10);
+    assert!(!notes[10].is_in_loop);
+}
+
+#[test]
+fn piano_arp_apron_click_toggles_mute_and_skip() {
+    let mut v = view(3, false);
+    v.snapshot.notes = harmony::voice(60, 0, None, 0, 0, 0);
+    let (mut cx, target, _) = context();
+
+    // Key 60 apron
+    let badge_r = piano_key_badge_rect(60);
+    let (bx, by) = (badge_r.0 + badge_r.2 * 0.5, badge_r.1 + badge_r.3 * 0.5);
+
+    // 1. Left click on apron toggles mute for string 0
+    assert!(!v.params.is_string_muted(0));
+    event(&mut v, &mut cx, target, bx, by, WindowEvent::MouseDown(MouseButton::Left));
+    event(&mut v, &mut cx, target, bx, by, WindowEvent::MouseUp(MouseButton::Left));
+    assert!(v.params.is_string_muted(0));
+
+    event(&mut v, &mut cx, target, bx, by, WindowEvent::MouseDown(MouseButton::Left));
+    event(&mut v, &mut cx, target, bx, by, WindowEvent::MouseUp(MouseButton::Left));
+    assert!(!v.params.is_string_muted(0));
+
+    // 2. Alt + Left click on apron toggles skip for string 0
+    BackendContext::new(&mut cx).modifiers().set(Modifiers::ALT, true);
+    assert!(!v.params.is_string_skipped(0));
+    event(&mut v, &mut cx, target, bx, by, WindowEvent::MouseDown(MouseButton::Left));
+    event(&mut v, &mut cx, target, bx, by, WindowEvent::MouseUp(MouseButton::Left));
+    assert!(v.params.is_string_skipped(0));
+    BackendContext::new(&mut cx).modifiers().set(Modifiers::ALT, false);
+
+    // 3. Right click on piano key toggles skip for string 0
+    event(&mut v, &mut cx, target, bx, by, WindowEvent::MouseDown(MouseButton::Right));
+    assert!(!v.params.is_string_skipped(0));
+}
+
+#[test]
+fn piano_arp_volume_vertical_scrub_and_shift_ramp() {
+    let mut v = view(3, false);
+    v.snapshot.notes = harmony::voice(60, 0, None, 0, 0, 0);
+    let (mut cx, target, _) = context();
+
+    // Key 60 body (above apron)
+    let key_r = piano_key_rect(60);
+    let badge_r = piano_key_badge_rect(60);
+    let body_y = (key_r.1 + badge_r.1) * 0.5;
+    let kx = key_r.0 + key_r.2 * 0.5;
+
+    // Drag vertically on key body
+    event(&mut v, &mut cx, target, kx, body_y, WindowEvent::MouseDown(MouseButton::Left));
+    assert!(matches!(v.drag, Some(Drag::PianoArpVolumeSweep { .. })));
+
+    // Drag up towards top (higher volume)
+    event(&mut v, &mut cx, target, kx, key_r.1 + 2.0, WindowEvent::MouseMove(kx, key_r.1 + 2.0));
+    assert!(v.params.string_volume(0) > 0.85);
+
+    // Drag down towards bottom (lower volume)
+    event(&mut v, &mut cx, target, kx, badge_r.1 - 2.0, WindowEvent::MouseMove(kx, badge_r.1 - 2.0));
+    assert!(v.params.string_volume(0) < 0.2);
+
+    event(&mut v, &mut cx, target, kx, badge_r.1 - 2.0, WindowEvent::MouseUp(MouseButton::Left));
+    assert!(v.drag.is_none());
+
+    // Double-click resets volume to 1.0
+    event(&mut v, &mut cx, target, kx, body_y, WindowEvent::MouseDoubleClick(MouseButton::Left));
+    assert!((v.params.string_volume(0) - 1.0).abs() < 0.001);
+}
+
+#[test]
+fn piano_arp_loop_rail_drag_and_double_click_reset() {
+    let mut v = view(3, false);
+    v.snapshot.notes = harmony::voice(60, 0, None, 0, 0, 0);
+    let (mut cx, target, changes) = context();
+
+    let rail_y = PIANO_ARP_LOOP_RAIL.1 + PIANO_ARP_LOOP_RAIL.3 * 0.5;
+    let x_60 = piano_note_x(60);
+    let x_71 = piano_note_x(71);
+
+    // Drag across the rail from note 60 to note 71 to brush loop bounds
+    event(&mut v, &mut cx, target, x_60, rail_y, WindowEvent::MouseDown(MouseButton::Left));
+    assert!(matches!(v.drag, Some(Drag::PianoArpLoopBound(_) | Drag::PianoArpLoopDraw { .. })));
+
+    event(&mut v, &mut cx, target, x_71, rail_y, WindowEvent::MouseMove(x_71, rail_y));
+    event(&mut v, &mut cx, target, x_71, rail_y, WindowEvent::MouseUp(MouseButton::Left));
+
+    // Double click on rail resets loop bounds
+    event(&mut v, &mut cx, target, x_60, rail_y, WindowEvent::MouseDoubleClick(MouseButton::Left));
+    let events = changes.borrow().clone();
+    assert!(events.iter().any(|(ptr, val)|
+        *ptr == v.params.loop_start.as_ptr() && (*val - v.params.loop_start.preview_normalized(1)).abs() < 0.001
+    ));
+    assert!(events.iter().any(|(ptr, val)|
+        *ptr == v.params.loop_end.as_ptr() && (*val - v.params.loop_end.preview_normalized(0)).abs() < 0.001
+    ));
+}
+
+#[test]
+fn test_comp_default_channel_and_groove_menu() {
+    let mut v = view(1, false);
+    assert_eq!(v.params.comp_channel.value(), 1);
+    assert_eq!(v.params.output_channel.value(), 1);
+    assert_eq!(v.params.bass_channel.value(), 1);
+    assert_eq!(v.params.routing_preset.value(), 0);
+
+    let (mut cx, target, _changes) = context();
+
+    // Set comp_mode to 2 (Rhythm)
+    Arc::get_mut(&mut v.params).unwrap().comp_mode = IntParam::new("Comp mode", 2, IntRange::Linear { min: 0, max: 2 });
+
+    let rhythm_rect = comp_rhythm_rect(false);
+    let rx = rhythm_rect.0 + rhythm_rect.2 * 0.5;
+    let ry = rhythm_rect.1 + rhythm_rect.3 * 0.5;
+
+    // Click on comp rhythm button opens menu
+    event(&mut v, &mut cx, target, rx, ry, WindowEvent::MouseDown(MouseButton::Left));
+    assert_eq!(v.menu, Some(Menu::CompRhythm));
+
+    // Select Tresillo (index 2: 3 hits, 8 steps)
+    v.select_menu(&mut EventContext::new_with_current(&mut cx, target), Menu::CompRhythm, 2);
+    assert_eq!(v.menu, None);
+
+    // Verify comp_rhythm_label helper
+    assert_eq!(ChordboardView::comp_rhythm_label(4, 16), "Quarter ▾");
+    assert_eq!(ChordboardView::comp_rhythm_label(8, 16), "Eighths ▾");
+    assert_eq!(ChordboardView::comp_rhythm_label(3, 8), "Tresillo ▾");
+    assert_eq!(ChordboardView::comp_rhythm_label(6, 16), "Charleston ▾");
+    assert_eq!(ChordboardView::comp_rhythm_label(5, 16), "Cinquillo ▾");
+}
+
+#[test]
+fn test_live_console_view_and_mode_toggles() {
+    let mut v = view(1, false);
+    assert_eq!(v.params.console_view.value(), 0);
+    assert_eq!(v.params.bottom_deck_mode.value(), 0);
+    assert!(!v.params.degree_shift.value());
+
+    let (mut cx, target, changes) = context();
+
+    // 1. Click SURFACE_TAB_LIVE from Studio view switches to Live Console
+    let tab = sound::SURFACE_TAB_LIVE;
+    event(&mut v, &mut cx, target, tab.0 + 10.0, tab.1 + 10.0, WindowEvent::MouseDown(MouseButton::Left));
+    let events = changes.borrow().clone();
+    assert!(events.iter().any(|(ptr, val)|
+        *ptr == v.params.console_view.as_ptr() && (*val - v.params.console_view.preview_normalized(1)).abs() < 0.001
+    ));
+
+    // Switch view to Live Console (value 1)
+    Arc::get_mut(&mut v.params).unwrap().console_view = IntParam::new("Console view", 1, IntRange::Linear { min: 0, max: 1 });
+    let x0 = console::console_x_offset();
+
+    // 2. Click Bottom Deck Mode Pill (Right half = Strings Harp)
+    let dp = console::bottom_deck_pill_rect(x0);
+    event(&mut v, &mut cx, target, dp.0 + 120.0, dp.1 + 10.0, WindowEvent::MouseDown(MouseButton::Left));
+    let events = changes.borrow().clone();
+    assert!(events.iter().any(|(ptr, val)|
+        *ptr == v.params.bottom_deck_mode.as_ptr() && (*val - v.params.bottom_deck_mode.preview_normalized(1)).abs() < 0.001
+    ));
+
+    // 3. Click Degree Shift keycap
+    let sr = console::degree_shift_rect(x0);
+    event(&mut v, &mut cx, target, sr.0 + 10.0, sr.1 + 10.0, WindowEvent::MouseDown(MouseButton::Left));
+    let events = changes.borrow().clone();
+    assert!(events.iter().any(|(ptr, val)|
+        *ptr == v.params.degree_shift.as_ptr() && (*val - 1.0).abs() < 0.001
+    ));
+
+    // 4. Click Two Square Bass Pads (ALT)
+    let alt_pad = console::bass_pad_alt_rect(x0);
+    event(&mut v, &mut cx, target, alt_pad.0 + 5.0, alt_pad.1 + 5.0, WindowEvent::MouseDown(MouseButton::Left));
+    let events = changes.borrow().clone();
+    assert!(events.iter().any(|(ptr, val)|
+        *ptr == v.params.bass_pad_trigger.as_ptr() && (*val - v.params.bass_pad_trigger.preview_normalized(1)).abs() < 0.001
+    ));
+
+    // 5. Click Top Deck Pill Left Half ("STUDIO") switches back to Studio view
+    let pill = console::console_view_pill_rect(x0);
+    event(&mut v, &mut cx, target, pill.0 + 20.0, pill.1 + 10.0, WindowEvent::MouseDown(MouseButton::Left));
+    let events = changes.borrow().clone();
+    assert!(events.iter().any(|(ptr, val)|
+        *ptr == v.params.console_view.as_ptr() && (*val - v.params.console_view.preview_normalized(0)).abs() < 0.001
+    ));
+}
+
+#[test]
+fn test_live_console_cherry_and_arp_interactions() {
+    let mut v = view(1, false);
+    Arc::get_mut(&mut v.params).unwrap().console_view = IntParam::new("Console view", 1, IntRange::Linear { min: 0, max: 1 });
+    let (mut cx, target, changes) = context();
+    let x0 = console::console_x_offset();
+
+    // 1. Click Cherry White Key 0 triggers KeyDown command and captures drag
+    let key0 = console::cherry_white_key_rect(x0, 0);
+    event(&mut v, &mut cx, target, key0.0 + 5.0, key0.1 + 5.0, WindowEvent::MouseDown(MouseButton::Left));
+    assert!(matches!(v.drag, Some(Drag::Key(_))));
+    assert!(std::iter::from_fn(|| v.bridge.commands.pop()).any(|c| matches!(c, Command::KeyDown(..))));
+
+    // Release mouse triggers KeyUp command
+    event(&mut v, &mut cx, target, key0.0 + 5.0, key0.1 + 5.0, WindowEvent::MouseUp(MouseButton::Left));
+    assert!(std::iter::from_fn(|| v.bridge.commands.pop()).any(|c| matches!(c, Command::KeyUp(..))));
+
+    // 2. Click Arp Rate Division button 2 ("1/8")
+    let r2 = console::arp_rate_rect(x0, 2);
+    event(&mut v, &mut cx, target, r2.0 + 5.0, r2.1 + 5.0, WindowEvent::MouseDown(MouseButton::Left));
+    let events = changes.borrow().clone();
+    assert!(events.iter().any(|(ptr, val)|
+        *ptr == v.params.rate.as_ptr() && (*val - v.params.rate.preview_normalized(0.5)).abs() < 0.001
+    ));
+
+    // 3. Click Arp Pattern contour tile 1 ("DOWN")
+    let p1 = console::arp_pattern_rect(x0, 1);
+    event(&mut v, &mut cx, target, p1.0 + 5.0, p1.1 + 5.0, WindowEvent::MouseDown(MouseButton::Left));
+    let events = changes.borrow().clone();
+    assert!(events.iter().any(|(ptr, val)|
+        *ptr == v.params.arp_pattern.as_ptr() && (*val - v.params.arp_pattern.preview_normalized(1)).abs() < 0.001
+    ));
+
+    // 4. Click Accent step 0 cycles accent
+    let s0 = console::arp_accent_step_rect(x0, 0);
+    let before_accent = v.params.step_accent(0);
+    event(&mut v, &mut cx, target, s0.0 + 2.0, s0.1 + 2.0, WindowEvent::MouseDown(MouseButton::Left));
+    assert_ne!(v.params.step_accent(0), before_accent);
+}
+
+#[test]
+fn test_live_console_harp_and_pitch_bend_interactions() {
+    let mut v = view(1, false);
+    Arc::get_mut(&mut v.params).unwrap().console_view = IntParam::new("Console view", 1, IntRange::Linear { min: 0, max: 1 });
+    Arc::get_mut(&mut v.params).unwrap().bottom_deck_mode = IntParam::new("Bottom deck mode", 1, IntRange::Linear { min: 0, max: 1 });
+    let (mut cx, target, changes) = context();
+    let x0 = console::console_x_offset();
+
+    // 1. Click bottom mute badge on string 0 (y near bottom of harp)
+    assert!(!v.params.is_string_muted(0));
+    let hr0 = console::harp_string_rect(x0, 0);
+    event(&mut v, &mut cx, target, hr0.0 + 10.0, hr0.1 + hr0.3 - 10.0, WindowEvent::MouseDown(MouseButton::Left));
+    assert!(v.params.is_string_muted(0));
+
+    // 2. Right-click string 0 toggles skipped
+    assert!(!v.params.is_string_skipped(0));
+    event(&mut v, &mut cx, target, hr0.0 + 10.0, hr0.1 + 50.0, WindowEvent::MouseDown(MouseButton::Right));
+    assert!(v.params.is_string_skipped(0));
+
+    // 3. Click string body (pluck) starts gesture
+    event(&mut v, &mut cx, target, hr0.0 + 10.0, hr0.1 + 30.0, WindowEvent::MouseDown(MouseButton::Left));
+    assert!(matches!(v.drag, Some(Drag::Pad)));
+    assert!(std::iter::from_fn(|| v.bridge.commands.pop()).any(|c| matches!(c, Command::BeginGesture(..))));
+
+    // Dragging across harp strings sends X gesture
+    event(&mut v, &mut cx, target, hr0.0 + 100.0, hr0.1 + 30.0, WindowEvent::MouseMove(hr0.0 + 100.0, hr0.1 + 30.0));
+    assert!(std::iter::from_fn(|| v.bridge.commands.pop()).any(|c| matches!(c, Command::X(..))));
+
+    // Mouse up sends EndGesture
+    event(&mut v, &mut cx, target, hr0.0 + 100.0, hr0.1 + 30.0, WindowEvent::MouseUp(MouseButton::Left));
+    assert!(std::iter::from_fn(|| v.bridge.commands.pop()).any(|c| matches!(c, Command::EndGesture)));
+
+    // 4. Pitch bend deflection and spring back
+    let pb = console::pitch_bend_rail_rect(x0);
+    event(&mut v, &mut cx, target, pb.0 + pb.2 * 0.75, pb.1 + pb.3 * 0.5, WindowEvent::MouseDown(MouseButton::Left));
+    let events = changes.borrow().clone();
+    assert!(events.iter().any(|(ptr, val)| *ptr == v.params.pitch_bend.as_ptr() && *val > 0.5));
+
+    // Releasing mouse returns pitch bend to 0.0 center
+    event(&mut v, &mut cx, target, pb.0 + pb.2 * 0.75, pb.1 + pb.3 * 0.5, WindowEvent::MouseUp(MouseButton::Left));
+    let events_after = changes.borrow().clone();
+    assert!(events_after.iter().any(|(ptr, val)|
+        *ptr == v.params.pitch_bend.as_ptr() && (*val - v.params.pitch_bend.preview_normalized(0.0)).abs() < 0.001
+    ));
+
+    // 5. Looper REC primes recording, clicking slot records chord
+    let rec_r = console::looper_rec_rect(x0);
+    event(&mut v, &mut cx, target, rec_r.0 + 5.0, rec_r.1 + 5.0, WindowEvent::MouseDown(MouseButton::Left));
+    let events = changes.borrow().clone();
+    assert!(events.iter().any(|(ptr, val)| *ptr == v.params.looper_rec.as_ptr() && (*val - 1.0).abs() < 0.001));
+    Arc::get_mut(&mut v.params).unwrap().looper_rec = BoolParam::new("Looper rec", true);
+
+    let bar0 = console::looper_bar_rect(x0, 0);
+    event(&mut v, &mut cx, target, bar0.0 + 5.0, bar0.1 + 5.0, WindowEvent::MouseDown(MouseButton::Left));
+    assert!(std::iter::from_fn(|| v.bridge.commands.pop()).any(|c| matches!(c, Command::Capture(0))));
+}
+

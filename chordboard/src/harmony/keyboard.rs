@@ -14,7 +14,7 @@ fn degree_root(scale: u8, column: usize) -> u8 {
     tones[column % tones.len()] + (column / tones.len()) as u8 * 12
 }
 
-fn degree_quality(scale: u8, column: usize) -> u8 {
+pub fn degree_quality(scale: u8, column: usize) -> u8 {
     // Pentatonic layouts use the triads of their parent major/natural-minor scale.
     let parent = match scale {
         6 => 0,

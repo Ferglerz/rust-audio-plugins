@@ -800,7 +800,7 @@ fn once_rate_uses_beats_or_milliseconds_per_note() {
         );
         on(&mut e, 60, 0);
         let last = e.scheduled.iter().flatten().map(|note| note.at).max();
-        assert_eq!(last, Some(expected * 7), "tempo {tempo}, sync {sync}");
+        assert_eq!(last, Some(expected * 2), "tempo {tempo}, sync {sync}");
     }
 }
 
@@ -1195,7 +1195,7 @@ fn auto_full_strings_match_display_in_both_directions() {
                 &mut e,
                 Config {
                     mode: AUTO,
-                    strings: 12,
+                    octaves: 4,
                     strum_ms: 0.0,
                     strum_sync: false,
                     spread,
@@ -1263,40 +1263,38 @@ fn released_strums_ring_across_the_next_chord_without_hold() {
 }
 
 #[test]
-fn auto_strings_played_limits_sweeps_without_changing_the_layout() {
-    for total in [3, 8, 12] {
-        for played in 1..=12 {
-            for direction in 0..2 {
-                let mut e = Engine::default();
-                configure(
-                    &mut e,
-                    Config {
-                        mode: AUTO,
-                        strings: total,
-                        strings_played: played,
-                        arp_pattern: direction,
-                        strum_ms: 0.0,
-                        strum_sync: false,
-                        ..Config::default()
-                    },
-                );
-                on(&mut e, 63, 1);
-                let layout = e.snapshot().notes;
-                for sweep in 0..2 {
-                    if sweep == 1 {
-                        e.rebuild(&mut |_| {});
-                    }
-                    let reverse = direction == 1;
-                    let expected = (0..played.min(total) as usize)
-                        .map(|i| {
-                            layout
-                                .string(if reverse { total as usize - 1 - i } else { i })
-                                .unwrap()
-                        })
-                        .collect::<Vec<_>>();
-                    assert_eq!(notes(&tick(&mut e, 1)), expected);
-                    assert_eq!(e.snapshot().notes, layout);
+fn once_octaves_limits_sweeps_without_changing_the_layout() {
+    for octaves in 1..=4 {
+        for direction in 0..2 {
+            let mut e = Engine::default();
+            configure(
+                &mut e,
+                Config {
+                    mode: AUTO,
+                    octaves,
+                    arp_pattern: direction,
+                    strum_ms: 0.0,
+                    strum_sync: false,
+                    ..Config::default()
+                },
+            );
+            on(&mut e, 63, 1);
+            let layout = e.snapshot().notes;
+            let total = layout.len * octaves as usize;
+            for sweep in 0..2 {
+                if sweep == 1 {
+                    e.rebuild(&mut |_| {});
                 }
+                let reverse = direction == 1;
+                let expected = (0..total)
+                    .map(|i| {
+                        layout
+                            .string(if reverse { total - 1 - i } else { i })
+                            .unwrap()
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(notes(&tick(&mut e, 1)), expected);
+                assert_eq!(e.snapshot().notes, layout);
             }
         }
     }
@@ -2190,8 +2188,7 @@ fn auto_strum_orders_notes_in_ascending_and_descending_thirds() {
     let config_up_3rds = Config {
         mode: AUTO,
         arp_pattern: 3, // Up in 3rds
-        strings: 6,
-        strings_played: 6,
+        octaves: 2,
         ..Config::default()
     };
     configure(&mut e, config_up_3rds);
@@ -2216,8 +2213,7 @@ fn auto_strum_orders_notes_in_ascending_and_descending_thirds() {
     let config_down_3rds = Config {
         mode: AUTO,
         arp_pattern: 4, // Down in 3rds
-        strings: 6,
-        strings_played: 6,
+        octaves: 2,
         ..Config::default()
     };
     configure(&mut e, config_down_3rds);
@@ -3165,15 +3161,13 @@ fn once_long_patterns_fit_scheduler_and_played_order_stays_in_range() {
         &mut e,
         Config {
             mode: AUTO,
-            strings: 12,
-            strings_played: 12,
             octaves: 4,
             arp_pattern: 3,
             ..Config::default()
         },
     );
     on(&mut e, 24, 1);
-    assert_eq!(e.scheduled.iter().flatten().count(), 96);
+    assert_eq!(e.scheduled.iter().flatten().count(), 24);
     for count in 1..=12 {
         for step in 0..count {
             assert!(e.arp_index(5, step, count) < count);
@@ -3202,4 +3196,1163 @@ fn note_feedback_records_octave_strikes_even_after_short_notes_end() {
     let snapshot = e.snapshot();
     assert!(snapshot.note_strikes[96] > 0);
     assert!(!snapshot.sounding_notes[96]);
+}
+
+#[test]
+fn looped_chord_can_have_9_notes_of_length() {
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            mode: ARP,
+            octaves: 3,
+            arp_pattern: 0, // Up
+            humanize: 0.0,
+            ..Config::default()
+        },
+    );
+    // Chord 60 is C major triad: C4 (60), E4 (64), G4 (67).
+    // With octaves: 3, total length is 3 notes * 3 octaves = 9 notes.
+    on(&mut e, 60, 0);
+    let mut played = Vec::new();
+    while played.len() < 10 {
+        e.tick(&mut |event| {
+            if let Out::On(_, note, _) = event {
+                played.push(note);
+            }
+        });
+    }
+    assert_eq!(played.len(), 10);
+    assert_eq!(
+        played,
+        vec![60, 64, 67, 72, 76, 79, 84, 88, 91, 60]
+    );
+}
+
+#[test]
+fn four_and_five_note_chords_can_loop_at_9_notes() {
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            mode: ARP,
+            octaves: 3,
+            loop_start: 1,
+            loop_end: 9,
+            arp_pattern: 0, // Up
+            humanize: 0.0,
+            ..Config::default()
+        },
+    );
+    e.command(Command::KeyDown(0, 60, 3), &mut |_| {});
+    let mut played_4 = Vec::new();
+    while played_4.len() < 10 {
+        e.tick(&mut |event| {
+            if let Out::On(_, note, _) = event {
+                played_4.push(note);
+            }
+        });
+    }
+    assert_eq!(played_4.len(), 10);
+    assert_eq!(
+        played_4,
+        vec![60, 64, 67, 71, 72, 76, 79, 83, 84, 60]
+    );
+
+    let mut e5 = Engine::default();
+    configure(
+        &mut e5,
+        Config {
+            mode: ARP,
+            octaves: 2,
+            loop_start: 1,
+            loop_end: 9,
+            arp_pattern: 0,
+            humanize: 0.0,
+            ..Config::default()
+        },
+    );
+    e5.notes = harmony::Notes {
+        values: [60, 62, 64, 67, 71, 0, 0, 0, 0, 0, 0, 0],
+        len: 5,
+    };
+    e5.restart_arp();
+    let mut played_5 = Vec::new();
+    while played_5.len() < 10 {
+        e5.tick(&mut |event| {
+            if let Out::On(_, note, _) = event {
+                played_5.push(note);
+            }
+        });
+    }
+    assert_eq!(played_5.len(), 10);
+    assert_eq!(
+        played_5,
+        vec![60, 62, 64, 67, 71, 72, 74, 76, 79, 60]
+    );
+}
+
+#[test]
+fn loop_start_and_end_range_plays_custom_subsegment() {
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            mode: ARP,
+            octaves: 3,
+            loop_start: 2,
+            loop_end: 5,
+            arp_pattern: 0, // Up
+            humanize: 0.0,
+            ..Config::default()
+        },
+    );
+    e.command(Command::KeyDown(0, 60, 3), &mut |_| {});
+    let mut played = Vec::new();
+    while played.len() < 5 {
+        e.tick(&mut |event| {
+            if let Out::On(_, note, _) = event {
+                played.push(note);
+            }
+        });
+    }
+    // String 2 (E3 = 64), String 3 (G3 = 67), String 4 (B3 = 71), String 5 (C4 = 72), wrapping to 64
+    assert_eq!(played, vec![64, 67, 71, 72, 64]);
+}
+
+#[test]
+fn arp_per_note_volume_scales_velocity() {
+    let mut e = Engine::default();
+    let mut arp_volume = [100u8; 32];
+    arp_volume[0] = 100; // 100% -> vel * 1.0
+    arp_volume[1] = 50;  // 50%  -> vel * 0.5
+    arp_volume[2] = 20;  // 20%  -> vel * 0.2
+    arp_volume[3] = 80;  // 80%  -> vel * 0.8
+    configure(
+        &mut e,
+        Config {
+            mode: ARP,
+            octaves: 1,
+            arp_pattern: 0,
+            arp_volume,
+            humanize: 0.0,
+            ..Config::default()
+        },
+    );
+    e.command(Command::KeyDown(0, 60, 3), &mut |_| {});
+    let mut played = Vec::new();
+    while played.len() < 4 {
+        e.tick(&mut |event| {
+            if let Out::On(_, note, vel) = event {
+                played.push((note, vel));
+            }
+        });
+    }
+    assert_eq!(played.len(), 4);
+    let base_vel = 0.8;
+    assert!((played[0].1 - base_vel * 1.0).abs() < 1e-3);
+    assert!((played[1].1 - base_vel * 0.5).abs() < 1e-3);
+    assert!((played[2].1 - base_vel * 0.2).abs() < 1e-3);
+    assert!((played[3].1 - base_vel * 0.8).abs() < 1e-3);
+}
+
+#[test]
+fn arp_per_note_mute_acts_as_musical_rest() {
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            mode: ARP,
+            octaves: 1,
+            arp_pattern: 0,
+            arp_mute: 1 << 1, // mute string 1 (index 1)
+            humanize: 0.0,
+            ..Config::default()
+        },
+    );
+    e.command(Command::KeyDown(0, 60, 3), &mut |_| {});
+    let mut played = Vec::new();
+    let mut ticks = 0;
+    while played.len() < 3 && ticks < 200_000 {
+        e.tick(&mut |event| {
+            if let Out::On(_, note, _) = event {
+                played.push(note);
+            }
+        });
+        ticks += 1;
+    }
+    // String 0 is 60, string 1 is muted (rest), string 2 is 67, string 3 is 71
+    assert_eq!(played, vec![60, 67, 71]);
+}
+
+#[test]
+fn arp_per_note_skip_bypasses_step() {
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            mode: ARP,
+            octaves: 1,
+            arp_pattern: 0,
+            arp_skip: 1 << 1, // skip string 1 (index 1)
+            humanize: 0.0,
+            ..Config::default()
+        },
+    );
+    e.command(Command::KeyDown(0, 60, 3), &mut |_| {});
+    let mut played = Vec::new();
+    while played.len() < 4 {
+        e.tick(&mut |event| {
+            if let Out::On(_, note, _) = event {
+                played.push(note);
+            }
+        });
+    }
+    // Sequence length is 3 unskipped notes: [60, 67, 71], so cycle wraps immediately to 60!
+    assert_eq!(played, vec![60, 67, 71, 60]);
+}
+
+#[test]
+fn arp_all_strings_skipped_graceful_no_panic() {
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            mode: ARP,
+            octaves: 1,
+            arp_pattern: 0,
+            arp_skip: 0xFFFF_FFFF, // all strings skipped
+            humanize: 0.0,
+            ..Config::default()
+        },
+    );
+    e.command(Command::KeyDown(0, 60, 3), &mut |_| {});
+    let mut played = Vec::new();
+    for _ in 0..10_000 {
+        e.tick(&mut |event| {
+            if let Out::On(_, note, _) = event {
+                played.push(note);
+            }
+        });
+    }
+    assert!(played.is_empty());
+}
+
+#[test]
+fn test_48_voice_capacity_and_stealing() {
+    let mut e = Engine::default();
+    assert_eq!(e.voices.len(), 48);
+
+    // Allocate 1 Bass voice and 4 Comp voices
+    e.allocate_voice(36, 0.9, u64::MAX, true, KIND_BASS, &mut |_| {});
+    for note in [60, 64, 67, 71] {
+        e.allocate_voice(note, 0.8, u64::MAX, true, KIND_COMP, &mut |_| {});
+    }
+
+    // Allocate 43 Arp voices with finite duration
+    for i in 0..43 {
+        e.allocate_voice(80 + (i % 12) as u8, 0.7, 1000 + i as u64, false, KIND_ARP, &mut |_| {});
+    }
+
+    // Total voices is now 1 + 4 + 43 = 48 (at full capacity)
+    assert_eq!(e.voices.iter().flatten().count(), 48);
+
+    // Allocating one more voice must steal an Arp voice, NEVER the Bass or Comp voices!
+    e.allocate_voice(99, 0.7, 2000, false, KIND_ARP, &mut |_| {});
+    assert_eq!(e.voices.iter().flatten().count(), 48);
+
+    assert!(e.voices.iter().flatten().any(|v| v.note == 36 && v.kind == KIND_BASS));
+    for note in [60, 64, 67, 71] {
+        assert!(e.voices.iter().flatten().any(|v| v.note == note && v.kind == KIND_COMP));
+    }
+}
+
+#[test]
+fn test_adaptive_accents_and_interlock() {
+    let mut e = Engine::default();
+    let mut config = Config {
+        mode: ARP,
+        octaves: 1,
+        arp_pattern: 0,
+        humanize: 0.0,
+        ..Config::default()
+    };
+    // Step 0: Normal (0)
+    // Step 1: Accent (1) -> velocity boosted
+    // Step 2: Ghost (2) -> velocity reduced
+    config.arp_accents[0] = 0;
+    config.arp_accents[1] = 1;
+    config.arp_accents[2] = 2;
+    configure(&mut e, config);
+
+    e.command(Command::KeyDown(0, 60, 3), &mut |_| {});
+    let mut vels = Vec::new();
+    for _ in 0..100_000 {
+        e.tick(&mut |event| {
+            if let Out::On(_, _, v) = event {
+                vels.push(v);
+            }
+        });
+        if vels.len() >= 3 {
+            break;
+        }
+    }
+    assert_eq!(vels.len(), 3);
+    assert!(vels[1] > vels[0], "vels[1] = {}, vels[0] = {}", vels[1], vels[0]);
+    assert!(vels[2] < vels[0], "vels[2] = {}, vels[0] = {}", vels[2], vels[0]);
+}
+
+#[test]
+fn test_comp_euclidean_and_dilla_lag() {
+    let config = Config {
+        comp_euclidean_steps: 8,
+        comp_euclidean_hits: 3,
+        ..Config::default()
+    };
+    // 3 hits in 8 steps: steps 0, 3, 6
+    assert!(config.comp_is_hit(0));
+    assert!(!config.comp_is_hit(1));
+    assert!(!config.comp_is_hit(2));
+    assert!(config.comp_is_hit(3));
+    assert!(!config.comp_is_hit(4));
+    assert!(!config.comp_is_hit(5));
+    assert!(config.comp_is_hit(6));
+    assert!(!config.comp_is_hit(7));
+}
+
+#[test]
+fn test_single_track_shared_channel_note_off_safety() {
+    let mut e = Engine::default();
+    configure(&mut e, Config {
+        output_channel: 0,
+        comp_channel: 0,
+        bass_channel: 0,
+        ..Config::default()
+    });
+
+    // Comp layer holds note 60 on Channel 0
+    e.allocate_voice(60, 0.8, u64::MAX, true, KIND_COMP, &mut |_| {});
+
+    // Arp note 60 strikes on Channel 0 with duration 100
+    e.strike(60, 0.8, 100, &mut |_| {});
+
+    let mut offs = Vec::new();
+    for _ in 0..200 {
+        e.tick(&mut |event| {
+            if let Out::Off(ch, note, _) = event {
+                offs.push((ch, note));
+            }
+        });
+    }
+
+    assert!(!offs.contains(&(0, 60)), "Premature note off emitted on shared channel!");
+}
+
+#[test]
+fn test_lane_tap_records_distinct_roles() {
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            output_channel: 0,
+            comp_channel: 1,
+            bass_channel: 2,
+            key_split: true,
+            split_note: 70,
+            bass_split: 40,
+            bass_enabled: true,
+            ..Config::default()
+        },
+    );
+
+    // 1. Bass note (below split)
+    e.midi_note(true, 0, 36, 0.8, &mut |_| {});
+    // 2. Comp voice
+    e.allocate_voice(60, 0.8, u64::MAX, true, KIND_COMP, &mut |_| {});
+    // 3. Arp strike
+    e.strike(64, 0.8, 100, &mut |_| {});
+    // 4. Melody note (above split)
+    e.midi_note(true, 0, 72, 0.8, &mut |_| {});
+
+    let on_lanes: Vec<_> = e.tap.events[..e.tap.len]
+        .iter()
+        .flatten()
+        .filter_map(|t| match t.event {
+            LaneEvent::On { lane, note, .. } => Some((lane, note)),
+            _ => None,
+        })
+        .collect();
+
+    assert!(on_lanes.contains(&(Lane::Bass, 36)), "Missing Bass On tap");
+    assert!(on_lanes.contains(&(Lane::Comp, 60)), "Missing Comp On tap");
+    assert!(on_lanes.contains(&(Lane::Arp, 64)), "Missing Arp On tap");
+    assert!(on_lanes.contains(&(Lane::Lead, 72)), "Missing Lead On tap");
+
+    // Release bass and melody
+    e.midi_note(false, 0, 36, 0.0, &mut |_| {});
+    e.midi_note(false, 0, 72, 0.0, &mut |_| {});
+
+    let off_lanes: Vec<_> = e.tap.events[..e.tap.len]
+        .iter()
+        .flatten()
+        .filter_map(|t| match t.event {
+            LaneEvent::Off { lane, note, .. } => Some((lane, note)),
+            _ => None,
+        })
+        .collect();
+
+    assert!(off_lanes.contains(&(Lane::Bass, 36)), "Missing Bass Off tap");
+    assert!(off_lanes.contains(&(Lane::Lead, 72)), "Missing Lead Off tap");
+}
+
+#[test]
+fn test_lane_tap_preserves_lanes_on_same_channel() {
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            output_channel: 0,
+            comp_channel: 0,
+            bass_channel: 0,
+            ..Config::default()
+        },
+    );
+
+    e.allocate_voice(60, 0.8, u64::MAX, true, KIND_COMP, &mut |_| {});
+    e.strike(60, 0.8, 100, &mut |_| {});
+
+    let on_events: Vec<_> = e.tap.events[..e.tap.len]
+        .iter()
+        .flatten()
+        .filter_map(|t| match t.event {
+            LaneEvent::On { lane, note, channel, .. } => Some((lane, note, channel)),
+            _ => None,
+        })
+        .collect();
+
+    assert!(on_events.contains(&(Lane::Comp, 60, 0)), "Comp lane On expected");
+    assert!(on_events.contains(&(Lane::Arp, 60, 0)), "Arp lane On expected");
+}
+
+#[test]
+fn nopia_static_mode_harmonizes_and_voices_chords() {
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            harmonization_mode: 1, // NopiaStatic
+            chromatic_flavor: 0,   // SecondaryDominants
+            key: 0,                // C
+            scale: 0,              // Major
+            voice_leading: 0,      // Nearest
+            spread: 0,             // Close
+            ..Config::default()
+        },
+    );
+
+    // Play C4 (60) -> C Major triad [60, 64, 67]
+    on(&mut e, 60, 1);
+    assert_eq!(e.notes.as_slice(), &[60, 64, 67]);
+    assert_eq!(e.selected_root(), Some(60));
+    assert_eq!(e.quality, 0); // Major
+    off(&mut e, 60, 1);
+
+    // Play C#4 (61) -> A7 (V7/ii) [57, 61, 64, 67] with root A3 (57)
+    on(&mut e, 61, 2);
+    assert_eq!(e.quality, 2); // 7th
+    assert_eq!(e.selected_root(), Some(57));
+    assert!(e.notes.as_slice().contains(&61));
+    off(&mut e, 61, 2);
+
+    // Play D4 (62) -> Dm with root D4 (62)
+    on(&mut e, 62, 3);
+    assert_eq!(e.quality, 1); // Minor
+    assert_eq!(e.selected_root(), Some(62));
+    off(&mut e, 62, 3);
+}
+
+#[test]
+fn nopia_modal_interchange_flavor_in_engine() {
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            harmonization_mode: 1, // NopiaStatic
+            chromatic_flavor: 1,   // ModalInterchange
+            key: 0,                // C
+            scale: 0,              // Major
+            ..Config::default()
+        },
+    );
+
+    // Play Bb3/Bb4 (70) -> Bbmaj7 (bVIImaj7)
+    on(&mut e, 70, 1);
+    assert_eq!(e.quality, 3); // Maj7
+    assert_eq!(e.selected_root().map(|r| r % 12), Some(10)); // Bb
+}
+
+#[test]
+fn classic_dual_touch_mode_remains_unaffected() {
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            harmonization_mode: 0, // ClassicDualTouch
+            quality: 0,            // Major
+            ..Config::default()
+        },
+    );
+
+    // Single note C4
+    on(&mut e, 60, 1);
+    assert_eq!(e.notes.as_slice(), &[60, 64, 67]);
+    assert_eq!(e.selected_root(), Some(60));
+
+    // Dual-touch with D4 (62) alters chord to sus2
+    on(&mut e, 62, 2);
+    assert_eq!(e.notes.as_slice(), &[60, 62, 67]);
+}
+
+#[test]
+fn nopia_real_mode_in_engine() {
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            harmonization_mode: 2, // NopiaReal
+            chromatic_flavor: 0,   // SecondaryDominants
+            key: 7,                // G
+            scale: 0,              // Major
+            ..Config::default()
+        },
+    );
+
+    // Diatonic tonic G4 (67) -> G Major triad [67, 71, 74]
+    on(&mut e, 67, 1);
+    assert_eq!(e.notes.as_slice(), &[67, 71, 74]);
+    assert_eq!(e.selected_root(), Some(67));
+    assert_eq!(e.quality, 0); // Major
+    off(&mut e, 67, 1);
+
+    // Diatonic supertonic A4 (69) -> Am triad [69, 72, 76]
+    on(&mut e, 69, 2);
+    assert_eq!(e.notes.as_slice(), &[69, 72, 76]);
+    assert_eq!(e.selected_root(), Some(69));
+    assert_eq!(e.quality, 1); // Minor
+    off(&mut e, 69, 2);
+
+    // Chromatic note C#4 (61) in G Major is #4 -> V7/V (A7) with root A3 (57)
+    on(&mut e, 61, 3);
+    assert_eq!(e.quality, 2); // 7th
+    assert_eq!(e.selected_root().map(|r| r % 12), Some(9)); // A
+    assert!(e.notes.as_slice().contains(&61)); // contains C#
+    off(&mut e, 61, 3);
+}
+
+#[test]
+fn nopia_voice_leading_progression_in_engine() {
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            harmonization_mode: 1, // NopiaStatic
+            chromatic_flavor: 0,   // SecondaryDominants
+            key: 0,                // C
+            scale: 0,              // Major
+            voice_leading: 0,      // Nearest resolution
+            spread: 0,             // Close
+            ..Config::default()
+        },
+    );
+
+    // Progression: C#4 (yielding A7) -> D4 (yielding Dm)
+    on(&mut e, 61, 1);
+    let a7_notes = e.notes;
+    assert_eq!(e.quality, 2); // 7th
+    off(&mut e, 61, 1);
+
+    on(&mut e, 62, 1);
+    let dm_notes = e.notes;
+    assert_eq!(e.quality, 1); // Minor
+    off(&mut e, 62, 1);
+
+    // Nearest voice leading should ensure smooth voice movement
+    let base_dm = harmony::voice(62, 1, None, 0, 0, 0);
+    let prev_chord = harmony::SavedChord {
+        root: 57,
+        second: None,
+        quality: 2,
+        inversion: 0,
+        spread: 0,
+        transpose: 0,
+    };
+    let curr_chord = harmony::SavedChord {
+        root: 62,
+        second: None,
+        quality: 1,
+        inversion: 0,
+        spread: 0,
+        transpose: 0,
+    };
+    let expected_led = harmony::lead(curr_chord, 0, prev_chord, a7_notes, base_dm, false);
+    assert_eq!(dm_notes, expected_led);
+}
+
+#[test]
+fn harmonization_mode_runtime_switch_revoices_held_chord() {
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            harmonization_mode: 0, // Classic
+            quality: 0,            // Major
+            ..Config::default()
+        },
+    );
+
+    // Hold C#4 (61) in Classic mode -> C# Major
+    on(&mut e, 61, 1);
+    assert_eq!(e.quality, 0);
+    assert_eq!(e.notes.as_slice(), &[61, 65, 68]);
+
+    // Switch to NopiaStatic mode at runtime while key is held
+    configure(
+        &mut e,
+        Config {
+            harmonization_mode: 1, // NopiaStatic
+            chromatic_flavor: 0,   // SecondaryDominants
+            key: 0,                // C Major
+            scale: 0,
+            ..Config::default()
+        },
+    );
+
+    // Chord should dynamically revoice to A7 (V7/ii) containing C#4 (61)
+    assert_eq!(e.quality, 2); // 7th
+    assert_eq!(e.selected_root().map(|r| r % 12), Some(9)); // A
+    assert!(e.notes.as_slice().contains(&61));
+    off(&mut e, 61, 1);
+}
+
+#[test]
+fn nopia_static_dual_touch_with_non_zero_key() {
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            harmonization_mode: 1, // NopiaStatic
+            chromatic_flavor: 0,   // SecondaryDominants
+            key: 7,                // G Major
+            scale: 0,              // Major
+            voice_leading: 2,      // Off for direct voicing test
+            spread: 0,             // Close
+            ..Config::default()
+        },
+    );
+
+    // Play C4 (60) -> G Major triad [67, 71, 74]
+    on(&mut e, 60, 1);
+    assert_eq!(e.notes.as_slice(), &[67, 71, 74]);
+    assert_eq!(e.selected_root(), Some(67));
+
+    // Dual-touch D4 (62) which is +2 semitones from C4 (sus2 gesture)
+    // Musician expects Gsus2: [G4 (67), A4 (69), D5 (74)]
+    // NOT G5 power chord [67, 74]
+    on(&mut e, 62, 2);
+    assert_eq!(e.notes.as_slice(), &[67, 69, 74]);
+    off(&mut e, 62, 2);
+
+    // After release, reverts back to G Major triad
+    assert_eq!(e.notes.as_slice(), &[67, 71, 74]);
+
+    // Dual-touch F4 (65) which is +5 semitones from C4 (sus4 gesture)
+    // Musician expects Gsus4: [G4 (67), C5 (72), D5 (74)]
+    on(&mut e, 65, 2);
+    assert_eq!(e.notes.as_slice(), &[67, 72, 74]);
+    off(&mut e, 65, 2);
+
+    // Dual-touch A#4 (70) which is +10 semitones from C4 (dominant 7th gesture)
+    // Musician expects G7: [G4 (67), B4 (71), D5 (74), F5 (77)]
+    on(&mut e, 70, 2);
+    assert_eq!(e.notes.as_slice(), &[67, 71, 74, 77]);
+    off(&mut e, 70, 2);
+
+    off(&mut e, 60, 1);
+}
+
+#[test]
+fn nopia_static_dual_touch_in_key_of_f() {
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            harmonization_mode: 1, // NopiaStatic
+            chromatic_flavor: 0,   // SecondaryDominants
+            key: 5,                // F Major
+            scale: 0,              // Major
+            voice_leading: 2,      // Off
+            spread: 0,             // Close
+            ..Config::default()
+        },
+    );
+
+    // C4 (60) -> F Major triad [65, 69, 72]
+    on(&mut e, 60, 1);
+    assert_eq!(e.notes.as_slice(), &[65, 69, 72]);
+
+    // Dual-touch D4 (62, +2 semitones) -> Fsus2 [65, 67, 72]
+    on(&mut e, 62, 2);
+    assert_eq!(e.notes.as_slice(), &[65, 67, 72]);
+    off(&mut e, 62, 2);
+
+    off(&mut e, 60, 1);
+}
+
+#[test]
+fn nopia_static_latched_dual_touch() {
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            harmonization_mode: 1, // NopiaStatic
+            chromatic_flavor: 0,   // SecondaryDominants
+            key: 7,                // G Major
+            scale: 0,              // Major
+            latch: true,           // Latch enabled
+            spread: 0,             // Close
+            voice_leading: 2,
+            ..Config::default()
+        },
+    );
+
+    // Press C4 (60) + D4 (62) for Gsus2
+    on(&mut e, 60, 1);
+    on(&mut e, 62, 2);
+    assert_eq!(e.notes.as_slice(), &[67, 69, 74]);
+
+    // Release both notes
+    off(&mut e, 62, 2);
+    off(&mut e, 60, 1);
+
+    // Under Latch, Gsus2 remains held and properly voiced
+    assert_eq!(e.notes.as_slice(), &[67, 69, 74]);
+    assert_eq!(e.selected_root(), Some(67));
+}
+
+#[test]
+fn nopia_static_boundary_clamping_at_extreme_midi_notes() {
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            harmonization_mode: 1, // NopiaStatic
+            chromatic_flavor: 0,   // SecondaryDominants
+            key: 11,               // B Major
+            scale: 0,              // Major
+            ..Config::default()
+        },
+    );
+
+    // Play high note 127 (G9) -> White key degree 4 (V = F#)
+    on(&mut e, 127, 1);
+    assert!(e.selected_root().is_some());
+    // Ensure all voiced notes are within valid MIDI range [0..=127]
+    for &n in e.notes.as_slice() {
+        assert!(n <= 127);
+    }
+    // Dual-touch with extreme note should not panic or overflow
+    on(&mut e, 126, 2);
+    for &n in e.notes.as_slice() {
+        assert!(n <= 127);
+    }
+    off(&mut e, 126, 2);
+    off(&mut e, 127, 1);
+}
+
+#[test]
+fn test_comp_guide_tone_isolation() {
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            comp_mode: 1, // Pad mode
+            comp_guide_tone: true,
+            comp_channel: 2,
+            scale: 0, // Major
+            key: 0,   // C
+            ..Config::default()
+        },
+    );
+
+    // Play C4 (60)
+    on(&mut e, 60, 1);
+    // In C major, degree 0 is C Major triad [60, 64, 67]
+    assert_eq!(e.notes.as_slice(), &[60, 64, 67]);
+
+    // Check comp layer voices
+    let comp_voices: Vec<u8> = e
+        .voices
+        .iter()
+        .flatten()
+        .filter(|v| v.kind == KIND_COMP)
+        .map(|v| v.note)
+        .collect();
+
+    // extract_guide_tone for C Major [60, 64, 67] with root 60 should be the 3rd: 64 (E4)
+    assert_eq!(comp_voices, vec![64]);
+
+    // Now switch comp_guide_tone to false
+    configure(
+        &mut e,
+        Config {
+            comp_mode: 1,
+            comp_guide_tone: false,
+            comp_channel: 2,
+            scale: 0,
+            key: 0,
+            ..Config::default()
+        },
+    );
+
+    // With comp_guide_tone false, comp pad voices should contain all notes of the chord [60, 64, 67]
+    let mut comp_voices_all: Vec<u8> = e
+        .voices
+        .iter()
+        .flatten()
+        .filter(|v| v.kind == KIND_COMP)
+        .map(|v| v.note)
+        .collect();
+    comp_voices_all.sort();
+    assert_eq!(comp_voices_all, vec![60, 64, 67]);
+}
+
+#[test]
+fn test_engine_extensions_macro() {
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            latch: true,
+            ..Config::default()
+        },
+    );
+    // Default extensions is 0.5 (Triad / 7th)
+    on(&mut e, 60, 1);
+    assert_eq!(e.notes.as_slice(), &[60, 64, 67]);
+
+    // Set extensions < 0.20 (Root only)
+    configure(
+        &mut e,
+        Config {
+            latch: true,
+            extensions: 0.1,
+            ..Config::default()
+        },
+    );
+    assert_eq!(e.notes.as_slice(), &[60]);
+
+    // Set extensions to 0.30 (Root + 5th)
+    configure(
+        &mut e,
+        Config {
+            latch: true,
+            extensions: 0.3,
+            ..Config::default()
+        },
+    );
+    assert_eq!(e.notes.as_slice(), &[60, 67]);
+}
+
+#[test]
+fn test_deterministic_major_harmonic_matrix() {
+    use crate::harmony::MAJOR_HARMONIC_INTERVALS;
+    // Section 1.1 verification:
+    assert_eq!(MAJOR_HARMONIC_INTERVALS[0], [0, 4, 7, 11, 14, 17, 21]); // I Maj7
+    assert_eq!(MAJOR_HARMONIC_INTERVALS[1], [0, 4, 7, 11, 13, 17, 20]); // bII Neapolitan
+    assert_eq!(MAJOR_HARMONIC_INTERVALS[2], [0, 3, 7, 10, 14, 17, 21]); // ii m7
+    assert_eq!(MAJOR_HARMONIC_INTERVALS[3], [0, 4, 7, 11, 14, 17, 20]); // bIII Modal Borrow
+    assert_eq!(MAJOR_HARMONIC_INTERVALS[4], [0, 3, 7, 10, 13, 17, 20]); // iii m7
+    assert_eq!(MAJOR_HARMONIC_INTERVALS[5], [0, 4, 7, 11, 14, 18, 21]); // IV Lydian
+    assert_eq!(MAJOR_HARMONIC_INTERVALS[6], [0, 3, 6, 10, 13, 17, 20]); // #IV / bV Half-Dim
+    assert_eq!(MAJOR_HARMONIC_INTERVALS[7], [0, 4, 7, 10, 14, 17, 21]); // V Dominant 7th
+    assert_eq!(MAJOR_HARMONIC_INTERVALS[8], [0, 4, 7, 11, 14, 18, 20]); // bVI Modal Borrow
+    assert_eq!(MAJOR_HARMONIC_INTERVALS[9], [0, 3, 7, 10, 14, 17, 20]); // vi m7
+    assert_eq!(MAJOR_HARMONIC_INTERVALS[10], [0, 4, 7, 10, 14, 17, 21]); // bVII Subtonic Dominant
+    assert_eq!(MAJOR_HARMONIC_INTERVALS[11], [0, 3, 6, 10, 13, 17, 20]); // vii° Half-Dim
+}
+
+#[test]
+fn test_deterministic_minor_harmonic_matrix() {
+    use crate::harmony::MINOR_HARMONIC_INTERVALS;
+    // Section 1.2 verification:
+    assert_eq!(MINOR_HARMONIC_INTERVALS[0], [0, 3, 7, 10, 14, 17, 20]); // i m7
+    assert_eq!(MINOR_HARMONIC_INTERVALS[1], [0, 4, 7, 11, 13, 17, 20]); // bII Phrygian Major
+    assert_eq!(MINOR_HARMONIC_INTERVALS[2], [0, 3, 6, 10, 13, 17, 20]); // ii° Half-Dim
+    assert_eq!(MINOR_HARMONIC_INTERVALS[3], [0, 4, 7, 11, 14, 17, 21]); // bIII Relative Major
+    assert_eq!(MINOR_HARMONIC_INTERVALS[4], [0, 4, 8, 10, 13, 17, 20]); // III Altered Dominant
+    assert_eq!(MINOR_HARMONIC_INTERVALS[5], [0, 3, 7, 10, 14, 17, 21]); // iv m7
+    assert_eq!(MINOR_HARMONIC_INTERVALS[6], [0, 3, 6, 9, 13, 16, 20]);  // #IV / bV Dim Substitution
+    assert_eq!(MINOR_HARMONIC_INTERVALS[7], [0, 4, 7, 10, 13, 17, 20]); // V Harmonic Dominant
+    assert_eq!(MINOR_HARMONIC_INTERVALS[8], [0, 4, 7, 11, 14, 18, 21]); // bVI Major 7th
+    assert_eq!(MINOR_HARMONIC_INTERVALS[9], [0, 3, 7, 10, 14, 17, 21]); // VI Dorian Subdominant
+    assert_eq!(MINOR_HARMONIC_INTERVALS[10], [0, 4, 7, 10, 14, 17, 21]); // bVII Subtonic Dominant
+    assert_eq!(MINOR_HARMONIC_INTERVALS[11], [0, 3, 6, 9, 13, 16, 20]);  // vii° Fully Diminished
+}
+
+#[test]
+fn test_realtime_bitmask_transition_plan() {
+    use crate::engine::{plan_legato_transition, NoteMask};
+    // Current chord: C Major {60, 64, 67}
+    let current_mask: NoteMask = (1 << 60) | (1 << 64) | (1 << 67);
+    // Target chord: A Minor {57, 60, 64} -> 60 and 64 are common tones!
+    let target_mask: NoteMask = (1 << 57) | (1 << 60) | (1 << 64);
+
+    let plan = plan_legato_transition(current_mask, target_mask);
+
+    // Common tones (sustain without retrigger): 60, 64
+    assert_eq!(plan.sustain_count, 2);
+    assert!(plan.notes_to_sustain[..plan.sustain_count].contains(&60));
+    assert!(plan.notes_to_sustain[..plan.sustain_count].contains(&64));
+
+    // Released tone: 67
+    assert_eq!(plan.release_count, 1);
+    assert_eq!(plan.notes_to_release[0], 67);
+
+    // Attacked tone: 57
+    assert_eq!(plan.attack_count, 1);
+    assert_eq!(plan.notes_to_attack[0], 57);
+}
+
+#[test]
+fn test_extension_hysteresis_tracker_anti_flamming() {
+    use crate::engine::ExtensionHysteresisTracker;
+    let mut tracker = ExtensionHysteresisTracker::new(44100.0);
+    for _ in 0..2000 {
+        tracker.process_parameter(0.5);
+    }
+    assert_eq!(tracker.current_tier, 0);
+
+    // Push near boundary 1.0 but within hysteresis (1.02 < 1.0 + 0.05)
+    for _ in 0..2000 {
+        tracker.process_parameter(1.02);
+    }
+    assert_eq!(tracker.current_tier, 0); // No premature switch!
+
+    // Push beyond hysteresis 1.08 > 1.0 + 0.05
+    for _ in 0..2000 {
+        tracker.process_parameter(1.08);
+    }
+    assert_eq!(tracker.current_tier, 1); // Switched cleanly to Tier 1
+
+    // Drop back down slightly (1.02 > 1.0 - 0.05)
+    for _ in 0..2000 {
+        tracker.process_parameter(1.02);
+    }
+    assert_eq!(tracker.current_tier, 1); // Stays in Tier 1 without flamming!
+}
+
+#[test]
+fn test_lookahead_buffer_timing_and_flush() {
+    use crate::engine::{LookaheadBuffer, PendingNote};
+    let mut buf = LookaheadBuffer::new(1000.0); // 1000 Hz sample rate -> 35ms = 35 samples
+    buf.ingest_zone_b(0, 65, 100, 100);
+    buf.ingest_zone_b(1, 67, 110, 105);
+
+    // At t = 120 (20 ms elapsed), should NOT flush yet
+    let mut out = [PendingNote::default(); 8];
+    assert_eq!(buf.drain_expired(120, &mut out), 0);
+    assert_eq!(buf.count, 2);
+
+    // Test fast staccato slap cancellation before timer expires:
+    assert!(buf.cancel_note(1, 67));
+    assert_eq!(buf.count, 1);
+
+    // At t = 140 (40 ms elapsed), 35ms window expired -> note 65 flushes!
+    let n = buf.drain_expired(140, &mut out);
+    assert_eq!(n, 1);
+    assert_eq!(out[0].note, 65);
+    assert_eq!(out[0].channel, 0);
+    assert_eq!(out[0].velocity, 100);
+    assert_eq!(buf.count, 0);
+}
+
+#[test]
+fn test_muscle_memory_modulo_spread_mapping() {
+    use crate::harmony::{map_zone_b_white_key, MAJOR_HARMONIC_INTERVALS};
+    let tuple = MAJOR_HARMONIC_INTERVALS[0]; // C Maj7: [0, 4, 7, 11, 14, 17, 21]
+    let root = 60; // C4
+
+    // Test structural anchors at low extensions (alpha = 2.0 / Triad), octave_offset = 0
+    assert_eq!(map_zone_b_white_key(0, 0, root, &tuple, 2.0), 60); // Key 0 (C) -> Root
+    assert_eq!(map_zone_b_white_key(2, 0, root, &tuple, 2.0), 64); // Key 2 (E) -> 3rd (E)
+    assert_eq!(map_zone_b_white_key(4, 0, root, &tuple, 2.0), 67); // Key 4 (G) -> 5th (G)
+    assert_eq!(map_zone_b_white_key(6, 0, root, &tuple, 2.0), 71); // Key 6 (B) -> 7th (B)
+
+    // Inactive extensions double lower chord tones:
+    assert_eq!(map_zone_b_white_key(1, 0, root, &tuple, 2.0), 72); // Key 1 (D) -> Root + 12
+    assert_eq!(map_zone_b_white_key(3, 0, root, &tuple, 2.0), 67); // Key 3 (F) -> 5th
+    assert_eq!(map_zone_b_white_key(5, 0, root, &tuple, 2.0), 76); // Key 5 (A) -> Octave 3rd
+
+    // Test passing extensions when active (alpha = 3.8 / Upper Colors):
+    assert_eq!(map_zone_b_white_key(1, 0, root, &tuple, 3.8), 74); // 9th (D5 = 60 + 14)
+    assert_eq!(map_zone_b_white_key(3, 0, root, &tuple, 3.8), 77); // 11th (F5 = 60 + 17)
+    assert_eq!(map_zone_b_white_key(5, 0, root, &tuple, 4.0), 81); // 13th (A5 = 60 + 21)
+
+    // Test octave indexing (octave_offset = 1 -> transposed up 12):
+    assert_eq!(map_zone_b_white_key(0, 1, root, &tuple, 2.0), 72); // C5
+    assert_eq!(map_zone_b_white_key(2, 1, root, &tuple, 2.0), 76); // E5
+}
+
+#[test]
+fn test_register_boundaries_and_voicing() {
+    use crate::harmony::{voice_keys_module, voice_bass_module, KEYS_REGISTER_FLOOR, BASS_REGISTER_CEILING};
+    // 4-note chord: Cmaj7 [60, 64, 67, 71]
+    let raw = [60, 64, 67, 71];
+    let voiced = voice_keys_module(&raw, 0, 0);
+    // Keys floor must be >= 52
+    for &note in voiced.iter().take(4) {
+        assert!(note >= KEYS_REGISTER_FLOOR, "Note {} must be >= {}", note, KEYS_REGISTER_FLOOR);
+    }
+    // Drop-2 voicing lowers 2nd-from-top (67 -> 55)
+    assert!(voiced.contains(&55));
+
+    // Low 4-note chord: F3 [53, 57, 60, 65]
+    // Second-from-top is 60. 60 - 12 = 48 (< 52). Pre-scaling transposes chord up by 12 to [65, 69, 72, 77]
+    // Then Drop-2 drops 72 -> 60. Final voiced chord: [60, 65, 69, 77], all >= 52 and Drop-2 preserved!
+    let low_raw = [53, 57, 60, 65];
+    let low_voiced = voice_keys_module(&low_raw, 0, 0);
+    for &note in low_voiced.iter().take(4) {
+        assert!(note >= KEYS_REGISTER_FLOOR, "Low chord note {} must be >= {}", note, KEYS_REGISTER_FLOOR);
+    }
+    assert!(low_voiced.contains(&60), "Pre-scaled Drop-2 note 60 must be present");
+
+    // Bass module must be <= 48
+    let bass_root = voice_bass_module(0, 4, 7, 11, 0); // Root inversion
+    assert!(bass_root <= BASS_REGISTER_CEILING, "Bass note {} must be <= {}", bass_root, BASS_REGISTER_CEILING);
+    assert_eq!(bass_root % 12, 0); // Root pitch class C
+
+    let bass_first_inv = voice_bass_module(0, 4, 7, 11, 1); // 1st inversion (3rd in bass)
+    assert!(bass_first_inv <= BASS_REGISTER_CEILING);
+    assert_eq!(bass_first_inv % 12, 4); // 3rd pitch class E
+}
+
+#[test]
+fn test_pad_voice_allocation_and_dynamic_hpf() {
+    use crate::harmony::{resolve_pad_voices, pad_hpf_cutoff_hz};
+    let root = 60;
+    // Tier 4: alpha = 3.6 (3rd + extension)
+    let p4 = resolve_pad_voices(root, Some(4), Some(7), Some(11), Some(14), 3.6);
+    assert_eq!(p4.note_a, 64);
+    assert_eq!(p4.note_b, Some(74));
+
+    // Tier 3: alpha = 3.2 (3rd + 7th)
+    let p3 = resolve_pad_voices(root, Some(4), Some(7), Some(11), Some(14), 3.2);
+    assert_eq!(p3.note_a, 64);
+    assert_eq!(p3.note_b, Some(71));
+
+    // Tier 0: alpha = 0.5 (Root +12, Root +24)
+    let p0 = resolve_pad_voices(root, None, None, None, None, 0.5);
+    assert_eq!(p0.note_a, 72);
+    assert_eq!(p0.note_b, Some(84));
+
+    // Dynamic HPF cutoff decreases smoothly as alpha increases
+    let hpf_low = pad_hpf_cutoff_hz(0.0);
+    let hpf_high = pad_hpf_cutoff_hz(4.0);
+    assert!(hpf_low > 350.0);
+    assert!(hpf_high < 150.0);
+}
+
+#[test]
+fn test_mouse_free_root_capture_and_zone_b_dual_core() {
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            harmonization_mode: 1, // NopiaStatic
+            key_split: true,
+            split_note: 60,
+            key: 0, // C
+            scale: 0, // Major
+            extensions: 0.5, // Tier 2 (Triad)
+            upper_channel: 1,
+            ..Config::default()
+        },
+    );
+
+    // 1. Dual-Core Zone B with Zone A held
+    // Play Zone A root chord on note 48 (C3)
+    let mut out_events = Vec::new();
+    e.midi_note(true, 0, 48, 0.8, &mut |ev| out_events.push(ev));
+    assert!(e.root.is_some());
+
+    // Strike Zone B note 62 (D4 = white key 1 in octave 0). Under C triad, maps to Root + 12 (72).
+    out_events.clear();
+    e.midi_note(true, 0, 62, 0.8, &mut |ev| out_events.push(ev));
+    assert!(out_events.contains(&Out::On(0, 72, 0.8)));
+    assert_eq!(e.zone_b_mapped[0][62], Some(72));
+
+    // Strike Zone B note 74 (D5 = white key 1 in octave 1). Maps to 72 + 12 = 84!
+    out_events.clear();
+    e.midi_note(true, 0, 74, 0.8, &mut |ev| out_events.push(ev));
+    assert!(out_events.contains(&Out::On(0, 84, 0.8)));
+    assert_eq!(e.zone_b_mapped[0][74], Some(84));
+
+    // Release notes 62 and 74 -> terminates cleanly
+    out_events.clear();
+    e.midi_note(false, 0, 62, 0.0, &mut |ev| out_events.push(ev));
+    e.midi_note(false, 0, 74, 0.0, &mut |ev| out_events.push(ev));
+    assert!(out_events.contains(&Out::Off(0, 72, 0.0)));
+    assert!(out_events.contains(&Out::Off(0, 84, 0.0)));
+    assert_eq!(e.zone_b_mapped[0][62], None);
+    assert_eq!(e.zone_b_mapped[0][74], None);
+
+    // Release Zone A chord
+    e.midi_note(false, 0, 48, 0.0, &mut |_| {});
+    assert!(e.root.is_none());
+
+    // 2. Fast Staccato Slap Edge Case in Lookahead Buffer
+    out_events.clear();
+    e.midi_note(true, 0, 65, 0.8, &mut |ev| out_events.push(ev));
+    assert_eq!(e.lookahead_buffer.count, 1);
+    // Released immediately before 35ms expires or Zone A arrives -> cancelled without sounding
+    e.midi_note(false, 0, 65, 0.0, &mut |ev| out_events.push(ev));
+    assert_eq!(e.lookahead_buffer.count, 0);
+    assert!(!out_events.iter().any(|ev| matches!(ev, Out::On(..))));
+
+    // 3. Multi-note Lookahead Strumming Buffer when Zone A is NOT held
+    out_events.clear();
+    // Glissando / strum across 2 notes before chord arrives: note 60 (C4) and note 62 (D4)
+    e.midi_note(true, 0, 60, 0.8, &mut |ev| out_events.push(ev));
+    e.midi_note(true, 0, 62, 0.8, &mut |ev| out_events.push(ev));
+    assert_eq!(e.lookahead_buffer.count, 2);
+    assert!(!out_events.iter().any(|ev| matches!(ev, Out::On(..))));
+
+    // Now strike Zone A chord 48 within 35ms -> both buffered notes flush and retarget in order!
+    e.midi_note(true, 0, 48, 0.8, &mut |ev| out_events.push(ev));
+    assert_eq!(e.lookahead_buffer.count, 0);
+    assert!(out_events.iter().any(|ev| matches!(ev, Out::On(0, 60, _))));
+    assert!(out_events.iter().any(|ev| matches!(ev, Out::On(0, 72, _))));
+
+    // Release Zone B notes
+    out_events.clear();
+    e.midi_note(false, 0, 60, 0.0, &mut |ev| out_events.push(ev));
+    e.midi_note(false, 0, 62, 0.0, &mut |ev| out_events.push(ev));
+    assert!(out_events.contains(&Out::Off(0, 60, 0.0)));
+    assert!(out_events.contains(&Out::Off(0, 72, 0.0)));
+
+    // Release Zone A chord 48
+    e.midi_note(false, 0, 48, 0.0, &mut |_| {});
+
+    // 4. Pedal double-tap root capture
+    // Reset key to C (0). Hold chord 53 (F3).
+    e.config.key = 0;
+    e.midi_note(true, 0, 53, 0.8, &mut |_| {});
+    assert_eq!(e.selected_root(), Some(53)); // F (5)
+    // First pedal press
+    e.control(0, 64, 1.0, &mut |_| {});
+    // Release pedal
+    e.control(0, 64, 0.0, &mut |_| {});
+    // Second pedal press within 400ms -> double tap captures F (5)
+    e.control(0, 64, 1.0, &mut |_| {});
+    assert_eq!(e.config.key, 5); // F captured as scale root!
 }
