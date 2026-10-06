@@ -481,6 +481,10 @@ impl ChordboardView {
                     if self.handle_live_console_mouse_down(cx, x, y) {
                         return true;
                     }
+                    let x0 = console::console_x_offset();
+                    if x >= x0 && x <= x0 + console::CONSOLE_W && y >= 0.0 && y <= console::CONSOLE_H {
+                        return true;
+                    }
                 }
                 if self.strum_bound_at(x, y).is_some()
                     || !(self.mode() == 2 && hit(self.play_pad(), x, y))

@@ -1,6 +1,6 @@
 use super::*;
 use crate::engine::Lane;
-use crate::params::{KARPLUS_PRESETS, WURLI_PRESETS};
+use crate::params::WURLI_PRESETS;
 use crate::sound::LaneEngineType;
 
 pub(super) const SURFACE_TAB_CHORDS: Rect = (420.0, 23.0, 96.0, 30.0);
@@ -196,9 +196,6 @@ impl ChordboardView {
             if engine_type != LaneEngineType::Off {
                 let pr_idx = lp.preset.value() as usize;
                 let preset_name = match engine_type {
-                    LaneEngineType::Karplus => {
-                        KARPLUS_PRESETS.get(pr_idx).map_or("Custom", |p| p.0)
-                    }
                     LaneEngineType::OpenWurli => {
                         WURLI_PRESETS.get(pr_idx).map_or("Custom", |p| p.0)
                     }
@@ -234,7 +231,6 @@ impl ChordboardView {
 
                 // Macro Knobs (2 rows of 3)
                 let macro_labels: [&str; 6] = match engine_type {
-                    LaneEngineType::Karplus => ["Tone", "Decay", "Body Res", "Pick Pos", "Glide", "Detune"],
                     LaneEngineType::OpenWurli => ["Drive", "Tremolo", "Trem Rate", "Speaker", "Reed", "Hammer"],
                     LaneEngineType::Off => ["", "", "", "", "", ""],
                 };
@@ -257,7 +253,6 @@ impl ChordboardView {
 
                 // Option Toggles (Opt A & Opt B)
                 let (opt_a_label, opt_b_label) = match engine_type {
-                    LaneEngineType::Karplus => ("Palm Mute", "Stereo Wide"),
                     LaneEngineType::OpenWurli => ("Heavy Ckt", "Rail Sag"),
                     LaneEngineType::Off => ("", ""),
                 };
@@ -428,18 +423,6 @@ impl ChordboardView {
         Self::emit(cx, lp.preset.as_ptr(), lp.preset.preview_normalized(preset_idx as i32));
 
         match engine_type {
-            LaneEngineType::Karplus => {
-                if let Some(p) = KARPLUS_PRESETS.get(preset_idx) {
-                    Self::emit(cx, lp.m1.as_ptr(), p.1[0]);
-                    Self::emit(cx, lp.m2.as_ptr(), p.1[1]);
-                    Self::emit(cx, lp.m3.as_ptr(), p.1[2]);
-                    Self::emit(cx, lp.m4.as_ptr(), p.1[3]);
-                    Self::emit(cx, lp.m5.as_ptr(), p.1[4]);
-                    Self::emit(cx, lp.m6.as_ptr(), p.1[5]);
-                    Self::emit(cx, lp.opt_a.as_ptr(), 0.0);
-                    Self::emit(cx, lp.opt_b.as_ptr(), 0.0);
-                }
-            }
             LaneEngineType::OpenWurli => {
                 if let Some(p) = WURLI_PRESETS.get(preset_idx) {
                     Self::emit(cx, lp.m1.as_ptr(), p.1[0]);
@@ -459,8 +442,8 @@ impl ChordboardView {
     pub(super) fn cycle_lane_engine(&self, cx: &mut EventContext, lane: Lane) {
         let lp = self.params.lane_params(lane);
         let current = lp.engine.value();
-        // Cycle: Off (0) -> Karplus (1) -> OpenWurli (2) -> Off (0)
-        let next = (current + 1) % 3;
+        // Toggle: Off (0) <-> OpenWurli (1)
+        let next = if current == 0 { 1 } else { 0 };
         Self::emit(cx, lp.engine.as_ptr(), lp.engine.preview_normalized(next));
         let next_engine = LaneEngineType::from_index(next);
         self.apply_lane_preset(cx, lane, next_engine, 0);
@@ -470,7 +453,6 @@ impl ChordboardView {
         let lp = self.params.lane_params(lane);
         let engine_type = LaneEngineType::from_index(lp.engine.value());
         let total = match engine_type {
-            LaneEngineType::Karplus => KARPLUS_PRESETS.len() as i32,
             LaneEngineType::OpenWurli => WURLI_PRESETS.len() as i32,
             LaneEngineType::Off => 1,
         };
@@ -515,22 +497,17 @@ impl ChordboardView {
         // Reset all engines to default presets
         if hit(SOUND_RESET_ALL, x, y) {
             for &lane in &Lane::ALL {
-                let default_engine = match lane {
-                    Lane::Bass => LaneEngineType::Karplus,
-                    Lane::Comp => LaneEngineType::OpenWurli,
-                    Lane::Arp => LaneEngineType::Karplus,
-                    Lane::Lead => LaneEngineType::Karplus,
-                };
+                let default_engine = LaneEngineType::OpenWurli;
                 let lp = self.params.lane_params(lane);
                 Self::emit(cx, lp.engine.as_ptr(), lp.engine.preview_normalized(default_engine.to_index()));
                 Self::emit(cx, lp.level.as_ptr(), lp.level.preview_normalized(0.8));
                 Self::emit(cx, lp.pan.as_ptr(), lp.pan.preview_normalized(0.0));
                 Self::emit(cx, lp.mute.as_ptr(), 0.0);
                 let preset_idx = match lane {
-                    Lane::Bass => 0,
+                    Lane::Bass => 3,
                     Lane::Comp => 0,
-                    Lane::Arp => 1,
-                    Lane::Lead => 4,
+                    Lane::Arp => 2,
+                    Lane::Lead => 5,
                 };
                 self.apply_lane_preset(cx, lane, default_engine, preset_idx);
             }

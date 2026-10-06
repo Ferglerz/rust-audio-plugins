@@ -513,11 +513,9 @@ impl Engine {
             };
             if bass_hit {
                 if let Some(root) = self.selected_root() {
-                    let bass_pitch = if self.config.bass_mode == 3 && (current_step / 2).is_multiple_of(2) {
-                        (root as i16 + 7 + self.config.bass_octave as i16 * 12).clamp(0, 127) as u8
-                    } else {
-                        (root as i16 + self.config.bass_octave as i16 * 12).clamp(0, 127) as u8
-                    };
+                    let is_alt = (self.config.bass_mode == 3 && (current_step / 2).is_multiple_of(2)) || self.config.bass_pad_trigger == 1;
+                    let alt_offset = if is_alt { 7 } else { 0 };
+                    let bass_pitch = (root as i16 + alt_offset + self.config.bass_octave as i16 * 12).clamp(0, 127) as u8;
                     self.schedule(Scheduled {
                         at: self.now,
                         note: bass_pitch,

@@ -3968,3 +3968,61 @@ fn test_live_console_cherry_and_arp_interactions() {
     event(&mut v, &mut cx, target, s0.0 + 2.0, s0.1 + 2.0, WindowEvent::MouseDown(MouseButton::Left));
     assert_ne!(v.params.step_accent(0), before_accent);
 }
+
+#[test]
+fn test_live_console_harp_and_pitch_bend_interactions() {
+    let mut v = view(1, false);
+    Arc::get_mut(&mut v.params).unwrap().console_view = IntParam::new("Console view", 1, IntRange::Linear { min: 0, max: 1 });
+    Arc::get_mut(&mut v.params).unwrap().bottom_deck_mode = IntParam::new("Bottom deck mode", 1, IntRange::Linear { min: 0, max: 1 });
+    let (mut cx, target, changes) = context();
+    let x0 = console::console_x_offset();
+
+    // 1. Click bottom mute badge on string 0 (y near bottom of harp)
+    assert!(!v.params.is_string_muted(0));
+    let hr0 = console::harp_string_rect(x0, 0);
+    event(&mut v, &mut cx, target, hr0.0 + 10.0, hr0.1 + hr0.3 - 10.0, WindowEvent::MouseDown(MouseButton::Left));
+    assert!(v.params.is_string_muted(0));
+
+    // 2. Right-click string 0 toggles skipped
+    assert!(!v.params.is_string_skipped(0));
+    event(&mut v, &mut cx, target, hr0.0 + 10.0, hr0.1 + 50.0, WindowEvent::MouseDown(MouseButton::Right));
+    assert!(v.params.is_string_skipped(0));
+
+    // 3. Click string body (pluck) starts gesture
+    event(&mut v, &mut cx, target, hr0.0 + 10.0, hr0.1 + 30.0, WindowEvent::MouseDown(MouseButton::Left));
+    assert!(matches!(v.drag, Some(Drag::Pad)));
+    assert!(std::iter::from_fn(|| v.bridge.commands.pop()).any(|c| matches!(c, Command::BeginGesture(..))));
+
+    // Dragging across harp strings sends X gesture
+    event(&mut v, &mut cx, target, hr0.0 + 100.0, hr0.1 + 30.0, WindowEvent::MouseMove(hr0.0 + 100.0, hr0.1 + 30.0));
+    assert!(std::iter::from_fn(|| v.bridge.commands.pop()).any(|c| matches!(c, Command::X(..))));
+
+    // Mouse up sends EndGesture
+    event(&mut v, &mut cx, target, hr0.0 + 100.0, hr0.1 + 30.0, WindowEvent::MouseUp(MouseButton::Left));
+    assert!(std::iter::from_fn(|| v.bridge.commands.pop()).any(|c| matches!(c, Command::EndGesture)));
+
+    // 4. Pitch bend deflection and spring back
+    let pb = console::pitch_bend_rail_rect(x0);
+    event(&mut v, &mut cx, target, pb.0 + pb.2 * 0.75, pb.1 + pb.3 * 0.5, WindowEvent::MouseDown(MouseButton::Left));
+    let events = changes.borrow().clone();
+    assert!(events.iter().any(|(ptr, val)| *ptr == v.params.pitch_bend.as_ptr() && *val > 0.5));
+
+    // Releasing mouse returns pitch bend to 0.0 center
+    event(&mut v, &mut cx, target, pb.0 + pb.2 * 0.75, pb.1 + pb.3 * 0.5, WindowEvent::MouseUp(MouseButton::Left));
+    let events_after = changes.borrow().clone();
+    assert!(events_after.iter().any(|(ptr, val)|
+        *ptr == v.params.pitch_bend.as_ptr() && (*val - v.params.pitch_bend.preview_normalized(0.0)).abs() < 0.001
+    ));
+
+    // 5. Looper REC primes recording, clicking slot records chord
+    let rec_r = console::looper_rec_rect(x0);
+    event(&mut v, &mut cx, target, rec_r.0 + 5.0, rec_r.1 + 5.0, WindowEvent::MouseDown(MouseButton::Left));
+    let events = changes.borrow().clone();
+    assert!(events.iter().any(|(ptr, val)| *ptr == v.params.looper_rec.as_ptr() && (*val - 1.0).abs() < 0.001));
+    Arc::get_mut(&mut v.params).unwrap().looper_rec = BoolParam::new("Looper rec", true);
+
+    let bar0 = console::looper_bar_rect(x0, 0);
+    event(&mut v, &mut cx, target, bar0.0 + 5.0, bar0.1 + 5.0, WindowEvent::MouseDown(MouseButton::Left));
+    assert!(std::iter::from_fn(|| v.bridge.commands.pop()).any(|c| matches!(c, Command::Capture(0))));
+}
+

@@ -46,6 +46,8 @@ pub struct Chordboard {
     pub sound: sound::LaneDispatcher,
     expected_position: Option<i64>,
     last_axes: [f32; 2],
+    last_pitch_bend: f32,
+    last_mod_wheel: f32,
     pending_reset: bool,
 }
 impl Default for Chordboard {
@@ -57,6 +59,8 @@ impl Default for Chordboard {
             sound: sound::LaneDispatcher::new(44100.0),
             expected_position: None,
             last_axes: [0.0, 0.8],
+            last_pitch_bend: 0.0,
+            last_mod_wheel: 0.0,
             pending_reset: false,
         }
     }
@@ -460,6 +464,43 @@ impl Plugin for Chordboard {
             self.sound.set_lane_param(lane, 5, lp.m6.value());
             self.sound.set_lane_opt_a(lane, lp.opt_a.value());
             self.sound.set_lane_opt_b(lane, lp.opt_b.value());
+        }
+
+        // Apply pad crossfader between Comp (chords/pad) and Lead lanes
+        let pad_cross = self.params.pad_crossfade.value();
+        let comp_scale = ((1.0 - pad_cross) * 2.0).clamp(0.0, 1.0);
+        let lead_scale = (pad_cross * 2.0).clamp(0.0, 1.0);
+        let comp_level = self.params.lane_params(Lane::Comp).level.value() * comp_scale;
+        let lead_level = self.params.lane_params(Lane::Lead).level.value() * lead_scale;
+        self.sound.set_lane_level(Lane::Comp, comp_level);
+        self.sound.set_lane_level(Lane::Lead, lead_level);
+
+        // Apply FX Drive to pickup drive if active
+        let fx_drive_val = self.params.fx_drive.value();
+        if self.params.fx_tape.value() || fx_drive_val > 0.01 {
+            let base_drive = self.params.lane_params(Lane::Comp).m6.value();
+            self.sound.set_lane_param(Lane::Comp, 6, (base_drive + fx_drive_val * 0.5).clamp(0.0, 1.0));
+        }
+
+        // Dispatch hardware pitch bend parameter
+        let cur_bend = self.params.pitch_bend.value();
+        if (cur_bend - self.last_pitch_bend).abs() > 0.001 {
+            self.last_pitch_bend = cur_bend;
+            let norm_bend = (cur_bend + 1.0) * 0.5;
+            for ch in 0..16 {
+                self.sound.handle_bend(ch, cur_bend);
+                emitted.push(0, Out::Bend(ch, norm_bend));
+            }
+        }
+
+        // Dispatch hardware modulation wheel parameter
+        let cur_mod = self.params.mod_wheel.value();
+        if (cur_mod - self.last_mod_wheel).abs() > 0.001 {
+            self.last_mod_wheel = cur_mod;
+            for ch in 0..16 {
+                self.sound.handle_cc(ch, 1, cur_mod);
+                emitted.push(0, Out::Cc(ch, 1, cur_mod));
+            }
         }
 
         self.engine

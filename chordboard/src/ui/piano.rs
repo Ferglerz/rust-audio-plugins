@@ -19,7 +19,7 @@ impl ChordboardView {
         }
     }
 
-    fn note_label(&self, note: u8) -> String {
+    pub(super) fn note_label(&self, note: u8) -> String {
         harmony::midi_note_name_in_key(
             note,
             self.params.key.value() as u8,

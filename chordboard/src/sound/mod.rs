@@ -1,14 +1,11 @@
-//! Multi-engine sound subsystem for Chordboard.
+//! Sound subsystem for Chordboard.
 //!
-//! Provides 4 isolated sound lanes (Bass, Comp, Arp, Lead) each capable of
-//! hosting independent instances of Karplus-Strong physical modeling strings
-//! or OpenWurli electric piano.
+//! Provides 4 isolated sound lanes (Bass, Comp, Arp, Lead) hosting
+//! OpenWurli electric piano synthesis.
 
-pub mod karplus;
 pub mod wurli;
 
 use crate::engine::{Lane, LaneEvent};
-pub use karplus::KarplusEngine;
 pub use wurli::WurliEngineWrapper;
 
 pub trait SoundEngine: Send {
@@ -26,15 +23,13 @@ pub trait SoundEngine: Send {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LaneEngineType {
     Off = 0,
-    Karplus = 1,
-    OpenWurli = 2,
+    OpenWurli = 1,
 }
 
 impl LaneEngineType {
     pub fn from_index(index: i32) -> Self {
         match index {
-            1 => LaneEngineType::Karplus,
-            2 => LaneEngineType::OpenWurli,
+            1 | 2 => LaneEngineType::OpenWurli,
             _ => LaneEngineType::Off,
         }
     }
@@ -46,7 +41,6 @@ impl LaneEngineType {
     pub fn name(self) -> &'static str {
         match self {
             LaneEngineType::Off => "Off",
-            LaneEngineType::Karplus => "Karplus String",
             LaneEngineType::OpenWurli => "OpenWurli",
         }
     }
@@ -54,7 +48,6 @@ impl LaneEngineType {
 
 pub struct LaneStrip {
     pub engine_type: LaneEngineType,
-    pub karplus: Option<Box<KarplusEngine>>,
     pub wurli: Option<Box<WurliEngineWrapper>>,
     pub level: f32,
     pub pan: f32,
@@ -67,7 +60,6 @@ impl LaneStrip {
     fn new(engine_type: LaneEngineType) -> Self {
         Self {
             engine_type,
-            karplus: None,
             wurli: None,
             level: 0.8,
             pan: 0.0,
@@ -79,56 +71,27 @@ impl LaneStrip {
 
     pub fn set_engine(&mut self, engine_type: LaneEngineType, sample_rate: f32) {
         if self.engine_type != engine_type {
-            match self.engine_type {
-                LaneEngineType::Karplus => {
-                    if let Some(k) = self.karplus.as_mut() {
-                        k.reset();
-                    }
+            if self.engine_type == LaneEngineType::OpenWurli {
+                if let Some(w) = self.wurli.as_mut() {
+                    w.reset();
                 }
-                LaneEngineType::OpenWurli => {
-                    if let Some(w) = self.wurli.as_mut() {
-                        w.reset();
-                    }
-                }
-                LaneEngineType::Off => {}
             }
             self.engine_type = engine_type;
         }
-        match self.engine_type {
-            LaneEngineType::Karplus => {
-                if self.karplus.is_none() {
-                    self.karplus = Some(Box::new(KarplusEngine::new(sample_rate)));
-                }
-            }
-            LaneEngineType::OpenWurli => {
-                if self.wurli.is_none() {
-                    self.wurli = Some(Box::new(WurliEngineWrapper::new(sample_rate)));
-                }
-            }
-            LaneEngineType::Off => {}
+        if self.engine_type == LaneEngineType::OpenWurli && self.wurli.is_none() {
+            self.wurli = Some(Box::new(WurliEngineWrapper::new(sample_rate)));
         }
     }
 
     pub fn ensure_engine(&mut self, sample_rate: f32) {
-        match self.engine_type {
-            LaneEngineType::Karplus => {
-                if self.karplus.is_none() {
-                    self.karplus = Some(Box::new(KarplusEngine::new(sample_rate)));
-                }
-            }
-            LaneEngineType::OpenWurli => {
-                if self.wurli.is_none() {
-                    self.wurli = Some(Box::new(WurliEngineWrapper::new(sample_rate)));
-                }
-            }
-            LaneEngineType::Off => {}
+        if self.engine_type == LaneEngineType::OpenWurli && self.wurli.is_none() {
+            self.wurli = Some(Box::new(WurliEngineWrapper::new(sample_rate)));
         }
     }
 
     pub fn active_engine_mut(&mut self) -> Option<&mut dyn SoundEngine> {
         match self.engine_type {
             LaneEngineType::Off => None,
-            LaneEngineType::Karplus => self.karplus.as_mut().map(|k| k.as_mut() as &mut dyn SoundEngine),
             LaneEngineType::OpenWurli => self.wurli.as_mut().map(|w| w.as_mut() as &mut dyn SoundEngine),
         }
     }
@@ -147,10 +110,10 @@ impl LaneDispatcher {
     pub fn new(sample_rate: f32) -> Self {
         let sample_rate = sample_rate.max(1.0);
         let lanes = [
-            LaneStrip::new(LaneEngineType::Karplus),   // Bass
+            LaneStrip::new(LaneEngineType::OpenWurli), // Bass
             LaneStrip::new(LaneEngineType::OpenWurli), // Comp
-            LaneStrip::new(LaneEngineType::Karplus),   // Arp
-            LaneStrip::new(LaneEngineType::Karplus),   // Lead
+            LaneStrip::new(LaneEngineType::OpenWurli), // Arp
+            LaneStrip::new(LaneEngineType::OpenWurli), // Lead
         ];
         Self {
             lanes,
@@ -165,9 +128,6 @@ impl LaneDispatcher {
     pub fn set_sample_rate(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate.max(1.0);
         for lane in &mut self.lanes {
-            if let Some(k) = lane.karplus.as_mut() {
-                k.set_sample_rate(self.sample_rate);
-            }
             if let Some(w) = lane.wurli.as_mut() {
                 w.set_sample_rate(self.sample_rate);
             }
@@ -176,9 +136,6 @@ impl LaneDispatcher {
 
     pub fn reset(&mut self) {
         for lane in &mut self.lanes {
-            if let Some(k) = lane.karplus.as_mut() {
-                k.reset();
-            }
             if let Some(w) = lane.wurli.as_mut() {
                 w.reset();
             }
@@ -228,9 +185,6 @@ impl LaneDispatcher {
 
     pub fn set_lane_param(&mut self, lane: Lane, index: usize, value: f32) {
         let strip = &mut self.lanes[lane.index()];
-        if let Some(k) = strip.karplus.as_mut() {
-            k.set_param(index, value);
-        }
         if let Some(w) = strip.wurli.as_mut() {
             w.set_param(index, value);
         }
@@ -357,18 +311,6 @@ impl LaneDispatcher {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_karplus_renders_audio() {
-        let mut k = karplus::KarplusEngine::new(44100.0);
-        k.note_on(0, 60, 0.8);
-        let mut l = vec![0.0f32; 512];
-        let mut r = vec![0.0f32; 512];
-        k.render(&mut l, &mut r);
-        let max_l = l.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
-        let max_r = r.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
-        assert!(max_l > 0.01, "Karplus left output is silent: {max_l}");
-        assert!(max_r > 0.01, "Karplus right output is silent: {max_r}");
-    }
 
     #[test]
     fn test_wurli_renders_audio() {

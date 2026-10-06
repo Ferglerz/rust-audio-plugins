@@ -163,8 +163,12 @@ impl ChordboardView {
             11.0,
             if feedback { GOLD } else { MUTED },
         );
+        self.draw_menu_overlay(&mut d);
+    }
+
+    pub(super) fn draw_menu_overlay(&self, d: &mut Draw) {
         if let Some(menu) = self.menu {
-            self.surface(&mut d, self.menu_bounds(menu));
+            self.surface(d, self.menu_bounds(menu));
             let r = self.menu_bounds(menu);
             d.text(r.0 + 12.0, r.1 + 24.0, menu.title(), 12.0, MUTED);
             for (label, heading) in menu.group_heading_rects(r) {
@@ -174,7 +178,7 @@ impl ChordboardView {
                 let r = self.menu_option_rect(menu, i);
                 let allowed = self.route_menu_allowed(menu, i);
                 self.button(
-                    &mut d,
+                    d,
                     r,
                     label,
                     allowed && i == self.menu_selection(menu),
@@ -210,7 +214,7 @@ impl ChordboardView {
             return Some("Switch to Chords harmony matrix".into());
         }
         if hit(sound::SURFACE_TAB_SOUND, x, y) {
-            return Some("Switch to Sound Instrument Lanes (Karplus-Strong · OpenWurli mixer)".into());
+            return Some("Switch to Sound Instrument Lanes (OpenWurli multi-lane mixer)".into());
         }
         if hit(sound::SURFACE_TAB_ROUTES, x, y) {
             return Some("Switch to Modulation Routing matrix".into());

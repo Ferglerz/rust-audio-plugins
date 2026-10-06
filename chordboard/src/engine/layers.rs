@@ -306,7 +306,8 @@ impl Engine {
             }
             if self.config.bass_mode == 1 && self.config.bass_enabled {
                 if let Some(note) = self.selected_root() {
-                    let trans = (note as i16 + self.config.bass_octave as i16 * 12).clamp(0, 127) as u8;
+                    let alt_offset = if self.config.bass_pad_trigger == 1 { 7 } else { 0 };
+                    let trans = (note as i16 + alt_offset + self.config.bass_octave as i16 * 12).clamp(0, 127) as u8;
                     if desired_count < 32 {
                         desired[desired_count] = Some((trans, self.config.bass_channel, KIND_BASS));
                         desired_count += 1;

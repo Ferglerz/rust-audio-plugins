@@ -935,6 +935,7 @@ impl ChordboardParams {
                 self.lane_auto_mute_arp.value(),
                 self.lane_auto_mute_lead.value(),
             ],
+            bass_pad_trigger: self.bass_pad_trigger.value() as u8,
         }
     }
     pub fn mapping(&self, axis: usize) -> &AtomicU32 {
@@ -1363,15 +1364,6 @@ mod tests {
     }
 }
 
-pub const KARPLUS_PRESETS: [(&str, [f32; 6]); 6] = [
-    ("Deep Bass", [0.80, 0.65, 0.35, 0.50, 0.70, 0.00]),
-    ("Punchy Slap", [0.60, 0.35, 0.15, 0.85, 0.55, 0.00]),
-    ("Acoustic Pluck", [0.60, 0.30, 0.20, 0.75, 0.40, 0.45]),
-    ("Harp / Koto", [0.75, 0.20, 0.50, 0.60, 0.30, 0.60]),
-    ("Singing Lead", [0.85, 0.22, 0.40, 0.65, 0.45, 0.25]),
-    ("Muted Chime", [0.35, 0.50, 0.10, 0.90, 0.20, 0.30]),
-];
-
 pub const WURLI_PRESETS: [(&str, [f32; 6], bool, bool); 6] = [
     ("Classic 200A", [0.75, 0.35, 0.40, 0.25, 0.50, 0.50], false, true),
     ("Warm Velvet", [0.80, 0.00, 0.20, 0.50, 0.60, 0.30], false, false),
@@ -1422,19 +1414,19 @@ impl LaneSoundParams {
         Self::new(
             "Bass",
             1,
-            0,
+            3,
             0.85,
             0.0,
             false,
-            0.80, 0.65, 0.35, 0.50, 0.70, 0.00,
-            false, false,
+            0.90, 0.15, 0.30, 0.35, 0.70, 0.90,
+            true, true,
         )
     }
 
     pub fn new_comp() -> Self {
         Self::new(
             "Comp",
-            2,
+            1,
             0,
             0.75,
             0.0,
@@ -1452,8 +1444,8 @@ impl LaneSoundParams {
             0.80,
             0.15,
             false,
-            0.60, 0.30, 0.20, 0.75, 0.40, 0.45,
-            false, false,
+            0.85, 0.70, 0.65, 0.15, 0.45, 0.80,
+            true, true,
         )
     }
 
@@ -1461,12 +1453,12 @@ impl LaneSoundParams {
         Self::new(
             "Lead",
             1,
-            4,
+            5,
             0.85,
             -0.10,
             false,
-            0.85, 0.22, 0.40, 0.65, 0.45, 0.25,
-            false, false,
+            0.85, 0.50, 0.50, 0.30, 0.55, 0.70,
+            true, true,
         )
     }
 
@@ -1493,8 +1485,7 @@ impl LaneSoundParams {
                 IntRange::Linear { min: 0, max: 2 },
             )
             .with_value_to_string(Arc::new(|v| match v {
-                1 => "Karplus String".into(),
-                2 => "OpenWurli".into(),
+                1 | 2 => "OpenWurli".into(),
                 _ => "Off".into(),
             })),
             preset: IntParam::new(

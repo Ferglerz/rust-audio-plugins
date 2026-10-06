@@ -216,6 +216,7 @@ pub struct Config {
     pub comp_guide_tone: bool,
     pub pad_swell_source: u8,
     pub lane_auto_mute: [bool; 4],
+    pub bass_pad_trigger: u8,
 }
 impl Config {
     pub fn bass_boundary(&self) -> i16 {
@@ -329,6 +330,7 @@ impl Default for Config {
             comp_guide_tone: false,
             pad_swell_source: 0,
             lane_auto_mute: [false; 4],
+            bass_pad_trigger: 0,
         }
     }
 }

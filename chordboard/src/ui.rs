@@ -434,6 +434,15 @@ impl ChordboardView {
         (r.0 + r.2 - 48.0, r.1 + 6.0, 36.0, 32.0)
     }
     fn menu_trigger_rect(&self, menu: Menu) -> Rect {
+        if self.params.console_view.value() == 1 {
+            let x0 = console::console_x_offset();
+            let oled_r = console::col1_oled_rect(x0);
+            match menu {
+                Menu::Key => return (oled_r.0, oled_r.1, oled_r.2 * 0.5, oled_r.3),
+                Menu::Scale => return (oled_r.0 + oled_r.2 * 0.5, oled_r.1, oled_r.2 * 0.5, oled_r.3),
+                _ => {}
+            }
+        }
         let r = mapping_panel_rect(self.mapping_axis);
         match menu {
             Menu::MappingKind => (r.0 + 12.0, r.1 + 48.0, 132.0, 28.0),
