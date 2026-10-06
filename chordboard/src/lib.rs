@@ -388,14 +388,15 @@ impl Plugin for Chordboard {
         config: &BufferConfig,
         _: &mut impl InitContext<Self>,
     ) -> bool {
-        self.engine.sample_rate = config.sample_rate;
+        self.engine.set_sample_rate(config.sample_rate);
         self.sound.set_sample_rate(config.sample_rate);
-        self.pending_reset = true;
+        self.sound.prewarm(config.sample_rate, config.max_buffer_size as usize);
+        self.pending_reset = false;
         true
     }
     fn reset(&mut self) {
         self.bridge.learned_split.store(0, Ordering::Release);
-        self.pending_reset = true;
+        self.pending_reset = false;
         self.sound.reset();
         self.engine.quality = self.params.selected_quality.load(Ordering::Relaxed).min(11) as u8;
         self.expected_position = None;
@@ -425,14 +426,13 @@ impl Plugin for Chordboard {
         };
         let panic_requested = self.bridge.panic.swap(false, Ordering::AcqRel);
         let reset_requested = self.bridge.reset.swap(false, Ordering::AcqRel);
-        if self.pending_reset || panic_requested || reset_requested {
-            self.sound.reset();
+        if panic_requested || reset_requested {
+            self.sound.panic();
             self.engine.panic(&mut |e| emitted.push(0, e));
             if reset_requested {
                 self.engine.quality = self.params.quality.value() as u8;
                 self.engine.inversion = self.params.inversion.value() as u8;
             }
-            self.pending_reset = false;
             for _ in 0..128 {
                 if self.bridge.commands.pop().is_none() {
                     break;
@@ -557,7 +557,7 @@ impl Plugin for Chordboard {
                 .store(base as i32, Ordering::Relaxed);
         }
         if emitted.overflow {
-            self.sound.reset();
+            self.sound.panic();
             self.engine.panic(&mut |_| {});
             // A pedal-up earlier in the dropped batch may have cleared the
             // internal flag already. Release sustain on every output channel.

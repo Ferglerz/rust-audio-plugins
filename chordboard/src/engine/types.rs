@@ -564,3 +564,372 @@ impl LearnedSplit {
         }
     }
 }
+
+pub type NoteMask = u128;
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum VoiceModule {
+    Keys,
+    Bass,
+    Pad,
+    Arp,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum VoiceState {
+    Inactive,
+    Active,
+    SustainedLegato,
+    Releasing,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct RealtimeVoice {
+    pub note_number: u8,
+    pub target_bus: VoiceModule,
+    pub state: VoiceState,
+    pub current_gain: f32,
+    pub target_gain: f32,
+    pub velocity: u8,
+    pub age_samples: u64,
+}
+
+impl Default for RealtimeVoice {
+    fn default() -> Self {
+        Self {
+            note_number: 0,
+            target_bus: VoiceModule::Keys,
+            state: VoiceState::Inactive,
+            current_gain: 0.0,
+            target_gain: 0.0,
+            velocity: 0,
+            age_samples: 0,
+        }
+    }
+}
+
+pub const MAX_VOICES: usize = 32;
+
+pub struct VoicePool {
+    pub voices: [RealtimeVoice; MAX_VOICES],
+    pub active_mask: NoteMask,
+}
+
+impl VoicePool {
+    pub const fn new() -> Self {
+        Self {
+            voices: [RealtimeVoice {
+                note_number: 0,
+                target_bus: VoiceModule::Keys,
+                state: VoiceState::Inactive,
+                current_gain: 0.0,
+                target_gain: 0.0,
+                velocity: 0,
+                age_samples: 0,
+            }; MAX_VOICES],
+            active_mask: 0,
+        }
+    }
+
+    #[inline(always)]
+    pub fn is_note_active(&self, note: u8) -> bool {
+        (self.active_mask & (1u128 << note)) != 0
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct TransitionPlan {
+    pub notes_to_release: [u8; 16],
+    pub release_count: usize,
+    pub notes_to_attack: [u8; 16],
+    pub attack_count: usize,
+    pub notes_to_sustain: [u8; 16],
+    pub sustain_count: usize,
+}
+
+#[inline]
+pub fn plan_legato_transition(current: NoteMask, target: NoteMask) -> TransitionPlan {
+    let mut plan = TransitionPlan {
+        notes_to_release: [0; 16],
+        release_count: 0,
+        notes_to_attack: [0; 16],
+        attack_count: 0,
+        notes_to_sustain: [0; 16],
+        sustain_count: 0,
+    };
+
+    let common_mask = current & target;
+    let release_mask = current & !target;
+    let attack_mask = target & !current;
+
+    populate_plan_array(release_mask, &mut plan.notes_to_release, &mut plan.release_count);
+    populate_plan_array(attack_mask, &mut plan.notes_to_attack, &mut plan.attack_count);
+    populate_plan_array(common_mask, &mut plan.notes_to_sustain, &mut plan.sustain_count);
+
+    plan
+}
+
+#[inline(always)]
+fn populate_plan_array(mut mask: NoteMask, destination: &mut [u8; 16], count: &mut usize) {
+    while mask != 0 && *count < 16 {
+        let lsb_index = mask.trailing_zeros() as u8;
+        destination[*count] = lsb_index;
+        *count += 1;
+        mask &= mask - 1;
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ExtensionHysteresisTracker {
+    pub current_tier: u8,
+    pub smoothed_alpha: f32,
+    pub filter_coeff: f32,
+}
+
+impl ExtensionHysteresisTracker {
+    pub const HYSTERESIS_EPSILON: f32 = 0.05;
+
+    pub fn new(sample_rate: f32) -> Self {
+        let tau = 0.020;
+        let filter_coeff = (-1.0 / (tau * sample_rate.max(1.0))).exp();
+        Self {
+            current_tier: 0,
+            smoothed_alpha: 0.0,
+            filter_coeff,
+        }
+    }
+
+    #[inline]
+    pub fn process_parameter(&mut self, raw_alpha: f32) -> (u8, f32) {
+        self.smoothed_alpha = (raw_alpha * (1.0 - self.filter_coeff))
+            + (self.smoothed_alpha * self.filter_coeff);
+
+        let alpha = self.smoothed_alpha;
+        let mut tier = self.current_tier;
+
+        match tier {
+            0 => {
+                if alpha >= (1.0 + Self::HYSTERESIS_EPSILON) {
+                    tier = 1;
+                }
+            }
+            1 => {
+                if alpha < (1.0 - Self::HYSTERESIS_EPSILON) {
+                    tier = 0;
+                } else if alpha >= (2.0 + Self::HYSTERESIS_EPSILON) {
+                    tier = 2;
+                }
+            }
+            2 => {
+                if alpha < (2.0 - Self::HYSTERESIS_EPSILON) {
+                    tier = 1;
+                } else if alpha >= (3.0 + Self::HYSTERESIS_EPSILON) {
+                    tier = 3;
+                }
+            }
+            3 => {
+                if alpha < (3.0 - Self::HYSTERESIS_EPSILON) {
+                    tier = 2;
+                } else if alpha >= (4.0 - Self::HYSTERESIS_EPSILON) {
+                    tier = 4;
+                }
+            }
+            4 => {
+                if alpha < (4.0 - Self::HYSTERESIS_EPSILON) {
+                    tier = 3;
+                }
+            }
+            _ => tier = 0,
+        }
+
+        self.current_tier = tier;
+        (tier, alpha)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PendingNote {
+    pub channel: u8,
+    pub note: u8,
+    pub velocity: u8,
+    pub timestamp_samples: u64,
+}
+
+impl Default for PendingNote {
+    fn default() -> Self {
+        Self {
+            channel: 0,
+            note: 0,
+            velocity: 0,
+            timestamp_samples: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LookaheadBuffer {
+    pub queue: [Option<PendingNote>; 8],
+    pub count: usize,
+    pub window_samples: u64,
+}
+
+impl LookaheadBuffer {
+    pub fn new(sample_rate: f32) -> Self {
+        let window_samples = (0.035 * sample_rate.max(1.0)) as u64;
+        Self {
+            queue: [None; 8],
+            count: 0,
+            window_samples,
+        }
+    }
+
+    #[inline]
+    pub fn ingest_zone_b(&mut self, channel: u8, note: u8, velocity: u8, current_time: u64) {
+        let pending = PendingNote {
+            channel,
+            note,
+            velocity,
+            timestamp_samples: current_time,
+        };
+        // Update existing note if already present
+        for slot in self.queue.iter_mut() {
+            if let Some(p) = slot {
+                if p.channel == channel && p.note == note {
+                    *p = pending;
+                    return;
+                }
+            }
+        }
+        // Insert into first empty slot
+        for slot in self.queue.iter_mut() {
+            if slot.is_none() {
+                *slot = Some(pending);
+                self.count += 1;
+                return;
+            }
+        }
+        // If buffer full (8 notes), overwrite oldest
+        let mut oldest_idx = 0;
+        let mut oldest_time = u64::MAX;
+        for (i, slot) in self.queue.iter().enumerate() {
+            if let Some(p) = slot {
+                if p.timestamp_samples < oldest_time {
+                    oldest_time = p.timestamp_samples;
+                    oldest_idx = i;
+                }
+            }
+        }
+        self.queue[oldest_idx] = Some(pending);
+    }
+
+    /// Fast Staccato Slap Cancellation:
+    /// If note-off arrives in Zone B before 35ms lookahead timer expires,
+    /// cancel the pending note so it never rings orphaned.
+    #[inline]
+    pub fn cancel_note(&mut self, channel: u8, note: u8) -> bool {
+        for slot in self.queue.iter_mut() {
+            if let Some(p) = slot {
+                if p.channel == channel && p.note == note {
+                    *slot = None;
+                    self.count = self.count.saturating_sub(1);
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Drain all pending notes in arrival order when Zone A chord lands
+    #[inline]
+    pub fn drain_all(&mut self, out: &mut [PendingNote; 8]) -> usize {
+        let mut n = 0;
+        for slot in self.queue.iter_mut() {
+            if let Some(p) = slot.take() {
+                out[n] = p;
+                n += 1;
+            }
+        }
+        if n > 1 {
+            out[..n].sort_unstable_by_key(|p| p.timestamp_samples);
+        }
+        self.count = 0;
+        n
+    }
+
+    /// Drain expired notes whose 35ms window has elapsed without Zone A landing
+    #[inline]
+    pub fn drain_expired(&mut self, current_time: u64, out: &mut [PendingNote; 8]) -> usize {
+        let mut n = 0;
+        for slot in self.queue.iter_mut() {
+            if let Some(p) = slot {
+                if current_time.saturating_sub(p.timestamp_samples) >= self.window_samples {
+                    out[n] = *p;
+                    n += 1;
+                    *slot = None;
+                }
+            }
+        }
+        if n > 0 {
+            self.count = self.count.saturating_sub(n);
+            if n > 1 {
+                out[..n].sort_unstable_by_key(|p| p.timestamp_samples);
+            }
+        }
+        n
+    }
+
+    #[inline]
+    pub fn clear(&mut self) {
+        self.queue = [None; 8];
+        self.count = 0;
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DualCoreTopology {
+    pub zone_a_min: u8,
+    pub zone_a_max: u8,
+    pub zone_b_min: u8,
+    pub zone_b_max: u8,
+}
+
+impl DualCoreTopology {
+    pub const KEYS_61: Self = Self {
+        zone_a_min: 36, // C2
+        zone_a_max: 59, // B3
+        zone_b_min: 60, // C4
+        zone_b_max: 84, // C6
+    };
+
+    pub const KEYS_49: Self = Self {
+        zone_a_min: 36, // C2
+        zone_a_max: 59, // B3
+        zone_b_min: 60, // C4
+        zone_b_max: 72, // C5
+    };
+
+    pub const KEYS_25: Self = Self {
+        zone_a_min: 36, // C2
+        zone_a_max: 47, // B2
+        zone_b_min: 48, // C3
+        zone_b_max: 60, // C4
+    };
+
+    pub const KEYS_88: Self = Self {
+        zone_a_min: 36, // C2
+        zone_a_max: 59, // B3
+        zone_b_min: 60, // C4
+        zone_b_max: 108, // C8
+    };
+
+    #[inline]
+    pub fn is_zone_a(&self, note: u8) -> bool {
+        note >= self.zone_a_min && note <= self.zone_a_max
+    }
+
+    #[inline]
+    pub fn is_zone_b(&self, note: u8) -> bool {
+        note >= self.zone_b_min && note <= self.zone_b_max
+    }
+}
+

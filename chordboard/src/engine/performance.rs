@@ -515,7 +515,15 @@ impl Engine {
                 if let Some(root) = self.selected_root() {
                     let is_alt = (self.config.bass_mode == 3 && (current_step / 2).is_multiple_of(2)) || self.config.bass_pad_trigger == 1;
                     let alt_offset = if is_alt { 7 } else { 0 };
-                    let bass_pitch = (root as i16 + alt_offset + self.config.bass_octave as i16 * 12).clamp(0, 127) as u8;
+                    let bass_pitch = if self.config.harmonization_mode > 0 {
+                        let root_pc = root % 12;
+                        let third_pc = (root_pc + 4) % 12;
+                        let fifth_pc = (root_pc + alt_offset) % 12;
+                        let seventh_pc = (root_pc + 10) % 12;
+                        harmony::voice_bass_module(root_pc, third_pc, fifth_pc, seventh_pc, if is_alt { 2 } else { self.inversion })
+                    } else {
+                        (root as i16 + alt_offset as i16 + self.config.bass_octave as i16 * 12).clamp(0, 127) as u8
+                    };
                     self.schedule(Scheduled {
                         at: self.now,
                         note: bass_pitch,
@@ -592,6 +600,15 @@ impl Engine {
                 if let Some(e) = self.scheduled[i].take() {
                     self.strike_with_gate(e.note, e.velocity, e.duration, e.gate_step, e.channel, e.kind, out);
                 }
+            }
+        }
+        if self.config.harmonization_mode > 0 {
+            let mut expired = [PendingNote::default(); 8];
+            let n = self.lookahead_buffer.drain_expired(self.now, &mut expired);
+            for p in &expired[..n] {
+                let vel_f32 = (p.velocity as f32 / 127.0).clamp(0.01, 1.0);
+                self.zone_b_mapped[p.channel as usize][p.note as usize] = Some(p.note);
+                self.melody_note(true, p.channel, p.note, vel_f32, out);
             }
         }
         self.now = self.now.wrapping_add(1);

@@ -99,6 +99,37 @@ impl Engine {
             // Consume releases and zero-velocity Note Ons on every channel too.
             return;
         }
+        if self.config.harmonization_mode > 0 && self.config.key_split && self.topology.is_zone_b(note) {
+            if pressed {
+                if self.root.is_some() {
+                    if let Some(white_idx) = harmony::white_key_degree(note % 12) {
+                        let root_pc = self.selected_root().unwrap_or(60) % 12;
+                        let rel_semi = (root_pc as i16 - self.config.key as i16).rem_euclid(12) as u8;
+                        let tuple = harmony::matrix_interval_tuple(self.config.scale, rel_semi);
+                        let octave_offset = (note.saturating_sub(self.topology.zone_b_min) / 12) as u8;
+                        let root_pitch = (self.topology.zone_b_min + root_pc).min(127);
+                        let mapped = harmony::map_zone_b_white_key(white_idx, octave_offset, root_pitch, &tuple, self.config.extensions * 4.0);
+                        self.zone_b_mapped[channel as usize][note as usize] = Some(mapped);
+                        self.melody_note(true, channel, mapped, velocity, out);
+                    } else {
+                        self.zone_b_mapped[channel as usize][note as usize] = Some(note);
+                        self.melody_note(true, channel, note, velocity, out);
+                    }
+                } else {
+                    self.lookahead_buffer.ingest_zone_b(channel, note, (velocity.clamp(0.01, 1.0) * 127.0) as u8, self.now);
+                }
+            } else {
+                if self.lookahead_buffer.cancel_note(channel, note) {
+                    return;
+                }
+                if let Some(mapped) = self.zone_b_mapped[channel as usize][note as usize].take() {
+                    self.melody_note(false, channel, mapped, velocity, out);
+                } else {
+                    self.melody_note(false, channel, note, velocity, out);
+                }
+            }
+            return;
+        }
         if self.config.bass_boundary() >= 0 && (note as i16) < self.config.bass_boundary() {
             self.bass_note(pressed, channel, note, velocity, out);
             return;
@@ -143,6 +174,12 @@ impl Engine {
         {
             self.expression.pressure = value.clamp(0.0, 1.0);
             self.fan_expression(out);
+            if self.config.harmonization_mode > 0 {
+                let alpha = value.clamp(0.0, 1.0) * 4.0;
+                let (_tier, smoothed_alpha) = self.hysteresis_tracker.process_parameter(alpha);
+                self.config.extensions = (smoothed_alpha / 4.0).clamp(0.0, 1.0);
+                self.rebuild_harmony(false, out);
+            }
         } else if note.is_none()
             && channel == self.input_master()
             && self.root.is_some_and(|s| s.channel != channel)
@@ -210,7 +247,13 @@ impl Engine {
         }
         match cc {
             1 => self.source(1, value, out),
-            11 => self.source(2, value, out),
+            11 => {
+                self.source(2, value, out);
+                if self.config.harmonization_mode > 0 {
+                    self.config.extensions = value.clamp(0.0, 1.0);
+                    self.rebuild_harmony(false, out);
+                }
+            }
             2 => self.source(3, value, out),
             74 => self.source(5, value, out),
             _ => {}
@@ -264,7 +307,20 @@ impl Engine {
                     self.melody_sustain[channel as usize] = raw >= 64;
                     out(Out::Cc(channel, 64, value));
                 }
+                let prev_pedal = self.pedal;
                 self.pedal = raw >= 64;
+                if self.config.harmonization_mode > 0 && !prev_pedal && self.pedal {
+                    let now_ms = (self.now as f64 * 1000.0 / self.sample_rate.max(1.0) as f64) as u64;
+                    if self.last_pedal_tap_time > 0 && now_ms.saturating_sub(self.last_pedal_tap_time) < 400 {
+                        if let Some(held_note) = self.root.map(|s| s.note).or_else(|| self.selected_root()) {
+                            self.config.key = held_note % 12;
+                            self.rebuild_harmony(true, out);
+                        }
+                        self.last_pedal_tap_time = 0;
+                    } else {
+                        self.last_pedal_tap_time = now_ms.max(1);
+                    }
+                }
                 if !self.pedal
                     && !self.config.latch
                     && !self.config.key_split

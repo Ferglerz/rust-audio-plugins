@@ -1419,7 +1419,7 @@ impl LaneSoundParams {
             0.0,
             false,
             0.90, 0.15, 0.30, 0.35, 0.70, 0.90,
-            true, true,
+            false, true,
         )
     }
 
@@ -1445,7 +1445,7 @@ impl LaneSoundParams {
             0.15,
             false,
             0.85, 0.70, 0.65, 0.15, 0.45, 0.80,
-            true, true,
+            false, true,
         )
     }
 

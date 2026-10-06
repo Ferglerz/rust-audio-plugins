@@ -358,19 +358,33 @@ impl ChordboardView {
         let key_tonic = self.params.key.value() as u8;
 
         // 7 White Keys
-        let white_labels = ["I", "II", "III", "IV", "V", "VI", "VII"];
+        let is_minor = self.params.scale.value() == 1;
+        let white_labels = if is_minor {
+            ["i", "ii°", "bIII", "iv", "v", "bVI", "bVII"]
+        } else {
+            ["I", "ii", "iii", "IV", "V", "vi", "vii°"]
+        };
         let degree_pitches = [0u8, 2, 4, 5, 7, 9, 11];
         for i in 0..7 {
             let kr = cherry_white_key_rect(x0, i);
             let root_pitch = (key_tonic + degree_pitches[i]) % 12;
-            let qual = if shift_active { 5 } else { [3, 1, 1, 3, 2, 1, 4][i] };
-            let qual_name = match qual {
-                1 => "m7",
-                2 => "7",
-                3 => "maj7",
-                4 => "m7b5",
-                5 => "sus4",
-                _ => "",
+            let tuple = harmony::matrix_interval_tuple(self.params.scale.value() as u8, degree_pitches[i]);
+            let qual_name = if shift_active {
+                "sus4"
+            } else if tuple[1] == 3 && tuple[2] == 6 && tuple[3] == 9 {
+                "°7"
+            } else if tuple[1] == 3 && tuple[2] == 6 {
+                "ø7"
+            } else if tuple[1] == 3 && tuple[3] == 10 {
+                "m7"
+            } else if tuple[1] == 4 && tuple[3] == 10 {
+                "7"
+            } else if tuple[1] == 4 && tuple[3] == 11 {
+                "maj7"
+            } else if tuple[1] == 3 {
+                "m"
+            } else {
+                "maj"
             };
             let sub_name = format!("{}{}", self.note_name(root_pitch), qual_name);
             let active = matches!(self.drag, Some(Drag::Key(k)) if k == CONSOLE_TOKEN_CHERRY_WHITE + i as u8)
@@ -385,8 +399,8 @@ impl ChordboardView {
             d.text_centered(kr.0 + kr.2 * 0.5, kr.1 + kr.3 - 16.0, &sub_name, 10.0, sub_col);
         }
 
-        // 5 Black Keys
-        let black_labels = ["V/V", "SubV", "viio/V", "bVI", "bVII"];
+        // 5 Black Keys (Aeolian Modal Interchange)
+        let black_labels = ["bII", "bIII", "#IV/bV", "bVI", "bVII"];
         let black_pitches = [1u8, 3, 6, 8, 10];
         for j in 0..5 {
             let kr = cherry_black_key_rect(x0, j);
@@ -395,10 +409,17 @@ impl ChordboardView {
                 || (self.snapshot.root >= 0 && (self.snapshot.root.rem_euclid(12) as u8) == root_pitch);
             let black_fill = if active { TEAL } else { rgb(16, 18, 22) };
             let black_text_col = if active { BG } else { TEXT };
+            let sub_name = format!("{}{}", self.note_name(root_pitch), match black_pitches[j] {
+                1 | 3 | 8 => "maj7",
+                6 => "ø7",
+                10 => "7",
+                _ => "",
+            });
 
             d.rounded_rect(kr.0, kr.1, kr.2, kr.3, 3.0, black_fill);
             d.outline_rounded(kr.0, kr.1, kr.2, kr.3, 3.0, if active { TEAL } else { LINE }, if active { 1.5 } else { 1.0 });
-            d.text_centered(kr.0 + kr.2 * 0.5, kr.1 + kr.3 - 16.0, black_labels[j], 9.0, black_text_col);
+            d.text_centered(kr.0 + kr.2 * 0.5, kr.1 + kr.3 - 26.0, black_labels[j], 9.5, black_text_col);
+            d.text_centered(kr.0 + kr.2 * 0.5, kr.1 + kr.3 - 12.0, &sub_name, 8.0, if active { BG } else { TEAL });
         }
 
         // Degree Shift Button
@@ -660,7 +681,17 @@ impl ChordboardView {
             10.0,
             hero_cy + 56.0,
         );
-        let color_tier = if ext_val < 0.25 { "TRIAD" } else if ext_val < 0.5 { "7th BASE" } else if ext_val < 0.75 { "9th COLOR" } else { "11th/13th" };
+        let color_tier = if ext_val < 0.25 {
+            "ROOT"
+        } else if ext_val < 0.50 {
+            "POWER 5th"
+        } else if ext_val < 0.75 {
+            "TRIAD"
+        } else if ext_val < 0.875 {
+            "7th CHORD"
+        } else {
+            "UPPER COLOR"
+        };
         d.knob_with_layout(&hero_layout, "EXTENSIONS", color_tier, ext_val, GOLD, false);
 
         // Density Meter Gauge

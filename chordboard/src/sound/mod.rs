@@ -17,6 +17,9 @@ pub trait SoundEngine: Send {
     fn pressure(&mut self, channel: u8, value: f32);
     fn cc(&mut self, channel: u8, cc: u8, value: f32);
     fn set_param(&mut self, index: usize, value: f32);
+    fn is_active(&self) -> bool {
+        true
+    }
     fn render(&mut self, left: &mut [f32], right: &mut [f32]);
 }
 
@@ -131,6 +134,28 @@ impl LaneDispatcher {
             if let Some(w) = lane.wurli.as_mut() {
                 w.set_sample_rate(self.sample_rate);
             }
+        }
+    }
+
+    pub fn prewarm(&mut self, sample_rate: f32, max_samples: usize) {
+        self.sample_rate = sample_rate.max(1.0);
+        for lane in &mut self.lanes {
+            if lane.engine_type == LaneEngineType::OpenWurli && lane.wurli.is_none() {
+                lane.wurli = Some(Box::new(WurliEngineWrapper::new(self.sample_rate)));
+            }
+            if let Some(w) = lane.wurli.as_mut() {
+                w.set_sample_rate(self.sample_rate);
+                w.ensure_capacity(max_samples);
+            }
+        }
+    }
+
+    pub fn panic(&mut self) {
+        for lane in &mut self.lanes {
+            if let Some(w) = lane.wurli.as_mut() {
+                w.panic();
+            }
+            lane.peak = 0.0;
         }
     }
 
@@ -274,36 +299,60 @@ impl LaneDispatcher {
             }
 
             strip.ensure_engine(sample_rate);
-            let lane_l = &mut self.temp_l[..len];
-            let lane_r = &mut self.temp_r[..len];
-            lane_l.fill(0.0);
-            lane_r.fill(0.0);
-
             if let Some(engine) = strip.active_engine_mut() {
+                if !engine.is_active() {
+                    strip.peak = 0.0;
+                    continue;
+                }
+
+                let lane_l = &mut self.temp_l[..len];
+                let lane_r = &mut self.temp_r[..len];
+                lane_l.fill(0.0);
+                lane_r.fill(0.0);
+
                 engine.render(lane_l, lane_r);
-            }
 
-            // Constant-power pan:
-            let pan_normalized = (strip.pan + 1.0) * 0.5; // 0.0 .. 1.0
-            let angle = pan_normalized * (std::f32::consts::PI * 0.5);
-            let swell = if i == Lane::Comp.index() && self.pad_swell_source != 0 {
-                self.pad_swell
+                // Constant-power pan:
+                let pan_normalized = (strip.pan + 1.0) * 0.5; // 0.0 .. 1.0
+                let angle = pan_normalized * (std::f32::consts::PI * 0.5);
+                let swell = if i == Lane::Comp.index() && self.pad_swell_source != 0 {
+                    self.pad_swell
+                } else {
+                    1.0
+                };
+                let gain_l = strip.level * swell * angle.cos();
+                let gain_r = strip.level * swell * angle.sin();
+
+                let mut max_peak = 0.0f32;
+                for s in 0..len {
+                    let sl = lane_l[s] * gain_l;
+                    let sr = lane_r[s] * gain_r;
+                    left[s] += sl;
+                    right[s] += sr;
+                    max_peak = max_peak.max(sl.abs()).max(sr.abs());
+                }
+                strip.peak = max_peak;
             } else {
-                1.0
-            };
-            let gain_l = strip.level * swell * angle.cos();
-            let gain_r = strip.level * swell * angle.sin();
-
-            let mut max_peak = 0.0f32;
-            for s in 0..len {
-                let sl = lane_l[s] * gain_l;
-                let sr = lane_r[s] * gain_r;
-                left[s] += sl;
-                right[s] += sr;
-                max_peak = max_peak.max(sl.abs()).max(sr.abs());
+                strip.peak = 0.0;
             }
-            strip.peak = max_peak;
         }
+
+        // Transparent soft-clip master saturation to ensure output never hard-clips
+        for s in 0..len {
+            left[s] = soft_clip(left[s]);
+            right[s] = soft_clip(right[s]);
+        }
+    }
+}
+
+#[inline(always)]
+fn soft_clip(x: f32) -> f32 {
+    if x > 0.85 {
+        0.85 + (x - 0.85) / (1.0 + (x - 0.85) * (x - 0.85)).sqrt() * 0.14
+    } else if x < -0.85 {
+        -0.85 - (-x - 0.85) / (1.0 + (-x - 0.85) * (-x - 0.85)).sqrt() * 0.14
+    } else {
+        x
     }
 }
 
@@ -363,6 +412,10 @@ mod tests {
                 assert!(max_r > 0.01, "Dispatcher right output is silent: {max_r}");
                 assert!(disp.lanes[0].peak > 0.0, "Bass peak meter is zero");
                 assert!(disp.lanes[1].peak > 0.0, "Comp peak meter is zero");
+
+                // Inactive lanes (Arp and Lead) should be skipped (0 peak)
+                assert_eq!(disp.lanes[2].peak, 0.0, "Arp should be idle");
+                assert_eq!(disp.lanes[3].peak, 0.0, "Lead should be idle");
             })
             .unwrap()
             .join()

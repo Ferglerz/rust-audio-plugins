@@ -4062,3 +4062,297 @@ fn test_engine_extensions_macro() {
     );
     assert_eq!(e.notes.as_slice(), &[60, 67]);
 }
+
+#[test]
+fn test_deterministic_major_harmonic_matrix() {
+    use crate::harmony::MAJOR_HARMONIC_INTERVALS;
+    // Section 1.1 verification:
+    assert_eq!(MAJOR_HARMONIC_INTERVALS[0], [0, 4, 7, 11, 14, 17, 21]); // I Maj7
+    assert_eq!(MAJOR_HARMONIC_INTERVALS[1], [0, 4, 7, 11, 13, 17, 20]); // bII Neapolitan
+    assert_eq!(MAJOR_HARMONIC_INTERVALS[2], [0, 3, 7, 10, 14, 17, 21]); // ii m7
+    assert_eq!(MAJOR_HARMONIC_INTERVALS[3], [0, 4, 7, 11, 14, 17, 20]); // bIII Modal Borrow
+    assert_eq!(MAJOR_HARMONIC_INTERVALS[4], [0, 3, 7, 10, 13, 17, 20]); // iii m7
+    assert_eq!(MAJOR_HARMONIC_INTERVALS[5], [0, 4, 7, 11, 14, 18, 21]); // IV Lydian
+    assert_eq!(MAJOR_HARMONIC_INTERVALS[6], [0, 3, 6, 10, 13, 17, 20]); // #IV / bV Half-Dim
+    assert_eq!(MAJOR_HARMONIC_INTERVALS[7], [0, 4, 7, 10, 14, 17, 21]); // V Dominant 7th
+    assert_eq!(MAJOR_HARMONIC_INTERVALS[8], [0, 4, 7, 11, 14, 18, 20]); // bVI Modal Borrow
+    assert_eq!(MAJOR_HARMONIC_INTERVALS[9], [0, 3, 7, 10, 14, 17, 20]); // vi m7
+    assert_eq!(MAJOR_HARMONIC_INTERVALS[10], [0, 4, 7, 10, 14, 17, 21]); // bVII Subtonic Dominant
+    assert_eq!(MAJOR_HARMONIC_INTERVALS[11], [0, 3, 6, 10, 13, 17, 20]); // vii° Half-Dim
+}
+
+#[test]
+fn test_deterministic_minor_harmonic_matrix() {
+    use crate::harmony::MINOR_HARMONIC_INTERVALS;
+    // Section 1.2 verification:
+    assert_eq!(MINOR_HARMONIC_INTERVALS[0], [0, 3, 7, 10, 14, 17, 20]); // i m7
+    assert_eq!(MINOR_HARMONIC_INTERVALS[1], [0, 4, 7, 11, 13, 17, 20]); // bII Phrygian Major
+    assert_eq!(MINOR_HARMONIC_INTERVALS[2], [0, 3, 6, 10, 13, 17, 20]); // ii° Half-Dim
+    assert_eq!(MINOR_HARMONIC_INTERVALS[3], [0, 4, 7, 11, 14, 17, 21]); // bIII Relative Major
+    assert_eq!(MINOR_HARMONIC_INTERVALS[4], [0, 4, 8, 10, 13, 17, 20]); // III Altered Dominant
+    assert_eq!(MINOR_HARMONIC_INTERVALS[5], [0, 3, 7, 10, 14, 17, 21]); // iv m7
+    assert_eq!(MINOR_HARMONIC_INTERVALS[6], [0, 3, 6, 9, 13, 16, 20]);  // #IV / bV Dim Substitution
+    assert_eq!(MINOR_HARMONIC_INTERVALS[7], [0, 4, 7, 10, 13, 17, 20]); // V Harmonic Dominant
+    assert_eq!(MINOR_HARMONIC_INTERVALS[8], [0, 4, 7, 11, 14, 18, 21]); // bVI Major 7th
+    assert_eq!(MINOR_HARMONIC_INTERVALS[9], [0, 3, 7, 10, 14, 17, 21]); // VI Dorian Subdominant
+    assert_eq!(MINOR_HARMONIC_INTERVALS[10], [0, 4, 7, 10, 14, 17, 21]); // bVII Subtonic Dominant
+    assert_eq!(MINOR_HARMONIC_INTERVALS[11], [0, 3, 6, 9, 13, 16, 20]);  // vii° Fully Diminished
+}
+
+#[test]
+fn test_realtime_bitmask_transition_plan() {
+    use crate::engine::{plan_legato_transition, NoteMask};
+    // Current chord: C Major {60, 64, 67}
+    let current_mask: NoteMask = (1 << 60) | (1 << 64) | (1 << 67);
+    // Target chord: A Minor {57, 60, 64} -> 60 and 64 are common tones!
+    let target_mask: NoteMask = (1 << 57) | (1 << 60) | (1 << 64);
+
+    let plan = plan_legato_transition(current_mask, target_mask);
+
+    // Common tones (sustain without retrigger): 60, 64
+    assert_eq!(plan.sustain_count, 2);
+    assert!(plan.notes_to_sustain[..plan.sustain_count].contains(&60));
+    assert!(plan.notes_to_sustain[..plan.sustain_count].contains(&64));
+
+    // Released tone: 67
+    assert_eq!(plan.release_count, 1);
+    assert_eq!(plan.notes_to_release[0], 67);
+
+    // Attacked tone: 57
+    assert_eq!(plan.attack_count, 1);
+    assert_eq!(plan.notes_to_attack[0], 57);
+}
+
+#[test]
+fn test_extension_hysteresis_tracker_anti_flamming() {
+    use crate::engine::ExtensionHysteresisTracker;
+    let mut tracker = ExtensionHysteresisTracker::new(44100.0);
+    for _ in 0..2000 {
+        tracker.process_parameter(0.5);
+    }
+    assert_eq!(tracker.current_tier, 0);
+
+    // Push near boundary 1.0 but within hysteresis (1.02 < 1.0 + 0.05)
+    for _ in 0..2000 {
+        tracker.process_parameter(1.02);
+    }
+    assert_eq!(tracker.current_tier, 0); // No premature switch!
+
+    // Push beyond hysteresis 1.08 > 1.0 + 0.05
+    for _ in 0..2000 {
+        tracker.process_parameter(1.08);
+    }
+    assert_eq!(tracker.current_tier, 1); // Switched cleanly to Tier 1
+
+    // Drop back down slightly (1.02 > 1.0 - 0.05)
+    for _ in 0..2000 {
+        tracker.process_parameter(1.02);
+    }
+    assert_eq!(tracker.current_tier, 1); // Stays in Tier 1 without flamming!
+}
+
+#[test]
+fn test_lookahead_buffer_timing_and_flush() {
+    use crate::engine::{LookaheadBuffer, PendingNote};
+    let mut buf = LookaheadBuffer::new(1000.0); // 1000 Hz sample rate -> 35ms = 35 samples
+    buf.ingest_zone_b(0, 65, 100, 100);
+    buf.ingest_zone_b(1, 67, 110, 105);
+
+    // At t = 120 (20 ms elapsed), should NOT flush yet
+    let mut out = [PendingNote::default(); 8];
+    assert_eq!(buf.drain_expired(120, &mut out), 0);
+    assert_eq!(buf.count, 2);
+
+    // Test fast staccato slap cancellation before timer expires:
+    assert!(buf.cancel_note(1, 67));
+    assert_eq!(buf.count, 1);
+
+    // At t = 140 (40 ms elapsed), 35ms window expired -> note 65 flushes!
+    let n = buf.drain_expired(140, &mut out);
+    assert_eq!(n, 1);
+    assert_eq!(out[0].note, 65);
+    assert_eq!(out[0].channel, 0);
+    assert_eq!(out[0].velocity, 100);
+    assert_eq!(buf.count, 0);
+}
+
+#[test]
+fn test_muscle_memory_modulo_spread_mapping() {
+    use crate::harmony::{map_zone_b_white_key, MAJOR_HARMONIC_INTERVALS};
+    let tuple = MAJOR_HARMONIC_INTERVALS[0]; // C Maj7: [0, 4, 7, 11, 14, 17, 21]
+    let root = 60; // C4
+
+    // Test structural anchors at low extensions (alpha = 2.0 / Triad), octave_offset = 0
+    assert_eq!(map_zone_b_white_key(0, 0, root, &tuple, 2.0), 60); // Key 0 (C) -> Root
+    assert_eq!(map_zone_b_white_key(2, 0, root, &tuple, 2.0), 64); // Key 2 (E) -> 3rd (E)
+    assert_eq!(map_zone_b_white_key(4, 0, root, &tuple, 2.0), 67); // Key 4 (G) -> 5th (G)
+    assert_eq!(map_zone_b_white_key(6, 0, root, &tuple, 2.0), 71); // Key 6 (B) -> 7th (B)
+
+    // Inactive extensions double lower chord tones:
+    assert_eq!(map_zone_b_white_key(1, 0, root, &tuple, 2.0), 72); // Key 1 (D) -> Root + 12
+    assert_eq!(map_zone_b_white_key(3, 0, root, &tuple, 2.0), 67); // Key 3 (F) -> 5th
+    assert_eq!(map_zone_b_white_key(5, 0, root, &tuple, 2.0), 76); // Key 5 (A) -> Octave 3rd
+
+    // Test passing extensions when active (alpha = 3.8 / Upper Colors):
+    assert_eq!(map_zone_b_white_key(1, 0, root, &tuple, 3.8), 74); // 9th (D5 = 60 + 14)
+    assert_eq!(map_zone_b_white_key(3, 0, root, &tuple, 3.8), 77); // 11th (F5 = 60 + 17)
+    assert_eq!(map_zone_b_white_key(5, 0, root, &tuple, 4.0), 81); // 13th (A5 = 60 + 21)
+
+    // Test octave indexing (octave_offset = 1 -> transposed up 12):
+    assert_eq!(map_zone_b_white_key(0, 1, root, &tuple, 2.0), 72); // C5
+    assert_eq!(map_zone_b_white_key(2, 1, root, &tuple, 2.0), 76); // E5
+}
+
+#[test]
+fn test_register_boundaries_and_voicing() {
+    use crate::harmony::{voice_keys_module, voice_bass_module, KEYS_REGISTER_FLOOR, BASS_REGISTER_CEILING};
+    // 4-note chord: Cmaj7 [60, 64, 67, 71]
+    let raw = [60, 64, 67, 71];
+    let voiced = voice_keys_module(&raw, 0, 0);
+    // Keys floor must be >= 52
+    for &note in voiced.iter().take(4) {
+        assert!(note >= KEYS_REGISTER_FLOOR, "Note {} must be >= {}", note, KEYS_REGISTER_FLOOR);
+    }
+    // Drop-2 voicing lowers 2nd-from-top (67 -> 55)
+    assert!(voiced.contains(&55));
+
+    // Low 4-note chord: F3 [53, 57, 60, 65]
+    // Second-from-top is 60. 60 - 12 = 48 (< 52). Pre-scaling transposes chord up by 12 to [65, 69, 72, 77]
+    // Then Drop-2 drops 72 -> 60. Final voiced chord: [60, 65, 69, 77], all >= 52 and Drop-2 preserved!
+    let low_raw = [53, 57, 60, 65];
+    let low_voiced = voice_keys_module(&low_raw, 0, 0);
+    for &note in low_voiced.iter().take(4) {
+        assert!(note >= KEYS_REGISTER_FLOOR, "Low chord note {} must be >= {}", note, KEYS_REGISTER_FLOOR);
+    }
+    assert!(low_voiced.contains(&60), "Pre-scaled Drop-2 note 60 must be present");
+
+    // Bass module must be <= 48
+    let bass_root = voice_bass_module(0, 4, 7, 11, 0); // Root inversion
+    assert!(bass_root <= BASS_REGISTER_CEILING, "Bass note {} must be <= {}", bass_root, BASS_REGISTER_CEILING);
+    assert_eq!(bass_root % 12, 0); // Root pitch class C
+
+    let bass_first_inv = voice_bass_module(0, 4, 7, 11, 1); // 1st inversion (3rd in bass)
+    assert!(bass_first_inv <= BASS_REGISTER_CEILING);
+    assert_eq!(bass_first_inv % 12, 4); // 3rd pitch class E
+}
+
+#[test]
+fn test_pad_voice_allocation_and_dynamic_hpf() {
+    use crate::harmony::{resolve_pad_voices, pad_hpf_cutoff_hz};
+    let root = 60;
+    // Tier 4: alpha = 3.6 (3rd + extension)
+    let p4 = resolve_pad_voices(root, Some(4), Some(7), Some(11), Some(14), 3.6);
+    assert_eq!(p4.note_a, 64);
+    assert_eq!(p4.note_b, Some(74));
+
+    // Tier 3: alpha = 3.2 (3rd + 7th)
+    let p3 = resolve_pad_voices(root, Some(4), Some(7), Some(11), Some(14), 3.2);
+    assert_eq!(p3.note_a, 64);
+    assert_eq!(p3.note_b, Some(71));
+
+    // Tier 0: alpha = 0.5 (Root +12, Root +24)
+    let p0 = resolve_pad_voices(root, None, None, None, None, 0.5);
+    assert_eq!(p0.note_a, 72);
+    assert_eq!(p0.note_b, Some(84));
+
+    // Dynamic HPF cutoff decreases smoothly as alpha increases
+    let hpf_low = pad_hpf_cutoff_hz(0.0);
+    let hpf_high = pad_hpf_cutoff_hz(4.0);
+    assert!(hpf_low > 350.0);
+    assert!(hpf_high < 150.0);
+}
+
+#[test]
+fn test_mouse_free_root_capture_and_zone_b_dual_core() {
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            harmonization_mode: 1, // NopiaStatic
+            key_split: true,
+            split_note: 60,
+            key: 0, // C
+            scale: 0, // Major
+            extensions: 0.5, // Tier 2 (Triad)
+            upper_channel: 1,
+            ..Config::default()
+        },
+    );
+
+    // 1. Dual-Core Zone B with Zone A held
+    // Play Zone A root chord on note 48 (C3)
+    let mut out_events = Vec::new();
+    e.midi_note(true, 0, 48, 0.8, &mut |ev| out_events.push(ev));
+    assert!(e.root.is_some());
+
+    // Strike Zone B note 62 (D4 = white key 1 in octave 0). Under C triad, maps to Root + 12 (72).
+    out_events.clear();
+    e.midi_note(true, 0, 62, 0.8, &mut |ev| out_events.push(ev));
+    assert!(out_events.contains(&Out::On(0, 72, 0.8)));
+    assert_eq!(e.zone_b_mapped[0][62], Some(72));
+
+    // Strike Zone B note 74 (D5 = white key 1 in octave 1). Maps to 72 + 12 = 84!
+    out_events.clear();
+    e.midi_note(true, 0, 74, 0.8, &mut |ev| out_events.push(ev));
+    assert!(out_events.contains(&Out::On(0, 84, 0.8)));
+    assert_eq!(e.zone_b_mapped[0][74], Some(84));
+
+    // Release notes 62 and 74 -> terminates cleanly
+    out_events.clear();
+    e.midi_note(false, 0, 62, 0.0, &mut |ev| out_events.push(ev));
+    e.midi_note(false, 0, 74, 0.0, &mut |ev| out_events.push(ev));
+    assert!(out_events.contains(&Out::Off(0, 72, 0.0)));
+    assert!(out_events.contains(&Out::Off(0, 84, 0.0)));
+    assert_eq!(e.zone_b_mapped[0][62], None);
+    assert_eq!(e.zone_b_mapped[0][74], None);
+
+    // Release Zone A chord
+    e.midi_note(false, 0, 48, 0.0, &mut |_| {});
+    assert!(e.root.is_none());
+
+    // 2. Fast Staccato Slap Edge Case in Lookahead Buffer
+    out_events.clear();
+    e.midi_note(true, 0, 65, 0.8, &mut |ev| out_events.push(ev));
+    assert_eq!(e.lookahead_buffer.count, 1);
+    // Released immediately before 35ms expires or Zone A arrives -> cancelled without sounding
+    e.midi_note(false, 0, 65, 0.0, &mut |ev| out_events.push(ev));
+    assert_eq!(e.lookahead_buffer.count, 0);
+    assert!(!out_events.iter().any(|ev| matches!(ev, Out::On(..))));
+
+    // 3. Multi-note Lookahead Strumming Buffer when Zone A is NOT held
+    out_events.clear();
+    // Glissando / strum across 2 notes before chord arrives: note 60 (C4) and note 62 (D4)
+    e.midi_note(true, 0, 60, 0.8, &mut |ev| out_events.push(ev));
+    e.midi_note(true, 0, 62, 0.8, &mut |ev| out_events.push(ev));
+    assert_eq!(e.lookahead_buffer.count, 2);
+    assert!(!out_events.iter().any(|ev| matches!(ev, Out::On(..))));
+
+    // Now strike Zone A chord 48 within 35ms -> both buffered notes flush and retarget in order!
+    e.midi_note(true, 0, 48, 0.8, &mut |ev| out_events.push(ev));
+    assert_eq!(e.lookahead_buffer.count, 0);
+    assert!(out_events.iter().any(|ev| matches!(ev, Out::On(0, 60, _))));
+    assert!(out_events.iter().any(|ev| matches!(ev, Out::On(0, 72, _))));
+
+    // Release Zone B notes
+    out_events.clear();
+    e.midi_note(false, 0, 60, 0.0, &mut |ev| out_events.push(ev));
+    e.midi_note(false, 0, 62, 0.0, &mut |ev| out_events.push(ev));
+    assert!(out_events.contains(&Out::Off(0, 60, 0.0)));
+    assert!(out_events.contains(&Out::Off(0, 72, 0.0)));
+
+    // Release Zone A chord 48
+    e.midi_note(false, 0, 48, 0.0, &mut |_| {});
+
+    // 4. Pedal double-tap root capture
+    // Reset key to C (0). Hold chord 53 (F3).
+    e.config.key = 0;
+    e.midi_note(true, 0, 53, 0.8, &mut |_| {});
+    assert_eq!(e.selected_root(), Some(53)); // F (5)
+    // First pedal press
+    e.control(0, 64, 1.0, &mut |_| {});
+    // Release pedal
+    e.control(0, 64, 0.0, &mut |_| {});
+    // Second pedal press within 400ms -> double tap captures F (5)
+    e.control(0, 64, 1.0, &mut |_| {});
+    assert_eq!(e.config.key, 5); // F captured as scale root!
+}

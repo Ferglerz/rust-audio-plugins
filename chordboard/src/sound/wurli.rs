@@ -56,6 +56,7 @@ pub struct WurliEngineWrapper {
     engine: Box<WurliEngine>,
     finish: FastFinish,
     mono_buf: Vec<f32>,
+    decay_samples: usize,
 
     // Parameters
     pub volume: f32,
@@ -80,6 +81,7 @@ impl WurliEngineWrapper {
             engine,
             finish: FastFinish::new(sample_rate),
             mono_buf: vec![0.0; 2048],
+            decay_samples: 0,
             volume: 0.7,
             tremolo_depth: 0.4,
             tremolo_response: 1.0,
@@ -92,6 +94,23 @@ impl WurliEngineWrapper {
         };
         w.sync_params();
         w
+    }
+
+    pub fn ensure_capacity(&mut self, max_samples: usize) {
+        let cap = max_samples.max(2048);
+        if self.mono_buf.len() < cap {
+            self.mono_buf.resize(cap, 0.0);
+        }
+        self.engine.ensure_buffer_capacity(cap);
+    }
+
+    pub fn panic(&mut self) {
+        self.engine.set_sustain(false);
+        for note in 0..128 {
+            self.engine.note_off_extended(note);
+        }
+        self.decay_samples = 0;
+        self.finish.reset();
     }
 
     fn sync_params(&mut self) {
@@ -117,11 +136,15 @@ impl SoundEngine for WurliEngineWrapper {
     }
 
     fn reset(&mut self) {
-        self.engine.reset();
-        self.finish.reset();
+        self.panic();
+    }
+
+    fn is_active(&self) -> bool {
+        self.decay_samples > 0 || self.engine.active_voice_count() > 0
     }
 
     fn note_on(&mut self, _channel: u8, note: u8, velocity: f32) {
+        self.decay_samples = 2048;
         self.engine.note_on_extended(note, velocity);
     }
 
@@ -142,25 +165,56 @@ impl SoundEngine for WurliEngineWrapper {
     }
 
     fn set_param(&mut self, index: usize, value: f32) {
+        let mut changed = false;
+        let mut check_diff = |target: &mut f32, new_val: f32| {
+            if (*target - new_val).abs() > 1e-4 {
+                *target = new_val;
+                changed = true;
+            }
+        };
+
         match index {
-            0 => self.volume = value.clamp(0.0, 1.0),
-            1 => self.tremolo_depth = value.clamp(0.0, 1.0),
-            2 => self.tremolo_response = value.clamp(0.1, 4.0),
-            3 => self.speaker_character = value.clamp(0.0, 1.0),
-            4 => self.reed_decay = (0.5 + 4.5 * value).clamp(0.5, 10.0),
-            5 => self.hammer_hardness = (0.5 + 2.0 * value).clamp(0.5, 3.0),
-            6 => self.pickup_drive = (0.5 + 2.5 * value).clamp(0.5, 3.0),
-            7 => self.cpu_heavy = value >= 0.5,
-            8 => self.rail_sag = value >= 0.5,
+            0 => check_diff(&mut self.volume, value.clamp(0.0, 1.0)),
+            1 => check_diff(&mut self.tremolo_depth, value.clamp(0.0, 1.0)),
+            2 => check_diff(&mut self.tremolo_response, value.clamp(0.1, 4.0)),
+            3 => check_diff(&mut self.speaker_character, value.clamp(0.0, 1.0)),
+            4 => check_diff(&mut self.reed_decay, (0.5 + 4.5 * value).clamp(0.5, 10.0)),
+            5 => check_diff(&mut self.hammer_hardness, (0.5 + 2.0 * value).clamp(0.5, 3.0)),
+            6 => check_diff(&mut self.pickup_drive, (0.5 + 2.5 * value).clamp(0.5, 3.0)),
+            7 => {
+                let v = value >= 0.5;
+                if self.cpu_heavy != v {
+                    self.cpu_heavy = v;
+                    changed = true;
+                }
+            }
+            8 => {
+                let v = value >= 0.5;
+                if self.rail_sag != v {
+                    self.rail_sag = v;
+                    changed = true;
+                }
+            }
             _ => {}
         }
-        self.sync_params();
+        if changed {
+            self.sync_params();
+        }
     }
 
     fn render(&mut self, left: &mut [f32], right: &mut [f32]) {
         let len = left.len().min(right.len());
         if len == 0 {
             return;
+        }
+
+        let active = self.engine.active_voice_count() > 0;
+        if active {
+            self.decay_samples = 2048;
+        } else if self.decay_samples == 0 {
+            return;
+        } else {
+            self.decay_samples = self.decay_samples.saturating_sub(len);
         }
 
         if self.mono_buf.len() < len {

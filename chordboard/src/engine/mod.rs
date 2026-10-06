@@ -72,6 +72,11 @@ pub struct Engine {
     pub tempo: f64,
     pub playing: bool,
     pub tap: LaneTap,
+    pub hysteresis_tracker: ExtensionHysteresisTracker,
+    pub lookahead_buffer: LookaheadBuffer,
+    pub topology: DualCoreTopology,
+    pub last_pedal_tap_time: u64,
+    pub zone_b_mapped: [[Option<u8>; 128]; 16],
 }
 impl Default for Engine {
     fn default() -> Self {
@@ -145,10 +150,20 @@ impl Default for Engine {
             tempo: 120.0,
             playing: false,
             tap: LaneTap::default(),
+            hysteresis_tracker: ExtensionHysteresisTracker::new(44100.0),
+            lookahead_buffer: LookaheadBuffer::new(44100.0),
+            topology: DualCoreTopology::KEYS_61,
+            last_pedal_tap_time: 0,
+            zone_b_mapped: [[None; 128]; 16],
         }
     }
 }
 impl Engine {
+    pub fn set_sample_rate(&mut self, sample_rate: f32) {
+        self.sample_rate = sample_rate;
+        self.hysteresis_tracker = ExtensionHysteresisTracker::new(sample_rate);
+        self.lookahead_buffer = LookaheadBuffer::new(sample_rate);
+    }
     pub fn configure(&mut self, config: Config, out: &mut impl FnMut(Out)) {
         self.configure_inner(config, true, out);
     }
@@ -371,6 +386,26 @@ impl Engine {
         self.input_velocity = velocity.clamp(0.0, 1.0);
         self.configure_inner(self.host_config, false, out);
         self.rebuild(out);
+        if self.config.harmonization_mode > 0 {
+            let mut pending = [PendingNote::default(); 8];
+            let n = self.lookahead_buffer.drain_all(&mut pending);
+            for p in &pending[..n] {
+                let b_vel_f32 = (p.velocity as f32 / 127.0).clamp(0.01, 1.0);
+                if let Some(white_idx) = harmony::white_key_degree(p.note % 12) {
+                    let root_pc = self.selected_root().unwrap_or(60) % 12;
+                    let rel_semi = (root_pc as i16 - self.config.key as i16).rem_euclid(12) as u8;
+                    let tuple = harmony::matrix_interval_tuple(self.config.scale, rel_semi);
+                    let octave_offset = (p.note.saturating_sub(self.topology.zone_b_min) / 12) as u8;
+                    let root_pitch = (self.topology.zone_b_min + root_pc).min(127);
+                    let mapped = harmony::map_zone_b_white_key(white_idx, octave_offset, root_pitch, &tuple, self.config.extensions * 4.0);
+                    self.zone_b_mapped[p.channel as usize][p.note as usize] = Some(mapped);
+                    self.melody_note(true, p.channel, mapped, b_vel_f32, out);
+                } else {
+                    self.zone_b_mapped[p.channel as usize][p.note as usize] = Some(p.note);
+                    self.melody_note(true, p.channel, p.note, b_vel_f32, out);
+                }
+            }
+        }
     }
     pub fn note_off(&mut self, id: u16, velocity: f32, out: &mut impl FnMut(Out)) {
         if id as usize >= self.down.len() {

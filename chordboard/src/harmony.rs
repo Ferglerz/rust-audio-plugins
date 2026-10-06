@@ -628,6 +628,237 @@ pub fn harmonize_nopia_real(flavor: ChromaticFlavor, key: u8, scale: u8, note: u
     }
 }
 
+/// Deterministic 12-degree harmonic interval matrix for Major context (Section 1.1)
+/// Each entry contains [0, 3rd, 5th, 7th, 9th, 11th, 13th] semitone offsets from root.
+pub const MAJOR_HARMONIC_INTERVALS: [[u8; 7]; 12] = [
+    [0, 4, 7, 11, 14, 17, 21], // 0: I Maj7 (9, 11, 13)
+    [0, 4, 7, 11, 13, 17, 20], // 1: bII Neapolitan Maj7 (b9, 11, b13)
+    [0, 3, 7, 10, 14, 17, 21], // 2: ii m7 (9, 11, 13)
+    [0, 4, 7, 11, 14, 17, 20], // 3: bIII Modal Borrow Maj7 (9, 11, b13)
+    [0, 3, 7, 10, 13, 17, 20], // 4: iii m7 (b9, 11, b13)
+    [0, 4, 7, 11, 14, 18, 21], // 5: IV Lydian Maj7#11 (9, #11, 13)
+    [0, 3, 6, 10, 13, 17, 20], // 6: bV / #IV Half-Diminished / SubV (b9, 11, b13)
+    [0, 4, 7, 10, 14, 17, 21], // 7: V Dominant 7th (9, 11, 13)
+    [0, 4, 7, 11, 14, 18, 20], // 8: bVI Modal Borrow Maj7 (9, #11, b13)
+    [0, 3, 7, 10, 14, 17, 20], // 9: vi m7 (9, 11, b13)
+    [0, 4, 7, 10, 14, 17, 21], // 10: bVII Subtonic Dominant (9, 11, 13)
+    [0, 3, 6, 10, 13, 17, 20], // 11: viiø Half-Diminished 7th (b9, 11, b13)
+];
+
+/// Deterministic 12-degree harmonic interval matrix for Natural Minor context (Section 1.2)
+/// Each entry contains [0, 3rd, 5th, 7th, 9th, 11th, 13th] semitone offsets from root.
+pub const MINOR_HARMONIC_INTERVALS: [[u8; 7]; 12] = [
+    [0, 3, 7, 10, 14, 17, 20], // 0: i m7 (9, 11, b13)
+    [0, 4, 7, 11, 13, 17, 20], // 1: bII Phrygian Major (b9, 11, b13)
+    [0, 3, 6, 10, 13, 17, 20], // 2: iiø Half-Diminished 7th (b9, 11, b13)
+    [0, 4, 7, 11, 14, 17, 21], // 3: bIII Relative Major 7th (9, 11, 13)
+    [0, 4, 8, 10, 13, 17, 20], // 4: III Major Mediant / Secondary Dominant (V7/vi) (b9, 11, b13)
+    [0, 3, 7, 10, 14, 17, 21], // 5: iv m7 (9, 11, 13)
+    [0, 3, 6, 9, 13, 16, 20],  // 6: bV Diminished Substitution (b9, b11, b13)
+    [0, 4, 7, 10, 13, 17, 20], // 7: V Harmonic Dominant (b9, 11, b13)
+    [0, 4, 7, 11, 14, 18, 21], // 8: bVI Major 7th (9, #11, 13)
+    [0, 3, 7, 10, 14, 17, 21], // 9: VI Dorian Subdominant (9, 11, 13)
+    [0, 4, 7, 10, 14, 17, 21], // 10: bVII Subtonic Dominant (9, 11, 13)
+    [0, 3, 6, 9, 13, 16, 20],  // 11: vii° Fully Diminished 7th (b9, b11, b13)
+];
+
+/// Get the 7-note interval profile for a scale degree semitone offset (0..11)
+pub fn matrix_interval_tuple(scale: u8, degree_semitone: u8) -> [u8; 7] {
+    let deg = (degree_semitone % 12) as usize;
+    if scale == 1 || scale == 2 || scale == 3 || scale == 7 {
+        MINOR_HARMONIC_INTERVALS[deg]
+    } else {
+        MAJOR_HARMONIC_INTERVALS[deg]
+    }
+}
+
+pub const KEYS_REGISTER_FLOOR: u8 = 52;   // E3
+pub const BASS_REGISTER_CEILING: u8 = 48; // C3
+
+/// Polyphonic Keys module voice leading with Drop-2 voicing and register floor enforcement (Section 6)
+#[inline]
+pub fn voice_keys_module(
+    raw_chord_notes: &[u8],
+    inversion: u8,
+    register_shift: i8,
+) -> [u8; 8] {
+    let mut voiced_notes = [0u8; 8];
+    let count = raw_chord_notes.len().min(8);
+
+    let mut scratch = [0u8; 8];
+    for i in 0..count {
+        scratch[i] = raw_chord_notes[i];
+    }
+
+    if inversion > 0 && count > 2 {
+        let shifts = (inversion as usize) % count;
+        scratch[..count].rotate_left(shifts);
+        for i in (count - shifts)..count {
+            scratch[i] += 12;
+        }
+    }
+
+    let shift_semitones = register_shift as i16 * 12;
+    for i in 0..count {
+        let shifted = scratch[i] as i16 + shift_semitones;
+        scratch[i] = shifted.clamp(0, 127) as u8;
+    }
+
+    if count >= 4 {
+        scratch[..count].sort_unstable();
+        // Drop-2 targets the second-from-top voice
+        let second_from_top = scratch[count - 2];
+        let dropped_pitch = second_from_top.saturating_sub(12);
+        let min_after_drop = scratch[0].min(dropped_pitch);
+        // Pre-scale entire chord up so dropped voice safely clears KEYS_REGISTER_FLOOR (52)
+        if min_after_drop < KEYS_REGISTER_FLOOR {
+            let octaves_needed = ((KEYS_REGISTER_FLOOR - min_after_drop + 11) / 12) * 12;
+            for i in 0..count {
+                scratch[i] = (scratch[i] as i16 + octaves_needed as i16).min(127) as u8;
+            }
+        }
+        scratch[..count].sort_unstable();
+        scratch[count - 2] = scratch[count - 2].saturating_sub(12);
+        scratch[..count].sort_unstable();
+    } else {
+        for i in 0..count {
+            while scratch[i] < KEYS_REGISTER_FLOOR {
+                scratch[i] = scratch[i].saturating_add(12);
+            }
+        }
+        scratch[..count].sort_unstable();
+    }
+
+    for i in 0..count {
+        voiced_notes[i] = scratch[i];
+    }
+    voiced_notes
+}
+
+/// Monophonic Bass module voice leading with slash-bass inversions and register ceiling enforcement (Section 6)
+#[inline]
+pub fn voice_bass_module(
+    root_pitch_class: u8,
+    third_pitch_class: u8,
+    fifth_pitch_class: u8,
+    seventh_pitch_class: u8,
+    inversion: u8,
+) -> u8 {
+    let target_pc = match inversion {
+        1 => third_pitch_class,
+        2 => fifth_pitch_class,
+        3 => seventh_pitch_class,
+        _ => root_pitch_class,
+    };
+
+    let mut bass_note = 24 + (target_pc % 12);
+    if bass_note < 28 {
+        bass_note += 12;
+    }
+
+    while bass_note > BASS_REGISTER_CEILING {
+        bass_note = bass_note.saturating_sub(12);
+    }
+
+    bass_note
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct PadVoiceAllocation {
+    pub note_a: u8,
+    pub note_b: Option<u8>,
+}
+
+/// Pad module voice-selection hierarchy avoiding voice starvation (Section 5.1)
+#[inline]
+pub fn resolve_pad_voices(
+    root_pitch: u8,
+    third_offset: Option<u8>,
+    fifth_offset: Option<u8>,
+    seventh_offset: Option<u8>,
+    extension_offset: Option<u8>,
+    alpha: f32,
+) -> PadVoiceAllocation {
+    if alpha >= 3.0 {
+        let note_a = root_pitch + third_offset.unwrap_or(4);
+        let note_b = if alpha >= 3.5 && extension_offset.is_some() {
+            Some(root_pitch + extension_offset.unwrap())
+        } else {
+            seventh_offset.map(|offset| root_pitch + offset)
+        };
+        PadVoiceAllocation { note_a, note_b }
+    } else if alpha >= 2.0 {
+        let note_a = root_pitch + third_offset.unwrap_or(4);
+        let note_b = fifth_offset.map(|offset| root_pitch + offset);
+        PadVoiceAllocation { note_a, note_b }
+    } else if alpha >= 1.0 {
+        let note_a = root_pitch + fifth_offset.unwrap_or(7);
+        let note_b = Some(root_pitch + 12);
+        PadVoiceAllocation { note_a, note_b }
+    } else {
+        let note_a = root_pitch + 12;
+        let note_b = Some(root_pitch + 24);
+        PadVoiceAllocation { note_a, note_b }
+    }
+}
+
+/// Pad dynamic HPF cutoff frequency based on extension dial alpha in [0.0, 4.0] (Section 5.2)
+#[inline]
+pub fn pad_hpf_cutoff_hz(alpha: f32) -> f32 {
+    400.0 * 2.0f32.powf(-0.585 * alpha.clamp(0.0, 4.0))
+}
+
+/// Muscle-Memory Modulo-Spread Mapping for Zone B white keys (Section 9)
+#[inline]
+pub fn map_zone_b_white_key(
+    key_index_in_octave: usize,
+    octave_offset: u8,
+    root_pitch: u8,
+    chord_tuple: &[u8; 7],
+    alpha: f32,
+) -> u8 {
+    let base_interval = match key_index_in_octave % 7 {
+        0 => chord_tuple[0], // Root
+        1 => if alpha >= 3.5 { chord_tuple[4] } else { chord_tuple[0] + 12 }, // 9th or Octave
+        2 => chord_tuple[1], // 3rd
+        3 => if alpha >= 3.5 { chord_tuple[5] } else { chord_tuple[2] },      // 11th or 5th
+        4 => chord_tuple[2], // 5th
+        5 => if alpha >= 4.0 { chord_tuple[6] } else { chord_tuple[1] + 12 }, // 13th or Octave 3rd
+        6 => chord_tuple[3], // 7th
+        _ => chord_tuple[0],
+    };
+    root_pitch
+        .saturating_add(base_interval)
+        .saturating_add(octave_offset.saturating_mul(12))
+        .min(127)
+}
+
+/// Matrix-based chord extension expansion for alpha in [0.0, 4.0] (Section 3)
+#[inline]
+pub fn apply_extensions_matrix(chord_tuple: &[u8; 7], alpha: f32) -> Notes {
+    let mut notes = Notes::default();
+    if alpha < 1.0 {
+        notes.push(chord_tuple[0] as i16);
+    } else if alpha < 2.0 {
+        notes.push(chord_tuple[0] as i16);
+        notes.push(chord_tuple[2] as i16);
+    } else if alpha < 3.0 {
+        notes.push(chord_tuple[0] as i16);
+        notes.push(chord_tuple[1] as i16);
+        notes.push(chord_tuple[2] as i16);
+    } else if alpha < 3.5 {
+        notes.push(chord_tuple[0] as i16);
+        notes.push(chord_tuple[1] as i16);
+        notes.push(chord_tuple[2] as i16);
+        notes.push(chord_tuple[3] as i16);
+    } else {
+        for &interval in chord_tuple.iter() {
+            notes.push(interval as i16);
+        }
+    }
+    notes
+}
+
 /// Main harmonization router.
 pub fn harmonize(
     mode: HarmonizationEngineMode,
