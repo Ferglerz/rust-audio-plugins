@@ -11,10 +11,32 @@ pub struct KnobLayout {
     pub value_y: f32,
     pub label_size: f32,
     pub value_size: f32,
-    bottom: f32,
+    pub bottom: f32,
 }
 
 impl KnobLayout {
+    pub fn custom(
+        cx: f32,
+        cy: f32,
+        radius: f32,
+        label_y: f32,
+        value_y: f32,
+        label_size: f32,
+        value_size: f32,
+        bottom: f32,
+    ) -> Self {
+        Self {
+            cx,
+            cy,
+            radius,
+            label_y,
+            value_y,
+            label_size,
+            value_size,
+            bottom,
+        }
+    }
+
     pub fn new(r: (f32, f32, f32, f32)) -> Self {
         // Widget bounds can pick up subpixel rounding at fractional editor scales.
         let compact = r.2 <= 64.5 && r.3 <= 96.5;

@@ -40,13 +40,28 @@ impl Engine {
     }
     pub(super) fn end_voice(&mut self, i: usize, release: f32, out: &mut impl FnMut(Out)) {
         if let Some(v) = self.voices[i].take() {
+            let lane = match v.kind {
+                KIND_BASS => Lane::Bass,
+                KIND_COMP => Lane::Comp,
+                KIND_LEAD => Lane::Lead,
+                _ => Lane::Arp,
+            };
+            self.tap.push(
+                self.now,
+                LaneEvent::Off {
+                    lane,
+                    channel: v.channel,
+                    note: v.note,
+                    velocity: release,
+                },
+            );
             if !self.output_owned(v.channel, v.note) {
                 out(Out::Off(v.channel, v.note, release));
             }
         }
     }
     pub(super) fn stop_voices(&mut self, release: f32, out: &mut impl FnMut(Out)) {
-        for i in 0..15 {
+        for i in 0..self.voices.len() {
             self.end_voice(i, release, out);
         }
     }
@@ -90,14 +105,16 @@ impl Engine {
         duration: u64,
         out: &mut impl FnMut(Out),
     ) {
-        self.strike_with_gate(note, velocity, duration, None, out);
+        self.strike_with_gate(note, velocity, duration, None, self.config.output_channel, KIND_ARP, out);
     }
-    fn strike_with_gate(
+    pub(super) fn strike_with_gate(
         &mut self,
         note: u8,
         velocity: f32,
         duration: u64,
         gate_step: Option<u64>,
+        channel: u8,
+        kind: u8,
         out: &mut impl FnMut(Out),
     ) {
         // Publish the final, contoured velocity before evaluating destinations
@@ -123,14 +140,16 @@ impl Engine {
         } else {
             duration
         };
-        self.strike_prepared(note, velocity, duration, out);
+        self.strike_prepared(note, channel, velocity, duration, kind, out);
         self.config = previous;
     }
     fn strike_prepared(
         &mut self,
         note: u8,
+        channel: u8,
         velocity: f32,
         duration: u64,
+        kind: u8,
         out: &mut impl FnMut(Out),
     ) {
         self.setup(out);
@@ -139,19 +158,19 @@ impl Engine {
             .voices
             .iter_mut()
             .flatten()
-            .find(|v| v.note == note && v.layer)
+            .find(|v| v.note == note && v.channel == channel && v.layer && v.kind == kind)
         {
-            // A shared sustained note must never receive a premature Note Off.
+            // A shared sustained note on this channel must never receive a premature Note Off.
             voice.off = off;
             self.mark_strike(note);
             return;
         }
-        for i in 0..15 {
-            if self.voices[i].is_some_and(|v| v.note == note) {
+        for i in 0..self.voices.len() {
+            if self.voices[i].is_some_and(|v| v.note == note && v.channel == channel && v.kind == kind) {
                 self.end_voice(i, 0.0, out);
             }
         }
-        self.allocate_voice(note, velocity, off, false, out);
+        self.allocate_voice(note, velocity, off, false, kind, out);
         self.mark_strike(note);
     }
     pub(super) fn allocate_voice(
@@ -160,6 +179,7 @@ impl Engine {
         velocity: f32,
         off: u64,
         layer: bool,
+        kind: u8,
         out: &mut impl FnMut(Out),
     ) {
         if self.config.affect_chords && self.melody.iter().any(|notes| notes[note as usize]) {
@@ -169,7 +189,7 @@ impl Engine {
         let capacity = if self.config.mpe {
             self.config.members.clamp(1, 15) as usize
         } else {
-            15
+            self.voices.len()
         };
         let available = |i: &usize| {
             !self.config.mpe
@@ -181,6 +201,14 @@ impl Engine {
             .filter(available)
             .find(|&i| self.voices[i].is_none())
             .or_else(|| {
+                // If capacity is reached, prioritize stealing oldest Arp tail
+                (0..capacity)
+                    .filter(available)
+                    .filter(|&i| self.voices[i].is_some_and(|v| !v.layer && v.kind == KIND_ARP))
+                    .min_by_key(|&i| self.voices[i].map_or(0, |v| v.started))
+            })
+            .or_else(|| {
+                // Otherwise steal any non-layer voice
                 (0..capacity)
                     .filter(available)
                     .filter(|&i| self.voices[i].is_some_and(|v| !v.layer))
@@ -191,10 +219,33 @@ impl Engine {
             return;
         };
         self.end_voice(index, 0.0, out);
-        let channel = self.member(index);
+        let channel = if self.config.mpe {
+            self.member(index)
+        } else {
+            match kind {
+                KIND_COMP => self.config.comp_channel,
+                KIND_BASS => self.config.bass_channel,
+                _ => self.config.output_channel,
+            }
+        };
         if !self.melody_channel(channel) {
             self.emit_expression(channel, out);
         }
+        let lane = match kind {
+            KIND_BASS => Lane::Bass,
+            KIND_COMP => Lane::Comp,
+            KIND_LEAD => Lane::Lead,
+            _ => Lane::Arp,
+        };
+        self.tap.push(
+            self.now,
+            LaneEvent::On {
+                lane,
+                channel,
+                note,
+                velocity: velocity.clamp(0.01, 1.0),
+            },
+        );
         if !self.output_owned(channel, note) {
             out(Out::On(channel, note, velocity.clamp(0.01, 1.0)));
         }
@@ -204,11 +255,17 @@ impl Engine {
             started: self.now,
             off,
             layer,
+            kind,
         });
     }
     fn mark_strike(&mut self, note: u8) {
         self.note_strikes[note as usize] = self.note_strikes[note as usize].wrapping_add(1);
-        for i in 0..self.config.strings as usize {
+        let count = if self.config.mode == MANUAL {
+            self.config.strings.clamp(3, 12) as usize
+        } else {
+            (self.notes.len * self.arp_octaves.max(1) as usize).min(self.strikes.len())
+        };
+        for i in 0..count {
             if self.notes.string(i) == Some(note) {
                 self.strikes[i] = self.strikes[i].wrapping_add(1);
             }
@@ -371,7 +428,7 @@ impl Engine {
     }
 
     pub fn tick(&mut self, out: &mut impl FnMut(Out)) {
-        for i in 0..15 {
+        for i in 0..self.voices.len() {
             if self.voices[i].is_some_and(|v| !v.layer && v.off <= self.now) {
                 self.end_voice(i, 0.0, out);
             }
@@ -379,12 +436,25 @@ impl Engine {
         if self.notes.len > 0 && self.now >= self.arp_next {
             // Keep the clock moving while another performance mode is selected.
             // A new range/pattern takes effect only after the old cycle completes.
+            let total = self.notes.len * self.arp_octaves as usize;
+            let cycle = self.current_loop_length(total);
+            if self.arp_cycle_step >= cycle {
+                self.arp_cycle_step = 0;
+            }
             if self.arp_cycle_step == 0 {
                 self.arp_octaves = self.config.octaves.clamp(1, 4);
                 self.arp_pattern = self.config.arp_pattern;
             }
             let total = self.notes.len * self.arp_octaves as usize;
-            let index = self.arp_index(self.arp_pattern, self.arp_cycle_step, total);
+            let (start_idx, end_idx) = self.arp_range(total);
+            let mut unskipped = [0usize; 32];
+            let mut unskipped_len = 0;
+            for s in start_idx..=end_idx {
+                if !self.config.is_string_skipped(s) {
+                    unskipped[unskipped_len] = s;
+                    unskipped_len += 1;
+                }
+            }
             if self.arp_step.is_multiple_of(2) {
                 self.arp_pair_swing = self.config.swing as f64;
                 self.arp_pair_rate = self.rate_samples();
@@ -398,40 +468,131 @@ impl Engine {
             let exact_step = (base * swing).max(1.0) + self.arp_fraction;
             let step = exact_step.floor() as u64;
             self.arp_fraction = exact_step - step as f64;
-            let random = self.random() as f32 / u32::MAX as f32;
-            if let Some(note) = self.notes.string(index) {
-                let already_started = self.config.root_on_select
-                    && self.selected_root() == Some(note)
-                    && self
-                        .voices
-                        .iter()
-                        .flatten()
-                        .any(|v| v.note == note && v.started == self.now);
-                if self.config.mode == ARP && !already_started {
+            let current_step = self.arp_step;
+            self.arp_step = self.arp_step.wrapping_add(1);
+            self.arp_next = self.now + step;
+
+            // 1. Rhythmic Comping
+            if self.config.comp_mode == 2 && self.config.comp_is_hit(current_step) {
+                let comp_lag = if self.config.comp_lag_ms != 0.0 {
+                    (self.config.comp_lag_ms / 1000.0 * self.sample_rate) as i64
+                } else {
+                    0
+                };
+                let comp_at = if comp_lag >= 0 {
+                    self.now.saturating_add(comp_lag as u64)
+                } else {
+                    self.now.saturating_sub((-comp_lag) as u64)
+                };
+                let comp_duration = (step as f32 * 0.75).max(1.0) as u64;
+                for i in 0..self.notes.len {
+                    let base_note = self.notes.values[i];
+                    let trans = (base_note as i16 + self.config.comp_octave as i16 * 12).clamp(0, 127) as u8;
                     self.schedule(Scheduled {
+                        at: comp_at,
+                        note: trans,
+                        velocity: self.config.comp_velocity.clamp(0.01, 1.0),
+                        duration: comp_duration,
                         gate_step: Some(step),
-                        at: self.now + (step as f32 * 0.1 * self.config.humanize * random) as u64,
-                        note,
-                        velocity: (self.strike_velocity()
-                            * contour_factor(
-                                self.arp_contour_position(total),
-                                self.config.contour,
-                                self.config.contour_curve,
-                            )
-                            * (1.0 - self.config.humanize * 0.2 * random))
-                            .clamp(0.01, 1.0),
-                        duration: (step as f32 * self.config.gate).max(1.0) as u64,
+                        channel: self.config.comp_channel,
+                        kind: KIND_COMP,
                     });
                 }
             }
-            self.arp_cycle_step = (self.arp_cycle_step + 1) % self.arp_cycle_length(total);
-            self.arp_step = self.arp_step.wrapping_add(1);
-            self.arp_next = self.now + step;
+
+            // 2. Bass (Pulse, Root-5th, With Comp)
+            let bass_hit = if self.config.bass_enabled {
+                match self.config.bass_mode {
+                    2 => true,
+                    3 => current_step.is_multiple_of(2),
+                    4 => self.config.comp_mode == 2 && self.config.comp_is_hit(current_step),
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            if bass_hit {
+                if let Some(root) = self.selected_root() {
+                    let bass_pitch = if self.config.bass_mode == 3 && (current_step / 2).is_multiple_of(2) {
+                        (root as i16 + 7 + self.config.bass_octave as i16 * 12).clamp(0, 127) as u8
+                    } else {
+                        (root as i16 + self.config.bass_octave as i16 * 12).clamp(0, 127) as u8
+                    };
+                    self.schedule(Scheduled {
+                        at: self.now,
+                        note: bass_pitch,
+                        velocity: self.config.bass_velocity.clamp(0.01, 1.0),
+                        duration: (step as f32 * 0.85).max(1.0) as u64,
+                        gate_step: Some(step),
+                        channel: self.config.bass_channel,
+                        kind: KIND_BASS,
+                    });
+                }
+            }
+
+            // 3. Arp Step
+            if unskipped_len > 0 {
+                let cycle = Self::pattern_length(self.arp_pattern, unskipped_len);
+                let pattern_idx = self.arp_index(self.arp_pattern, self.arp_cycle_step, unskipped_len);
+                let index = unskipped[pattern_idx];
+                let random = self.random() as f32 / u32::MAX as f32;
+                let is_muted = self.config.is_string_muted(index);
+                let string_vol = self.config.string_volume(index);
+                if let Some(note) = self.notes.string(index) {
+                    let already_started = self.config.root_on_select
+                        && self.selected_root() == Some(note)
+                        && self
+                            .voices
+                            .iter()
+                            .flatten()
+                            .any(|v| v.note == note && v.started == self.now);
+                    if self.config.mode == ARP && !already_started && !is_muted && string_vol > 0.001 {
+                        let step_in_cycle = self.arp_cycle_step % cycle;
+                        let accent_state = self.config.arp_accents[step_in_cycle % 32];
+                        let (mut vel_factor, mut gate_factor) = match accent_state {
+                            1 => (1.35, 1.20),
+                            2 => (0.60, 0.50),
+                            _ => (1.00, 1.00),
+                        };
+
+                        let comp_hit_now = self.config.comp_mode == 2 && self.config.comp_is_hit(current_step);
+                        if comp_hit_now {
+                            if self.config.comp_interlock == 1 {
+                                vel_factor = 0.50;
+                                gate_factor = 0.60;
+                            } else if self.config.comp_interlock == 2 {
+                                vel_factor = 1.35;
+                                gate_factor = 1.20;
+                            }
+                        }
+
+                        self.schedule(Scheduled {
+                            gate_step: Some(step),
+                            at: self.now + (step as f32 * 0.1 * self.config.humanize * random) as u64,
+                            note,
+                            velocity: (self.strike_velocity()
+                                * contour_factor(
+                                    self.arp_contour_position(cycle),
+                                    self.config.contour,
+                                    self.config.contour_curve,
+                                )
+                                * string_vol
+                                * vel_factor
+                                * (1.0 - self.config.humanize * 0.2 * random))
+                                .clamp(0.01, 1.0),
+                            duration: (step as f32 * self.config.gate * gate_factor).max(1.0) as u64,
+                            channel: self.config.output_channel,
+                            kind: KIND_ARP,
+                        });
+                    }
+                }
+                self.arp_cycle_step = (self.arp_cycle_step + 1) % cycle;
+            }
         }
         for i in 0..self.scheduled.len() {
             if self.scheduled[i].is_some_and(|e| e.at <= self.now) {
                 if let Some(e) = self.scheduled[i].take() {
-                    self.strike_with_gate(e.note, e.velocity, e.duration, e.gate_step, out);
+                    self.strike_with_gate(e.note, e.velocity, e.duration, e.gate_step, e.channel, e.kind, out);
                 }
             }
         }
@@ -501,19 +662,43 @@ impl Engine {
             _ => step % total,
         }
     }
-    pub(super) fn pattern_length(pattern: u8, notes: usize) -> usize {
+    pub fn pattern_length(pattern: u8, notes: usize) -> usize {
         match pattern {
             2 => (notes * 2).saturating_sub(2).max(1),
             3 | 4 => (notes * 2).max(1),
             _ => notes.max(1),
         }
     }
-    pub(super) fn arp_cycle_length(&self, notes: usize) -> usize {
-        Self::pattern_length(self.arp_pattern, notes)
+    pub(super) fn arp_range(&self, total: usize) -> (usize, usize) {
+        let start_idx = (self.config.loop_start.clamp(1, 32) - 1) as usize;
+        let end_idx = if self.config.loop_end > 0 {
+            (self.config.loop_end.clamp(1, 32) - 1) as usize
+        } else {
+            total.saturating_sub(1)
+        };
+        if start_idx <= end_idx {
+            (start_idx, end_idx)
+        } else {
+            (end_idx, start_idx)
+        }
+    }
+    pub(super) fn current_loop_length(&self, total: usize) -> usize {
+        let (start_idx, end_idx) = self.arp_range(total);
+        let mut unskipped_len = 0;
+        for s in start_idx..=end_idx {
+            if !self.config.is_string_skipped(s) {
+                unskipped_len += 1;
+            }
+        }
+        let active_len = if unskipped_len == 0 {
+            (end_idx - start_idx + 1).max(1)
+        } else {
+            unskipped_len
+        };
+        Self::pattern_length(self.arp_pattern, active_len)
     }
 
-    fn arp_contour_position(&self, notes: usize) -> f32 {
-        let cycle = self.arp_cycle_length(notes);
+    fn arp_contour_position(&self, cycle: usize) -> f32 {
         (self.arp_cycle_step % cycle) as f32 / cycle.saturating_sub(1).max(1) as f32
     }
     pub(super) fn random(&mut self) -> u32 {

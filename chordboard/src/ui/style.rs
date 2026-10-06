@@ -42,6 +42,40 @@ impl ChordboardView {
                 .collect();
         }
         let mut targets = Vec::new();
+        targets.extend([
+            (sound::SURFACE_TAB_CHORDS, self.panel.is_none()),
+            (sound::SURFACE_TAB_SOUND, self.panel == Some(Panel::Sound)),
+            (sound::SURFACE_TAB_ROUTES, self.panel == Some(Panel::Routes)),
+            (sound::SURFACE_TAB_LIVE, self.params.console_view.value() == 1),
+        ]);
+        if self.params.console_view.value() == 1 {
+            let x0 = console::console_x_offset();
+            targets.extend([
+                (console::console_view_pill_rect(x0), false),
+                (console::looper_rec_rect(x0), self.params.looper_rec.value()),
+                (console::looper_bar_rect(x0, 0), self.params.looper_slot.value() == 0),
+                (console::looper_bar_rect(x0, 1), self.params.looper_slot.value() == 1),
+                (console::looper_bar_rect(x0, 2), self.params.looper_slot.value() == 2),
+                (console::fx_button_rect(x0, 0), self.params.fx_tape.value()),
+                (console::fx_button_rect(x0, 1), self.params.fx_delay.value()),
+                (console::fx_button_rect(x0, 2), self.params.fx_reverb.value()),
+                (console::degree_shift_rect(x0), self.params.degree_shift.value()),
+                (console::comp_interlock_rect(x0), self.params.comp_interlock.value() > 0),
+                (console::bass_pad_root_rect(x0), self.params.bass_pad_trigger.value() == 0),
+                (console::bass_pad_alt_rect(x0), self.params.bass_pad_trigger.value() == 1),
+                (console::bottom_deck_pill_rect(x0), false),
+            ]);
+            for i in 0..7 {
+                targets.push((console::arp_pattern_rect(x0, i), self.params.arp_pattern.value() as usize == i));
+            }
+            for i in 0..8 {
+                targets.push((console::arp_rate_rect(x0, i), (self.params.rate.value() - ARP_RATES[i].1).abs() < 0.001));
+            }
+            for oct in 1..=4 {
+                targets.push((console::arp_octave_rect(x0, oct), self.params.octaves.value() == oct as i32));
+            }
+            return targets;
+        }
         targets.extend(self.route_chips().into_iter().map(|(_, r)| (r, false)));
         if self.expand_t() == 0.0 {
             targets
@@ -67,6 +101,13 @@ impl ChordboardView {
                     (ROUTE_SOURCE, false),
                     (ROUTE_TARGET, false),
                     (ROUTE_CLEAR, false),
+                ]);
+            }
+            if panel == Panel::Sound {
+                targets.extend([
+                    (sound::SOUND_AUDITION, self.auditioning.get()),
+                    (sound::SOUND_LATCH, self.audition_latch.get()),
+                    (sound::SOUND_RESET_ALL, false),
                 ]);
             }
             if panel == Panel::Mapping {

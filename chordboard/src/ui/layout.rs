@@ -43,7 +43,41 @@ pub(super) const EXPANDED_EXPAND: Rect = field_corner(EXPANDED_PAD);
 pub(super) const EXPANDED_STRUM_SYNC: Rect =
     (1567.0 - WIDTH_REDUCTION - OLD_MOD_COLUMN, 116.0, 92.0, 28.0);
 pub(super) const STRUM_RATE: Rect = (PAD.0 + 8.0, 344.0, PAD.2 - 16.0, 36.0);
-pub(super) const ARP_STRINGS: Rect = (PAD.0 + 8.0, 244.0, PAD.2 - 16.0, 72.0);
+pub(super) const ARP_STRINGS: Rect = (PAD.0 + 8.0, 242.0, PAD.2 - 16.0, 76.0);
+pub(super) fn arp_string_pos(r: Rect, index: usize, count: usize) -> (f32, f32, f32) {
+    let count = count.max(1);
+    let rows = count.div_ceil(18);
+    let columns = count.div_ceil(rows);
+    let handle_h = 22.0;
+    let usable_h = r.3 - handle_h;
+    let height = usable_h / rows as f32;
+    let col = index % columns;
+    let row = index / columns;
+    let x = r.0 + col as f32 * (r.2 - 32.0) / (columns - 1).max(1) as f32 + 16.0;
+    let y = r.1 + handle_h + row as f32 * height + 1.0;
+    let bottom = y + height - 19.0;
+    (x, y, bottom)
+}
+pub(super) fn arp_string_index_at(r: Rect, x: f32, y: f32, count: usize) -> usize {
+    let count = count.max(1);
+    let rows = count.div_ceil(18);
+    let columns = count.div_ceil(rows);
+    let handle_h = 22.0;
+    let usable_h = r.3 - handle_h;
+    let height = usable_h / rows as f32;
+    let row = if rows > 1 {
+        ((y - (r.1 + handle_h)) / height).floor().clamp(0.0, (rows - 1) as f32) as usize
+    } else {
+        0
+    };
+    if columns <= 1 {
+        return (row * columns).min(count.saturating_sub(1));
+    }
+    let col_w = (r.2 - 32.0) / (columns - 1) as f32;
+    let rel_x = x - (r.0 + 16.0);
+    let col = (rel_x / col_w).round().clamp(0.0, (columns - 1) as f32) as usize;
+    (row * columns + col).min(count.saturating_sub(1))
+}
 pub(super) const RATE_SYNC: Rect = (PAD.0 + PAD.2 - 156.0, 320.0, 148.0, 24.0);
 pub(super) const EXPANDED_STRUM_RATE: Rect = (
     1339.0 - WIDTH_REDUCTION - OLD_MOD_COLUMN,
@@ -87,13 +121,23 @@ pub(super) fn inversion_control_rect(mpe: bool, i: usize) -> Rect {
 const PERFORMANCE_CONTROL_WIDTH: f32 = PAD.2 - 16.0;
 const PATTERN_WIDTH: f32 = (PERFORMANCE_CONTROL_WIDTH - 6.0 * 6.0) / 7.0;
 const PATTERN_HEIGHT: f32 = 48.0;
+pub(super) const LOOP_RESET_WIDTH: f32 = 64.0;
+pub(super) fn loop_reset_rect() -> Rect {
+    (PAD.0 + PAD.2 - 8.0 - LOOP_RESET_WIDTH, 450.0, LOOP_RESET_WIDTH, 38.0)
+}
 pub(super) fn output_controls(mode: i32) -> Vec<(&'static str, Rect)> {
     let ids: &[&str] = match mode {
-        1 => &["velocity", "length_ms", "strings", "strings_played"],
+        1 => &["velocity", "length_ms"],
         2 => &["velocity", "length_ms", "strings"],
+        3 => &["velocity", "loop_start", "loop_end"],
         _ => &["velocity"],
     };
-    let width = (PAD.2 - 16.0 - (ids.len() - 1) as f32 * 12.0) / ids.len() as f32;
+    let total_w = if mode == 3 {
+        PAD.2 - 16.0 - LOOP_RESET_WIDTH - 8.0
+    } else {
+        PAD.2 - 16.0
+    };
+    let width = (total_w - (ids.len() - 1) as f32 * 12.0) / ids.len() as f32;
     ids.iter()
         .enumerate()
         .map(|(i, &id)| {
@@ -189,11 +233,12 @@ pub(super) fn mapping_summary_rect(i: usize) -> Rect {
 pub(super) enum Panel {
     Mapping,
     Routes,
+    Sound,
 }
 impl Panel {
     pub(super) fn rect(self) -> Rect {
         match self {
-            Self::Routes => CHORDS_SURFACE,
+            Self::Routes | Self::Sound => CHORDS_SURFACE,
             Self::Mapping => (760.0, 276.0, 488.0, 242.0),
         }
     }
@@ -402,7 +447,7 @@ pub(super) fn route_control_rect(_id: &str) -> Rect {
 
 pub(super) const PIANO_SURFACE: Rect = (16.0, 622.0, W - 32.0, 200.0);
 const KEYBOARD_MODULE_W: f32 = (W - 64.0 - 24.0) / 3.0;
-const KEYBOARD_CONTROL_Y: f32 = 774.0;
+pub(super) const KEYBOARD_CONTROL_Y: f32 = 774.0;
 pub(super) const BASS_CONTAINER: Rect = (32.0, 766.0, KEYBOARD_MODULE_W, 44.0);
 pub(super) const CHORD_CONTAINER: Rect = (44.0 + KEYBOARD_MODULE_W, 766.0, KEYBOARD_MODULE_W, 44.0);
 pub(super) const MELODY_CONTAINER: Rect = (
@@ -468,6 +513,31 @@ pub(super) fn piano_nearest_note(x: f32) -> u8 {
         .unwrap_or(60)
 }
 
+pub(super) const PIANO_ARP_LOOP_RAIL: Rect = (PIANO_KEYS.0, 682.0, PIANO_KEYS.2, 14.0);
+
+pub(super) fn piano_key_badge_rect(note: u8) -> Rect {
+    let r = piano_key_rect(note);
+    if piano_black(note) {
+        (r.0 + 1.0, r.1 + r.3 - 14.0, (r.2 - 2.0).max(1.0), 13.0)
+    } else {
+        (r.0 + 2.0, r.1 + r.3 - 20.0, (r.2 - 4.0).max(1.0), 18.0)
+    }
+}
+
+pub(super) fn piano_nearest_chord_string(x: f32, notes: &[u8], count: usize) -> Option<usize> {
+    if notes.is_empty() || count == 0 {
+        return None;
+    }
+    let max_count = count.min(32);
+    (0..max_count).min_by(|&a, &b| {
+        let na = (notes[a % notes.len()] as usize + (a / notes.len()) * 12).min(127) as u8;
+        let nb = (notes[b % notes.len()] as usize + (b / notes.len()) * 12).min(127) as u8;
+        let xa = piano_note_x(na);
+        let xb = piano_note_x(nb);
+        (xa - x).abs().total_cmp(&(xb - x).abs())
+    })
+}
+
 // Always-visible MIDI settings inside the three keyboard submodules.
 // Bass container (GOLD, left).
 // Chord container (center).
@@ -500,6 +570,7 @@ pub(super) fn keyboard_control_rect(id: &str, mpe: bool) -> Rect {
         "bass_split" => (BASS_CONTAINER.0 + 236.0, KEYBOARD_CONTROL_Y, 100.0, 28.0),
         "output_channel" => keyboard_channel_rect(chord_container(mpe)),
         "upper_channel" => keyboard_channel_rect(melody_container(mpe)),
+        "comp_channel" => (melody_container(mpe).0 + 364.0, KEYBOARD_CONTROL_Y, 53.0, 28.0),
         "upper" => (MELODY_CONTAINER.0 + 344.0, KEYBOARD_CONTROL_Y, 76.0, 28.0),
         "members" => keyboard_channel_rect(melody_container(mpe)),
         _ => unreachable!("unknown keyboard control"),
@@ -508,10 +579,62 @@ pub(super) fn keyboard_control_rect(id: &str, mpe: bool) -> Rect {
 
 pub(super) fn keyboard_menu_range(id: &str) -> Option<(i32, i32)> {
     match id {
-        "bass_channel" | "output_channel" | "upper_channel" => Some((1, 16)),
+        "bass_channel" | "output_channel" | "upper_channel" | "comp_channel" => Some((1, 16)),
         "members" => Some((1, 15)),
         _ => None,
     }
+}
+
+pub(super) fn arp_accent_step_pos(r: Rect, step: usize, cycle: usize) -> (f32, f32) {
+    let cycle = cycle.max(1);
+    let start_x = r.0 + 16.0;
+    let width = r.2 - 32.0;
+    let x = if cycle == 1 {
+        start_x + width * 0.5
+    } else {
+        start_x + step as f32 * width / (cycle - 1) as f32
+    };
+    let y = r.1 + 17.0;
+    (x, y)
+}
+
+pub(super) fn arp_accent_step_at(r: Rect, x: f32, cycle: usize) -> usize {
+    let cycle = cycle.max(1);
+    if cycle == 1 {
+        return 0;
+    }
+    let start_x = r.0 + 16.0;
+    let width = r.2 - 32.0;
+    let rel = (x - start_x) / width;
+    ((rel * (cycle - 1) as f32).round() as isize).clamp(0, (cycle - 1) as isize) as usize
+}
+
+pub(super) fn routing_preset_rect(mpe: bool) -> Rect {
+    (chord_container(mpe).0 + 372.0, KEYBOARD_CONTROL_Y, 58.0, 28.0)
+}
+
+pub(super) fn comp_mode_rect(mpe: bool) -> Rect {
+    (melody_container(mpe).0 + 40.0, KEYBOARD_CONTROL_Y, 72.0, 28.0)
+}
+
+pub(super) fn comp_octave_rect(mpe: bool) -> Rect {
+    (melody_container(mpe).0 + 116.0, KEYBOARD_CONTROL_Y, 46.0, 28.0)
+}
+
+pub(super) fn comp_rhythm_rect(mpe: bool) -> Rect {
+    (melody_container(mpe).0 + 166.0, KEYBOARD_CONTROL_Y, 94.0, 28.0)
+}
+
+pub(super) fn comp_lag_rect(mpe: bool) -> Rect {
+    (melody_container(mpe).0 + 264.0, KEYBOARD_CONTROL_Y, 44.0, 28.0)
+}
+
+pub(super) fn comp_interlock_rect(mpe: bool) -> Rect {
+    (melody_container(mpe).0 + 312.0, KEYBOARD_CONTROL_Y, 48.0, 28.0)
+}
+
+pub(super) fn bass_octave_rect() -> Rect {
+    (BASS_CONTAINER.0 + 344.0, KEYBOARD_CONTROL_Y, 64.0, 28.0)
 }
 
 // Keep the chord readout and its tooltip beside the memory row.

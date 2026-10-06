@@ -85,23 +85,48 @@ impl ChordboardView {
         );
     }
 
-    pub(super) fn arp_string_count(&self, mode: i32) -> usize {
+    pub(super) fn arp_string_count(&self, _mode: i32) -> usize {
         let octaves = self
             .routed_plain("octaves")
             .unwrap_or(self.params.octaves.value() as f32) as usize;
-        if mode == 1 {
-            self.routed_plain("strings")
-                .unwrap_or(self.params.strings.value() as f32) as usize
-                + self.snapshot.notes.len * octaves.saturating_sub(1)
-        } else {
-            self.snapshot.notes.len * octaves
+        self.snapshot.notes.len * octaves
+    }
+
+    pub(super) fn arp_cycle_length(&self) -> usize {
+        let notes = self.snapshot.notes.len;
+        if notes == 0 {
+            return 0;
         }
+        let octaves = self
+            .routed_plain("octaves")
+            .unwrap_or(self.params.octaves.value() as f32) as usize;
+        let total = (notes * octaves).max(1);
+        let loop_start = self.params.loop_start.value().clamp(1, 32) as usize;
+        let loop_end = self.params.loop_end.value().clamp(0, 32) as usize;
+        let start_idx = loop_start.saturating_sub(1);
+        let end_idx = if loop_end > 0 {
+            loop_end.saturating_sub(1)
+        } else {
+            total.saturating_sub(1)
+        };
+        let (min_idx, max_idx) = if start_idx <= end_idx {
+            (start_idx, end_idx)
+        } else {
+            (end_idx, start_idx)
+        };
+        let mut unskipped_len = 0;
+        for s in min_idx..=max_idx {
+            if !self.params.is_string_skipped(s) {
+                unskipped_len += 1;
+            }
+        }
+        let pattern = self.params.arp_pattern.value() as u8;
+        crate::engine::Engine::pattern_length(pattern, unskipped_len).min(32)
     }
 
     fn draw_arp_strings(&self, d: &mut Draw, mode: i32) {
         let r = ARP_STRINGS;
         d.rounded_rect(r.0, r.1, r.2, r.3, 6.0, alpha(TEXT, 0.025));
-        let count = self.arp_string_count(mode).max(1);
         if self.snapshot.notes.len == 0 {
             d.text_centered(
                 r.0 + r.2 * 0.5,
@@ -112,46 +137,242 @@ impl ChordboardView {
             );
             return;
         }
-        let rows = count.div_ceil(18);
-        let columns = count.div_ceil(rows);
-        let height = r.3 / rows as f32;
+        let base_count = self.arp_string_count(mode).max(1);
+        let loop_start_val = self.params.loop_start.value() as usize;
+        let loop_end_val = self.params.loop_end.value() as usize;
+        let count = if mode == 3 {
+            base_count.max(loop_end_val).max(loop_start_val)
+        } else {
+            base_count
+        };
+        let effective_end = if loop_end_val > 0 { loop_end_val } else { base_count };
+        let start_idx = loop_start_val.saturating_sub(1).min(count - 1);
+        let end_idx = effective_end.saturating_sub(1).min(count - 1);
+        let (min_idx, max_idx) = if start_idx <= end_idx {
+            (start_idx, end_idx)
+        } else {
+            (end_idx, start_idx)
+        };
+
+        if mode == 3 {
+            let x_start = arp_string_pos(r, start_idx, count).0;
+            let x_end = arp_string_pos(r, end_idx, count).0;
+            let (bx1, bx2) = (x_start.min(x_end), x_start.max(x_end));
+            d.rounded_rect(
+                bx1 - 8.0,
+                r.1 + 2.0,
+                (bx2 - bx1 + 16.0).max(16.0),
+                r.3 - 4.0,
+                4.0,
+                alpha(GOLD, 0.04),
+            );
+            d.line(bx1, r.1 + 3.0, bx2, r.1 + 3.0, alpha(GOLD, 0.6), 2.0);
+        }
+
         for i in 0..count {
             let Some(note) = self.snapshot.notes.string(i) else {
                 continue;
             };
-            let x = r.0 + (i % columns) as f32 * (r.2 - 32.0) / (columns - 1).max(1) as f32 + 16.0;
-            let y = r.1 + (i / columns) as f32 * height + 4.0;
-            let bottom = y + height - 22.0;
+            let (x, y, bottom) = arp_string_pos(r, i, count);
+            let in_loop = mode != 3 || (i >= min_idx && i <= max_idx);
             let pulse = self.note_anim[note as usize];
             let sounding = self.snapshot.sounding_notes[note as usize];
             let color = if sounding { GOLD } else { TEAL };
-            if sounding || pulse > 0.01 {
-                d.rounded_rect(
-                    x - 6.0,
-                    y,
-                    12.0,
-                    bottom - y,
-                    3.0,
-                    alpha(color, 0.08 + pulse * 0.12),
+
+            if in_loop {
+                if mode == 3 {
+                    let is_skipped = self.params.is_string_skipped(i);
+                    let is_muted = self.params.is_string_muted(i);
+                    let vol = self.params.string_volume(i);
+                    let vol_y = bottom - vol * (bottom - y);
+
+                    if is_skipped {
+                        d.line(x, y, x, bottom, alpha(MUTED, 0.2), 1.0);
+                        d.rounded_rect(x - 13.0, bottom + 2.0, 26.0, 14.0, 3.0, alpha(MUTED, 0.25));
+                        d.text_centered(x, bottom + 12.0, "SKIP", 8.0, alpha(TEXT, 0.45));
+                    } else if is_muted {
+                        d.line(x, y, x, bottom, alpha(GOLD, 0.2), 1.0);
+                        d.rounded_rect(x - 3.5, vol_y - 1.5, 7.0, 3.0, 1.5, alpha(GOLD, 0.6));
+                        d.rounded_rect(x - 13.0, bottom + 2.0, 26.0, 14.0, 3.0, alpha(GOLD, 0.25));
+                        d.text_centered(x, bottom + 12.0, "MUTE", 8.0, GOLD);
+                    } else {
+                        if sounding || pulse > 0.01 {
+                            d.rounded_rect(
+                                x - 6.0,
+                                vol_y,
+                                12.0,
+                                bottom - vol_y,
+                                3.0,
+                                alpha(color, 0.08 + pulse * 0.12),
+                            );
+                        }
+                        let displacement = (pulse * 24.0).sin() * pulse * 3.0;
+                        let mid_y = (vol_y + bottom) * 0.5;
+                        d.poly(
+                            &[(x, vol_y), (x + displacement, mid_y), (x, bottom)],
+                            alpha(color, if sounding { 0.95 } else { 0.35 + pulse * 0.65 }),
+                            1.0 + pulse,
+                        );
+                        if vol < 0.98 {
+                            d.line(x, y, x, vol_y, alpha(color, 0.15), 1.0);
+                        }
+                        d.rounded_rect(
+                            x - 4.0,
+                            vol_y - 1.5,
+                            8.0,
+                            3.0,
+                            1.5,
+                            if sounding { GOLD } else { TEAL },
+                        );
+                        d.text_centered(
+                            x,
+                            bottom + 13.0,
+                            &self.note_name(note),
+                            TEXT_SMALL,
+                            if sounding || pulse > 0.1 {
+                                color
+                            } else {
+                                MUTED
+                            },
+                        );
+                    }
+                } else {
+                    if sounding || pulse > 0.01 {
+                        d.rounded_rect(
+                            x - 6.0,
+                            y,
+                            12.0,
+                            bottom - y,
+                            3.0,
+                            alpha(color, 0.08 + pulse * 0.12),
+                        );
+                    }
+                    let displacement = (pulse * 24.0).sin() * pulse * 3.0;
+                    d.poly(
+                        &[(x, y), (x + displacement, (y + bottom) * 0.5), (x, bottom)],
+                        alpha(color, if sounding { 0.95 } else { 0.25 + pulse * 0.65 }),
+                        1.0 + pulse,
+                    );
+                    d.text_centered(
+                        x,
+                        bottom + 13.0,
+                        &self.note_name(note),
+                        TEXT_SMALL,
+                        if sounding || pulse > 0.1 {
+                            color
+                        } else {
+                            MUTED
+                        },
+                    );
+                }
+            } else {
+                d.line(x, y, x, bottom, alpha(MUTED, 0.15), 1.0);
+                d.text_centered(
+                    x,
+                    bottom + 13.0,
+                    &self.note_name(note),
+                    TEXT_SMALL,
+                    alpha(MUTED, 0.35),
                 );
             }
-            let displacement = (pulse * 24.0).sin() * pulse * 3.0;
-            d.poly(
-                &[(x, y), (x + displacement, (y + bottom) * 0.5), (x, bottom)],
-                alpha(color, if sounding { 0.95 } else { 0.25 + pulse * 0.65 }),
-                1.0 + pulse,
+        }
+
+        if mode == 3 {
+            let x_start = arp_string_pos(r, start_idx, count).0;
+            let x_end = arp_string_pos(r, end_idx, count).0;
+            let tag_w = 16.0;
+            let tag_h = 11.0;
+            let tag_y = r.1 + 2.0;
+
+            let (xs, xe) = if (x_start - x_end).abs() < 12.0 {
+                (x_start - 7.0, x_end + 7.0)
+            } else {
+                (x_start, x_end)
+            };
+            let (bx1, bx2) = (xs.min(xe), xs.max(xe));
+            d.line(bx1, tag_y + tag_h * 0.5, bx2, tag_y + tag_h * 0.5, alpha(GOLD, 0.4), 1.5);
+
+            let end_str = if loop_end_val == 0 {
+                "Auto".to_string()
+            } else {
+                loop_end_val.to_string()
+            };
+            if self.drag.is_none() {
+                if (bx2 - bx1) >= 80.0 {
+                    let loop_len = effective_end.saturating_sub(loop_start_val).saturating_add(1);
+                    d.text_centered(
+                        (bx1 + bx2) * 0.5,
+                        tag_y + 8.5,
+                        &format!("{loop_start_val} → {end_str} ({loop_len} notes)"),
+                        9.0,
+                        alpha(TEXT, 0.7),
+                    );
+                } else if (bx2 - bx1) >= 44.0 {
+                    d.text_centered(
+                        (bx1 + bx2) * 0.5,
+                        tag_y + 8.5,
+                        &format!("{loop_start_val} → {end_str}"),
+                        9.0,
+                        alpha(TEXT, 0.7),
+                    );
+                }
+            }
+
+            d.rounded_rect(xs - tag_w * 0.5, tag_y, tag_w, tag_h, 3.0, TEAL);
+            d.fill_poly(
+                &[
+                    (xs - 3.5, tag_y + tag_h),
+                    (xs + 3.5, tag_y + tag_h),
+                    (xs, tag_y + tag_h + 3.0),
+                ],
+                TEAL,
             );
-            d.text_centered(
-                x,
-                bottom + 13.0,
-                &self.note_name(note),
-                TEXT_SMALL,
-                if sounding || pulse > 0.1 {
-                    color
-                } else {
-                    MUTED
-                },
+            d.text_centered(xs, tag_y + 8.5, "S", 8.5, BG);
+
+            d.rounded_rect(xe - tag_w * 0.5, tag_y, tag_w, tag_h, 3.0, GOLD);
+            d.fill_poly(
+                &[
+                    (xe - 3.5, tag_y + tag_h),
+                    (xe + 3.5, tag_y + tag_h),
+                    (xe, tag_y + tag_h + 3.0),
+                ],
+                GOLD,
             );
+            d.text_centered(xe, tag_y + 8.5, "E", 8.5, BG);
+        }
+
+        // Draw Adaptive Step Accent Lane
+        let cycle = self.arp_cycle_length();
+        if cycle > 0 {
+            let active_step = self.snapshot.arp_cycle_step % cycle;
+            for s in 0..cycle {
+                let (px, py) = arp_accent_step_pos(r, s, cycle);
+                let accent = self.params.step_accent(s);
+                let is_sounding = self.snapshot.notes.len > 0 && active_step == s;
+
+                // Playhead highlight
+                if is_sounding {
+                    let halo_color = if accent == 1 { GOLD } else { TEAL };
+                    d.rounded_rect(px - 5.0, py - 6.0, 10.0, 12.0, 3.0, alpha(halo_color, 0.25));
+                }
+
+                match accent {
+                    1 => {
+                        // Accent: Tall gold peg
+                        d.rounded_rect(px - 2.5, py - 5.0, 5.0, 10.0, 1.5, GOLD);
+                        d.circle(px, py - 5.0, 2.0, GOLD, true);
+                    }
+                    2 => {
+                        // Ghost: Muted staccato pip with subtle horizontal bracket
+                        d.circle(px, py, 2.2, alpha(TEXT, 0.55), true);
+                        d.line(px - 3.5, py, px + 3.5, py, alpha(TEXT, 0.45), 1.0);
+                    }
+                    _ => {
+                        // Normal: Subtle hollow dot
+                        d.circle(px, py, 2.0, alpha(MUTED, 0.4), false);
+                    }
+                }
+            }
         }
     }
 
@@ -322,6 +543,90 @@ impl ChordboardView {
                     3.0,
                     if i % 2 == 0 { GOLD } else { alpha(GOLD, 0.5) },
                 );
+            }
+        }
+
+        if looping {
+            self.button(d, loop_reset_rect(), "Reset", false, GOLD);
+
+            if let Some(Drag::ArpLoopBound(is_end)) = self.drag {
+                let r = ARP_STRINGS;
+                let base_count = self.arp_string_count(3).max(1);
+                let loop_start_val = self.params.loop_start.value() as usize;
+                let loop_end_val = self.params.loop_end.value() as usize;
+                let count = base_count.max(loop_end_val).max(loop_start_val);
+                let effective_end = if loop_end_val > 0 { loop_end_val } else { base_count };
+                let target_idx = if is_end {
+                    effective_end.saturating_sub(1).min(count - 1)
+                } else {
+                    loop_start_val.saturating_sub(1).min(count - 1)
+                };
+                let x = arp_string_pos(r, target_idx, count).0;
+                let text = if is_end {
+                    if loop_end_val == 0 {
+                        format!("End: Auto ({effective_end})")
+                    } else {
+                        format!("End: {loop_end_val}")
+                    }
+                } else {
+                    format!("Begin: {loop_start_val}")
+                };
+                let badge_w = 78.0;
+                let badge_h = 16.0;
+                let badge_x = (x - badge_w * 0.5).clamp(r.0 + 4.0, r.0 + r.2 - badge_w - 4.0);
+                let badge_y = r.1 + 17.0;
+                d.rounded_rect(badge_x, badge_y, badge_w, badge_h, 3.0, BG);
+                d.outline_rounded(
+                    badge_x,
+                    badge_y,
+                    badge_w,
+                    badge_h,
+                    3.0,
+                    if is_end { GOLD } else { TEAL },
+                    1.0,
+                );
+                d.text_centered(
+                    badge_x + badge_w * 0.5,
+                    badge_y + 11.5,
+                    &text,
+                    9.5,
+                    if is_end { GOLD } else { TEAL },
+                );
+            } else if let Some(Drag::ArpVolumeSweep {
+                origin_idx,
+                origin_vol,
+                last_pos,
+                is_ramp,
+                ..
+            }) = self.drag
+            {
+                let r = ARP_STRINGS;
+                let base_count = self.arp_string_count(3).max(1);
+                let loop_start_val = self.params.loop_start.value() as usize;
+                let loop_end_val = self.params.loop_end.value() as usize;
+                let count = base_count.max(loop_end_val).max(loop_start_val);
+
+                let cur_idx = arp_string_index_at(r, last_pos.0, last_pos.1, count);
+                let cur_vol = self.params.string_volume(cur_idx);
+
+                let tip = if is_ramp {
+                    format!(
+                        "Ramp #{}-#{} ({:.0}% → {:.0}%)",
+                        origin_idx + 1,
+                        cur_idx + 1,
+                        origin_vol * 100.0,
+                        cur_vol * 100.0
+                    )
+                } else {
+                    format!("#{}: {:.0}%", cur_idx + 1, cur_vol * 100.0)
+                };
+                let tip_w = if is_ramp { 150.0 } else { 62.0 };
+                let tip_h = 16.0;
+                let tip_x = (last_pos.0 - tip_w * 0.5).clamp(r.0 + 4.0, r.0 + r.2 - tip_w - 4.0);
+                let tip_y = (last_pos.1 - 22.0).clamp(r.1 + 4.0, r.1 + r.3 - tip_h - 4.0);
+                d.rounded_rect(tip_x, tip_y, tip_w, tip_h, 3.0, BG);
+                d.outline_rounded(tip_x, tip_y, tip_w, tip_h, 3.0, GOLD, 1.0);
+                d.text_centered(tip_x + tip_w * 0.5, tip_y + 11.5, &tip, 9.0, GOLD);
             }
         }
     }

@@ -12,6 +12,8 @@ use routing::RouteDrag;
 mod performance;
 mod piano;
 mod render;
+mod sound;
+mod console;
 use crate::{
     bridge::Bridge,
     engine::{Command, Snapshot, POINTER_KEY_OFFSET},
@@ -109,6 +111,29 @@ struct Tick;
 enum Drag {
     Pad,
     StrumBound(bool, bool),
+    ArpLoopBound(bool),
+    ArpAccentPaint {
+        painted_state: u8,
+        last_step: usize,
+    },
+    ArpVolumeSweep {
+        origin_idx: usize,
+        origin_vol: f32,
+        origin_pos: (f32, f32),
+        last_pos: (f32, f32),
+        is_ramp: bool,
+    },
+    PianoArpLoopBound(bool),
+    PianoArpLoopDraw {
+        origin_string: usize,
+    },
+    PianoArpVolumeSweep {
+        origin_string: usize,
+        origin_vol: f32,
+        origin_y: f32,
+        last_string: usize,
+        is_ramp: bool,
+    },
     RouteContour {
         origin: (f32, f32),
         min: f32,
@@ -185,9 +210,15 @@ struct ChordboardView {
     mapping_signature: [u32; 2],
     pub(super) show_bass_split: bool,
     pub(super) voicing_pulse: f32,
+    pub(super) lane_meters: [Cell<f32>; 4],
+    pub(super) auditioning: Cell<bool>,
+    pub(super) audition_latch: Cell<bool>,
 }
 impl Drop for ChordboardView {
     fn drop(&mut self) {
+        if self.auditioning.get() {
+            self.bridge.send(Command::ReleaseKeyboard);
+        }
         self.bridge.send(Command::ReleaseKeyboard);
         self.bridge.send(Command::EndGesture);
         self.bridge.visible.store(false, Ordering::Relaxed);
@@ -252,6 +283,9 @@ impl ChordboardView {
             mapping_signature: [0; 2],
             show_bass_split: true,
             voicing_pulse: 0.0,
+            lane_meters: std::array::from_fn(|_| Cell::new(0.0)),
+            auditioning: Cell::new(false),
+            audition_latch: Cell::new(false),
         }
     }
     fn control(&self, id: &str) -> Option<Control> {
@@ -441,6 +475,44 @@ impl ChordboardView {
         let Some(panel) = self.panel else {
             return Vec::new();
         };
+        if panel == Panel::Sound {
+            let mut controls = Vec::new();
+            for &lane in &crate::engine::Lane::ALL {
+                let i = lane.index();
+                let prefix = match lane {
+                    crate::engine::Lane::Bass => "lane_bass",
+                    crate::engine::Lane::Comp => "lane_comp",
+                    crate::engine::Lane::Arp => "lane_arp",
+                    crate::engine::Lane::Lead => "lane_lead",
+                };
+                let lp = self.params.lane_params(lane);
+                let engine_type = lp.engine.value();
+                if engine_type != 0 {
+                    for m_idx in 0..6 {
+                        let id = format!("{prefix}_m{}", m_idx + 1);
+                        if let Some(c) = self.control(&id) {
+                            controls.push((c, sound::lane_macro_rect(i, m_idx)));
+                        }
+                    }
+                    if let Some(c) = self.control(&format!("{prefix}_opt_a")) {
+                        controls.push((c, sound::lane_opt_a_rect(i)));
+                    }
+                    if let Some(c) = self.control(&format!("{prefix}_opt_b")) {
+                        controls.push((c, sound::lane_opt_b_rect(i)));
+                    }
+                }
+                if let Some(c) = self.control(&format!("{prefix}_level")) {
+                    controls.push((c, sound::lane_level_rect(i)));
+                }
+                if let Some(c) = self.control(&format!("{prefix}_pan")) {
+                    controls.push((c, sound::lane_pan_rect(i)));
+                }
+                if let Some(c) = self.control(&format!("{prefix}_mute")) {
+                    controls.push((c, sound::lane_mute_rect(i)));
+                }
+            }
+            return controls;
+        }
         if panel == Panel::Routes {
             if !self.has_selected_route() {
                 return Vec::new();
@@ -516,6 +588,14 @@ impl ChordboardView {
             },
             Menu::MappingChannel(_) => self.mapping().channel as usize,
             Menu::MappingCc(_) => self.mapping().number as usize,
+            Menu::CompRhythm => {
+                let cur_hits = self.params.comp_hits.value();
+                let cur_steps = self.params.comp_steps.value();
+                crate::ui::menu::COMP_RHYTHMS
+                    .iter()
+                    .position(|&(_, h, s, _)| h == cur_hits && s == cur_steps)
+                    .unwrap_or(0)
+            }
         }
     }
     fn open_menu(&mut self, menu: Menu) {
@@ -596,6 +676,20 @@ impl ChordboardView {
                 self.params.scale.as_ptr(),
                 self.params.scale.preview_normalized(index as i32),
             ),
+            Menu::CompRhythm => {
+                if let Some(&(_, hits, steps, _)) = crate::ui::menu::COMP_RHYTHMS.get(index) {
+                    Self::emit(
+                        cx,
+                        self.params.comp_hits.as_ptr(),
+                        self.params.comp_hits.preview_normalized(hits),
+                    );
+                    Self::emit(
+                        cx,
+                        self.params.comp_steps.as_ptr(),
+                        self.params.comp_steps.preview_normalized(steps),
+                    );
+                }
+            }
             _ => {
                 let mut m = self.mapping();
                 match menu {
@@ -837,6 +931,18 @@ impl ChordboardView {
                 Drag::StrumBound(y_axis, right) => {
                     pleasant_ui::param::end(cx, self.bound_param(y_axis, right).as_ptr());
                 }
+                Drag::ArpLoopBound(is_end) | Drag::PianoArpLoopBound(is_end) => {
+                    let ptr = if is_end {
+                        self.params.loop_end.as_ptr()
+                    } else {
+                        self.params.loop_start.as_ptr()
+                    };
+                    pleasant_ui::param::end(cx, ptr);
+                }
+                Drag::ArpVolumeSweep { .. }
+                | Drag::ArpAccentPaint { .. }
+                | Drag::PianoArpLoopDraw { .. }
+                | Drag::PianoArpVolumeSweep { .. } => {}
                 Drag::RouteContour { slot, .. } => {
                     pleasant_ui::param::end(cx, self.params.routes[slot].min.as_ptr());
                     pleasant_ui::param::end(cx, self.params.routes[slot].max.as_ptr());

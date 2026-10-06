@@ -11,6 +11,7 @@ impl ChordboardView {
         self.close_icon(d, self.panel_close_rect(panel), TEAL, false);
         match panel {
             Panel::Routes => self.draw_routes(d),
+            Panel::Sound => {}
             Panel::Mapping => self.draw_mapping(d),
         }
     }

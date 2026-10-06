@@ -8,6 +8,131 @@ pub const AUTO: u8 = 1;
 pub const MANUAL: u8 = 2;
 pub const ARP: u8 = 3;
 
+pub const VOICE_CAPACITY: usize = 48;
+pub const KIND_ARP: u8 = 0;
+pub const KIND_COMP: u8 = 1;
+pub const KIND_BASS: u8 = 2;
+pub const KIND_LEAD: u8 = 3;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Lane {
+    Bass = 0,
+    Comp = 1,
+    Arp = 2,
+    Lead = 3,
+}
+
+impl Lane {
+    pub const ALL: [Lane; 4] = [Lane::Bass, Lane::Comp, Lane::Arp, Lane::Lead];
+    pub const COUNT: usize = 4;
+
+    pub fn index(self) -> usize {
+        self as usize
+    }
+
+    pub fn from_index(index: usize) -> Self {
+        match index {
+            0 => Lane::Bass,
+            1 => Lane::Comp,
+            2 => Lane::Arp,
+            3 => Lane::Lead,
+            _ => Lane::Arp,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Lane::Bass => "Bass",
+            Lane::Comp => "Comp",
+            Lane::Arp => "Arp",
+            Lane::Lead => "Lead",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LaneEvent {
+    On {
+        lane: Lane,
+        channel: u8,
+        note: u8,
+        velocity: f32,
+    },
+    Off {
+        lane: Lane,
+        channel: u8,
+        note: u8,
+        velocity: f32,
+    },
+}
+
+impl LaneEvent {
+    pub fn lane(self) -> Lane {
+        match self {
+            LaneEvent::On { lane, .. } | LaneEvent::Off { lane, .. } => lane,
+        }
+    }
+
+    pub fn channel(self) -> u8 {
+        match self {
+            LaneEvent::On { channel, .. } | LaneEvent::Off { channel, .. } => channel,
+        }
+    }
+
+    pub fn note(self) -> u8 {
+        match self {
+            LaneEvent::On { note, .. } | LaneEvent::Off { note, .. } => note,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LaneTapEvent {
+    pub at: u64,
+    pub event: LaneEvent,
+}
+
+pub struct LaneTap {
+    pub events: Box<[Option<LaneTapEvent>; 1024]>,
+    pub len: usize,
+    pub overflow: bool,
+}
+
+impl Default for LaneTap {
+    fn default() -> Self {
+        Self {
+            events: Box::new([None; 1024]),
+            len: 0,
+            overflow: false,
+        }
+    }
+}
+
+impl LaneTap {
+    pub fn push(&mut self, at: u64, event: LaneEvent) {
+        if self.len >= self.events.len() {
+            self.overflow = true;
+        } else {
+            self.events[self.len] = Some(LaneTapEvent { at, event });
+            self.len += 1;
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.len = 0;
+        self.overflow = false;
+    }
+
+    pub fn drain(&mut self) -> impl Iterator<Item = LaneEvent> + '_ {
+        let count = self.len;
+        self.len = 0;
+        self.overflow = false;
+        self.events[..count]
+            .iter_mut()
+            .filter_map(|opt| opt.take().map(|tap| tap.event))
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Config {
     pub root_on_select: bool,
@@ -47,6 +172,24 @@ pub struct Config {
     pub gate: f32,
     pub swing: f32,
     pub octaves: u8,
+    pub loop_start: u8,
+    pub loop_end: u8,
+    pub arp_volume: [u8; 32],
+    pub arp_mute: u32,
+    pub arp_skip: u32,
+    pub arp_accents: [u8; 32],
+    pub comp_mode: u8,
+    pub comp_channel: u8,
+    pub comp_octave: i8,
+    pub comp_velocity: f32,
+    pub comp_euclidean_steps: u8,
+    pub comp_euclidean_hits: u8,
+    pub comp_lag_ms: f32,
+    pub comp_interlock: u8,
+    pub bass_mode: u8,
+    pub bass_octave: i8,
+    pub bass_velocity: f32,
+    pub routing_preset: u8,
     pub humanize: f32,
     pub mpe: bool,
     pub upper: bool,
@@ -64,6 +207,15 @@ pub struct Config {
     pub y_target: u8,
     pub y_cc: u8,
     pub mappings: [Mapping; 2],
+    pub harmonization_mode: u8,
+    pub chromatic_flavor: u8,
+    pub key: u8,
+    pub scale: u8,
+    pub extensions: f32,
+    pub legato_retention: bool,
+    pub comp_guide_tone: bool,
+    pub pad_swell_source: u8,
+    pub lane_auto_mute: [bool; 4],
 }
 impl Config {
     pub fn bass_boundary(&self) -> i16 {
@@ -74,6 +226,22 @@ impl Config {
             self.bass_split
         } else {
             self.control_base
+        }
+    }
+    #[inline]
+    pub fn is_string_muted(&self, index: usize) -> bool {
+        index < 32 && (self.arp_mute & (1 << index)) != 0
+    }
+    #[inline]
+    pub fn is_string_skipped(&self, index: usize) -> bool {
+        index < 32 && (self.arp_skip & (1 << index)) != 0
+    }
+    #[inline]
+    pub fn string_volume(&self, index: usize) -> f32 {
+        if index < 32 {
+            self.arp_volume[index] as f32 / 100.0
+        } else {
+            1.0
         }
     }
 }
@@ -117,6 +285,24 @@ impl Default for Config {
             gate: 0.65,
             swing: 0.0,
             octaves: 1,
+            loop_start: 1,
+            loop_end: 0,
+            arp_volume: [100; 32],
+            arp_mute: 0,
+            arp_skip: 0,
+            arp_accents: [0; 32],
+            comp_mode: 0,
+            comp_channel: 0,
+            comp_octave: 0,
+            comp_velocity: 0.75,
+            comp_euclidean_steps: 16,
+            comp_euclidean_hits: 4,
+            comp_lag_ms: 0.0,
+            comp_interlock: 0,
+            bass_mode: 0,
+            bass_octave: -1,
+            bass_velocity: 0.85,
+            routing_preset: 0,
             humanize: 0.0,
             mpe: false,
             upper: false,
@@ -134,7 +320,38 @@ impl Default for Config {
             y_target: 0,
             y_cc: 11,
             mappings: [Mapping::cc(1, 16), Mapping::default()],
+            harmonization_mode: 0,
+            chromatic_flavor: 0,
+            key: 0,
+            scale: 0,
+            extensions: 0.5,
+            legato_retention: true,
+            comp_guide_tone: false,
+            pad_swell_source: 0,
+            lane_auto_mute: [false; 4],
         }
+    }
+}
+impl Config {
+    #[inline]
+    pub fn step_accent(&self, step: usize) -> u8 {
+        if step < 32 {
+            self.arp_accents[step]
+        } else {
+            0
+        }
+    }
+    #[inline]
+    pub fn comp_is_hit(&self, step: usize) -> bool {
+        let s = self.comp_euclidean_steps.clamp(1, 32) as usize;
+        let k = self.comp_euclidean_hits.clamp(0, s as u8) as usize;
+        if k == 0 {
+            return false;
+        }
+        if k >= s {
+            return true;
+        }
+        ((step % s) * k) % s < k
     }
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -192,6 +409,7 @@ pub struct Voice {
     pub started: u64,
     pub off: u64,
     pub layer: bool,
+    pub kind: u8,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Scheduled {
@@ -200,6 +418,8 @@ pub struct Scheduled {
     pub velocity: f32,
     pub duration: u64,
     pub gate_step: Option<u64>,
+    pub channel: u8,
+    pub kind: u8,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Out {
@@ -260,6 +480,7 @@ pub struct Snapshot {
     pub learning: u8,
     pub output_mpe: bool,
     pub tempo: f32,
+    pub arp_cycle_step: usize,
 }
 impl Default for Snapshot {
     fn default() -> Self {
@@ -294,6 +515,7 @@ impl Default for Snapshot {
             learning: 0,
             output_mpe: false,
             tempo: 120.0,
+            arp_cycle_step: 0,
         }
     }
 }

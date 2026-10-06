@@ -12,7 +12,19 @@ pub(super) enum Menu {
     MappingKind,
     MappingChannel(bool),
     MappingCc(bool),
+    CompRhythm,
 }
+
+pub(super) const COMP_RHYTHMS: &[(&str, i32, i32, &str)] = &[
+    ("Quarter Notes", 4, 16, "Straight 4-on-the-floor pulse"),
+    ("Eighth Notes", 8, 16, "Driving straight 8ths"),
+    ("Tresillo (3+3+2)", 3, 8, "Classic syncopated Latin/pop groove"),
+    ("Charleston", 6, 16, "Swing jazz & house comp (beat 1 & upbeat 2)"),
+    ("Cinquillo (Funk)", 5, 16, "Funky syncopated pocket"),
+    ("Half Notes", 2, 16, "Relaxed chops on beats 1 & 3"),
+    ("Shuffle / Triplets", 12, 16, "Driving swing shuffle comp"),
+    ("Afro Polyrhythm", 7, 16, "Syncopated cross-rhythm"),
+];
 
 impl Menu {
     pub(super) fn items(self) -> Vec<String> {
@@ -60,6 +72,12 @@ impl Menu {
                     .map(|n| n.to_string())
                     .collect()
             }
+            Self::CompRhythm => {
+                return COMP_RHYTHMS
+                    .iter()
+                    .map(|(name, hits, steps, _)| format!("{name} ({hits}/{steps})"))
+                    .collect()
+            }
         };
         labels.iter().map(|s| s.to_string()).collect()
     }
@@ -74,6 +92,7 @@ impl Menu {
                 "members" => "MPE members",
                 "bass_channel" => "Bass MIDI channel",
                 "upper_channel" => "Melody MIDI channel",
+                "comp_channel" => "Comp MIDI channel",
                 _ => "Chord MIDI channel",
             },
             Self::YTarget => "Y destination",
@@ -81,6 +100,7 @@ impl Menu {
             Self::MappingKind => "Controller source",
             Self::MappingChannel(_) => "MIDI channel",
             Self::MappingCc(_) => "Controller number",
+            Self::CompRhythm => "Comp Rhythm Groove",
         }
     }
 
@@ -94,6 +114,7 @@ impl Menu {
             Self::MappingKind => 130.0,
             Self::MappingChannel(_) => 40.0,
             Self::MappingCc(_) => 34.0,
+            Self::CompRhythm => 210.0,
         }
     }
 
@@ -106,6 +127,7 @@ impl Menu {
             Self::MappingCc(_) => 16,
             Self::Key => 3,
             Self::KeyboardParam(_) => 6,
+            Self::CompRhythm => 1,
         }
     }
 
@@ -130,7 +152,7 @@ impl Menu {
                         "spread" | "quality" | "inversion" | "transpose" | "filter" => 0,
                         "strings" | "strings_played" | "x" => 1,
                         "arp_pattern" | "rate" | "strum_ms" | "strum_sync" | "strum_hold"
-                        | "gate" | "swing" | "octaves" | "humanize" => 2,
+                        | "gate" | "swing" | "octaves" | "humanize" | "loop_start" | "loop_end" => 2,
                         "velocity" | "length_ms" | "contour" | "root_on_select" | "latch"
                         | "mode" => 3,
                         _ => 4,
@@ -223,6 +245,7 @@ impl Menu {
             Self::MappingKind => (776.0, 324.0, 200.0, 30.0),
             Self::MappingChannel(_) => (984.0, 324.0, 110.0, 30.0),
             Self::MappingCc(_) => (1102.0, 324.0, 130.0, 30.0),
+            Self::CompRhythm => comp_rhythm_rect(false),
         }
     }
 }
