@@ -245,6 +245,9 @@ impl Engine {
         }
         let requests = self.sequence_requests();
         for (lane, &requested) in requests.iter().enumerate() {
+            if lane == 3 {
+                continue;
+            }
             if let Some((phase, page)) = self.seq.early[lane] {
                 let changed = page != requested
                     || self.seq.early_settings[lane]
@@ -287,7 +290,7 @@ impl Engine {
         self.refresh_sequence_lookahead();
         let requests = self.sequence_requests();
         // Harmony is processed before musical lanes at coincident boundaries.
-        for lane in [3, 1, 2, 0] {
+        for lane in [1, 2, 0] {
             if self.now < self.seq.next[lane] {
                 continue;
             }
@@ -318,7 +321,7 @@ impl Engine {
             self.seq.early_settings[lane] = None;
         }
         self.refresh_sequence_lookahead();
-        for lane in [3, 1, 2, 0] {
+        for lane in [1, 2, 0] {
             for slot in 0..self.seq.events.len() {
                 if self.seq.events[slot].is_some_and(|e| e.lane == lane && e.at <= self.now) {
                     let event = self.seq.events[slot].take().unwrap();
@@ -331,7 +334,8 @@ impl Engine {
         if event.first && self.seq.early[event.lane] == Some((event.phase, event.page)) {
             self.seq.early_fired[event.lane] = true;
         }
-        let step = event.step;
+        let mut step = event.step;
+        step.tie = false;
         if event.lane == 3 {
             if !event.settings.enabled || step.live {
                 self.seq.harmony = None;
@@ -748,7 +752,7 @@ mod tests {
             .any(|(at, e)| *at == 94 && matches!(e, Out::On(..))));
     }
     #[test]
-    fn harmony_is_relative_not_cumulative_and_live_resets() {
+    fn harmony_lane_does_not_change_the_live_chord() {
         let mut e = engine();
         prepare(&mut e, |s| {
             let p = &mut s.lanes[3][0];
@@ -757,10 +761,8 @@ mod tests {
             p.steps[2].live = true;
         });
         e.tick(&mut |_| {});
-        assert_eq!(e.notes.values[0], 62);
-        e.advance(125, &mut |_, _| {});
-        assert_eq!(e.notes.values[0], 62);
-        e.advance(125, &mut |_, _| {});
+        assert_eq!(e.notes.values[0], 60);
+        e.advance(250, &mut |_, _| {});
         assert_eq!(e.notes.values[0], 60);
         assert_eq!(e.memory.unwrap().root, 60);
     }
@@ -852,7 +854,11 @@ mod tests {
         e.accept_sequence_generation(&mut |_| {});
         assert_eq!(e.seq.phase, phase);
         assert_eq!(e.seq.next, next);
-        assert!(e.voices.iter().flatten().any(|v| v.off == u64::MAX));
+        assert!(e
+            .voices
+            .iter()
+            .flatten()
+            .any(|v| v.owner > 0 && v.off != u64::MAX));
         store.set(crate::sequencer::State::default());
         store.apply_pending(&mut e.seq.data);
         e.accept_sequence_generation(&mut |_| {});
@@ -877,7 +883,7 @@ mod tests {
         assert!(events.iter().any(
             |event| matches!(event,Out::Pressure(_,value) if (*value - 20.0/127.0).abs()<0.0001)
         ));
-        assert!(!events.iter().any(|event| matches!(event, Out::On(..))));
+        assert!(events.iter().any(|event| matches!(event, Out::On(..))));
         events.clear();
         e.control(0, 11, 100.0 / 127.0, &mut |event| events.push(event));
         assert!(events.contains(&Out::Cc(0, 11, 90.0 / 127.0)));
@@ -1015,7 +1021,7 @@ mod tests {
         }
     }
     #[test]
-    fn harmony_boxes_apply_within_span_and_return_to_live_in_gaps() {
+    fn harmony_boxes_do_not_change_the_live_chord() {
         let mut e = engine();
         prepare(&mut e, |s| {
             let p = &mut s.lanes[3][0];
@@ -1026,9 +1032,9 @@ mod tests {
         });
         e.tick(&mut |_| {});
         assert_eq!(e.notes.values[0], 60);
-        for expected in [62, 62, 60, 58, 60] {
+        for _ in 0..5 {
             e.advance(125, &mut |_, _| {});
-            assert_eq!(e.notes.values[0], expected);
+            assert_eq!(e.notes.values[0], 60);
             assert_eq!(e.memory.unwrap().root, 60);
         }
     }

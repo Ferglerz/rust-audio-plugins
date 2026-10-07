@@ -119,9 +119,6 @@ impl ChordboardView {
         self.menu = None;
         self.edit = None;
         self.cancel_sequencer();
-        if !open {
-            self.clear_loop();
-        }
         let u = &mut self.sequencer_ui;
         u.start = u.progress;
         u.elapsed = 0.0;
@@ -132,75 +129,10 @@ impl ChordboardView {
         cx.needs_redraw();
     }
 
-    pub(super) fn loop_range(&self) -> Option<(usize, usize)> {
-        let u = &self.sequencer_ui;
-        self.params
-            .sequencer
-            .audition()
-            .filter(|a| a.lane == u.lane && a.page == u.edit_pages[u.lane])
-            .map(|a| (a.start as usize, a.end as usize))
-    }
-
-    pub(super) fn set_loop(&mut self, a: usize, b: usize) {
-        let u = &self.sequencer_ui;
-        let (lane, page) = (u.lane, u.edit_pages[u.lane]);
-        let last = self.params.sequencer.snapshot().lanes[lane][page]
-            .length
-            .saturating_sub(1) as usize;
-        self.params
-            .sequencer
-            .set_audition(Some(crate::sequencer::Audition {
-                lane,
-                page,
-                start: a.min(b).min(last) as u8,
-                end: a.max(b).min(last) as u8,
-            }));
-    }
-
-    pub(in crate::ui) fn clear_loop(&mut self) {
-        self.sequencer_ui.loop_anchor = None;
-        self.params.sequencer.set_audition(None);
-    }
-
-    pub(super) fn release_foreign_loop(&mut self) {
-        let u = &self.sequencer_ui;
-        if self
-            .params
-            .sequencer
-            .audition()
-            .is_some_and(|a| a.lane != u.lane || a.page != u.edit_pages[u.lane])
-        {
-            self.clear_loop();
-        }
-    }
-
-    pub(in crate::ui) fn loop_strip_hit(&self, x: f32, y: f32) -> bool {
-        self.sequencer_open()
-            && self.sequencer_ui.progress == 1.0
-            && (hit(loop_strip_rect(), x, y) || hit(loop_all_rect(), x, y))
-    }
-
-    pub(super) fn loop_step_at(&self, x: f32) -> usize {
-        let u = &self.sequencer_ui;
-        let length = self.params.sequencer.snapshot().lanes[u.lane][u.edit_pages[u.lane]].length;
-        step_at(0, x, 0.0).min(length.saturating_sub(1) as usize)
-    }
-
-    pub(super) fn select_loop_step(&mut self, step: usize) {
-        let u = &mut self.sequencer_ui;
-        u.step = step;
-        if u.lane == 0 {
-            u.arp_step = step;
-        }
-        u.inspector = true;
-    }
-
     pub(in crate::ui) fn cancel_sequencer(&mut self) {
         self.sequencer_ui.edit = None;
-        self.sequencer_ui.box_drag = None;
         self.sequencer_ui.slider_drag = None;
         self.sequencer_ui.length_drag = None;
-        self.sequencer_ui.loop_anchor = None;
     }
 
     pub(super) fn seq_commit(&mut self, cx: &mut EventContext) -> bool {
@@ -270,22 +202,6 @@ impl ChordboardView {
             cx.release();
             return false;
         }
-        if let Some(anchor) = self.sequencer_ui.loop_anchor {
-            match event {
-                WindowEvent::MouseMove(_, _) => {
-                    let step = self.loop_step_at(x);
-                    self.set_loop(anchor, step);
-                    self.select_loop_step(step);
-                }
-                WindowEvent::MouseUp(MouseButton::Left) | WindowEvent::KeyDown(Code::Escape, _) => {
-                    self.sequencer_ui.loop_anchor = None;
-                    cx.release();
-                }
-                _ => {}
-            }
-            cx.needs_redraw();
-            return true;
-        }
         if let Some(lane) = self.sequencer_ui.length_drag {
             match event {
                 WindowEvent::MouseMove(_, _) => self.set_sequencer_length(lane, x),
@@ -323,41 +239,6 @@ impl ChordboardView {
                 _ => {}
             }
             return true;
-        }
-        if let Some((page, start, end)) = self.sequencer_ui.box_drag {
-            match event {
-                WindowEvent::MouseMove(_, _) => {
-                    let length = self.params.sequencer.snapshot().lanes[3][page].length as usize;
-                    let step = step_at(3, x, y)
-                        .min(length - 1)
-                        .max(start);
-                    let pattern = self.params.sequencer.snapshot();
-                    let spans = pattern.lanes[3][page].box_spans();
-                    let step = ((start + 1)..=step)
-                        .find(|&i| spans[i] > 0)
-                        .map_or(step, |next| next - 1);
-                    self.sequencer_ui.box_drag = Some((page, start, step));
-                    cx.needs_redraw();
-                    return true;
-                }
-                WindowEvent::MouseUp(MouseButton::Left) => {
-                    self.params
-                        .sequencer
-                        .edit(|state| state.lanes[3][page].draw_box(start, end));
-                    self.sequencer_ui.box_drag = None;
-                    self.sequencer_ui.inspector = true;
-                    cx.release();
-                    cx.needs_redraw();
-                    return true;
-                }
-                WindowEvent::KeyDown(Code::Escape, _) => {
-                    self.sequencer_ui.box_drag = None;
-                    cx.release();
-                    cx.needs_redraw();
-                    return true;
-                }
-                _ => return true,
-            }
         }
         if self.sequencer_ui.edit.is_some() {
             match event {
@@ -400,18 +281,6 @@ impl ChordboardView {
                 | WindowEvent::MouseDoubleClick(MouseButton::Left)
                 | WindowEvent::MouseTripleClick(MouseButton::Left)
         );
-        if press && self.loop_strip_hit(x, y) && hit(loop_strip_rect(), x, y) {
-            let step = self.loop_step_at(x);
-            self.set_loop(step, step);
-            self.select_loop_step(step);
-            self.sequencer_ui.loop_anchor = Some(step);
-            if self.panel.is_some() {
-                self.set_panel(None);
-            }
-            cx.capture();
-            cx.needs_redraw();
-            return true;
-        }
         if press && self.sequencer_open() {
             if let Some(lane) = VISIBLE_LANES
                 .into_iter()
@@ -445,13 +314,6 @@ impl ChordboardView {
         }
         if !self.sequencer_open() {
             return false;
-        }
-        if matches!(event, WindowEvent::KeyDown(Code::Escape, _))
-            && self.sequencer_ui.inspector
-        {
-            self.sequencer_ui.inspector = false;
-            cx.needs_redraw();
-            return true;
         }
         let u = &self.sequencer_ui;
         let arp_ready = self.arp_ready();
@@ -529,7 +391,6 @@ impl ChordboardView {
         }
         let (lane, page, index) = (u.lane, u.edit_pages[u.lane], u.step);
         match c.action {
-            Action::Tab(tab) => u.tab = tab,
             Action::Modifier(field) => u.modifier = field,
             Action::EditPage(l, p) => {
                 let param = &self.params.seq_pages[l].page;
@@ -541,7 +402,7 @@ impl ChordboardView {
                     u.edit_pages[l] = p;
                 }
                 u.lane = l;
-                u.inspector = false;
+                u.inspector = true;
                 if l == 0 {
                     u.arp_step = u
                         .arp_step
@@ -553,30 +414,6 @@ impl ChordboardView {
                     u.step
                         .min(state.lanes[l][p].length.saturating_sub(1) as usize)
                 };
-            }
-            Action::PlayPage(l) => {
-                let p = &self.params.seq_pages[l].page;
-                Self::emit(cx, p.as_ptr(), p.preview_normalized(u.edit_pages[l] as i32));
-            }
-            Action::SelectStep(3, s) => {
-                let p = &state.lanes[3][u.edit_pages[3]];
-                if let Some((start, len)) = p.box_at(s) {
-                    u.step = start;
-                    let last_visible =
-                        (start + len - 1).saturating_sub(first_step());
-                    let edge = step_rect(3, last_visible);
-                    if !edit_only && hit(edge, x, y) && x >= edge.0 + edge.2 - 7.0 {
-                        u.box_drag = Some((u.edit_pages[3], start, start + len - 1));
-                        cx.capture();
-                    }
-                    u.inspector = true;
-                } else if !edit_only {
-                    u.step = s;
-                    u.box_drag = Some((u.edit_pages[3], s, s));
-                    cx.capture();
-                }
-                u.lane = 3;
-                u.tab = 0;
             }
             Action::SelectStep(l, s) => {
                 if let Some(field) = u.modifier.filter(|_| !edit_only) {
@@ -633,10 +470,6 @@ impl ChordboardView {
                     });
                 }
             }
-            Action::LoopAll => {
-                u.loop_anchor = None;
-                self.params.sequencer.set_audition(None);
-            }
             Action::Choice(field) => {
                 self.params.sequencer.edit(|state| {
                     let p = &mut state.lanes[lane][page];
@@ -648,29 +481,12 @@ impl ChordboardView {
                                 Some(_) => None,
                             }
                         }
-                        Field::Quality => {
-                            let s = &mut p.steps[index];
-                            s.quality = if s.quality >= 11 { -1 } else { s.quality + 1 };
-                        }
-                        Field::Inversion => {
-                            let s = &mut p.steps[index];
-                            s.inversion = if s.inversion >= 5 {
-                                -1
-                            } else {
-                                s.inversion + 1
-                            };
-                        }
-                        Field::Spread => {
-                            let s = &mut p.steps[index];
-                            s.spread = if s.spread >= 4 { -1 } else { s.spread + 1 };
-                        }
                         _ => {}
                     }
                 });
             }
             Action::Field(field)
                 if is_step_value(field)
-                    && lane != 3
                     && !matches!(
                         event,
                         WindowEvent::MouseDoubleClick(_) | WindowEvent::MouseTripleClick(_)
@@ -698,33 +514,10 @@ impl ChordboardView {
                 let p = &mut state.lanes[l][u.edit_pages[l]];
                 p.enabled = !p.enabled;
             }),
-            action => {
-                self.params.sequencer.edit(|state| {
-                    let p = &mut state.lanes[lane][page];
-                    match action {
-                        Action::Enabled => p.steps[index].enabled = !p.steps[index].enabled,
-                        Action::DeleteBox => p.delete_box(index),
-                        Action::Tie => p.steps[index].tie = !p.steps[index].tie,
-                        Action::Ghosts => {
-                            for i in p.start as usize..=p.end as usize {
-                                let s = &mut p.steps[i];
-                                if !s.enabled {
-                                    s.enabled = true;
-                                    s.velocity = if (i - p.start as usize).is_multiple_of(4) {
-                                        65
-                                    } else {
-                                        38
-                                    };
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                });
-            }
-        }
-        if matches!(c.action, Action::EditPage(..) | Action::SelectStep(..)) {
-            self.release_foreign_loop();
+            Action::Enabled => self.params.sequencer.edit(|state| {
+                let p = &mut state.lanes[lane][page];
+                p.steps[index].enabled = !p.steps[index].enabled;
+            }),
         }
         cx.needs_redraw();
         true

@@ -74,6 +74,8 @@ pub struct Engine {
     pub rng: u32,
     pub tempo: f64,
     pub playing: bool,
+    pub time_sig_num: u8,
+    pub time_sig_den: u8,
 }
 impl Default for Engine {
     fn default() -> Self {
@@ -148,6 +150,8 @@ impl Default for Engine {
             rng: 0x43484f52,
             tempo: 120.0,
             playing: false,
+            time_sig_num: 4,
+            time_sig_den: 4,
         }
     }
 }
@@ -888,7 +892,18 @@ impl Engine {
             }),
             seq_steps: self.seq.steps,
             seq_running: self.seq.running,
+            time_sig_num: self.time_sig_num,
+            time_sig_den: self.time_sig_den,
         }
+    }
+    pub fn set_time_signature(&mut self, numerator: Option<i32>, denominator: Option<i32>) {
+        self.time_sig_num = numerator.unwrap_or(4).clamp(1, 32) as u8;
+        let denominator = denominator.unwrap_or(4);
+        self.time_sig_den = if denominator > 0 {
+            denominator.clamp(1, 32) as u8
+        } else {
+            4
+        };
     }
     pub(super) fn selected_root(&self) -> Option<u8> {
         let root = self.root.map(|s| s.note).or(self.memory.map(|m| m.root))? as i16

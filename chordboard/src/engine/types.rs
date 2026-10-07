@@ -276,6 +276,8 @@ pub struct Snapshot {
     pub seq_pending: [u8; 4],
     pub seq_steps: [u8; 4],
     pub seq_running: bool,
+    pub time_sig_num: u8,
+    pub time_sig_den: u8,
 }
 impl Default for Snapshot {
     fn default() -> Self {
@@ -315,6 +317,8 @@ impl Default for Snapshot {
             seq_pending: [0; 4],
             seq_steps: [0; 4],
             seq_running: false,
+            time_sig_num: 4,
+            time_sig_den: 4,
         }
     }
 }

@@ -25,29 +25,6 @@ impl ChordboardView {
         }
     }
 
-    pub(in crate::ui) fn draw_sequencer_editor(&self, d: &mut Draw) {
-        let u = &self.sequencer_ui;
-        let state = self.params.sequencer.snapshot();
-        let i = ARP_EDITOR;
-        d.rounded_rect(i.0, i.1, i.2, i.3, 8.0, PANEL);
-        d.outline(i, LINE);
-        d.text(
-            i.0 + 12.0,
-            i.1 + 24.0,
-            &format!("{} · Step {}", LANES[u.lane], u.step + 1),
-            13.0,
-            TEXT,
-        );
-        for c in self.seq_inspector_items(&state, u.tab, i, true) {
-            d.button(c.rect, &c.label, c.on, lane_color(u.lane));
-        }
-        if let Some(edit) = &u.edit {
-            if hit(i, edit.rect.0, edit.rect.1) {
-                d.value_edit(edit, TEAL);
-            }
-        }
-    }
-
     pub(in crate::ui) fn draw_arp_pattern_edit(&self, d: &mut Draw) {
         if let Some(edit) = &self.sequencer_ui.edit {
             if hit(ARP_PAD, edit.rect.0, edit.rect.1) {
@@ -102,13 +79,6 @@ impl ChordboardView {
             Action::LengthLock,
             self.params.seq_length_lock.value(),
         );
-        item(
-            &mut items,
-            loop_all_rect(),
-            "Loop all",
-            Action::LoopAll,
-            self.loop_range().is_none(),
-        );
         for lane in VISIBLE_LANES {
             let y = lane_y(lane);
             item(
@@ -153,188 +123,62 @@ impl ChordboardView {
                 );
             }
         }
-        let page = &state.lanes[3][u.edit_pages[3]];
-        let first_visible = first_step();
-        let last_visible = (first_visible + visible_steps()).min(page.length as usize);
-        for (start, len) in page
-            .box_spans()
-            .iter()
-            .copied()
-            .enumerate()
-            .filter(|(_, n)| *n > 0)
-        {
-            let first = start.max(first_visible);
-            let end = (start + len as usize).min(last_visible);
-            if first >= end {
-                continue;
-            }
-            for rect in span_rects(first, end) {
-                item(&mut items, rect, "", Action::SelectStep(3, start), true);
-            }
-        }
-        items.extend(self.seq_inspector_items(state, u.tab, inspector_rect(), true));
+        let lane = if VISIBLE_LANES.contains(&u.lane) {
+            u.lane
+        } else {
+            0
+        };
+        items.extend(self.seq_inspector_items(state, lane, inspector_rect(), true));
         items
     }
 
-    pub(super) fn seq_inspector_items(&self, state: &State, tab: usize, i: Rect, tabs: bool) -> Vec<Item> {
+    pub(super) fn seq_inspector_items(&self, state: &State, _tab: usize, _i: Rect, _tabs: bool) -> Vec<Item> {
         let u = &self.sequencer_ui;
-        let mut items = Vec::new();
-        for (index, (label, field)) in MODIFIERS.iter().enumerate() {
-            item(
-                &mut items,
-                (
-                    i.0 + 12.0 + (index % 3) as f32 * 80.0,
-                    i.1 + 64.0 + (index / 3) as f32 * 26.0,
-                    76.0,
-                    22.0,
-                ),
-                *label,
-                Action::Modifier(*field),
-                u.modifier == *field,
-            );
-        }
-        if tabs {
-            for (position, (tab, name)) in TABS.iter().enumerate().enumerate() {
-                item(
-                    &mut items,
-                    (
-                        i.0 + 12.0 + position as f32 * 120.0,
-                        i.1 + 36.0,
-                        114.0,
-                        24.0,
-                    ),
-                    *name,
-                    Action::Tab(tab),
-                    u.tab == tab,
-                );
-            }
+        let lane = if VISIBLE_LANES.contains(&u.lane) {
+            u.lane
         } else {
-            item(
-                &mut items,
-                (i.0 + 12.0, i.1 + 18.0, 180.0, 28.0),
-                TABS[tab],
-                Action::Tab(tab),
-                true,
-            );
-        }
-        let p = &state.lanes[u.lane][u.edit_pages[u.lane]];
-        let s = &p.steps[u.step];
-        let fields: Vec<(&str, Field)> = match tab {
-            0 if u.lane == 3 => vec![
-                ("Box length", Field::Span),
-                ("Root offset", Field::Root),
-                ("Quality", Field::Quality),
-                ("Inversion", Field::Inversion),
-                ("Voicing", Field::Spread),
-            ],
-            0 => {
-                let mut fields = vec![
-                    ("Gate %", Field::Gate),
-                    ("Octave", Field::Octave),
-                    ("Chance %", Field::Probability),
-                    ("Repeats", Field::Ratchets),
-                    ("Timing %", Field::Micro),
-                ];
-                if u.lane != 1 {
-                    fields.push(("Note", Field::Tone));
-                }
-                fields
-            }
-            1 => {
-                let mut fields = vec![("Loop first", Field::Start)];
-                if u.lane != 0 {
-                    fields.insert(0, ("Step beats", Field::Rate));
-                }
-                fields
-            }
-            _ => Vec::new(),
+            0
         };
-        let cols = 2;
-        let fw = (i.2 - 24.0) / cols as f32;
-        for (index, (label, field)) in fields.iter().enumerate() {
-            let rect = (
-                i.0 + 12.0 + (index % cols) as f32 * fw,
-                i.1 + 122.0 + (index / cols) as f32 * 28.0,
-                fw - 8.0,
-                24.0,
-            );
-            item(
-                &mut items,
+        let page = &state.lanes[lane][u.edit_pages[lane]];
+        let step = &page.steps[u.step.min(page.steps.len() - 1)];
+        let mut entries = Vec::new();
+        for (label, field) in MODIFIERS {
+            entries.push(((*label).to_string(), Action::Modifier(field), u.modifier == field));
+        }
+        let mut fields = vec![
+            ("Gate %", Field::Gate),
+            ("Octave", Field::Octave),
+            ("Chance %", Field::Probability),
+            ("Repeats", Field::Ratchets),
+            ("Timing %", Field::Micro),
+        ];
+        if lane != 1 {
+            fields.push(("Note", Field::Tone));
+        }
+        for (label, field) in fields {
+            entries.push((
+                format!("{label}: {}", field_value(field, page, step, u)),
+                Action::Field(field),
+                u.modifier == Some(field),
+            ));
+        }
+        entries.push((
+            if step.enabled { "Step on" } else { "Step off" }.into(),
+            Action::Enabled,
+            step.enabled,
+        ));
+        let modifiers = MODIFIERS.len();
+        let rects = header_slots(modifiers, entries.len() - modifiers);
+        entries
+            .into_iter()
+            .zip(rects)
+            .map(|((label, action, on), rect)| Item {
                 rect,
-                format!("{label}: {}", field_value(*field, p, s, u)),
-                if matches!(
-                    field,
-                    Field::Quality
-                        | Field::Inversion
-                        | Field::Spread
-                        | Field::Interlock
-                ) {
-                    Action::Choice(*field)
-                } else {
-                    Action::Field(*field)
-                },
-                u.modifier == Some(*field),
-            );
-        }
-        let y = i.1 + i.3 - 42.0;
-        match tab {
-            0 if u.lane == 3 => {
-                item(
-                    &mut items,
-                    (i.0 + 12.0, y, 120.0, 27.0),
-                    "Delete box",
-                    Action::DeleteBox,
-                    false,
-                );
-            }
-            0 => {
-                item(
-                    &mut items,
-                    (i.0 + 12.0, y, 102.0, 27.0),
-                    if s.enabled { "Step on" } else { "Step off" },
-                    Action::Enabled,
-                    s.enabled,
-                );
-                item(
-                    &mut items,
-                    (i.0 + 124.0, y, 102.0, 27.0),
-                    "Tie",
-                    Action::Tie,
-                    s.tie,
-                );
-            }
-            1 => {
-                let actions = [
-                    ("Pattern on", Action::LaneEnabled(u.lane), p.enabled),
-                    (
-                        "Play pattern",
-                        Action::PlayPage(u.lane),
-                        self.snapshot.seq_pages[u.lane] as usize == u.edit_pages[u.lane],
-                    ),
-                    ("Ghosts", Action::Ghosts, false),
-                ];
-                for (index, (label, action, on)) in actions
-                    .into_iter()
-                    .enumerate()
-                    .take(if u.lane == 3 { 2 } else { 5 })
-                {
-                    item(
-                        &mut items,
-                        (
-                            i.0 + 12.0 + (index % 2) as f32 * 120.0,
-                            y - 30.0 + (index / 2) as f32 * 30.0,
-                            114.0,
-                            27.0,
-                        ),
-                        label,
-                        action,
-                        on,
-                    );
-                }
-            }
-            _ => {}
-        }
-        items
+                label,
+                action,
+                on,
+            })
+            .collect()
     }
 
     pub(super) fn draw_sequencer_rows(&self, d: &mut Draw, state: &State) {
@@ -363,49 +207,33 @@ impl ChordboardView {
                 }
                 d.offset_x = offset + slide;
                 let page = &state.lanes[lane][page_index];
-                if lane == 3 {
-                    let visible_start = first_step();
-                    let visible_end =
-                        (visible_start + visible_steps()).min(page.length as usize);
-                    for index in visible_start..visible_end {
-                        let rect = step_rect(3, index - visible_start);
-                        d.outline(rect, alpha(COLORS[1], 0.15));
+                let beats = if lane == 0 {
+                    self.params.rate.value()
+                } else {
+                    page.rate
+                };
+                let per_bar = steps_per_bar(
+                    beats,
+                    self.snapshot.time_sig_num,
+                    self.snapshot.time_sig_den,
+                );
+                let shown = page.length as usize;
+                let mut bar = 0;
+                while bar < shown.min(visible_steps()) {
+                    let end = (bar + per_bar).min(shown).min(visible_steps());
+                    if (bar / per_bar) % 2 == 1 {
+                        let a = step_rect(lane, bar);
+                        let b = step_rect(lane, end - 1);
+                        d.rounded_rect(
+                            a.0 - 1.0,
+                            a.1 - 3.0,
+                            b.0 + b.2 - a.0 + 2.0,
+                            a.3 + 6.0,
+                            4.0,
+                            alpha(TEXT, 0.06),
+                        );
                     }
-                    for (start, len) in page
-                        .box_spans()
-                        .iter()
-                        .copied()
-                        .enumerate()
-                        .filter(|(_, n)| *n > 0)
-                    {
-                        let end = (start + len as usize).min(visible_end);
-                        let first = start.max(visible_start);
-                        if first >= end {
-                            continue;
-                        }
-                        for rect in span_rects(first, end) {
-                            d.button(rect, "", true, COLORS[1]);
-                            let last = step_rect(3, end - 1 - visible_start);
-                            if rect.1 == last.1 {
-                                d.line(
-                                    rect.0 + rect.2 - 4.0,
-                                    rect.1 + 5.0,
-                                    rect.0 + rect.2 - 4.0,
-                                    rect.1 + rect.3 - 5.0,
-                                    TEXT,
-                                    2.0,
-                                );
-                            }
-                            if u.lane == 3 && u.step == start {
-                                d.outline(rect, TEXT);
-                            }
-                        }
-                    }
-                    if let Some((_, start, end)) = u.box_drag.filter(|(p, _, _)| *p == page_index) {
-                        for rect in span_rects(start, end + 1) {
-                            d.outline(rect, GOLD);
-                        }
-                    }
+                    bar = end;
                 }
                 for visible in 0..visible_steps() {
                     let step = first_step() + visible;
@@ -421,18 +249,6 @@ impl ChordboardView {
                         0.0
                     };
                     let rect = step_rect(lane, visible);
-                    if lane == 3 {
-                        if let Some((start, _)) = page.box_at(step) {
-                            d.text_centered(
-                                rect.0 + rect.2 / 2.0,
-                                rect.1 + rect.3 / 2.0 + 4.0,
-                                &format!("{:+}", page.steps[start].root_offset),
-                                11.0,
-                                alpha(COLORS[1], number_alpha),
-                            );
-                        }
-                        continue;
-                    }
                     let c = Item {
                         rect,
                         label: (step + 1).to_string(),
@@ -557,26 +373,14 @@ impl ChordboardView {
                 );
             }
             let items = self.seq_items(&state);
-            for c in items.iter().filter(|c| {
-                !hit(ARP_EDITOR, c.rect.0, c.rect.1)
-                    && !matches!(c.action, Action::SelectStep(..))
-                    && !matches!(
-                        c.action,
-                        Action::Tab(_)
-                            | Action::Field(_)
-                            | Action::Choice(_)
-                            | Action::Enabled
-                            | Action::DeleteBox
-                            | Action::Tie
-                            | Action::Ghosts
-                    )
-            }) {
+            for c in items
+                .iter()
+                .filter(|c| !matches!(c.action, Action::SelectStep(..)))
+            {
                 let color = match c.action {
-                    Action::SelectStep(l, _)
-                    | Action::EditPage(l, _)
-                    | Action::PlayPage(l)
-                    | Action::LaneEnabled(l) => lane_color(l),
-                    Action::LoopAll => lane_color(u.lane),
+                    Action::SelectStep(l, _) | Action::EditPage(l, _) | Action::LaneEnabled(l) => {
+                        lane_color(l)
+                    }
                     _ => TEAL,
                 };
                 d.button(c.rect, &c.label, c.on, color);
@@ -596,38 +400,15 @@ impl ChordboardView {
                     }
                 }
             }
-            self.draw_loop_strip(d, &state);
             self.draw_sequencer_rows(d, &state);
+            if let Some(edit) = &u.edit {
+                if hit(r, edit.rect.0, edit.rect.1) {
+                    d.value_edit(edit, TEAL);
+                }
+            }
 
             d.offset_x = offset;
             d.reset_scissor();
-        }
-    }
-
-    pub(super) fn draw_loop_strip(&self, d: &mut Draw, state: &State) {
-        let u = &self.sequencer_ui;
-        let length = state.lanes[u.lane][u.edit_pages[u.lane]].length as usize;
-        let range = self.loop_range();
-        let color = lane_color(u.lane);
-        for step in 0..length.min(visible_steps()) {
-            let r = loop_step_rect(step);
-            let inside = range.is_some_and(|(a, b)| (a..=b).contains(&step));
-            let fill = if inside {
-                alpha(color, 0.32)
-            } else {
-                alpha(TEXT, 0.03 + d.is_hovered(r) as u8 as f32 * 0.04)
-            };
-            d.rounded_rect(r.0, r.1, r.2, r.3, 5.0, fill);
-            let edge = range.is_some_and(|(a, b)| step == a || step == b);
-            if step % 4 == 0 || edge {
-                d.text_centered(
-                    r.0 + r.2 * 0.5,
-                    r.1 + r.3 * 0.5 + 3.5,
-                    &(step + 1).to_string(),
-                    TEXT_SMALL,
-                    if inside { TEXT } else { MUTED },
-                );
-            }
         }
     }
 }

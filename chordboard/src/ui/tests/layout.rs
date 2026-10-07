@@ -337,7 +337,7 @@ fn expanded_manual_field_preserves_all_four_insets() {
     for t in [0.0, 0.25, 0.5, 0.75, 1.0] {
         assert_eq!(
             insets(pad_rect(t), play_pad_rect(t)),
-            (60.0, 75.0, 20.0, 65.0)
+            (60.0, 60.0, 20.0, 65.0)
         );
     }
 }

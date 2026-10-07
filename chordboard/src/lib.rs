@@ -429,6 +429,10 @@ impl Plugin for Chordboard {
             .configure(self.current_config(), &mut |e| emitted.push(0, e));
         self.engine
             .transport(playing, tempo, jump, &mut |e| emitted.push(0, e));
+        self.engine.set_time_signature(
+            transport.time_sig_numerator,
+            transport.time_sig_denominator,
+        );
         let axes = [self.params.x.value(), self.params.y.value()];
         for (axis, &value) in axes.iter().enumerate() {
             if value != self.last_axes[axis] {

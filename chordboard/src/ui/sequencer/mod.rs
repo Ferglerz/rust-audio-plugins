@@ -5,7 +5,7 @@ use crate::sequencer::{Page, State, Step};
 const NUMBER_HOLD: f32 = 0.5;
 const NUMBER_FADE: f32 = 0.35;
 
-const VISIBLE_LANES: [usize; 3] = [0, 1, 3];
+const VISIBLE_LANES: [usize; 2] = [0, 1];
 const LANES: [&str; 4] = ["Arp", "Chords", "Bass", "Harmony"];
 fn number_alpha(age: f32) -> f32 {
     (1.0 - (age - NUMBER_HOLD).max(0.0) / NUMBER_FADE).clamp(0.0, 1.0)
@@ -17,8 +17,6 @@ fn lane_color(lane: usize) -> Color {
         _ => COLORS[1],
     }
 }
-const TABS: [&str; 2] = ["Step", "Pattern"];
-
 pub(super) struct SequencerUi {
     pub progress: f32,
     pub edit_pages: [usize; 4],
@@ -33,13 +31,10 @@ pub(super) struct SequencerUi {
     step: usize,
     arp_step: usize,
     pub(super) inspector: bool,
-    tab: usize,
-    box_drag: Option<(usize, usize, usize)>,
     edit: Option<ValueEdit<Field>>,
     modifier: Option<Field>,
     slider_drag: Option<(usize, usize, usize, Field)>,
     length_drag: Option<usize>,
-    loop_anchor: Option<usize>,
 }
 impl Default for SequencerUi {
     fn default() -> Self {
@@ -57,20 +52,15 @@ impl Default for SequencerUi {
             step: 0,
             arp_step: 0,
             inspector: false,
-            tab: 0,
-            box_drag: None,
             edit: None,
             modifier: None,
             slider_drag: None,
             length_drag: None,
-            loop_anchor: None,
         }
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Field {
-    Span,
-    Start,
     Rate,
     Interlock,
     Velocity,
@@ -80,10 +70,6 @@ enum Field {
     Probability,
     Ratchets,
     Micro,
-    Root,
-    Quality,
-    Inversion,
-    Spread,
     Pressure,
     Timbre,
     Bend,
@@ -91,20 +77,14 @@ enum Field {
 }
 #[derive(Clone, Copy)]
 enum Action {
-    Tab(usize),
     Modifier(Option<Field>),
     EditPage(usize, usize),
-    PlayPage(usize),
     SelectStep(usize, usize),
     LengthLock,
-    LoopAll,
     Field(Field),
     Choice(Field),
     Enabled,
-    DeleteBox,
-    Tie,
     LaneEnabled(usize),
-    Ghosts,
 }
 struct Item {
     rect: Rect,
@@ -161,17 +141,38 @@ fn header_rect(x: f32, width: f32) -> Rect {
 fn lock_lengths_rect() -> Rect {
     header_rect(114.0, 104.0)
 }
-fn loop_all_rect() -> Rect {
-    header_rect(224.0, 76.0)
+/// Step settings share the header row to the right of Lock lengths.
+fn header_slots(modifiers: usize, rest: usize) -> Vec<Rect> {
+    let y = surface().1 + 8.0;
+    let height = 28.0;
+    let gap = 6.0;
+    let left = lock_lengths_rect().0 + lock_lengths_rect().2 + 8.0;
+    let right = surface().0 + surface().2 - 8.0;
+    let mod_w = 72.0;
+    let mut rects = Vec::with_capacity(modifiers + rest);
+    for index in 0..modifiers {
+        rects.push((left + index as f32 * (mod_w + gap), y, mod_w, height));
+    }
+    if rest == 0 {
+        return rects;
+    }
+    let fields_left = left + modifiers as f32 * (mod_w + gap);
+    let fields_width =
+        ((right - fields_left) - gap * (rest.saturating_sub(1) as f32)) / rest as f32;
+    for index in 0..rest {
+        rects.push((
+            fields_left + index as f32 * (fields_width + gap),
+            y,
+            fields_width.max(0.0),
+            height,
+        ));
+    }
+    rects
 }
-fn loop_step_rect(visible: usize) -> Rect {
-    let step = step_rect(0, visible);
-    (step.0, surface().1 + 10.0, step.2, 24.0)
-}
-fn loop_strip_rect() -> Rect {
-    let first = loop_step_rect(0);
-    let last = loop_step_rect(31);
-    (first.0, first.1, last.0 + last.2 - first.0, first.3)
+fn steps_per_bar(step_beats: f32, numerator: u8, denominator: u8) -> usize {
+    let bar_beats = numerator.max(1) as f32 * 4.0 / denominator.max(1) as f32;
+    let steps = (bar_beats / step_beats.max(1.0 / 64.0)).round();
+    steps.clamp(1.0, 32.0) as usize
 }
 fn first_step() -> usize {
     0
@@ -182,15 +183,6 @@ fn visible_steps() -> usize {
 fn step_at(lane: usize, x: f32, _y: f32) -> usize {
     let r = step_rect(lane, 0);
     ((x - r.0) / (r.2 + 3.0)).floor().clamp(0.0, 31.0) as usize
-}
-fn span_rects(start: usize, end: usize) -> Vec<Rect> {
-    let end = end.min(visible_steps());
-    if start >= end {
-        return Vec::new();
-    }
-    let a = step_rect(3, start);
-    let b = step_rect(3, end - 1);
-    vec![(a.0, a.1, b.0 + b.2 - a.0, a.3)]
 }
 fn inspector_rect() -> Rect {
     ARP_EDITOR
@@ -264,8 +256,6 @@ fn slider_range(field: Field) -> (f32, f32) {
 
 fn field_value(field: Field, p: &Page, s: &Step, ui: &SequencerUi) -> String {
     match field {
-        Field::Span => p.box_at(ui.step).map_or(1, |(_, len)| len).to_string(),
-        Field::Start => (p.start + 1).to_string(),
         Field::Rate => p.rate.to_string(),
         Field::Interlock => {
             p.interlock_override.map_or("Global", |v| {
@@ -285,28 +275,6 @@ fn field_value(field: Field, p: &Page, s: &Step, ui: &SequencerUi) -> String {
         Field::Probability => s.probability.to_string(),
         Field::Ratchets => s.ratchets.to_string(),
         Field::Micro => s.micro.to_string(),
-        Field::Root => s.root_offset.to_string(),
-        Field::Quality => {
-            if s.quality < 0 {
-                "Live".into()
-            } else {
-                harmony::QUALITY_NAMES[s.quality.min(11) as usize].into()
-            }
-        }
-        Field::Inversion => {
-            if s.inversion < 0 {
-                "Live".into()
-            } else {
-                ["Root", "1st", "2nd", "3rd", "4th", "5th"][s.inversion.min(5) as usize].into()
-            }
-        }
-        Field::Spread => {
-            if s.spread < 0 {
-                "Live".into()
-            } else {
-                harmony::VOICING_NAMES[s.spread.min(4) as usize].into()
-            }
-        }
         Field::Pressure => s.pressure.to_string(),
         Field::Timbre => s.timbre.to_string(),
         Field::Bend => s.bend.to_string(),
@@ -340,8 +308,6 @@ fn set_field(field: Field, text: &str, p: &mut Page, index: usize, _tone: usize)
     let n = v.round() as i32;
     let s = &mut p.steps[index];
     match field {
-        Field::Span => p.draw_box(index, index + n.clamp(1, 32) as usize - 1),
-        Field::Start => p.start = (n - 1).clamp(0, p.end as i32) as u8,
         Field::Rate => p.rate = v.clamp(1.0 / 64.0, 16.0),
         Field::Interlock => p.interlock_override = (n >= 0).then(|| n.min(2) as u8),
         Field::Velocity => s.velocity = n.clamp(0, 200) as u8,
@@ -351,10 +317,6 @@ fn set_field(field: Field, text: &str, p: &mut Page, index: usize, _tone: usize)
         Field::Probability => s.probability = n.clamp(0, 100) as u8,
         Field::Ratchets => s.ratchets = n.clamp(1, 8) as u8,
         Field::Micro => s.micro = n.clamp(-49, 49) as i16,
-        Field::Root => s.root_offset = n.clamp(-48, 48) as i8,
-        Field::Quality => s.quality = n.clamp(-1, 11) as i8,
-        Field::Inversion => s.inversion = n.clamp(-1, 5) as i8,
-        Field::Spread => s.spread = n.clamp(-1, 4) as i8,
         Field::Pressure => s.pressure = n.clamp(-127, 127) as i16,
         Field::Timbre => s.timbre = n.clamp(-127, 127) as i16,
         Field::Bend => s.bend = v.clamp(-48.0, 48.0),

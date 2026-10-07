@@ -84,50 +84,25 @@ fn sequencer_page_shows_arp_and_bass_has_no_grid_controls() {
     assert_eq!((view.sequencer_ui.lane, view.sequencer_ui.step), (1, 2));
 }
 #[test]
-fn loop_strip_auditions_steps_without_saving_and_clears_on_exit() {
+fn step_click_selects_one_step_and_selection_cannot_be_cleared() {
     let mut view = view();
     view.sequencer_ui.open = true;
     view.sequencer_ui.progress = 1.0;
     let mut context = Context::default();
     let target = Element::new(&mut context).entity();
     let mut cx = EventContext::new_with_current(&mut context, target);
-    let a = loop_step_rect(3);
-    let b = loop_step_rect(5);
-    assert!(b.1 + b.3 < step_rect(0, 5).1);
-    assert!(lock_lengths_rect().0 + lock_lengths_rect().2 < loop_all_rect().0);
-    assert!(loop_all_rect().0 + loop_all_rect().2 < a.0.min(loop_step_rect(0).0));
+    let a = step_rect(0, 3);
+    let b = step_rect(0, 5);
     let press = WindowEvent::MouseDown(MouseButton::Left);
     assert!(view.sequencer_event(&mut cx, &press, a.0 + 2.0, a.1 + 2.0));
-    view.sequencer_event(&mut cx, &WindowEvent::MouseMove(0.0, 0.0), b.0 + 2.0, b.1 + 2.0);
-    view.sequencer_event(
-        &mut cx,
-        &WindowEvent::MouseUp(MouseButton::Left),
-        b.0 + 2.0,
-        b.1 + 2.0,
-    );
-    assert_eq!(view.loop_range(), Some((3, 5)));
-    assert_eq!(view.sequencer_ui.step, 5);
-    let saved = &view.params.sequencer.snapshot().lanes[0][0];
-    assert_eq!((saved.start, saved.end), (0, 15));
-    let all = loop_all_rect();
-    assert!(view.sequencer_event(&mut cx, &press, all.0 + 2.0, all.1 + 2.0));
-    assert_eq!(view.params.sequencer.audition(), None);
-    assert!(view.sequencer_event(&mut cx, &press, a.0 + 2.0, a.1 + 2.0));
-    view.sequencer_event(&mut cx, &WindowEvent::MouseUp(MouseButton::Left), a.0, a.1);
-    let other = step_rect(1, 2);
-    view.sequencer_event(
-        &mut cx,
-        &WindowEvent::MouseDown(MouseButton::Right),
-        other.0 + 2.0,
-        other.1 + 2.0,
-    );
-    assert_eq!(view.params.sequencer.audition(), None);
-    view.sequencer_ui.lane = 0;
-    assert!(view.sequencer_event(&mut cx, &press, a.0 + 2.0, a.1 + 2.0));
-    view.sequencer_event(&mut cx, &WindowEvent::MouseUp(MouseButton::Left), a.0, a.1);
-    assert!(view.params.sequencer.audition().is_some());
+    assert_eq!((view.sequencer_ui.lane, view.sequencer_ui.step), (0, 3));
+    assert!(view.sequencer_event(&mut cx, &press, b.0 + 2.0, b.1 + 2.0));
+    assert_eq!((view.sequencer_ui.lane, view.sequencer_ui.step), (0, 5));
+    let items = view.seq_items(&view.params.sequencer.snapshot());
+    assert!(!items.iter().any(|item| item.label == "Loop all"));
+    assert!(view.sequencer_ui.step == 5);
     view.set_sequencer_open(&mut cx, false);
-    assert_eq!(view.params.sequencer.audition(), None);
+    assert_eq!(view.sequencer_ui.step, 5);
 }
 #[test]
 fn expression_modes_follow_open_sequencer_independent_of_playback() {
@@ -373,7 +348,7 @@ fn page_modulation_targets_cover_number_buttons_and_gaps_in_both_sizes() {
     let state = view.params.sequencer.snapshot();
     {
         let targets = view.sequencer_route_targets();
-        assert_eq!(targets.len(), 3);
+        assert_eq!(targets.len(), VISIBLE_LANES.len());
         let items = view.seq_items(&state);
         assert!(!items
             .iter()
@@ -444,12 +419,12 @@ fn editing_page_is_independent_and_slide_reversal_is_continuous() {
 fn arp_inspector_omits_duplicate_and_removed_controls() {
     let mut view = view();
     let state = view.params.sequencer.snapshot();
-    assert_eq!(TABS, ["Step", "Pattern"]);
-    let items = view.seq_inspector_items(&state, 1, inspector_rect(), true);
+    let items = view.seq_inspector_items(&state, 0, inspector_rect(), true);
     for removed in [
         "Name:",
         "Steps:",
         "Loop last:",
+        "Loop first:",
         "Hits:",
         "Rotation:",
         "Order:",
@@ -457,15 +432,23 @@ fn arp_inspector_omits_duplicate_and_removed_controls() {
         "Euclidean",
         "Accents",
         "Tone pool",
+        "Tie",
+        "Ghosts",
+        "Pattern",
+        "Delete box",
     ] {
         assert!(
             !items.iter().any(|item| item.label.starts_with(removed)),
             "removed control remained: {removed}"
         );
     }
-    assert!(items
-        .iter()
-        .any(|item| item.label.starts_with("Loop first:")));
+    assert!(items.iter().any(|item| item.label.starts_with("Gate %:")));
+    assert!(items.iter().any(|item| item.label == "Step on" || item.label == "Step off"));
+    let surface = surface();
+    for item in &items {
+        assert!(item.rect.1 + item.rect.3 <= step_rect(0, 0).1);
+        assert!(hit(surface, item.rect.0, item.rect.1));
+    }
     view.sequencer_ui.open = true;
     let arp = view.arp_items(&state);
     assert!(!arp.iter().any(|item| item.label == "Live pattern"));
@@ -486,7 +469,7 @@ fn raw_controller_offsets_and_finite_values() {
 }
 #[test]
 fn inspector_exposes_core_sections_without_switching_tabs() {
-    let mut view = view();
+    let view = view();
     let items = view.seq_items(&view.params.sequencer.snapshot());
     for field in [Field::Gate, Field::Tone] {
         assert!(items
@@ -499,11 +482,11 @@ fn inspector_exposes_core_sections_without_switching_tabs() {
             Field::Velocity | Field::Pressure | Field::Timbre | Field::Bend | Field::Cc(_)
         )
     )));
-    view.sequencer_ui.lane = 3;
-    let items = view.seq_items(&view.params.sequencer.snapshot());
-    assert!(!items
+    assert!(!items.iter().any(|item| item.label == "Tie" || item.label == "Ghosts"));
+    assert!(!view
+        .seq_items(&view.params.sequencer.snapshot())
         .iter()
-        .any(|item| matches!(item.action, Action::Tab(2))));
+        .any(|item| matches!(item.action, Action::LaneEnabled(3) | Action::SelectStep(3, _))));
 }
 #[test]
 fn inspector_controls_fit_in_both_sizes() {
@@ -511,15 +494,11 @@ fn inspector_controls_fit_in_both_sizes() {
     view.sequencer_ui.inspector = true;
     let state = view.params.sequencer.snapshot();
     {
-        let r = inspector_rect();
-        assert!(r.0 >= 0.0 && r.1 >= 0.0 && r.0 + r.2 <= W && r.1 + r.3 <= H);
-        for tab in 0..TABS.len() {
-            view.sequencer_ui.tab = tab;
-            for item in view.seq_inspector_items(&state, tab, r, true) {
-                if hit(r, item.rect.0, item.rect.1) {
-                    assert!(hit(r, item.rect.0 + item.rect.2, item.rect.1 + item.rect.3));
-                }
-            }
+        let s = surface();
+        for item in view.seq_inspector_items(&state, 0, inspector_rect(), true) {
+            assert!(hit(s, item.rect.0, item.rect.1));
+            assert!(hit(s, item.rect.0 + item.rect.2 - 1.0, item.rect.1 + item.rect.3 - 1.0));
+            assert!(item.rect.1 + item.rect.3 <= step_rect(0, 0).1);
         }
     }
 }
@@ -616,82 +595,21 @@ fn text_editor_releases_performance_keys_before_capturing_typing() {
     assert!(view.pressed.iter().all(|pressed| !pressed));
 }
 #[test]
-fn harmony_draw_resize_edit_delete_and_gaps() {
-    let mut view = view();
-    view.sequencer_ui.open = true;
-    view.sequencer_ui.progress = 1.0;
-    let mut context = Context::default();
-    let target = Element::new(&mut context).entity();
-    let mut cx = EventContext::new_with_current(&mut context, target);
-    let first = step_rect(3, 2);
-    let last = step_rect(3, 5);
-    assert!(view.sequencer_event(
-        &mut cx,
-        &WindowEvent::MouseDown(MouseButton::Left),
-        first.0 + 4.0,
-        first.1 + 4.0
-    ));
-    view.sequencer_event(
-        &mut cx,
-        &WindowEvent::MouseMove(0.0, 0.0),
-        last.0 + 4.0,
-        last.1 + 4.0,
-    );
-    view.sequencer_event(
-        &mut cx,
-        &WindowEvent::MouseUp(MouseButton::Left),
-        last.0 + 4.0,
-        last.1 + 4.0,
-    );
-    assert_eq!(
-        view.params.sequencer.snapshot().lanes[3][0].box_at(5),
-        Some((2, 4))
-    );
-    // Clicking inside edits without toggling or splitting the box.
-    view.sequencer_event(
-        &mut cx,
-        &WindowEvent::MouseDown(MouseButton::Left),
-        first.0 + 4.0,
-        first.1 + 4.0,
-    );
-    assert_eq!(view.sequencer_ui.step, 2);
-    assert!(view.sequencer_ui.box_drag.is_none());
-    // Right edge resizes the existing span.
-    view.sequencer_event(
-        &mut cx,
-        &WindowEvent::MouseDown(MouseButton::Left),
-        last.0 + last.2 - 2.0,
-        last.1 + 4.0,
-    );
-    let shorter = step_rect(3, 3);
-    view.sequencer_event(
-        &mut cx,
-        &WindowEvent::MouseMove(0.0, 0.0),
-        shorter.0 + 4.0,
-        shorter.1 + 4.0,
-    );
-    view.sequencer_event(
-        &mut cx,
-        &WindowEvent::MouseUp(MouseButton::Left),
-        shorter.0 + 4.0,
-        shorter.1 + 4.0,
-    );
-    let state = view.params.sequencer.snapshot();
-    assert_eq!(state.lanes[3][0].box_at(3), Some((2, 2)));
-    assert_eq!(state.lanes[3][0].box_at(4), None);
-    let delete = view
-        .seq_items(&state)
-        .into_iter()
-        .find(|c| matches!(c.action, Action::DeleteBox))
-        .unwrap()
-        .rect;
-    view.sequencer_event(
-        &mut cx,
-        &WindowEvent::MouseDown(MouseButton::Left),
-        delete.0 + 4.0,
-        delete.1 + 4.0,
-    );
-    assert_eq!(view.params.sequencer.snapshot().lanes[3][0].box_at(2), None);
+fn host_meter_groups_quarter_and_sixteenth_steps_into_bars() {
+    assert_eq!(steps_per_bar(0.25, 4, 4), 16);
+    assert_eq!(steps_per_bar(1.0, 4, 4), 4);
+    assert_eq!(steps_per_bar(1.0, 3, 4), 3);
+    assert_eq!(steps_per_bar(1.0, 6, 8), 3);
+}
+#[test]
+fn harmony_row_is_absent_from_the_sequencer() {
+    let view = view();
+    let items = view.seq_items(&view.params.sequencer.snapshot());
+    assert!(!items.iter().any(|item| matches!(
+        item.action,
+        Action::LaneEnabled(3) | Action::EditPage(3, _) | Action::SelectStep(3, _)
+    )));
+    assert_eq!(VISIBLE_LANES, [0, 1]);
 }
 #[test]
 fn note_click_toggles_and_right_click_only_selects() {

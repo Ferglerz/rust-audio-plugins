@@ -179,6 +179,34 @@ fn memory_shortcuts_capture_with_shift_and_do_not_interrupt_text_entry() {
     assert!(view.bridge.commands.pop().is_none());
 }
 #[test]
+fn bound_lines_drag_as_well_as_their_tags() {
+    let mut view = view(2, false);
+    let (mut cx, target, changes) = context();
+    let x = PLAY_PAD.0 + PLAY_PAD.2 * 0.5;
+    let y = PLAY_PAD.1;
+    event(
+        &mut view,
+        &mut cx,
+        target,
+        x,
+        y,
+        WindowEvent::MouseDown(MouseButton::Left),
+    );
+    assert!(matches!(view.drag, Some(Drag::StrumBound(true, true))));
+    let moved = PLAY_PAD.1 + PLAY_PAD.3 * 0.4;
+    event(
+        &mut view,
+        &mut cx,
+        target,
+        x,
+        moved,
+        WindowEvent::MouseMove(x, moved),
+    );
+    let (ptr, norm) = changes.borrow().last().copied().unwrap();
+    assert_eq!(ptr, view.params.y_max.as_ptr());
+    assert!((view.params.y_max.preview_plain(norm) - 0.6).abs() < 0.02);
+}
+#[test]
 fn expression_range_grips_drag_vertically_without_playing_notes() {
     for (maximum, destination, expected) in [(false, 2.0, 0.99), (true, -1.0, 0.01)] {
         let mut view = view(2, false);

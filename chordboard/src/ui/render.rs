@@ -149,14 +149,9 @@ impl ChordboardView {
         let hint = if self.sequencer_open()
             && self
                 .hover_pointer()
-                .is_some_and(|(x, y)| y >= PIANO_SURFACE.1 && !self.loop_strip_hit(x, y))
+                .is_some_and(|(_, y)| y >= PIANO_SURFACE.1)
         {
-            Some("Steps: click hit/rest · Right-click: select · Value mode: drag/swipe, wheel, Cmd-click reset · Double-click a value to type".into())
-        } else if self
-            .hover_pointer()
-            .is_some_and(|(x, y)| self.loop_strip_hit(x, y))
-        {
-            Some("Click a step to loop it while editing · Drag to loop adjacent steps · Loop all returns to the full pattern · Not saved".into())
+            Some("Click a step to select it · Click again to toggle hit/rest · Right-click selects without toggling · One step stays selected".into())
         } else {
             self.hover_hint(if self.panel.is_some() {
                 &panel_controls

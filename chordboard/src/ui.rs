@@ -775,6 +775,7 @@ impl ChordboardView {
             return None;
         }
         let play = self.play_pad();
+        let mut line: Option<(bool, bool, f32)> = None;
         for y_axis in [false, true] {
             let (min, max) = if y_axis {
                 expression_bounds(self.params.y_min.value(), self.params.y_max.value())
@@ -786,9 +787,25 @@ impl ChordboardView {
                 if pleasant_ui::tag_contains(ax, ay, pointer, x, y) {
                     return Some((y_axis, right));
                 }
+                // The guide line is the control; the tag is only its handle.
+                const SLACK: f32 = 8.0;
+                let (distance, along) = if y_axis {
+                    (
+                        (y - ay).abs(),
+                        x >= play.0 - SLACK && x <= play.0 + play.2 + SLACK,
+                    )
+                } else {
+                    (
+                        (x - ax).abs(),
+                        y >= play.1 - SLACK && y <= play.1 + play.3 + SLACK,
+                    )
+                };
+                if along && distance <= SLACK && line.is_none_or(|(_, _, best)| distance < best) {
+                    line = Some((y_axis, right, distance));
+                }
             }
         }
-        None
+        line.map(|(y_axis, right, _)| (y_axis, right))
     }
     fn can_pad_hover(&self) -> bool {
         self.manual_playing()

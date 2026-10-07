@@ -27,7 +27,8 @@ const fn field_latch(pad: Rect) -> Rect {
     (corner.0 - 96.0, corner.1, 88.0, 28.0)
 }
 const fn manual_field_inset(pad: Rect) -> Rect {
-    (pad.0 + 60.0, pad.1 + 75.0, pad.2 - 80.0, pad.3 - 140.0)
+    // Top inset matches the left inset so the graph fills the spare band under the header.
+    (pad.0 + 60.0, pad.1 + 60.0, pad.2 - 80.0, pad.3 - 125.0)
 }
 pub(super) const ARP_MAIN_WIDTH: f32 = 612.0;
 pub(super) const ARP_PAD: Rect = (32.0, 136.0, 892.0, 358.0);

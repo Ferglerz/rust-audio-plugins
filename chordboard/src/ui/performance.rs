@@ -372,7 +372,6 @@ impl ChordboardView {
             }
         }
         self.draw_arp_pattern_edit(d);
-        self.draw_sequencer_editor(d);
     }
     pub(super) fn draw_pad(&self, d: &mut Draw, mode: i32) {
         let pad = self.pad();
