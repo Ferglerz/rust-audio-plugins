@@ -39,3 +39,15 @@ These checks cover the interface. The user-operated checks below remain necessar
 13. Save a host preset and the host project. Reload each and verify chord slots, learned mappings, control zone, inversion, filter and MPE settings. Repeat in both CLAP and VST3 where the host exposes MIDI output.
 
 Record host/version, plugin format, destination patch and MIDI configuration with any failure. Hardware acceptance is not represented as complete until performed with the actual Osmose.
+
+## Sequencer acceptance
+
+Run `cargo check -p chordboard`, `cargo test -p chordboard --quiet`, and `cargo clippy -p chordboard` for the sequencer engine change. Build and install with `chordboard/scripts/install.sh`, then run `python3 chordboard/scripts/verify-clap.py ~/Library/Audio/Plug-Ins/CLAP/Chordboard.clap --sequencer`. The headless check verifies stored patterns through the actual CLAP state interface, relative harmony/bass output, exact first/second step timing, signed CC offsets, panic, persistence, and old-preset fallback.
+
+- Inspect compact/expanded editors at the current 1621 × 840 design size, both appearances and scaled windows. Verify the bottom piano slides away, four lane rows remain aligned, selected-step text stays legible, and zoom/close return to the piano.
+- Enable sequencing: expression step-edit buttons must appear above matching modulators, select the correct field/CC track, open the editor, and toggle back to Steps on a second click. Disable sequencing: those buttons must disappear. Check reassigned CC tracks and normal modulator routing.
+- Click each numbered page button during playback: it must select the editing page and request playback for only that lane at its next step boundary, preserving phase. Request a page from the Pattern inspector, from a memory, and by dragging a modulator onto the whole 1–8 row (including gaps); check base/effective/pending indicators and next-step phase wrapping at differing lengths and rates.
+- Edit and name inactive pages while another page plays: timing and ringing notes must continue. Check each generator, tone mute versus skip, ratchets, probability, rests, ties, gate, and microtiming. Focus loss/Escape discard uncommitted text; typing must not play QWERTY notes.
+- Program relative Harmony steps, held empty steps, and Live resets; change the played chord without accumulating offsets. Strum alongside sequencing without enabling a separate Manual Strum toggle; verify the shared harmony and independent note releases.
+- Check pressure, timbre, CC offsets, and semitone bends on an MPE destination and regular MIDI destination. Neutral steps must not emit an unknown CC11 baseline of zero. Live controller changes must retain step offsets without feeding them into the next baseline.
+- Save/reload presets and projects. Old mode automation must retain its original mapping. State replacement, stop/seek, panic, and voice exhaustion must leave no stuck notes. DAW and hardware checks remain user-operated.

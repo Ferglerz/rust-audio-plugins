@@ -43,19 +43,46 @@ impl Engine {
             if !self.output_owned(v.channel, v.note) {
                 out(Out::Off(v.channel, v.note, release));
             }
+            if let Some(expression) = v.seq_expression {
+                if !self.melody_channel(v.channel) {
+                    let remaining = self.newest_voice(v.channel);
+                    let next = remaining.and_then(|voice| voice.seq_expression);
+                    self.restore_step_cc(v.channel, expression, next, out);
+                    if let Some(voice) = remaining {
+                        if let Some(next) = voice.seq_expression {
+                            self.emit_step_expression(v.channel, next, out);
+                        } else {
+                            self.emit_expression(v.channel, out);
+                        }
+                    }
+                }
+            }
         }
     }
     pub(super) fn stop_voices(&mut self, release: f32, out: &mut impl FnMut(Out)) {
-        for i in 0..15 {
+        for i in 0..self.voices.len() {
             self.end_voice(i, release, out);
         }
     }
+    pub(super) fn newest_voice(&self, channel: u8) -> Option<Voice> {
+        self.voices
+            .iter()
+            .enumerate()
+            .filter_map(|(i, v)| v.filter(|v| v.channel == channel).map(|v| (i, v)))
+            .max_by_key(|(i, v)| (v.started, *i))
+            .map(|(_, v)| v)
+    }
     pub(super) fn fan_expression(&self, out: &mut impl FnMut(Out)) {
-        let mut sent = [false; 16];
-        for v in self.voices.iter().flatten() {
-            if !sent[v.channel as usize] && !self.melody_channel(v.channel) {
-                self.emit_expression(v.channel, out);
-                sent[v.channel as usize] = true;
+        for channel in 0..16 {
+            if self.melody_channel(channel) {
+                continue;
+            }
+            if let Some(v) = self.newest_voice(channel) {
+                if let Some(expression) = v.seq_expression {
+                    self.emit_step_expression(channel, expression, out);
+                } else {
+                    self.emit_expression(channel, out);
+                }
             }
         }
     }
@@ -139,15 +166,15 @@ impl Engine {
             .voices
             .iter_mut()
             .flatten()
-            .find(|v| v.note == note && v.layer)
+            .find(|v| v.note == note && v.layer && v.owner == 0)
         {
             // A shared sustained note must never receive a premature Note Off.
             voice.off = off;
             self.mark_strike(note);
             return;
         }
-        for i in 0..15 {
-            if self.voices[i].is_some_and(|v| v.note == note) {
+        for i in 0..self.voices.len() {
+            if self.voices[i].is_some_and(|v| v.note == note && v.owner == 0) {
                 self.end_voice(i, 0.0, out);
             }
         }
@@ -162,12 +189,27 @@ impl Engine {
         layer: bool,
         out: &mut impl FnMut(Out),
     ) {
+        self.allocate_owned_voice(note, velocity, off, layer, 0, None, out);
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn allocate_owned_voice(
+        &mut self,
+        note: u8,
+        velocity: f32,
+        off: u64,
+        layer: bool,
+        owner: u8,
+        seq_expression: Option<sequencer::StepExpression>,
+        out: &mut impl FnMut(Out),
+    ) {
         if self.config.affect_chords && self.melody.iter().any(|notes| notes[note as usize]) {
             return;
         }
         self.setup(out);
         let capacity = if self.config.mpe {
             self.config.members.clamp(1, 15) as usize
+        } else if self.config.mode == SEQUENCER {
+            self.voices.len()
         } else {
             15
         };
@@ -191,9 +233,17 @@ impl Engine {
             return;
         };
         self.end_voice(index, 0.0, out);
-        let channel = self.member(index);
+        let channel = if !self.config.mpe && owner == 3 {
+            self.config.bass_channel
+        } else {
+            self.member(index)
+        };
         if !self.melody_channel(channel) {
-            self.emit_expression(channel, out);
+            if let Some(expression) = seq_expression {
+                self.emit_step_expression(channel, expression, out);
+            } else {
+                self.emit_expression(channel, out);
+            }
         }
         if !self.output_owned(channel, note) {
             out(Out::On(channel, note, velocity.clamp(0.01, 1.0)));
@@ -204,6 +254,8 @@ impl Engine {
             started: self.now,
             off,
             layer,
+            owner,
+            seq_expression,
         });
     }
     fn mark_strike(&mut self, note: u8) {
@@ -291,7 +343,7 @@ impl Engine {
         self.x = value;
         let count = self.config.strings.clamp(3, 12) as i16;
         let location = value * (count - 1) as f32;
-        if !self.x_primed || self.config.mode != MANUAL || self.notes.len == 0 {
+        if !self.x_primed || !self.manual_active() || self.notes.len == 0 {
             self.last_string = location.round() as i16;
             self.x_primed = true;
             return;
@@ -354,6 +406,7 @@ impl Engine {
                 .chain(self.scheduled.iter().flatten().map(|event| event.at))
                 // The arp clock and RNG also advance in the other modes.
                 .chain((self.notes.len > 0).then_some(self.arp_next))
+                .chain(self.sequencer_deadline())
                 .min()
                 .unwrap_or(u64::MAX);
             // Stop at MAX even when idle: tick owns the wrapping clock and
@@ -371,11 +424,12 @@ impl Engine {
     }
 
     pub fn tick(&mut self, out: &mut impl FnMut(Out)) {
-        for i in 0..15 {
+        for i in 0..self.voices.len() {
             if self.voices[i].is_some_and(|v| !v.layer && v.off <= self.now) {
                 self.end_voice(i, 0.0, out);
             }
         }
+        self.tick_sequencer(out);
         if self.notes.len > 0 && self.now >= self.arp_next {
             // Keep the clock moving while another performance mode is selected.
             // A new range/pattern takes effect only after the old cycle completes.

@@ -109,6 +109,7 @@ impl ChordboardView {
         targets.extend((0..KEY_COUNT).map(|i| (self.keyboard_key_rect(i), false)));
         targets.extend((0..8).map(|i| (memory_rect(i), self.memory_ui.armed)));
         targets.push((BASS_BYPASS, !self.params.bass_enabled.value()));
+        targets.push((INTERLOCK, self.params.interlock.value() != 0));
         targets.push((PIANO_LEADING, self.params.voice_leading.value() != 2));
         targets.push((self.split_marker(), false));
         if let Some(r) = self.bass_marker() {
@@ -118,26 +119,20 @@ impl ChordboardView {
             affect_chords_rect(self.params.mpe_enabled()),
             self.params.affect_chords.value(),
         ));
-        targets.extend((0..3).map(|i| {
-            (
-                output_protocol_rect(self.params.mpe_enabled(), i),
-                self.params.output_mode.value() == i as i32,
-            )
-        }));
+        targets.push((
+            output_protocol_rect(self.params.mpe_enabled(), 0),
+            self.params.mpe_enabled(),
+        ));
         targets
             .extend((0..2).map(|i| (inversion_control_rect(self.params.mpe_enabled(), i), false)));
         targets
             .extend((0..5).map(|i| (transpose_control_rect(self.params.mpe_enabled(), i), false)));
-        targets.extend((0..MODE_LABELS.len()).map(|i| {
-            (
-                mode_rect(i),
-                if i == 0 {
-                    self.mode() != 2
-                } else {
-                    self.mode() == 2
-                },
-            )
-        }));
+        targets.push((HEADER_PLAY_TAB, !self.sequencer_open()));
+        targets.push((HEADER_SEQ_TAB, self.sequencer_open()));
+        targets.push((
+            strum_bypass_rect(self.expand_t()),
+            self.params.strum_enabled.value(),
+        ));
         if self.arp_main() {
             targets.extend(
                 [false, true].map(|looping| (repeat_rect(looping), (self.mode() == 3) == looping)),
@@ -176,7 +171,7 @@ impl ChordboardView {
                     (0..4).map(|i| (octave_rect(i), self.params.octaves.value() == i as i32 + 1)),
                 );
             }
-            2 => targets.push((
+            2 | 4 => targets.push((
                 strum_latch_rect(self.expand_t()),
                 self.params.strum_latch.value(),
             )),

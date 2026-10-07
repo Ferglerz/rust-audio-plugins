@@ -148,11 +148,13 @@ impl Engine {
                 for (i, voice) in displaced.into_iter().enumerate() {
                     if let Some(voice) = voice.filter(|v| v.channel == channel) {
                         self.end_voice(i, 0.0, out);
-                        self.allocate_voice(
+                        self.allocate_owned_voice(
                             voice.note,
                             self.strike_velocity(),
                             voice.off,
                             voice.layer,
+                            voice.owner,
+                            voice.seq_expression,
                             out,
                         );
                     }

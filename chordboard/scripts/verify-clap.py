@@ -2,9 +2,10 @@
 """Small CLAP ABI integration test; no DAW, audio device, or external packages.
 
 Declarations follow the clap-sys ABI used by the workspace's NIH-plug.
-Usage: python3 chordboard/scripts/verify-clap.py /path/to/Chordboard.clap [--held-chord]
+Usage: python3 chordboard/scripts/verify-clap.py /path/to/Chordboard.clap [--held-chord | --sequencer]
 """
 import ctypes as C
+import json
 import pathlib
 import sys
 
@@ -38,6 +39,12 @@ class Factory(C.Structure):
     _fields_ = [('count',F(U,P)),('descriptor',F(P,P,U)),('create',F(P,P,C.POINTER(Host),C.c_char_p))]
 class ParamInfo(C.Structure):
     _fields_ = [('id',U),('flags',U),('cookie',P),('name',C.c_char*256),('module',C.c_char*1024),('minimum',D),('maximum',D),('default',D)]
+class InputStream(C.Structure):
+    _fields_ = [('ctx',P),('read',F(C.c_int64,P,P,C.c_uint64))]
+class OutputStream(C.Structure):
+    _fields_ = [('ctx',P),('write',F(C.c_int64,P,P,C.c_uint64))]
+class StateExtension(C.Structure):
+    _fields_ = [('save',F(B,P,C.POINTER(OutputStream))),('load',F(B,P,C.POINTER(InputStream)))]
 class Params(C.Structure):
     _fields_ = [('count',F(U,P)),('info',F(B,P,U,C.POINTER(ParamInfo))),('value',P),('to_text',P),('from_text',P),('flush',F(None,P,C.POINTER(InEvents),C.POINTER(OutEvents)))]
 
@@ -74,6 +81,27 @@ class Harness:
         self.time=0
     def close(self):
         self.plugin.stop(self.ptr);self.plugin.deactivate(self.ptr);self.plugin.destroy(self.ptr);self.entry.deinit()
+    def save_state(self):
+        extension=C.cast(self.plugin.extension(self.ptr,b'clap.state'),C.POINTER(StateExtension)).contents
+        chunks=[]
+        def write(_,data,size):
+            chunks.append(C.string_at(data,size));return size
+        stream=OutputStream(None,F(C.c_int64,P,P,C.c_uint64)(write))
+        assert extension.save(self.ptr,C.byref(stream))
+        blob=b''.join(chunks)
+        assert int.from_bytes(blob[:8],'little')==len(blob)-8
+        return json.loads(blob[8:])
+    def load_state(self,state):
+        self.plugin.stop(self.ptr);self.plugin.deactivate(self.ptr)
+        extension=C.cast(self.plugin.extension(self.ptr,b'clap.state'),C.POINTER(StateExtension)).contents
+        payload=json.dumps(state).encode();blob=len(payload).to_bytes(8,'little')+payload;offset=0
+        def read(_,dest,size):
+            nonlocal offset
+            chunk=blob[offset:offset+size];C.memmove(dest,chunk,len(chunk));offset+=len(chunk);return len(chunk)
+        stream=InputStream(None,F(C.c_int64,P,P,C.c_uint64)(read))
+        assert extension.load(self.ptr,C.byref(stream))
+        assert self.plugin.activate(self.ptr,48000.,1,512);assert self.plugin.start(self.ptr)
+        self.time=0
     def parameter(self,name,value,time=0):
         return ParamEvent(Header(C.sizeof(ParamEvent),time,0,5,0),self.ids[name],None,-1,-1,-1,-1,value)
     def run(self,events=(),frames=256):
@@ -263,10 +291,54 @@ def run_split_tests(path):
             h.close()
     print('CLAP split controls passed: melody passthrough, sustained bass/full chord, last-right-key gate, latch replacement, and overflow recovery.')
 
+def run_sequencer_tests(path):
+    h=Harness(path)
+    try:
+        state=h.save_state()
+        assert state['params']['mode']=={'i32':1},'legacy play-mode default changed'
+        patterns=json.loads(state['fields']['sequencer-v1'])
+        # Two-step arp, independent bass/chord rhythms, and a relative harmony step.
+        for lane in range(4):
+            page=patterns['lanes'][lane][0];page['length']=2;page['end']=1
+        arp=patterns['lanes'][0][0]
+        arp['steps'][0]['tone']=0;arp['steps'][1]['tone']=1
+        arp['steps'][0]['pressure']=20;arp['steps'][0]['cc'][0]=-10
+        patterns['lanes'][2][0]['steps'][0].update(enabled=True,octave=-1)
+        patterns['lanes'][1][0]['steps'][1].update(enabled=True,velocity=75)
+        patterns['lanes'][3][0]['steps'][0].update(enabled=True,root_offset=2)
+        state['fields']['sequencer-v1']=json.dumps(patterns)
+        state['params']['seq_enabled']={'bool':True}
+        state['params']['output_mode']={'i32':2}
+        h.load_state(state)
+        events=h.run([midi(16,0x90,60,100)])
+        on={(e[2],e[3]) for e in events if e[0]=='on'}
+        assert (0,62) in on and (0,50) in on,('relative harmony/bass wrong',on)
+        assert all(e[1]==16 for e in events if e[0]=='on'),'first step timing shifted'
+        assert any(e[0]=='midi' and e[2]==0xb0 and e[3:]==(11,117) for e in events),'raw CC offset wrong'
+        all_events=[]
+        for _ in range(25):
+            origin=h.time;all_events.extend((origin+e[1],e) for e in h.run(frames=256))
+        assert any(at==6016 and e[0]=='on' and e[3]==66 for at,e in all_events),'second step phase wrong'
+        restored=h.save_state()
+        assert json.loads(restored['fields']['sequencer-v1'])==patterns,'sequencer state roundtrip changed'
+        # Existing MIDI panic and state replacement must release all lane ownership.
+        events=h.run([midi(0,0xb0,123,0)])
+        assert any(e[0]=='off' for e in events),'panic left sequencer notes owned'
+        for _ in range(25):
+            assert not any(e[0]=='on' for e in h.run()),'panic restarted an idle sequencer'
+        legacy=restored;legacy['fields'].pop('sequencer-v1');legacy['params']['seq_enabled']={'bool':True}
+        h.load_state(legacy)
+        assert h.save_state()['params']['seq_enabled']=={'bool':False},'legacy state enabled sequencing'
+        print('CLAP sequencer passed: relative harmony, independent lanes, exact timing, raw CC offsets, persistence, panic, and legacy fallback.')
+    finally:
+        h.close()
+
 if __name__=='__main__':
     path=pathlib.Path(sys.argv[1]).expanduser().resolve()
     if path.is_dir():path=path/'Contents'/'MacOS'/'Chordboard'
-    if '--split-controls' in sys.argv[2:]:
+    if '--sequencer' in sys.argv[2:]:
+        run_sequencer_tests(path)
+    elif '--split-controls' in sys.argv[2:]:
         run_split_tests(path)
     elif '--strum-controls' in sys.argv[2:]:
         run_strum_tests(path)

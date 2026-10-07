@@ -69,13 +69,7 @@ impl ChordboardView {
 
     pub(super) fn draw_chords(&self, d: &mut Draw) {
         d.font = self.ui_font.get();
-        d.text(
-            CHORDS_SURFACE.0 + 10.0,
-            module_title_y(CHORDS_SURFACE.1, MODULE_TITLE_SIZE),
-            "CHORDS",
-            MODULE_TITLE_SIZE,
-            TEXT,
-        );
+        self.draw_chord_page_title(d, "CHORDS");
         d.rect(TRANSPOSE.0, TRANSPOSE.1, TRANSPOSE.2, TRANSPOSE.3, LINE);
         let transpose = self
             .routed_plain("transpose")
@@ -144,7 +138,14 @@ impl ChordboardView {
             1.5,
         );
         d.font = self.bold_font.get();
-        d.text_centered(LATCH.0 + LATCH.2 * 0.5, LATCH.1 + 36.0, "Latch", 16.0, GOLD);
+        d.text_centered(LATCH.0 + LATCH.2 * 0.5, LATCH.1 + 28.0, "Latch", 16.0, GOLD);
+        d.text_centered(
+            LATCH.0 + LATCH.2 * 0.5,
+            LATCH.1 + 45.0,
+            "Shift",
+            10.0,
+            MUTED,
+        );
         d.font = self.ui_font.get();
         d.text_centered(
             LATCH.0 + LATCH.2 * 0.5,

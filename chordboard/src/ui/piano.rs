@@ -197,15 +197,14 @@ impl ChordboardView {
                 return true;
             }
         }
-        for i in 0..3 {
-            if hit(output_protocol_rect(self.params.mpe_enabled(), i), x, y) {
-                Self::emit(
-                    cx,
-                    self.params.output_mode.as_ptr(),
-                    self.params.output_mode.preview_normalized(i as i32),
-                );
-                return true;
-            }
+        if hit(output_protocol_rect(self.params.mpe_enabled(), 0), x, y) {
+            let mode = if self.params.mpe_enabled() { 2 } else { 1 };
+            Self::emit(
+                cx,
+                self.params.output_mode.as_ptr(),
+                self.params.output_mode.preview_normalized(mode),
+            );
+            return true;
         }
         for (c, r) in self.keyboard_controls() {
             if hit(r, x, y) {
@@ -288,6 +287,15 @@ impl ChordboardView {
                 self.params.split_note.as_ptr(),
             ));
             self.set_split_at(cx, x, y);
+            return true;
+        }
+        if hit(INTERLOCK, x, y) {
+            let param = &self.params.interlock;
+            Self::emit(
+                cx,
+                param.as_ptr(),
+                param.preview_normalized((param.value() + 1) % 3),
+            );
             return true;
         }
         if hit(PIANO_LEADING, x, y) {
@@ -407,6 +415,12 @@ impl ChordboardView {
                 parts.push("Chord voicing".into());
             }
             return Some(parts.join(" · "));
+        }
+        if hit(INTERLOCK, x, y) {
+            return Some(
+                "Interlock: arp strikes that land on a chord strike · Avoid chords softens and shortens them · Match chords accents them · Works with every voice-leading mode · An Arp sequencer page can override it"
+                    .into(),
+            );
         }
         if hit(PIANO_LEADING, x, y) {
             let from = self.snapshot.leading_from;
@@ -589,6 +603,7 @@ impl ChordboardView {
         }
         // Paths land on the keys; split handles and their rails paint over them.
         self.draw_piano_leading(d);
+        self.draw_interlock(d);
         let control_rect = self.control_octave_bounds();
         let control_hover = self
             .hover_pointer()
@@ -818,6 +833,21 @@ impl ChordboardView {
         }
     }
 
+    fn draw_interlock(&self, d: &mut Draw) {
+        let value = self.params.interlock.value();
+        d.rounded_rect(INTERLOCK.0, INTERLOCK.1, INTERLOCK.2, INTERLOCK.3, 6.0, PANEL);
+        self.button(
+            d,
+            INTERLOCK,
+            &format!(
+                "Interlock: {}",
+                crate::params::INTERLOCK_NAMES[value.clamp(0, 2) as usize]
+            ),
+            value != 0,
+            COLORS[1],
+        );
+    }
+
     fn draw_piano_leading(&self, d: &mut Draw) {
         let leading_y = PIANO_LEADING.1 + PIANO_LEADING.3 * 0.5;
         let from = self.snapshot.leading_from;
@@ -866,7 +896,7 @@ impl ChordboardView {
             );
 
             let label = ["Nearest", "Furthest", "Off"][mode.clamp(0, 2) as usize];
-            let cx = (x + width + 64.0).min(PIANO_LEADING.0 + PIANO_LEADING.2 - 54.0);
+            let cx = (x + width + 64.0).min(INTERLOCK.0 - 62.0);
             d.rounded_rect(cx - 54.0, PIANO_LEADING.1 + 6.0, 108.0, 16.0, 3.0, BG);
             d.outline_rounded(
                 cx - 54.0,
@@ -966,14 +996,13 @@ impl ChordboardView {
 
         // ── Controls inside containers ─────────────────────────────────────────
         // Protocol / MPE button goes in the Chord container
-        for (i, label) in ["Auto", "MPE", "MIDI"].iter().enumerate() {
-            self.button(
-                d,
-                output_protocol_rect(self.params.mpe_enabled(), i),
-                label,
-                self.params.output_mode.value() == i as i32,
-                COLORS[1],
-            );
+        let mpe = self.params.mpe_enabled();
+        let r = output_protocol_rect(mpe, 0);
+        self.button(d, r, if mpe { "MPE on" } else { "MPE off" }, mpe, COLORS[1]);
+        if !mpe && self.params.detected_mpe.load(Ordering::Relaxed) {
+            let pulse = 0.45 + 0.55 * self.mpe_pulse.sin().abs();
+            d.outline(r, alpha(GOLD, pulse));
+            d.text(r.0 + r.2 - 18.0, r.1 + 19.0, "!", 15.0, GOLD);
         }
 
         // Channel/mode controls from keyboard_controls()

@@ -205,6 +205,7 @@ impl Engine {
         }
         let raw = (value.clamp(0.0, 1.0) * 127.0).round() as u8;
         self.cc[channel as usize][cc as usize] = raw;
+        self.cc_known[channel as usize][cc as usize] = true;
         if (32..64).contains(&cc) {
             self.cc_lsb_seen[channel as usize] |= 1 << (cc - 32);
         }
@@ -244,6 +245,7 @@ impl Engine {
             121 => {
                 self.cc_lsb_seen[channel as usize] = 0;
                 self.cc[channel as usize].fill(0);
+                self.cc_known[channel as usize].fill(false);
                 self.bass_pedal(channel, false, out);
                 self.channels[channel as usize] = Expression::default();
                 self.input_bend_values[channel as usize] = 0.5;
@@ -303,6 +305,35 @@ impl Engine {
                 };
                 self.position(value, axis, out);
                 mapped = true;
+            }
+        }
+        if self.config.mode == SEQUENCER && crate::sequencer::valid_cc(cc) {
+            let source = self
+                .root
+                .filter(|s| s.channel < 16)
+                .map_or(self.input_master(), |s| s.channel);
+            if source == channel {
+                let mut sent = [false; 16];
+                for output in 0..16 {
+                    if self.melody_channel(output) {
+                        continue;
+                    }
+                    if let Some(expression) =
+                        self.newest_voice(output).and_then(|v| v.seq_expression)
+                    {
+                        if let Some(i) = expression.numbers.iter().position(|&n| n == cc) {
+                            out(Out::Cc(
+                                output,
+                                cc,
+                                ((raw as i16 + expression.cc[i]) as f32 / 127.0).clamp(0.0, 1.0),
+                            ));
+                            sent[output as usize] = true;
+                        }
+                    }
+                }
+                if sent[self.master() as usize] {
+                    return;
+                }
             }
         }
         if mapped {

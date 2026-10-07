@@ -231,7 +231,7 @@ impl ChordboardView {
             ] {
                 Self::emit(cx, param.as_ptr(), param.preview_normalized(value));
             }
-            self.bridge.send(Command::Recall(word));
+            self.bridge.send(Command::RecallMemory(slot, word));
             self.status = format!("Recalled slot {}", slot + 1);
         }
     }

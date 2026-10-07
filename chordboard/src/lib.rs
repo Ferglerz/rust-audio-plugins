@@ -3,6 +3,7 @@ mod bridge;
 pub mod engine;
 pub mod harmony;
 pub mod params;
+pub mod sequencer;
 mod ui;
 use bridge::Bridge;
 use engine::{Engine, Out};
@@ -270,6 +271,15 @@ impl Chordboard {
 impl Plugin for Chordboard {
     fn filter_state(state: &mut PluginState) {
         use nih_plug::wrapper::state::ParamValue;
+        if !state.fields.contains_key("sequencer-v1") {
+            state.fields.insert(
+                "sequencer-v1".into(),
+                serde_json::to_string(&sequencer::State::default()).unwrap_or_default(),
+            );
+            state
+                .params
+                .insert("seq_enabled".into(), ParamValue::Bool(false));
+        }
         state
             .params
             .entry("bass_split".into())
@@ -400,6 +410,21 @@ impl Plugin for Chordboard {
                 }
             }
         }
+        let mut sequence_updated = false;
+        for _ in 0..2 {
+            if !self
+                .params
+                .sequencer
+                .apply_pending(&mut self.engine.seq.data)
+            {
+                break;
+            }
+            sequence_updated = true;
+        }
+        if sequence_updated {
+            self.engine
+                .accept_sequence_generation(&mut |e| emitted.push(0, e));
+        }
         self.engine
             .configure(self.current_config(), &mut |e| emitted.push(0, e));
         self.engine
@@ -512,6 +537,11 @@ mod protocol_tests {
     fn split_melody_survives_auto_mpe_detection_and_poly_expression() {
         let mut plugin = Chordboard {
             params: Arc::new(ChordboardParams {
+                output_mode: IntParam::new(
+                    "Output protocol",
+                    0,
+                    IntRange::Linear { min: 0, max: 2 },
+                ),
                 key_split: BoolParam::new("Key split", true),
                 always_chord: BoolParam::new("Always play full chord", true),
                 mode: IntParam::new("Play mode", 2, IntRange::Linear { min: 1, max: 3 }),
@@ -628,7 +658,17 @@ mod protocol_tests {
     }
     #[test]
     fn auto_ignores_notes_and_master_expression_but_detects_member_expression() {
-        let mut plugin = Chordboard::default();
+        let mut plugin = Chordboard {
+            params: Arc::new(ChordboardParams {
+                output_mode: IntParam::new(
+                    "Output protocol",
+                    0,
+                    IntRange::Linear { min: 0, max: 2 },
+                ),
+                ..ChordboardParams::default()
+            }),
+            ..Chordboard::default()
+        };
         for (channel, note) in [(1, 60), (2, 64)] {
             plugin.input(
                 NoteEvent::NoteOn {
@@ -663,8 +703,8 @@ mod protocol_tests {
         assert!(plugin.engine.config.mpe);
     }
     #[test]
-    fn old_protocol_presets_migrate_once_and_new_instances_default_auto() {
-        assert_eq!(ChordboardParams::default().output_mode.value(), 0);
+    fn old_protocol_presets_migrate_once_and_new_instances_default_off() {
+        assert_eq!(ChordboardParams::default().output_mode.value(), 2);
         for enabled in [false, true] {
             let mut state = PluginState {
                 version: "0.1.0".into(),
@@ -728,7 +768,11 @@ mod protocol_tests {
         }
         Chordboard::filter_state(&mut state);
         assert_eq!(state.fields["schema-version"], "1");
-        assert_eq!(state.params.len(), engine::routing::ROUTE_COUNT * 2 + 1);
+        assert_eq!(state.params.len(), engine::routing::ROUTE_COUNT * 2 + 2);
+        assert!(matches!(
+            state.params["seq_enabled"],
+            ParamValue::Bool(false)
+        ));
         let mut config = engine::Config {
             mode: engine::MANUAL,
             legacy_direct_x: true,

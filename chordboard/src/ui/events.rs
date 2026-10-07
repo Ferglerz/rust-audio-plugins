@@ -1,12 +1,76 @@
 use super::*;
 impl ChordboardView {
+    pub(super) fn restore_shift_latch(&mut self, cx: &mut EventContext) {
+        if let Some((base, _, _)) = self.latch_shift.take() {
+            Self::emit(cx, self.params.latch.as_ptr(), if base { 1.0 } else { 0.0 });
+        }
+        self.shift_keys.fill(false);
+    }
+    pub(super) fn shift_latch_event(&mut self, cx: &mut EventContext, event: &WindowEvent) -> bool {
+        let (code, down) = match event {
+            WindowEvent::KeyDown(code, _) => (*code, true),
+            WindowEvent::KeyUp(code, _) => (*code, false),
+            _ => return false,
+        };
+        let index = match code {
+            Code::ShiftLeft => 0,
+            Code::ShiftRight => 1,
+            _ => {
+                if down {
+                    if let Some((_, _, used)) = self.latch_shift.as_mut() {
+                        *used = true;
+                    }
+                }
+                return false;
+            }
+        };
+        if down {
+            if !self.focused
+                || self.edit.is_some()
+                || self.sequencer_editing()
+                || self.menu.is_some()
+                || cx.modifiers().command()
+            {
+                return false;
+            }
+            if !self.shift_keys[index] {
+                self.shift_keys[index] = true;
+                if self.latch_shift.is_none() {
+                    let base = self.params.latch.value();
+                    self.latch_shift = Some((base, Instant::now(), false));
+                    Self::emit(cx, self.params.latch.as_ptr(), if base { 0.0 } else { 1.0 });
+                }
+            }
+            true
+        } else if self.shift_keys[index] {
+            self.shift_keys[index] = false;
+            if !self.shift_keys.iter().any(|&held| held) {
+                if let Some((base, pressed, used)) = self.latch_shift.take() {
+                    if used || pressed.elapsed().as_secs_f32() >= 0.25 {
+                        Self::emit(cx, self.params.latch.as_ptr(), if base { 1.0 } else { 0.0 });
+                    }
+                }
+            }
+            true
+        } else {
+            false
+        }
+    }
     fn press_expanded_strum(&mut self, cx: &mut EventContext, x: f32, y: f32) -> bool {
+        if hit(strum_bypass_rect(self.expand_t()), x, y) {
+            self.toggle_strum_bypass(cx);
+            return true;
+        }
+        if hit(strum_selection_rect(self.expand_t()), x, y) {
+            self.cycle_selection_mode(cx);
+            return true;
+        }
         if self.can_expand_strum() && hit(self.expand_button(), x, y) {
             self.end_pad_hover(cx);
             self.toggle_expand();
             return true;
         }
-        if self.mode() == 2 && hit(strum_latch_rect(self.expand_t()), x, y) {
+        if hit(strum_latch_rect(self.expand_t()), x, y) {
             self.set(
                 cx,
                 "strum_latch",
@@ -18,7 +82,7 @@ impl ChordboardView {
             );
             return true;
         }
-        if self.mode() == 2 {
+        if self.manual_playing() {
             if let Some((y_axis, right)) = self.strum_bound_at(x, y) {
                 self.end_pad_hover(cx);
                 self.drag = Some(Drag::StrumBound(y_axis, right));
@@ -102,9 +166,18 @@ impl ChordboardView {
             WindowEvent::MouseDoubleClick(MouseButton::Left)
                 | WindowEvent::MouseTripleClick(MouseButton::Left)
         ) {
+            if self.menu.is_none()
+                && self.edit.is_none()
+                && self.drag.is_none()
+                && self.sequencer_event(cx, event, x, y)
+            {
+                return true;
+            }
             return self.window_event(cx, &WindowEvent::MouseDown(MouseButton::Left));
         }
         if matches!(event, WindowEvent::FocusOut) {
+            self.restore_shift_latch(cx);
+            self.cancel_sequencer();
             self.focused = false;
             self.memory_held.fill(false);
             self.pointer = None;
@@ -116,6 +189,9 @@ impl ChordboardView {
             self.edit = None;
             self.set_panel(None);
             return false;
+        }
+        if self.shift_latch_event(cx, event) {
+            return true;
         }
         if matches!(event, WindowEvent::MouseLeave) {
             self.pointer = None;
@@ -132,6 +208,13 @@ impl ChordboardView {
                 self.flash_press(x, y);
             }
             cx.needs_redraw();
+        }
+        if self.menu.is_none()
+            && self.edit.is_none()
+            && self.drag.is_none()
+            && self.sequencer_event(cx, event, x, y)
+        {
+            return true;
         }
         // Dismiss the active interaction before leaving Escape to the host.
         if matches!(
@@ -279,11 +362,7 @@ impl ChordboardView {
             return true;
         }
         if self.page_elapsed < pleasant_ui::page_slide::DURATION
-            && hit(
-                (self.pad().0, self.pad().1, self.pad().2, self.pad().3),
-                x,
-                y,
-            )
+            && hit(CHORDS_SURFACE, x, y)
             && matches!(
                 event,
                 WindowEvent::MouseDown(_) | WindowEvent::MouseScroll(_, _)
@@ -353,7 +432,7 @@ impl ChordboardView {
                 cx.focus();
                 self.focused = true;
                 if self.strum_bound_at(x, y).is_some()
-                    || !(self.mode() == 2 && hit(self.play_pad(), x, y))
+                    || !(self.manual_playing() && hit(self.play_pad(), x, y))
                 {
                     self.end_pad_hover(cx);
                 }
@@ -458,8 +537,9 @@ impl ChordboardView {
                         return true;
                     }
                 }
-                if (0..TRANSPOSE_STEPS.len())
-                    .any(|i| hit(transpose_control_rect(self.params.mpe_enabled(), i), x, y))
+                if !self.arp_page()
+                    && (0..TRANSPOSE_STEPS.len())
+                        .any(|i| hit(transpose_control_rect(self.params.mpe_enabled(), i), x, y))
                 {
                     return self.press_piano(cx, x, y);
                 }
@@ -489,7 +569,7 @@ impl ChordboardView {
                     }
                     return true;
                 }
-                if self.mode() == 1 && hit(STRUM_HOLD, x, y) {
+                if self.arp_main() && self.mode() != 3 && hit(STRUM_HOLD, x, y) {
                     if !self.explain_modulation("strum_hold") {
                         self.set(
                             cx,
@@ -503,7 +583,7 @@ impl ChordboardView {
                     }
                     return true;
                 }
-                if self.mode() == 2 && hit(strum_latch_rect(self.expand_t()), x, y) {
+                if hit(strum_latch_rect(self.expand_t()), x, y) {
                     self.set(
                         cx,
                         "strum_latch",
@@ -516,7 +596,9 @@ impl ChordboardView {
                     return true;
                 }
                 for (i, step) in TRANSPOSE_STEPS.iter().enumerate() {
-                    if hit(transpose_control_rect(self.params.mpe_enabled(), i), x, y) {
+                    if !self.arp_page()
+                        && hit(transpose_control_rect(self.params.mpe_enabled(), i), x, y)
+                    {
                         let value = if *step == 0 {
                             0
                         } else {
@@ -534,27 +616,28 @@ impl ChordboardView {
                     prefs().toggle();
                     return true;
                 }
-                for i in 0..MODE_LABELS.len() {
-                    if hit(mode_rect(i), x, y) {
-                        Self::emit(
-                            cx,
-                            self.params.mode.as_ptr(),
-                            self.params.mode.preview_normalized(if i == 0 {
-                                if self.params.mode.value() == 3 {
-                                    3
-                                } else {
-                                    1
-                                }
-                            } else {
-                                2
-                            }),
-                        );
-                        self.end_drag(cx);
-                        self.set_panel(None);
-                        return true;
-                    }
+                if hit(strum_bypass_rect(self.expand_t()), x, y) {
+                    self.toggle_strum_bypass(cx);
+                    return true;
                 }
-                if hit(LATCH, x, y) {
+                if hit(HEADER_PLAY_TAB, x, y) || hit(HEADER_SEQ_TAB, x, y) {
+                    self.end_drag(cx);
+                    self.set_sequencer_open(cx, hit(HEADER_SEQ_TAB, x, y));
+                    return true;
+                }
+                if hit(HEADER_SEQ_BYPASS, x, y) {
+                    Self::emit(
+                        cx,
+                        self.params.seq_enabled.as_ptr(),
+                        if self.params.seq_enabled.value() {
+                            0.0
+                        } else {
+                            1.0
+                        },
+                    );
+                    return true;
+                }
+                if !self.arp_page() && hit(LATCH, x, y) {
                     self.set(
                         cx,
                         "latch",
@@ -562,12 +645,15 @@ impl ChordboardView {
                     );
                     return true;
                 }
-                if hit(ORDER, x, y) {
+                if !self.arp_page() && hit(ORDER, x, y) {
                     self.set_keyboard_layout(cx, (self.keyboard_layout() + 1) % 4);
                     return true;
                 }
                 for i in 0..KEY_COUNT {
-                    if self.keyboard_chord(i).is_some() && hit(self.keyboard_key_rect(i), x, y) {
+                    if !self.arp_page()
+                        && self.keyboard_chord(i).is_some()
+                        && hit(self.keyboard_key_rect(i), x, y)
+                    {
                         if let Some(chord) = self.keyboard_chord(i) {
                             self.bridge.send(Command::KeyDown(
                                 i as u8 + POINTER_KEY_OFFSET,
@@ -580,18 +666,18 @@ impl ChordboardView {
                         return true;
                     }
                 }
-                if hit(Menu::Key.trigger_rect(), x, y) {
+                if !self.arp_page() && hit(Menu::Key.trigger_rect(), x, y) {
                     self.open_menu(Menu::Key);
                     return true;
                 }
-                if hit(Menu::Scale.trigger_rect(), x, y) {
+                if !self.arp_page() && hit(Menu::Scale.trigger_rect(), x, y) {
                     self.open_menu(Menu::Scale);
                     return true;
                 }
-                if self.memory_press(cx, x, y) {
+                if !self.arp_page() && self.memory_press(cx, x, y) {
                     return true;
                 }
-                if self.mode() == 2 {
+                if self.manual_playing() {
                     if let Some((y_axis, right)) = self.strum_bound_at(x, y) {
                         self.end_pad_hover(cx);
                         self.drag = Some(Drag::StrumBound(y_axis, right));
@@ -602,7 +688,7 @@ impl ChordboardView {
                         return true;
                     }
                 }
-                if self.mode() == 2 && hit(self.play_pad(), x, y) {
+                if self.manual_playing() && hit(self.play_pad(), x, y) {
                     self.begin_pad(cx, x, y, true);
                     return true;
                 }

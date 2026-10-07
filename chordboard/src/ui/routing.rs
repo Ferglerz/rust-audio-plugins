@@ -253,10 +253,13 @@ impl ChordboardView {
                 ),
             ),
             ("transpose", TRANSPOSE),
-            ("mode", (PAD.0, 132.0, PAD.2, 24.0)),
+            ("strum_enabled", strum_bypass_rect(self.expand_t())),
         ]);
+        if self.arp_page() {
+            targets.retain(|(id, _)| !matches!(*id, "latch" | "transpose"));
+        }
         match self.mode() {
-            1 | 3 => {
+            _ if self.arp_main() => {
                 targets.push(("octaves", (octave_rect(0).0, octave_rect(0).1, 124.0, 28.0)));
                 targets.push((
                     "arp_pattern",
@@ -268,7 +271,7 @@ impl ChordboardView {
                     ),
                 ));
                 targets.push(("strum_sync", RATE_SYNC));
-                if self.mode() == 1 {
+                if self.mode() != 3 {
                     targets.push(("strum_hold", STRUM_HOLD));
                 }
                 if self.sweep_synced() {
@@ -283,11 +286,13 @@ impl ChordboardView {
                     ));
                 }
             }
-            2 => targets.push(("x", self.play_pad())),
             _ => {}
         }
+        if self.manual_playing() {
+            targets.push(("x", self.play_pad()));
+        }
         if self.page_elapsed < pleasant_ui::page_slide::DURATION {
-            targets.retain(|(_, r)| r.0 < PAD.0 || r.1 >= PAD.1 + PAD.3);
+            targets.retain(|(_, r)| !hit(CHORDS_SURFACE, r.0, r.1));
         }
         if self.route_progress > 0.0 && self.panel != Some(Panel::Routes) {
             targets.retain(|(_, r)| !hit(CHORDS_SURFACE, r.0 + r.2 / 2.0, r.1 + r.3 / 2.0));
@@ -302,15 +307,20 @@ impl ChordboardView {
                 targets.push(("y_target", self.menu_trigger_rect(Menu::YTarget)));
             }
         }
-        targets
+        let mut mapped: Vec<_> = targets
             .into_iter()
+            .filter(|(_, r)| {
+                !self.sequencer_open() || r.1 < PIANO_SURFACE.1
+            })
             .filter_map(|(id, r)| {
                 TARGETS
                     .iter()
                     .position(|t| t.available() && t.id == id)
                     .map(|i| (i, r))
             })
-            .collect()
+            .collect();
+        mapped.extend(self.sequencer_route_targets());
+        mapped
     }
 
     pub(super) fn route_target_at(&self, x: f32, y: f32) -> Option<usize> {
@@ -847,11 +857,25 @@ impl ChordboardView {
         self.snapshot.routed[i].map(|v| target.plain(v))
     }
     pub(super) fn mode(&self) -> i32 {
-        self.playback_mode()
+        // Performance page choice is independent of sequencer playback.
+        self.routed_plain("mode")
+            .map_or(self.params.mode.value(), |v| {
+                if (1.0..=3.0).contains(&v) {
+                    v as i32
+                } else {
+                    self.params.mode.value()
+                }
+            })
     }
     pub(super) fn playback_mode(&self) -> i32 {
-        self.routed_plain("mode")
-            .map_or(self.params.mode.value(), |v| v as i32)
+        self.routed_plain("mode").map_or(
+            if self.params.seq_enabled.value() {
+                4
+            } else {
+                self.params.mode.value()
+            },
+            |v| v as i32,
+        )
     }
     pub(super) fn routed_control(&self, c: &Control) -> Option<Control> {
         let (i, target) = TARGETS.iter().enumerate().find(|(_, t)| t.id == c.id)?;

@@ -6,6 +6,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering},
     Arc,
 };
+pub const INTERLOCK_NAMES: [&str; 3] = ["Off", "Avoid chords", "Match chords"];
 #[derive(Params)]
 pub struct ChordboardParams {
     #[id = "always_bass"]
@@ -22,10 +23,20 @@ pub struct ChordboardParams {
     pub bass_split: IntParam,
     #[id = "split_note"]
     pub split_note: IntParam,
+    #[id = "strum_enabled"]
+    pub strum_enabled: BoolParam,
     #[id = "root_on_select"]
     pub root_on_select: BoolParam,
     #[nested(array, group = "Modulation")]
     pub routes: [RouteParams; ROUTE_COUNT],
+    #[persist = "sequencer-v1"]
+    pub sequencer: Arc<crate::sequencer::Store>,
+    #[nested(array, group = "Sequencer")]
+    pub seq_pages: [SeqPageParams; 4],
+    #[id = "seq_length_lock"]
+    pub seq_length_lock: BoolParam,
+    #[id = "seq_enabled"]
+    pub seq_enabled: BoolParam,
     #[persist = "editor-state"]
     pub editor_state: Arc<ViziaState>,
     #[persist = "schema-version"]
@@ -64,6 +75,8 @@ pub struct ChordboardParams {
     pub quality: IntParam,
     #[id = "voice_leading"]
     pub voice_leading: IntParam,
+    #[id = "interlock"]
+    pub interlock: IntParam,
     #[id = "inversion"]
     pub inversion: IntParam,
     #[id = "transpose"]
@@ -234,10 +247,17 @@ impl Default for ChordboardParams {
                 )
             }))
             .with_string_to_value(Arc::new(parse_split_note)),
+            strum_enabled: BoolParam::new("Strumfield enabled", true),
             root_on_select: BoolParam::new("Root on select", false),
             routes: std::array::from_fn(|i| {
                 RouteParams::from_route(crate::engine::routing::default_routes()[i])
             }),
+            sequencer: crate::sequencer::Store::new(),
+            seq_pages: std::array::from_fn(|lane| {
+                SeqPageParams::new(crate::sequencer::LANE_NAMES[lane])
+            }),
+            seq_length_lock: BoolParam::new("Lock sequencer lengths", true),
+            seq_enabled: BoolParam::new("Sequencer", false),
             editor_state: ViziaState::new_screen_sized(
                 "Chordboard",
                 crate::ui::initial_editor_size,
@@ -274,6 +294,10 @@ impl Default for ChordboardParams {
                 .with_value_to_string(Arc::new(|v| {
                     ["Nearest resolution", "Furthest dominant resolution", "Off"][v as usize]
                         .to_string()
+                })),
+            interlock: IntParam::new("Interlock", 0, IntRange::Linear { min: 0, max: 2 })
+                .with_value_to_string(Arc::new(|v| {
+                    INTERLOCK_NAMES[v.clamp(0, 2) as usize].to_string()
                 })),
             inversion: IntParam::new("Inversion", 0, IntRange::Linear { min: 0, max: 5 }),
             transpose: IntParam::new("Transpose", 0, IntRange::Linear { min: -24, max: 24 }),
@@ -416,7 +440,7 @@ impl Default for ChordboardParams {
             humanize: FloatParam::new("Humanize", 0.0, FloatRange::Linear { min: 0.0, max: 1.0 })
                 .with_value_to_string(Arc::new(|v| format!("{v:.2}"))),
             mpe: BoolParam::new("MPE output (legacy)", false).hide(),
-            output_mode: IntParam::new("Output protocol", 0, IntRange::Linear { min: 0, max: 2 })
+            output_mode: IntParam::new("Output protocol", 2, IntRange::Linear { min: 0, max: 2 })
                 .with_value_to_string(Arc::new(|v| ["AUTO", "MPE", "REG"][v as usize].into())),
             detected_mpe: AtomicBool::new(false),
             upper: BoolParam::new("Upper MPE zone", false),
@@ -584,11 +608,18 @@ impl ChordboardParams {
             split_note: self.split_note.value() as u8,
             bass_split: self.bass_split.value() as i16,
             bass_enabled: self.bass_enabled.value(),
+            strum_enabled: self.strum_enabled.value(),
             root_on_select: self.root_on_select.value(),
             routes: std::array::from_fn(|i| self.routes[i].route()),
-            mode: self.mode.value() as u8,
+            mode: if self.seq_enabled.value() {
+                crate::engine::SEQUENCER
+            } else {
+                self.mode.value() as u8
+            },
+            seq_pages: std::array::from_fn(|i| self.seq_pages[i].page.value() as u8),
             quality: self.quality.value() as u8,
             voice_leading: self.voice_leading.value() as u8,
+            interlock: self.interlock.value() as u8,
             inversion: self.inversion.value() as u8,
             transpose: self.transpose.value() as i8,
             spread: self.spread.value() as u8,
@@ -672,12 +703,15 @@ control_catalog! {
     control(split_note, 0),
     control(bass_split, 0),
     control(mode, 0),
+    toggle(seq_enabled, 0),
+    toggle(seq_length_lock, 0),
     control(quality, 0),
     control(inversion, 0),
     control(voice_leading, 0),
     control(transpose, 0),
     control(spread, 0),
     toggle(latch, 0),
+    toggle(strum_enabled, 0),
     toggle(root_on_select, 0),
     toggle(strum_latch, 1),
     control(velocity, 0),
@@ -1018,5 +1052,23 @@ mod routing_state_tests {
         assert!(p.config().routes[1..].iter().all(|r| !r.active()));
         let range = &p.routes[0];
         assert_eq!(range.min.normalized_value_to_string(0.5, true), "50%");
+    }
+}
+
+#[derive(Params)]
+pub struct SeqPageParams {
+    #[id = "seq_page"]
+    pub page: IntParam,
+}
+impl SeqPageParams {
+    fn new(lane: &str) -> Self {
+        Self {
+            page: IntParam::new(
+                format!("{lane} page"),
+                0,
+                IntRange::Linear { min: 0, max: 7 },
+            )
+            .with_value_to_string(Arc::new(|v| format!("{}", v + 1))),
+        }
     }
 }

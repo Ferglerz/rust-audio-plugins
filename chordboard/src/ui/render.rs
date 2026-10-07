@@ -21,7 +21,8 @@ impl ChordboardView {
             bounds.x,
             bounds.y,
             self.ui_font.get(),
-        );
+        )
+        .with_hover(self.hover_pointer());
         d.rounded_rect(0.0, 0.0, W, H, 0.0, BG);
         d.rounded_rect(0.0, 0.0, W, 76.0, 0.0, PANEL);
         d.line(0.0, 75.0, W, 75.0, LINE, 1.0);
@@ -31,6 +32,7 @@ impl ChordboardView {
         d.appearance_button(APPEARANCE, prefs().label());
         d.font = self.ui_font.get();
         self.draw_tempo_header(&mut d);
+        self.draw_page_tabs(&mut d);
         let expand = self.expand_t();
         let chords = shrink_width(CHORDS_SURFACE, expand);
         let modulation = MOD_SURFACE;
@@ -46,7 +48,26 @@ impl ChordboardView {
             d.scissor(chords.0, chords.1, chords.2.max(0.0), CHORDS_SURFACE.3);
             d.offset_x = -self.route_progress * CHORDS_SURFACE.2;
             if self.route_progress < 1.0 {
-                self.draw_chords(&mut d);
+                let route_offset = d.offset_x;
+                for page in [1, 2] {
+                    let offset = (page as f32 - self.page_position) * CHORDS_SURFACE.2;
+                    if offset.abs() >= CHORDS_SURFACE.2 {
+                        continue;
+                    }
+                    d.offset_x = route_offset + offset;
+                    if page == 1 {
+                        self.draw_chord_page_title(&mut d, "ARPEGGIATOR");
+                        self.draw_arp(&mut d, if self.mode() == 3 { 3 } else { 1 });
+                        for (c, r) in self.base_controls() {
+                            if hit(ARP_PAD, r.0, r.1) && !matches!(c.id, "gate" | "swing") {
+                                self.draw_control(&mut d, &c, r, GOLD);
+                            }
+                        }
+                    } else {
+                        self.draw_chords(&mut d);
+                    }
+                }
+                d.offset_x = route_offset;
             }
             if self.route_progress > 0.0 {
                 d.offset_x = (1.0 - self.route_progress) * CHORDS_SURFACE.2;
@@ -63,47 +84,31 @@ impl ChordboardView {
             d.reset_scissor();
         }
         self.draw_meters(&mut d);
-        if expand == 0.0 {
-            self.draw_performance_header(&mut d);
-        }
         let pad = self.pad();
         d.scissor(pad.0, pad.1, pad.2, pad.3);
-        for page in [1, 2] {
-            let mode = if page == 1 && self.params.mode.value() == 3 {
-                3
-            } else {
-                page
-            };
-            let offset = (page as f32 - self.page_position) * pad.2;
-            if offset.abs() >= pad.2 {
-                continue;
-            }
-            d.offset_x = offset;
-            if matches!(mode, 1 | 3) {
-                self.draw_arp(&mut d, mode);
-            } else {
-                // Only mode-specific content participates in the page slide.
-                d.font = self.font.get();
-                self.draw_pad(&mut d, mode);
-                d.font = self.ui_font.get();
-            }
-            if expand == 0.0 {
-                for (c, r) in self.controls_for_mode(mode) {
-                    if r.0 >= PAD.0
-                        && r.1 >= PAD.1
-                        && r.1 < PAD.1 + PAD.3
-                        && !(matches!(mode, 1 | 3) && matches!(c.id, "gate" | "swing"))
-                    {
-                        self.draw_control(&mut d, &c, r, GOLD);
-                    }
+        d.font = self.font.get();
+        d.disabled = !self.params.strum_enabled.value();
+        self.draw_pad(&mut d, 2);
+        d.font = self.ui_font.get();
+        if expand == 0.0 {
+            for (c, r) in self.base_controls() {
+                if r.0 >= PAD.0 && r.1 >= PAD.1 && r.1 < PAD.1 + PAD.3 {
+                    self.draw_control(&mut d, &c, r, GOLD);
                 }
             }
         }
         d.offset_x = 0.0;
         d.reset_scissor();
+        d.disabled = false;
         let base_controls = self.base_controls();
         let panel_controls = self.panel_controls();
         for (c, r) in &base_controls {
+            if c.id == "root_on_select" {
+                continue;
+            }
+            if hit(ARP_PAD, r.0, r.1) {
+                continue;
+            }
             if r.1 >= PIANO_SURFACE.1 {
                 continue;
             }
@@ -115,7 +120,18 @@ impl ChordboardView {
             }
             self.draw_control(&mut d, c, *r, GOLD);
         }
+        self.draw_strumfield_header(&mut d);
+        d.scissor(
+            PIANO_SURFACE.0,
+            PIANO_SURFACE.1,
+            PIANO_SURFACE.2,
+            PIANO_SURFACE.3,
+        );
+        d.offset_x = -self.sequencer_ui.progress * PIANO_SURFACE.2;
         self.draw_piano(&mut d);
+        d.offset_x = 0.0;
+        d.reset_scissor();
+        self.draw_sequencer(&mut d);
         if self.panel == Some(Panel::Mapping) {
             self.draw_panel(&mut d);
             for (c, r) in &panel_controls {
@@ -130,11 +146,24 @@ impl ChordboardView {
             d.value_edit(edit, GOLD);
             d.font = self.ui_font.get();
         }
-        let hint = self.hover_hint(if self.panel.is_some() {
-            &panel_controls
+        let hint = if self.sequencer_open()
+            && self
+                .hover_pointer()
+                .is_some_and(|(x, y)| y >= PIANO_SURFACE.1 && !self.loop_strip_hit(x, y))
+        {
+            Some("Steps: click hit/rest · Right-click: select · Value mode: drag/swipe, wheel, Cmd-click reset · Double-click a value to type".into())
+        } else if self
+            .hover_pointer()
+            .is_some_and(|(x, y)| self.loop_strip_hit(x, y))
+        {
+            Some("Click a step to loop it while editing · Drag to loop adjacent steps · Loop all returns to the full pattern · Not saved".into())
         } else {
-            &base_controls
-        });
+            self.hover_hint(if self.panel.is_some() {
+                &panel_controls
+            } else {
+                &base_controls
+            })
+        };
         let feedback =
             self.memory_ui.flash.iter().any(|v| *v > 0.0) || self.status.starts_with("Saving");
         let footer = if feedback {
@@ -161,6 +190,12 @@ impl ChordboardView {
             for (label, heading) in menu.group_heading_rects(r) {
                 d.text(heading.0, heading.1 + 14.0, label, 10.0, GOLD);
             }
+            let menu_color = match menu {
+                Menu::Key | Menu::Scale => GOLD,
+                Menu::KeyboardParam(id) if id.starts_with("bass") => GOLD,
+                Menu::KeyboardParam("output_channel") => COLORS[1],
+                _ => TEAL,
+            };
             for (i, label) in menu.items().iter().enumerate() {
                 let r = self.menu_option_rect(menu, i);
                 let allowed = self.route_menu_allowed(menu, i);
@@ -169,7 +204,7 @@ impl ChordboardView {
                     r,
                     label,
                     allowed && i == self.menu_selection(menu),
-                    if allowed { TEAL } else { MUTED },
+                    if allowed { menu_color } else { MUTED },
                 );
                 if !allowed {
                     d.rect(r.0, r.1, r.2, r.3, alpha(PANEL, 0.65));
@@ -181,7 +216,7 @@ impl ChordboardView {
                         r.2 + 2.0,
                         r.3 + 2.0,
                         7.0,
-                        alpha(TEAL, 0.6),
+                        alpha(menu_color, 0.6),
                         1.0,
                     );
                 }
@@ -226,17 +261,29 @@ impl ChordboardView {
         if let Some(hint) = self.piano_hint(x, y) {
             return Some(hint);
         }
+        if hit(strum_bypass_rect(self.expand_t()), x, y) {
+            return Some("Enable or bypass the Strumfield".into());
+        }
+        if hit(HEADER_PLAY_TAB, x, y) {
+            return Some("Keyboard and chords".into());
+        }
+        if hit(HEADER_SEQ_TAB, x, y) {
+            return Some("Sequencer replaces the keyboard · Chords area shows the arpeggiator for the selected step".into());
+        }
+        if hit(HEADER_SEQ_BYPASS, x, y) {
+            return Some("Enable or bypass sequencer playback".into());
+        }
         if self.expand_t() > 0.0 && y >= HEADER_H {
             if self.can_expand_strum() && hit(self.expand_button(), x, y) {
                 return Some("Collapse the strum field".into());
             }
-            if hit(strum_latch_rect(self.expand_t()), x, y) && self.mode() == 2 {
+            if hit(strum_latch_rect(self.expand_t()), x, y) && self.manual_playing() {
                 return Some(
                     "Hover the strum field to play without clicking · Click the field to drag as usual"
                         .into(),
                 );
             }
-            if self.mode() == 2 {
+            if self.manual_playing() {
                 let play = self.play_pad();
                 for y_axis in [false, true] {
                     let (min, max) = if y_axis {
@@ -294,29 +341,28 @@ impl ChordboardView {
                 "Learn C · C major, Db b9, D sus2, Eb minor, E major, F sus4, F# dim, G power, Ab aug, A 6, Bb 7, B maj7".into()
             });
         }
-        if (0..3).any(|i| hit(output_protocol_rect(self.params.mpe_enabled(), i), x, y)) {
-            return Some(format!(
-                "Output: {} · Select Auto, MPE or MIDI",
-                if self.params.mpe_enabled() {
-                    "MPE"
+        if hit(output_protocol_rect(self.params.mpe_enabled(), 0), x, y) {
+            return Some(
+                if !self.params.mpe_enabled() && self.params.detected_mpe.load(Ordering::Relaxed) {
+                    "MPE input detected · Click MPE off to enable MPE output".into()
                 } else {
-                    "regular MIDI"
-                }
-            ));
+                    "Click to turn MPE output on or off".into()
+                },
+            );
         }
 
         if hit(LATCH, x, y) {
             return Some(
-                "Keep the chord and alteration after release · Re-press the root to reset".into(),
+                "Click or tap Shift: toggle latch · Hold Shift: invert latch until release".into(),
             );
         }
-        if hit(strum_latch_rect(self.expand_t()), x, y) && self.mode() == 2 {
+        if hit(strum_latch_rect(self.expand_t()), x, y) && self.manual_playing() {
             return Some(
                 "Hover the strum field to play without clicking · Click the field to drag as usual"
                     .into(),
             );
         }
-        if self.mode() == 2 && self.panel.is_none() {
+        if self.manual_playing() && self.panel.is_none() {
             let play = self.play_pad();
             for y_axis in [false, true] {
                 let (min, max) = if y_axis {
@@ -377,7 +423,7 @@ impl ChordboardView {
                 "Drag anywhere to adjust · Click value to type · Shift for fine adjustment".into(),
             );
         }
-        if hit(ROOT_ON_SELECT, x, y) {
+        if hit(strum_selection_rect(self.expand_t()), x, y) {
             return Some(
                 "Play the root immediately on chord selection, including Manual Strum".into(),
             );
@@ -579,7 +625,7 @@ impl ChordboardView {
 mod tests {
     use super::*;
     #[test]
-    fn arp_controls_fit_the_performance_surface_without_overlapping() {
+    fn arp_controls_fit_the_chords_page_without_overlapping() {
         let mut rects = (0..7).map(pattern_rect).collect::<Vec<_>>();
         rects.extend((0..8).map(rate_rect));
         rects.extend((0..4).map(octave_rect));
@@ -590,10 +636,10 @@ mod tests {
         rects.extend(output_controls(1).into_iter().map(|(_, r)| r));
         for (i, r) in rects.iter().enumerate() {
             assert!(
-                r.0 >= PAD.0
-                    && r.1 >= PAD.1
-                    && r.0 + r.2 <= PAD.0 + PAD.2
-                    && r.1 + r.3 <= PAD.1 + PAD.3
+                r.0 >= ARP_PAD.0
+                    && r.1 >= ARP_PAD.1
+                    && r.0 + r.2 <= ARP_PAD.0 + ARP_PAD.2
+                    && r.1 + r.3 <= ARP_PAD.1 + ARP_PAD.3
             );
             for other in rects.iter().skip(i + 1) {
                 let overlap = r.0 < other.0 + other.2
@@ -608,13 +654,13 @@ mod tests {
     fn performance_rows_fill_width_and_share_direction_sizes() {
         let first = pattern_rect(0);
         let last = pattern_rect(6);
-        assert_eq!(first.0, PAD.0 + 8.0);
-        assert!((last.0 + last.2 - (PAD.0 + PAD.2 - 8.0)).abs() < 0.001);
+        assert_eq!(first.0, ARP_PAD.0 + 8.0);
+        assert!((last.0 + last.2 - (ARP_PAD.0 + ARP_MAIN_WIDTH - 8.0)).abs() < 0.001);
         let [(_, humanize), (_, gate), (_, swing)] = arp_controls();
         assert!(humanize.1 + humanize.3 < first.1);
         assert_eq!(gate.1, swing.1);
         assert!(gate.0 > swing.0 + swing.2);
-        assert!((gate.2 + swing.2 + 8.0 - (PAD.2 - 16.0)).abs() < 0.001);
+        assert!((gate.2 + swing.2 + 8.0 - (ARP_MAIN_WIDTH - 16.0)).abs() < 0.001);
         assert_eq!(swing.2, gate.2);
         assert_eq!(ROOT_ON_SELECT.1, STRUM_LATCH.1);
         assert_eq!(ROOT_ON_SELECT.0 + ROOT_ON_SELECT.2 + 8.0, STRUM_LATCH.0);

@@ -2,11 +2,13 @@ mod layers;
 mod midi;
 mod performance;
 pub mod routing;
+pub mod sequencer;
 mod types;
 use crate::harmony::{self, Notes};
 pub use types::*;
 
 pub struct Engine {
+    pub seq: sequencer::Runtime,
     pub sources: [f32; routing::SOURCE_COUNT],
     input_velocity: f32,
     pub host_config: Config,
@@ -27,7 +29,7 @@ pub struct Engine {
     pub notes: Notes,
     pub expression: Expression,
     pub channels: [Expression; 16],
-    pub voices: [Option<Voice>; 15],
+    pub voices: [Option<Voice>; 48],
     pub scheduled: [Option<Scheduled>; 128],
     pub quality: u8,
     control_alteration: Option<u8>,
@@ -58,6 +60,7 @@ pub struct Engine {
     input_bend_values: [f32; 16],
     pub rpn: [[u8; 2]; 16],
     pub cc: [[u8; 128]; 16],
+    pub cc_known: [[bool; 128]; 16],
     cc_lsb_seen: [u32; 16],
     pub needs_setup: bool,
     pub arp_next: u64,
@@ -75,6 +78,7 @@ pub struct Engine {
 impl Default for Engine {
     fn default() -> Self {
         Self {
+            seq: sequencer::Runtime::default(),
             sources: routing::SOURCE_DEFAULTS,
             input_velocity: 0.8,
             host_config: Config::default(),
@@ -95,7 +99,7 @@ impl Default for Engine {
             notes: Notes::default(),
             expression: Expression::default(),
             channels: [Expression::default(); 16],
-            voices: [None; 15],
+            voices: [None; 48],
             scheduled: [None; 128],
             quality: 0,
             control_alteration: None,
@@ -130,6 +134,7 @@ impl Default for Engine {
             input_bend_values: [0.5; 16],
             rpn: [[127; 2]; 16],
             cc: [[0; 128]; 16],
+            cc_known: [[false; 128]; 16],
             cc_lsb_seen: [0; 16],
             needs_setup: true,
             arp_next: 0,
@@ -182,6 +187,14 @@ impl Engine {
             || old.bass_channel != config.bass_channel
             || old.upper_channel != config.upper_channel;
         let mode = old.mode != config.mode;
+        for lane in 0..4 {
+            if previous_host.seq_pages[lane] != self.host_config.seq_pages[lane] {
+                self.seq.base[lane] = self.host_config.seq_pages[lane].min(7);
+            }
+        }
+        if mode || route {
+            self.reset_sequencer(out);
+        }
         if route {
             self.stop_bass(out);
         }
@@ -194,6 +207,14 @@ impl Engine {
             self.needs_setup = true;
         }
         self.config = config;
+        if old.strum_enabled && !config.strum_enabled && matches!(config.mode, MANUAL | SEQUENCER) {
+            self.x_primed = false;
+            for i in 0..self.voices.len() {
+                if self.voices[i].is_some_and(|voice| voice.owner == 0 && !voice.layer) {
+                    self.end_voice(i, 0.0, out);
+                }
+            }
+        }
         if old.quality != config.quality {
             self.quality = config.quality;
             self.control_alteration = None;
@@ -203,7 +224,7 @@ impl Engine {
         }
         if old.strum_hold && !config.strum_hold && self.config.mode == AUTO {
             let duration = self.duration();
-            for i in 0..15 {
+            for i in 0..self.voices.len() {
                 if let Some(voice) = self.voices[i].as_mut() {
                     if !voice.layer && voice.off == u64::MAX {
                         voice.off = self.now.saturating_add(duration);
@@ -490,6 +511,11 @@ impl Engine {
                     self.saved = Some((index.min(MEMORY_COUNT - 1), chord.encode()));
                 }
             }
+            Command::RecallMemory(index, word) => {
+                if harmony::SavedChord::decode(word).is_some() && index < MEMORY_COUNT {
+                    self.command(Command::Recall(word), out);
+                }
+            }
             Command::Recall(word) => {
                 if let Some(chord) = harmony::SavedChord::decode(word) {
                     self.scheduled.fill(None);
@@ -530,7 +556,7 @@ impl Engine {
                 self.position(y, 1, out);
                 self.x_primed = false;
                 self.position(x, 0, out);
-                if self.config.mode == MANUAL {
+                if self.manual_active() {
                     self.pluck_string(self.last_string.max(0) as usize, out);
                 }
             }
@@ -551,6 +577,7 @@ impl Engine {
         }
     }
     pub fn panic(&mut self, out: &mut impl FnMut(Out)) {
+        self.reset_sequencer(out);
         self.learned_note_held.fill(false);
         self.stop_voices(0.0, out);
         self.stop_melody(out);
@@ -660,6 +687,9 @@ impl Engine {
         }
         self.notes = harmony::filter_notes(self.full_notes, self.config.filter);
         self.memory = Some(recipe);
+        if self.config.mode == SEQUENCER {
+            self.apply_sequenced_harmony();
+        }
         let count = harmony::intervals(
             self.quality,
             second.map(|n| (n as i16 - root_note as i16).rem_euclid(12) as u8),
@@ -681,7 +711,7 @@ impl Engine {
         }
         match self.config.mode {
             CHORD => {
-                for i in 0..15 {
+                for i in 0..self.voices.len() {
                     if self.voices[i].is_some_and(|v| !self.notes.as_slice().contains(&v.note)) {
                         let end = self.now.saturating_add(self.duration());
                         if let Some(voice) = self.voices[i].as_mut() {
@@ -700,7 +730,7 @@ impl Engine {
             }
             AUTO => {
                 if self.config.strum_hold {
-                    for i in 0..15 {
+                    for i in 0..self.voices.len() {
                         if self.voices[i].is_some_and(|v| !v.layer) {
                             self.end_voice(i, 0.0, out);
                         }
@@ -765,7 +795,9 @@ impl Engine {
             ARP => {}
             _ => {}
         }
-        if self.config.root_on_select {
+        if self.config.root_on_select
+            && (!matches!(self.config.mode, MANUAL | SEQUENCER) || self.config.strum_enabled)
+        {
             if let Some(root) = self.selected_root() {
                 for slot in &mut self.scheduled {
                     if slot.is_some_and(|e| e.note == root) {
@@ -844,6 +876,18 @@ impl Engine {
             learning: self.learn,
             output_mpe: self.config.mpe,
             tempo: self.tempo as f32,
+            seq_pages: self.seq.active,
+            seq_base: self.seq.base,
+            seq_pending: std::array::from_fn(|lane| {
+                let requested = self.sequence_requests()[lane];
+                if requested != self.seq.active[lane] {
+                    requested
+                } else {
+                    255
+                }
+            }),
+            seq_steps: self.seq.steps,
+            seq_running: self.seq.running,
         }
     }
     pub(super) fn selected_root(&self) -> Option<u8> {
@@ -882,6 +926,6 @@ impl Engine {
 }
 
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 mod advance_tests;
+#[cfg(test)]
+mod tests;

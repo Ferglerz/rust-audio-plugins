@@ -4,6 +4,7 @@ mod layout;
 mod mapping;
 mod menu;
 mod routing;
+mod sequencer;
 mod style;
 use menu::Menu;
 mod memories;
@@ -142,6 +143,10 @@ struct ChordboardView {
     motion: Vec<style::ControlMotion>,
     action_flash: Option<(Rect, f32)>,
     memory_ui: MemoryUi,
+    sequencer_ui: sequencer::SequencerUi,
+    mpe_pulse: f32,
+    latch_shift: Option<(bool, Instant, bool)>,
+    shift_keys: [bool; 2],
     snapshot: Snapshot,
     leading_progress: f32,
     pending_learn: Option<(u8, i32, u32)>,
@@ -209,6 +214,10 @@ impl ChordboardView {
             motion: Vec::new(),
             action_flash: None,
             memory_ui: MemoryUi::default(),
+            sequencer_ui: sequencer::SequencerUi::default(),
+            mpe_pulse: 0.0,
+            latch_shift: None,
+            shift_keys: [false; 2],
             snapshot: Snapshot::default(),
             leading_progress: 1.0,
             pending_learn: None,
@@ -230,9 +239,9 @@ impl ChordboardView {
             trail: Vec::with_capacity(24),
             last_frame: Instant::now(),
             meters: [0.0, 0.5, 0.5],
-            page_position: performance_page(params.mode.value()) as f32,
+            page_position: 2.0,
             page_start: params.mode.value().max(1) as f32,
-            page_target: performance_page(params.mode.value()),
+            page_target: 2,
             page_elapsed: pleasant_ui::page_slide::DURATION,
             expand_progress: 0.0,
             expand_start: 0.0,
@@ -263,11 +272,17 @@ impl ChordboardView {
         self.routed_plain("strum_sync")
             .map_or(self.params.strum_sync.value(), |v| v >= 0.5)
     }
+    fn arp_page(&self) -> bool {
+        self.sequencer_open()
+    }
     fn arp_main(&self) -> bool {
-        matches!(self.mode(), 1 | 3)
+        self.arp_page() && self.panel != Some(Panel::Routes)
+    }
+    fn manual_playing(&self) -> bool {
+        self.params.strum_enabled.value() && matches!(self.playback_mode(), 2 | 4)
     }
     fn can_expand_strum(&self) -> bool {
-        self.mode() == 2
+        matches!(self.playback_mode(), 2 | 4)
     }
     fn expand_t(&self) -> f32 {
         self.expand_progress
@@ -360,22 +375,19 @@ impl ChordboardView {
     }
     fn controls_for_mode(&self, mode: i32) -> Vec<(Control, Rect)> {
         let mut positions = Vec::new();
-        let mode = mode.max(1);
-        positions.extend(voicing_controls());
-        if mode == 2 {
-            positions.push(("root_on_select", ROOT_ON_SELECT));
+        let mode = if mode == 4 { 2 } else { mode.max(1) };
+        if !self.arp_page() {
+            positions.extend(voicing_controls());
         }
-        if matches!(mode, 1 | 3) {
-            positions.extend(
-                arp_controls()
-                    .into_iter()
-                    .filter(|(id, _)| mode == 3 || *id != "gate"),
-            );
+        positions.push(("root_on_select", strum_selection_rect(self.expand_t())));
+        positions.extend(output_controls(2));
+        if self.arp_main() {
+            positions.extend(arp_controls().into_iter().filter(|(id, _)| *id != "gate"));
             if !self.sweep_synced() {
                 positions.extend(strum_controls());
             }
+            positions.extend(output_controls(if mode == 3 { 3 } else { 1 }));
         }
-        positions.extend(output_controls(mode));
         positions.extend(self.keyboard_controls().into_iter().map(|(c, r)| (c.id, r)));
         if !self.params.tempo_sync.value() {
             positions.push(("tempo", TEMPO_CONTROL));
@@ -710,6 +722,18 @@ impl ChordboardView {
             0
         }
     }
+    fn toggle_strum_bypass(&mut self, cx: &mut EventContext) {
+        let enabled = !self.params.strum_enabled.value();
+        self.end_pad_hover(cx);
+        if enabled && self.playback_mode() != 4 {
+            Self::emit(
+                cx,
+                self.params.mode.as_ptr(),
+                self.params.mode.preview_normalized(2),
+            );
+        }
+        self.set(cx, "strum_enabled", if enabled { 1.0 } else { 0.0 });
+    }
     fn cycle_selection_mode(&self, cx: &mut EventContext) {
         self.step_selection_mode(cx, 1);
     }
@@ -767,7 +791,8 @@ impl ChordboardView {
         None
     }
     fn can_pad_hover(&self) -> bool {
-        self.mode() == 2
+        self.manual_playing()
+            && !self.sequencer_editing()
             && self.params.strum_latch.value()
             && self.panel != Some(Panel::Mapping)
             && self.menu.is_none()
@@ -777,10 +802,8 @@ impl ChordboardView {
     }
     fn set_pad_xy(&self, cx: &mut EventContext, x: f32, y: f32) {
         let (px, py) = self.pad_norm(x, y);
-        pleasant_ui::param::set_normalized(cx, self.params.x.as_ptr(),
-            px);
-        pleasant_ui::param::set_normalized(cx, self.params.y.as_ptr(),
-            py);
+        pleasant_ui::param::set_normalized(cx, self.params.x.as_ptr(), px);
+        pleasant_ui::param::set_normalized(cx, self.params.y.as_ptr(), py);
     }
     fn begin_pad(&mut self, cx: &mut EventContext, x: f32, y: f32, capture: bool) {
         let starting = !self.pad_hover && !matches!(self.drag, Some(Drag::Pad));
@@ -883,6 +906,13 @@ impl ChordboardView {
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
+        if !self.params.mpe_enabled() && self.params.detected_mpe.load(Ordering::Relaxed) {
+            self.mpe_pulse = (self.mpe_pulse + dt * 3.0) % std::f32::consts::TAU;
+            cx.needs_redraw();
+        }
+        if self.tick_sequencer(dt) {
+            cx.needs_redraw();
+        }
         if self.selected_modulator.is_some() {
             self.modulator_pulse = (self.modulator_pulse + dt * 3.0) % std::f32::consts::TAU;
             cx.needs_redraw();
@@ -902,7 +932,7 @@ impl ChordboardView {
             cx.needs_redraw();
         }
         let was_sliding = self.page_elapsed < pleasant_ui::page_slide::DURATION;
-        let mode = performance_page(self.mode());
+        let mode = if self.arp_page() { 1 } else { 2 };
         if mode != self.page_target {
             self.page_start = self.page_position;
             self.page_target = mode;
@@ -1050,7 +1080,7 @@ impl View for ChordboardView {
         Some("chordboard")
     }
     fn event(&mut self, cx: &mut EventContext, event: &mut Event) {
-        let was_editing = self.edit.is_some();
+        let was_editing = self.edit.is_some() || self.sequencer_editing();
         event.map(|_: &Tick, _| self.tick(cx));
         event.map(|param: &RawParamEvent, _| {
             if let RawParamEvent::SetParameterNormalized(ptr, value) = param {
@@ -1072,7 +1102,11 @@ impl View for ChordboardView {
                 cx.needs_redraw();
             }
         });
-        pleasant_ui::value_edit::sync_text_input(cx, was_editing, self.edit.is_some());
+        pleasant_ui::value_edit::sync_text_input(
+            cx,
+            was_editing,
+            self.edit.is_some() || self.sequencer_editing(),
+        );
     }
     fn draw(&self, cx: &mut DrawContext, canvas: &mut Canvas) {
         self.render(cx, canvas);

@@ -7,17 +7,22 @@ pub const CHORD: u8 = 0;
 pub const AUTO: u8 = 1;
 pub const MANUAL: u8 = 2;
 pub const ARP: u8 = 3;
+pub const SEQUENCER: u8 = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Config {
+    pub strum_enabled: bool,
     pub root_on_select: bool,
     pub routes: [Route; ROUTE_COUNT],
     pub filter: u8,
     pub bass_channel: u8,
     pub upper_channel: u8,
     pub mode: u8,
+    pub seq_pages: [u8; 4],
     pub quality: u8,
     pub voice_leading: u8,
+    /// Arp strikes that land on a chord strike: 0 off, 1 avoid chords, 2 match chords.
+    pub interlock: u8,
     pub inversion: u8,
     pub transpose: i8,
     pub spread: u8,
@@ -80,14 +85,17 @@ impl Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            strum_enabled: true,
             root_on_select: false,
             routes: super::routing::default_routes(),
             filter: 0,
             bass_channel: 0,
             upper_channel: 1,
             mode: CHORD,
+            seq_pages: [0; 4],
             quality: 0,
             voice_leading: 2,
+            interlock: 0,
             inversion: 0,
             transpose: 0,
             spread: 0,
@@ -192,6 +200,8 @@ pub struct Voice {
     pub started: u64,
     pub off: u64,
     pub layer: bool,
+    pub owner: u8,
+    pub seq_expression: Option<super::sequencer::StepExpression>,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Scheduled {
@@ -226,6 +236,7 @@ pub enum Command {
     BeginGesture(f32, f32),
     Capture(usize),
     Recall(u64),
+    RecallMemory(usize, u64),
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Snapshot {
@@ -260,6 +271,11 @@ pub struct Snapshot {
     pub learning: u8,
     pub output_mpe: bool,
     pub tempo: f32,
+    pub seq_pages: [u8; 4],
+    pub seq_base: [u8; 4],
+    pub seq_pending: [u8; 4],
+    pub seq_steps: [u8; 4],
+    pub seq_running: bool,
 }
 impl Default for Snapshot {
     fn default() -> Self {
@@ -294,6 +310,11 @@ impl Default for Snapshot {
             learning: 0,
             output_mpe: false,
             tempo: 120.0,
+            seq_pages: [0; 4],
+            seq_base: [0; 4],
+            seq_pending: [0; 4],
+            seq_steps: [0; 4],
+            seq_running: false,
         }
     }
 }

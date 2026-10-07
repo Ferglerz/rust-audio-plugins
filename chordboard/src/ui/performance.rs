@@ -21,30 +21,70 @@ impl ChordboardView {
         }
     }
 
-    pub(super) fn draw_performance_header(&self, d: &mut Draw) {
+    pub(super) fn draw_page_tabs(&self, d: &mut Draw) {
+        let open = self.sequencer_open();
+        self.button(d, HEADER_PLAY_TAB, "Play", !open, TEAL);
+        self.button(d, HEADER_SEQ_TAB, "Sequencer", open, TEAL);
+        d.bypass_button(
+            HEADER_SEQ_BYPASS,
+            !self.params.seq_enabled.value(),
+            TEAL,
+            self.hover_amount(HEADER_SEQ_BYPASS) > 0.01,
+            0.0,
+        );
+    }
+
+    pub(super) fn draw_strumfield_header(&self, d: &mut Draw) {
+        let surface = perf_surface_rect(self.expand_t());
+        let bypass = strum_bypass_rect(self.expand_t());
+        d.bypass_button(
+            bypass,
+            !self.params.strum_enabled.value(),
+            TEAL,
+            self.hover_amount(bypass) > 0.01,
+            0.0,
+        );
+        let disabled = d.disabled;
+        d.disabled = !self.params.strum_enabled.value();
         d.font = self.font.get();
         d.text(
-            PERF_SURFACE.0 + 10.0,
+            surface.0 + 48.0,
             module_title_y(PERF_SURFACE.1, MODULE_TITLE_SIZE),
-            "PERFORMANCE",
+            "STRUMFIELD",
             MODULE_TITLE_SIZE,
             TEXT,
         );
         d.font = self.ui_font.get();
-        for (i, label) in MODE_LABELS.iter().enumerate() {
-            self.button(
-                d,
-                mode_rect(i),
-                label,
-                if i == 0 {
-                    self.params.mode.value() != 2
-                } else {
-                    self.params.mode.value() == 2
-                },
-                TEAL,
-            );
-            self.live_choice(d, "mode", i as f32 + 1.0, mode_rect(i));
+        if let Some(control) = self.control("root_on_select") {
+            self.draw_control(d, &control, strum_selection_rect(self.expand_t()), GOLD);
         }
+        self.touch_latch_button(
+            d,
+            strum_latch_rect(self.expand_t()),
+            self.params.strum_latch.value(),
+            TEAL,
+        );
+        let r = self.expand_button();
+        d.graph_zoom_button(
+            r,
+            self.expand_target < 0.5,
+            self.hover_amount(r) > 0.0,
+            true,
+        );
+        d.disabled = disabled;
+    }
+
+    pub(super) fn draw_chord_page_title(&self, d: &mut Draw, title: &str) {
+        let font = d.font;
+        d.font = self.font.get();
+        d.text(
+            CHORDS_SURFACE.0 + 16.0,
+            module_title_y(CHORDS_SURFACE.1, MODULE_TITLE_SIZE),
+            title,
+            MODULE_TITLE_SIZE,
+            TEXT,
+        );
+        d.font = font;
     }
 
     pub(super) fn draw_contour_button(
@@ -99,7 +139,12 @@ impl ChordboardView {
     }
 
     fn draw_arp_strings(&self, d: &mut Draw, mode: i32) {
-        let r = ARP_STRINGS;
+        let r = (
+            ARP_STRINGS.0,
+            ARP_STRINGS.1,
+            ARP_STRINGS.2,
+            ARP_STRINGS.3 - 30.0,
+        );
         d.rounded_rect(r.0, r.1, r.2, r.3, 6.0, alpha(TEXT, 0.025));
         let count = self.arp_string_count(mode).max(1);
         if self.snapshot.notes.len == 0 {
@@ -157,7 +202,7 @@ impl ChordboardView {
 
     pub(super) fn draw_arp(&self, d: &mut Draw, mode: i32) {
         let looping = mode == 3;
-        let pad = self.pad();
+        let pad = ARP_PAD;
         d.rounded_rect(pad.0, pad.1, pad.2, pad.3, 8.0, BG);
         d.font = self.ui_font.get();
         for loop_choice in [false, true] {
@@ -170,6 +215,7 @@ impl ChordboardView {
             );
         }
         self.draw_arp_strings(d, mode);
+        self.draw_arp_pattern_settings(d);
         // Glyphs illustrate each ordering rule; they are not a playback position.
         let contours = [
             [0, 1, 2, 3, 4],
@@ -244,12 +290,13 @@ impl ChordboardView {
                     MUTED
                 },
             );
+            let active_rate = self.params.rate.value();
             for (i, (label, beats)) in ARP_RATES.iter().enumerate() {
                 self.button(
                     d,
                     rate_rect(i),
                     label,
-                    (self.params.rate.value() - beats).abs() < 0.0001,
+                    (active_rate - beats).abs() < 0.0001,
                     GOLD,
                 );
                 self.live_choice(d, "rate", *beats, rate_rect(i));
@@ -268,7 +315,7 @@ impl ChordboardView {
         for (id, r) in arp_controls()
             .into_iter()
             .skip(1)
-            .filter(|(id, _)| looping || *id != "gate")
+            .filter(|(id, _)| *id != "gate")
         {
             let gate = self
                 .routed_plain("gate")
@@ -324,6 +371,8 @@ impl ChordboardView {
                 );
             }
         }
+        self.draw_arp_pattern_edit(d);
+        self.draw_sequencer_editor(d);
     }
     pub(super) fn draw_pad(&self, d: &mut Draw, mode: i32) {
         let pad = self.pad();
@@ -384,30 +433,7 @@ impl ChordboardView {
                 );
             }
         }
-        d.text(
-            pad.0 + 10.0,
-            module_title_y(pad.1, MODULE_TITLE_SIZE),
-            if manual { "STRUM FIELD" } else { "AUTO STRUM" },
-            MODULE_TITLE_SIZE,
-            TEXT,
-        );
-        if manual {
-            let r = self.expand_button();
-            d.graph_zoom_button(
-                r,
-                self.expand_target < 0.5,
-                self.hover_amount(r) > 0.0,
-                true,
-            );
-        }
-        if manual {
-            self.touch_latch_button(
-                d,
-                strum_latch_rect(self.expand_t()),
-                self.params.strum_latch.value(),
-                TEAL,
-            );
-        } else {
+        if !manual {
             self.button(
                 d,
                 strum_sync_rect(self.expand_t()),
@@ -560,15 +586,24 @@ impl ChordboardView {
     pub(super) fn draw_meters(&self, d: &mut Draw) {
         use crate::engine::routing::SOURCE_SHORT;
         d.font = self.font.get();
+        let sequencer = self.sequencer_open();
         d.text(
-            MOD_SURFACE.0 + 10.0,
+            if sequencer {
+                meter_rect(7).0 + 8.0
+            } else {
+                MOD_SURFACE.0 + 10.0
+            },
             module_title_y(MOD_SURFACE.1, MODULE_TITLE_SIZE),
             "MODULATORS",
             MODULE_TITLE_SIZE,
             TEXT,
         );
         d.text(
-            MOD_SURFACE.0 + 132.0,
+            if sequencer {
+                meter_rect(8).0 + 8.0
+            } else {
+                MOD_SURFACE.0 + 132.0
+            },
             module_title_y(MOD_SURFACE.1, 11.0),
             "Drag to route",
             11.0,
@@ -655,10 +690,11 @@ impl ChordboardView {
             );
         }
         d.font = self.ui_font.get();
+        self.draw_expression_modes(d);
     }
 }
 
-// Pitch is bipolar: center is neutral, while other sources fill from zero.
+// Only pitch is bipolar. Timbre and all other sources fill from zero.
 pub(super) fn meter_fill(source: usize, value: f32) -> (f32, f32) {
     let value = value.clamp(0.0, 1.0);
     if source == 0 {

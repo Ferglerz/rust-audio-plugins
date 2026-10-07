@@ -336,6 +336,34 @@ pub const TARGETS: &[Target] = &[
         max: 1.0,
         discrete: false,
     },
+    Target {
+        name: "Arp page",
+        id: "seq_page_0",
+        min: 0.0,
+        max: 7.0,
+        discrete: true,
+    },
+    Target {
+        name: "Chords page",
+        id: "seq_page_1",
+        min: 0.0,
+        max: 7.0,
+        discrete: true,
+    },
+    Target {
+        name: "Bass page",
+        id: "seq_page_2",
+        min: 0.0,
+        max: 7.0,
+        discrete: true,
+    },
+    Target {
+        name: "Harmony page",
+        id: "seq_page_3",
+        min: 0.0,
+        max: 7.0,
+        discrete: true,
+    },
 ];
 impl Target {
     // Keep saved destination indices stable; touch bounds are no longer routable.
@@ -409,6 +437,7 @@ impl Target {
             "length_ms" | "strum_ms" => format!("{v:.0} ms"),
             "transpose" => format!("{v:+.0} st"),
             "bend_range" | "master_range" => format!("{v:.0} st"),
+            "seq_page_0" | "seq_page_1" | "seq_page_2" | "seq_page_3" => format!("{:.0}", v + 1.0),
             "output_channel" | "bass_channel" | "upper_channel" => format!("{:.0}", v + 1.0),
             "velocity" | "humanize" | "gate" | "contour" | "swing" => format!("{:.0}%", v * 100.0),
             _ if self.discrete => format!("{v:.0}"),
@@ -418,6 +447,10 @@ impl Target {
     fn apply(&self, c: &mut Config, norm: f32) {
         let v = self.plain(norm);
         match self.id {
+            "seq_page_0" => c.seq_pages[0] = v as u8,
+            "seq_page_1" => c.seq_pages[1] = v as u8,
+            "seq_page_2" => c.seq_pages[2] = v as u8,
+            "seq_page_3" => c.seq_pages[3] = v as u8,
             "strings" => c.strings = v as u8,
             "strings_played" => c.strings_played = v as u8,
             "x" => c.routed_x = Some(v),

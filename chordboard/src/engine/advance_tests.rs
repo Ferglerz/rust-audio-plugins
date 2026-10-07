@@ -130,6 +130,8 @@ fn overdue_simultaneous_slots_and_voice_stealing_keep_tick_order() {
                 channel: 0,
                 started: 0,
                 off,
+                owner: 0,
+                seq_expression: None,
                 layer,
             });
         }
@@ -261,6 +263,8 @@ fn clock_wrap_and_saturated_note_deadlines_match_reference_tick() {
             channel: 0,
             started: 0,
             off: u64::MAX,
+            owner: 0,
+            seq_expression: None,
             layer: false,
         });
         engine.voices[1] = Some(Voice {
@@ -268,6 +272,8 @@ fn clock_wrap_and_saturated_note_deadlines_match_reference_tick() {
             channel: 0,
             started: 0,
             off: 0,
+            owner: 0,
+            seq_expression: None,
             layer: true,
         });
         engine.scheduled[90] = Some(Scheduled {

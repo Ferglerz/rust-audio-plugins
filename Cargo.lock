@@ -793,6 +793,8 @@ dependencies = [
  "nih_plug",
  "nih_plug_vizia",
  "pleasant-ui",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
