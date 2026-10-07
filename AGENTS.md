@@ -18,7 +18,7 @@ Do not run `cargo test` after every edit. Tests stay in the repo. Default verify
 
 `cargo check -p <crate>`
 
-Plugin crate names: `composure`, `damian-channel-strip`, `flattery`, `tape_stop`, `openwurli-ui`, `chordboard`. Check `scd-plugin` from `scd-rust/`, its separate Cargo workspace.
+Plugin crate names: `composure`, `damian-channel-strip`, `flattery`, `tape_stop`, `openwurli-ui`, `chordboard`, `fundament`. Check `scd-plugin` from `scd-rust/`, its separate Cargo workspace.
 
 - No `--workspace`
 - No `--all-targets` unless tests or examples themselves changed

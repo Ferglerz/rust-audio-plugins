@@ -11,7 +11,7 @@ Do not run `cargo test` after every edit. Tests stay in the repo. Default verify
 
 `cargo check -p <crate>`
 
-Crate names: `damian-channel-strip`, `flattery`, `tape_stop`, `pleasant-ui`.
+Crate names: `damian-channel-strip`, `flattery`, `tape_stop`, `pleasant-ui`, `fundament`.
 
 - No `--workspace`
 - No `--all-targets` unless tests or examples themselves changed

@@ -16,6 +16,8 @@ members = [
     "Damian Channel Strip/xtask",
     "Flattery",
     "Flattery/xtask",
+    "Fundament",
+    "Fundament/xtask",
     "Tape Stop",
     "Tape Stop/xtask",
     "openwurli-ui",

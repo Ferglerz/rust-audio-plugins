@@ -1618,6 +1618,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
 
 [[package]]
+name = "fundament"
+version = "0.1.0"
+dependencies = [
+ "approx",
+ "atomic_float 1.1.0",
+ "nih_plug",
+ "nih_plug_vizia",
+ "pleasant-dsp",
+ "pleasant-ui",
+ "rustfft",
+]
+
+[[package]]
+name = "fundament-xtask"
+version = "0.1.0"
+dependencies = [
+ "nih_plug_xtask",
+]
+
+[[package]]
 name = "futures-channel"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"

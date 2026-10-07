@@ -15,6 +15,7 @@ cargo check -p tape_stop
 cargo check -p composure
 cargo check -p chordboard
 cargo check -p openwurli-ui
+cargo check -p fundament
 
 cargo test -p pleasant-dsp --quiet
 cargo test -p pleasant-curves --quiet
@@ -26,6 +27,7 @@ cargo test -p tape_stop --quiet
 cargo test -p composure --quiet
 cargo test -p chordboard --quiet
 cargo test -p openwurli-ui --quiet
+cargo test -p fundament --quiet
 
 cargo check -p pleasant-dsp-headless
 cargo check -p pleasant-curves-headless
