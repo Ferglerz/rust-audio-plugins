@@ -8,7 +8,8 @@ fn voice_leading_display_cycles_mode_and_modulation_is_one_column() {
     assert!(PIANO_LEADING.1 + PIANO_LEADING.3 + 2.0 < PIANO_SPLITS.1);
     assert!(PIANO_SPLITS.1 + PIANO_SPLITS.3 < PIANO_KEYS.1);
     let (mut cx, target, changes) = context();
-    click(&mut view, &mut cx, target, PIANO_LEADING);
+    let leading = view.voice_leading_rect();
+    click(&mut view, &mut cx, target, leading);
     assert_eq!(
         changes.borrow().last().copied(),
         Some((
@@ -20,10 +21,10 @@ fn voice_leading_display_cycles_mode_and_modulation_is_one_column() {
     );
     for i in 0..crate::engine::routing::SOURCE_COUNT {
         let r = meter_rect(i);
-        assert_eq!(r.1, meter_rect(0).1);
+        assert_eq!(r.0, meter_rect(0).0);
         assert!(r.1 + r.3 < MOD_SURFACE.1 + MOD_SURFACE.3);
         if i > 0 {
-            assert!(r.0 > meter_rect(i - 1).0 + meter_rect(i - 1).2);
+            assert!(r.1 > meter_rect(i - 1).1 + meter_rect(i - 1).3);
         }
     }
 }
@@ -251,7 +252,7 @@ fn compact_layout_preserves_keyboard_velocity_heights_and_memory_gap() {
     let tile = key_rect(KEY_COLUMNS * 2);
     assert_eq!(memory_rect(0).1 - tile.1 - tile.3, 10.0);
     assert!(tile.3 / tile.2 < 1.3);
-    assert_eq!(PIANO_SURFACE.2, W - 32.0);
+    assert_eq!(PIANO_SURFACE.2, MAIN_W - 32.0);
     let first = key_rect(0);
     let last = memory_rect(MEMORY_COUNT - 1);
     let body_top = CHORDS_SURFACE.1 + MODULE_HEADER_H;
@@ -266,8 +267,8 @@ fn compact_layout_preserves_keyboard_velocity_heights_and_memory_gap() {
         assert!(r.0 + r.2 <= CHORDS_SURFACE.0 + CHORDS_SURFACE.2 - 16.0);
     }
     let readout = chord_readout_rect();
-    assert!(readout.0 > last.0 + last.2);
-    assert!(readout.0 + readout.2 <= CHORDS_SURFACE.0 + CHORDS_SURFACE.2 - 16.0);
+    assert!(readout.1 + readout.3 < HEADER_H);
+    assert!(readout.0 + readout.2 < HEADER_PLAY_TAB.0);
 }
 #[test]
 fn all_layouts_keep_the_physical_keyboard_stagger() {
@@ -337,7 +338,7 @@ fn expanded_manual_field_preserves_all_four_insets() {
     for t in [0.0, 0.25, 0.5, 0.75, 1.0] {
         assert_eq!(
             insets(pad_rect(t), play_pad_rect(t)),
-            (60.0, 60.0, 20.0, 65.0)
+            (92.0, 60.0, 20.0, 65.0)
         );
     }
 }
@@ -461,4 +462,25 @@ fn strum_header_controls_remain_adjacent_through_expansion() {
         assert_eq!(zoom.1 + zoom.3 * 0.5, latch.1 + latch.3 * 0.5);
     }
     assert_eq!(initial_editor_size(), (W as u32, H as u32));
+}
+
+#[test]
+fn expression_bound_labels_follow_handles_at_all_positions() {
+    for expand in [0.0, 1.0] {
+        let field = play_pad_rect(expand);
+        let pad = pad_rect(expand);
+        for (low, high) in [(0.0,1.0),(0.0,0.01),(0.99,1.0),(0.495,0.505)] {
+            let [minimum, maximum] = expression_bound_labels(field, low, high);
+            for r in [minimum, maximum] {
+                assert!(r.0 >= pad.0 && r.0 + r.2 < field.0 - 36.0);
+                assert!(r.1 >= pad.1 && r.1 + r.3 <= pad.1 + pad.3);
+            }
+            assert_eq!(minimum.1 + minimum.3 * 0.5, field.1 + (1.0 - low) * field.3);
+            assert_eq!(maximum.1 + maximum.3 * 0.5, field.1 + (1.0 - high) * field.3);
+            let (_, min_y, _) = strum_bound_anchor_in(field, true, low);
+            let (_, max_y, _) = strum_bound_anchor_in(field, true, high);
+            assert_eq!(min_y, field.1 + (1.0 - low) * field.3);
+            assert_eq!(max_y, field.1 + (1.0 - high) * field.3);
+        }
+    }
 }

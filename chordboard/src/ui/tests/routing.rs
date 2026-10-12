@@ -7,6 +7,17 @@ fn routing_panel_owns_covered_targets_and_edits_the_selected_slot() {
     let mut view = view(2, false);
     let mut params = ChordboardParams::default();
     params.routes[7].source = IntParam::new("Source", 8, IntRange::Linear { min: 0, max: 9 });
+    params.routes[7].target = IntParam::new(
+        "Target",
+        crate::engine::routing::TARGETS
+            .iter()
+            .position(|t| t.id == "spread")
+            .unwrap() as i32,
+        IntRange::Linear {
+            min: 0,
+            max: crate::engine::routing::TARGET_COUNT as i32 - 1,
+        },
+    );
     params.mode = IntParam::new("Mode", 2, IntRange::Linear { min: 0, max: 3 });
     view.params = Arc::new(params);
     let (mut cx, target, changes) = context();
@@ -100,9 +111,9 @@ fn route_drag_to(
 }
 #[test]
 fn route_drag_links_only_on_drop_and_never_moves_the_destination_control() {
-    for (source, id) in [(0, "strings"), (3, "spread"), (8, "velocity")] {
+    for (source, id) in [(0, "length_ms"), (3, "spread"), (8, "humanize")] {
         let mut view = view(2, false);
-        if id == "velocity" {
+        if id == "humanize" {
             open_arp(&mut view);
         }
         let (mut cx, entity, changes) = context();
@@ -231,6 +242,18 @@ fn route_drag_reuses_existing_destination_and_preserves_range_and_curve() {
         let mut view = view(1, false);
         let route = &mut Arc::get_mut(&mut view.params).unwrap().routes[6];
         route.source = IntParam::new("Source", 1, IntRange::Linear { min: 0, max: 9 });
+        let length = crate::engine::routing::TARGETS
+            .iter()
+            .position(|t| t.id == "length_ms")
+            .unwrap() as i32;
+        route.target = IntParam::new(
+            "Target",
+            length,
+            IntRange::Linear {
+                min: 0,
+                max: crate::engine::routing::TARGET_COUNT as i32 - 1,
+            },
+        );
         route.min = FloatParam::new("Minimum", 0.25, FloatRange::Linear { min: 0.0, max: 1.0 });
         route.curve = FloatParam::new(
             "Curve",
@@ -242,9 +265,9 @@ fn route_drag_reuses_existing_destination_and_preserves_range_and_curve() {
         );
         open_arp(&mut view);
         let (mut cx, entity, changes) = context();
-        let rect = output_controls(1)
+        let rect = output_controls(2)
             .into_iter()
-            .find(|(id, _)| *id == "strings")
+            .find(|(id, _)| *id == "length_ms")
             .unwrap()
             .1;
         route_drag_to(
@@ -281,10 +304,10 @@ fn route_drag_exposes_keyboard_output_destinations() {
         .iter()
         .any(|(p, _)| *p == view.params.routes[view.route_slot].source.as_ptr()));
     changes.borrow_mut().clear();
-    // Starting a new drag folds the route editor away so the strumfield Strings is reachable.
+    // Starting a new drag folds the route editor away so the strumfield Length is reachable.
     let rect = output_controls(2)
         .into_iter()
-        .find(|(id, _)| *id == "strings")
+        .find(|(id, _)| *id == "length_ms")
         .unwrap()
         .1;
     route_drag_to(
@@ -313,22 +336,22 @@ fn route_drag_with_no_free_slots_does_not_overwrite_an_unrelated_link() {
     assert!(view.panel.is_none());
 }
 #[test]
-fn auto_strum_cannot_expand_and_collapses_the_manual_field() {
+fn arp_repeat_choice_keeps_the_manual_field_expandable() {
     let mut view = view(1, false);
     let (mut cx, target, _) = context();
-    assert!(!view.can_expand_strum());
+    assert!(view.can_expand_strum());
     click(&mut view, &mut cx, target, expand_rect(0.0));
-    assert_eq!(view.expand_target, 0.0);
+    assert_eq!(view.expand_target, 1.0);
     view.expand_progress = 1.0;
     view.expand_target = 1.0;
     view.tick(&mut EventContext::new_with_current(&mut cx, target));
-    assert_eq!(view.expand_target, 0.0);
+    assert_eq!(view.expand_target, 1.0);
 }
 #[test]
-fn modulator_drop_targets_include_auto_amount_and_manual_sweep() {
-    for (mode, id) in [(1, "strings_played"), (2, "x")] {
+fn modulator_drop_targets_include_arp_order_and_manual_sweep() {
+    for (mode, id) in [(1, "arp_pattern"), (2, "x")] {
         let mut view = view(mode, false);
-        if id == "strings_played" {
+        if id == "arp_pattern" {
             open_arp(&mut view);
         }
         let (mut cx, entity, changes) = context();
@@ -479,4 +502,51 @@ fn leading_animation_restarts_when_a_new_transition_arrives() {
     view.last_frame = Instant::now() - Duration::from_millis(50);
     view.tick(&mut EventContext::new_with_current(&mut cx, target));
     assert!(view.leading_progress < 0.2);
+}
+
+#[test]
+fn modulator_wire_has_two_rounded_corners_and_a_straight_middle() {
+    for (start, end) in [((10.0, 20.0), (100.0, 20.0)), ((100.0, 20.0), (10.0, 20.0))] {
+        let points = super::super::routing::rounded_mod_connection(start, end);
+        assert_eq!(points.first(), Some(&start));
+        assert_eq!(points.last(), Some(&end));
+        assert_eq!(points[1].0, start.0);
+        assert_eq!(points[18].0, end.0);
+        assert_eq!(points[9].1, points[10].1);
+        assert_eq!(points[9].1, 34.0);
+        assert!(points[9].0 != points[10].0);
+    }
+    for (start, end) in [((20.0, 10.0), (20.0, 100.0)), ((20.0, 100.0), (20.0, 10.0))] {
+        let points = super::super::routing::rounded_mod_connection(start, end);
+        assert_eq!(points.first(), Some(&start));
+        assert_eq!(points.last(), Some(&end));
+        assert_eq!(points[1].1, start.1);
+        assert_eq!(points[18].1, end.1);
+        assert_eq!(points[9].0, points[10].0);
+        assert!(points[9].1 != points[10].1);
+    }
+}
+
+#[test]
+fn additive_routes_leave_base_controls_editable_and_smoothing_edits_the_selected_slot() {
+    let mut view = view(2, false);
+    let mut params = ChordboardParams::default();
+    params.routes[7].source = IntParam::new("Source", 10, IntRange::Linear { min: 0, max: 11 });
+    let destination = crate::engine::routing::TARGETS.iter().position(|t| t.id == "velocity").unwrap();
+    params.routes[7].target = IntParam::new("Destination", destination as i32,
+        IntRange::Linear { min: 0, max: crate::engine::routing::TARGET_COUNT as i32 - 1 });
+    view.params = Arc::new(params);
+    let (mut cx, target, changes) = context();
+    assert!(!view.explain_modulation("velocity"));
+    assert!(view.routed_control(&view.control("velocity").unwrap()).is_none());
+    click(&mut view, &mut cx, target, meter_rect(9));
+    assert_eq!(view.route_slot, 7);
+    let (control, rect) = view.panel_controls().into_iter().find(|(c, _)| c.id == "route_smoothing_ms").unwrap();
+    assert_eq!(control.ptr, view.params.routes[7].smoothing_ms.as_ptr());
+    let value = pleasant_ui::slider_value_rect(rect);
+    click(&mut view, &mut cx, target, value);
+    assert_eq!(view.edit.as_ref().map(|edit| edit.target), Some("route_smoothing_ms"));
+    view.edit.as_mut().unwrap().text = "125 ms".into();
+    event(&mut view, &mut cx, target, value.0, value.1, WindowEvent::KeyDown(Code::Enter, None));
+    assert!(changes.borrow().iter().any(|(ptr, value)| *ptr == view.params.routes[7].smoothing_ms.as_ptr() && (*value - 0.0625).abs() < 1e-6));
 }

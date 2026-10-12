@@ -7,7 +7,7 @@ pub const CHORD: u8 = 0;
 pub const AUTO: u8 = 1;
 pub const MANUAL: u8 = 2;
 pub const ARP: u8 = 3;
-pub const SEQUENCER: u8 = 4;
+pub(super) const SELECT_ROOT_OWNER: u8 = 5;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Config {
@@ -18,6 +18,9 @@ pub struct Config {
     pub bass_channel: u8,
     pub upper_channel: u8,
     pub mode: u8,
+    /// Automatic playback augments the live performance instead of replacing its mode.
+    pub seq_enabled: bool,
+    pub seq_loop: bool,
     pub seq_pages: [u8; 4],
     pub quality: u8,
     pub voice_leading: u8,
@@ -34,6 +37,7 @@ pub struct Config {
     pub split_note: u8,
     pub bass_split: i16,
     pub bass_enabled: bool,
+    /// Unused: the string count follows the chord (`harmony::string_count`).
     pub strings: u8,
     pub strings_played: u8,
     pub routed_x: Option<f32>,
@@ -92,6 +96,8 @@ impl Default for Config {
             bass_channel: 0,
             upper_channel: 1,
             mode: CHORD,
+            seq_enabled: false,
+            seq_loop: true,
             seq_pages: [0; 4],
             quality: 0,
             voice_leading: 2,
@@ -257,6 +263,7 @@ pub struct Snapshot {
     pub second: i16,
     pub quality: u8,
     pub control_alteration: Option<u8>,
+    pub additions: u16,
     pub inversion: u8,
     pub accepted: u64,
     pub ignored: u64,
@@ -276,6 +283,7 @@ pub struct Snapshot {
     pub seq_pending: [u8; 4],
     pub seq_steps: [u8; 4],
     pub seq_running: bool,
+    pub time_sig_host: bool,
     pub time_sig_num: u8,
     pub time_sig_den: u8,
 }
@@ -298,6 +306,7 @@ impl Default for Snapshot {
             second: -1,
             quality: 0,
             control_alteration: None,
+            additions: 0,
             inversion: 0,
             accepted: 0,
             ignored: 0,
@@ -317,6 +326,7 @@ impl Default for Snapshot {
             seq_pending: [0; 4],
             seq_steps: [0; 4],
             seq_running: false,
+            time_sig_host: false,
             time_sig_num: 4,
             time_sig_den: 4,
         }

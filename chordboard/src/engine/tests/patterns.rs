@@ -2,7 +2,7 @@ use super::super::*;
 use super::support::*;
 
 #[test]
-fn final_contoured_velocity_drives_same_note_length_before_midi_output() {
+fn input_velocity_drives_length_independently_of_contoured_output() {
     for mode in [AUTO, MANUAL, ARP] {
         let mut e = Engine {
             sample_rate: 1000.0,
@@ -46,9 +46,14 @@ fn final_contoured_velocity_drives_same_note_length_before_midi_output() {
             })
             .unwrap();
         assert!((velocity - 0.2).abs() < 0.0001, "mode {mode}");
-        assert_eq!(e.snapshot().sources[6], velocity);
+        assert_eq!(e.snapshot().sources[6], 0.8);
         let voice = e.voices.iter().flatten().find(|v| !v.layer).unwrap();
-        let expected = (20.0 + velocity * 2980.0) as u64;
+        let expected = if mode == ARP {
+            // Arp owns its gate; the manual length route does not override it.
+            (125.0 * c.gate) as u64
+        } else {
+            (20.0 + 0.8 * 2980.0) as u64
+        };
         assert_eq!(voice.off - voice.started, expected, "mode {mode}");
         if mode == AUTO {
             assert!(e.scheduled.iter().flatten().count() >= 2);
@@ -56,7 +61,7 @@ fn final_contoured_velocity_drives_same_note_length_before_midi_output() {
     }
 }
 #[test]
-fn each_arp_note_routes_its_final_velocity_to_gate_without_rounding_the_step_twice() {
+fn arp_gate_uses_input_velocity_independently_of_each_output_note() {
     let mut e = Engine {
         sample_rate: 1000.0,
         ..Engine::default()
@@ -88,14 +93,14 @@ fn each_arp_note_routes_its_final_velocity_to_gate_without_rounding_the_step_twi
                 }
             });
         }
-        let (note, velocity) = emitted.unwrap();
+        let (note, _) = emitted.unwrap();
         let voice = e.voices.iter().flatten().find(|v| v.note == note).unwrap();
-        let expected_gate = 0.05 + 0.95 * velocity;
+        let expected_gate: f32 = 0.05 + 0.95 * 0.8;
         assert_eq!(
             voice.off - voice.started,
             (125.0 * expected_gate).max(1.0) as u64
         );
-        assert_eq!(e.snapshot().sources[6], velocity);
+        assert_eq!(e.snapshot().sources[6], 0.8);
     }
 }
 #[test]
@@ -103,6 +108,7 @@ fn strumfield_plays_without_a_self_route_and_still_drives_modulation() {
     let mut e = Engine::default();
     let mut c = Config {
         mode: MANUAL,
+        octaves: 3,
         routes: [routing::Route::default(); routing::ROUTE_COUNT],
         ..Config::default()
     };
@@ -122,7 +128,7 @@ fn strumfield_plays_without_a_self_route_and_still_drives_modulation() {
     );
     assert_eq!(
         notes(&send(&mut e, Command::X(1.0))),
-        vec![64, 67, 72, 76, 79, 84, 88]
+        vec![64, 67, 72, 76, 79, 84, 88, 91]
     );
     assert_eq!(e.sources[7], 1.0);
     assert_eq!(e.x, 1.0);
@@ -138,8 +144,7 @@ fn once_sweep_octaves_feel_and_duration_preserve_scheduled_cycle() {
             &mut e,
             Config {
                 mode: AUTO,
-                strings: 3,
-                strings_played: 3,
+                strings_played: 6,
                 octaves: 2,
                 strum_ms: 200.0,
                 strum_sync: false,
@@ -158,11 +163,18 @@ fn once_sweep_octaves_feel_and_duration_preserve_scheduled_cycle() {
         plain.iter().map(|s| s.note).collect::<Vec<_>>(),
         vec![60, 64, 67, 72, 76, 79]
     );
-    assert!(felt.first().unwrap().at <= 28);
+    assert!(felt.first().unwrap().at <= 70);
     assert!(felt.last().unwrap().at > plain.last().unwrap().at);
     assert!(felt.last().unwrap().at < 1200);
     assert!(felt[1].at > plain[1].at);
-    assert!(felt[1].velocity < plain[1].velocity);
+    assert!(felt
+        .iter()
+        .zip(&plain)
+        .any(|(f, p)| (f.velocity - p.velocity).abs() > 0.02));
+    assert!(felt
+        .iter()
+        .zip(&plain)
+        .all(|(f, p)| f.velocity >= p.velocity * 0.69 && f.velocity <= (p.velocity * 1.31).min(1.0)));
     assert!(felt.iter().all(|s| s.gate_step.is_none()));
     let previous = felt.iter().map(|s| (s.note, s.at)).collect::<Vec<_>>();
     let mut c = e.host_config;
@@ -261,7 +273,7 @@ fn once_long_patterns_fit_scheduler_and_played_order_stays_in_range() {
         },
     );
     on(&mut e, 24, 1);
-    assert_eq!(e.scheduled.iter().flatten().count(), 96);
+    assert_eq!(e.scheduled.iter().flatten().count(), 24);
     for count in 1..=12 {
         for step in 0..count {
             assert!(e.arp_index(5, step, count) < count);
@@ -289,4 +301,27 @@ fn note_feedback_records_octave_strikes_even_after_short_notes_end() {
     let snapshot = e.snapshot();
     assert!(snapshot.note_strikes[96] > 0);
     assert!(!snapshot.sounding_notes[96]);
+}
+
+#[test]
+fn input_velocity_survives_strums_and_tracks_new_input_extensions() {
+    let mut e = Engine::default();
+    configure(&mut e, Config {
+        mode: MANUAL,
+        contour: 1.0,
+        velocity: 0.4,
+        ..Config::default()
+    });
+    for (note, velocity) in [(60, 0.35), (64, 0.6), (67, 0.9)] {
+        e.midi_note(true, 0, note, velocity, &mut |_| {});
+        assert_eq!(e.snapshot().sources[6], velocity);
+        let mut output = Vec::new();
+        for string in 0..3 {
+            e.pluck_string(string, &mut |v| output.push(v));
+        }
+        assert!(output.iter().any(|v| matches!(v, Out::On(..))));
+        assert_eq!(e.snapshot().sources[6], velocity);
+    }
+    e.midi_note(false, 0, 67, 0.1, &mut |_| {});
+    assert_eq!(e.snapshot().sources[6], 0.9);
 }

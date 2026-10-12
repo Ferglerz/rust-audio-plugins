@@ -47,26 +47,6 @@ impl ChordboardView {
         (self.snapshot.root, self.snapshot.second)
     }
 
-    pub(super) fn chord_state_label(&self) -> &'static str {
-        if self.snapshot.root >= 0 {
-            "Held"
-        } else if self
-            .routed_plain("latch")
-            .map_or(self.params.latch.value(), |v| v >= 0.5)
-            && self.snapshot.full_notes.len > 0
-        {
-            "Latched"
-        } else if self.params.key_split.value() && self.snapshot.full_notes.len > 0 {
-            "Selected"
-        } else if self.snapshot.notes.len > 0 {
-            "Sustained"
-        } else if self.can_capture() {
-            "Last chord"
-        } else {
-            "Ready"
-        }
-    }
-
     pub(super) fn draw_chords(&self, d: &mut Draw) {
         d.font = self.ui_font.get();
         self.draw_chord_page_title(d, "CHORDS");
@@ -74,7 +54,7 @@ impl ChordboardView {
         let transpose = self
             .routed_plain("transpose")
             .unwrap_or(self.params.transpose.value() as f32) as i32;
-        for (i, label) in ["−12", "−1", &format!("{transpose:+} Reset"), "+1", "+12"]
+        for (i, label) in ["−12", "−1", &format!("{transpose:+}"), "+1", "+12"]
             .iter()
             .enumerate()
         {
@@ -94,8 +74,11 @@ impl ChordboardView {
             if i > 0 {
                 d.line(r.0, r.1 + 6.0, r.0, r.1 + r.3 - 6.0, alpha(MUTED, 0.3), 1.0);
             }
+            if i == 2 {
+                style::Icon::Reset.draw(d, r.0 + 13.0, r.1 + r.3 * 0.5, if transpose != 0 { GOLD } else { TEXT });
+            }
             d.text_centered(
-                r.0 + r.2 * 0.5,
+                r.0 + r.2 * 0.5 + if i == 2 { 8.0 } else { 0.0 },
                 r.1 + r.3 * 0.5 + 4.0,
                 label,
                 11.0,
@@ -105,16 +88,6 @@ impl ChordboardView {
                 self.live_highlight(d, r);
             }
         }
-        let readout = chord_readout_rect();
-        let state = self.chord_state_label();
-        if state != "Ready" {
-            d.text(readout.0, readout.1 + 68.0, state, 11.0, MUTED);
-        }
-        let name = self.chord_readout();
-        d.font = self.bold_font.get();
-        let title = self.fit_text(d, &name, readout.2, 22.0);
-        d.text(readout.0, readout.1 + 46.0, &title, 22.0, TEXT);
-        d.font = self.ui_font.get();
         let live_latch = self.routed_plain("latch");
         let latched = live_latch.map_or(self.params.latch.value(), |value| value >= 0.5);
         d.rect(LATCH.0, LATCH.1, LATCH.2, LATCH.3, BG);
@@ -138,12 +111,13 @@ impl ChordboardView {
             1.5,
         );
         d.font = self.bold_font.get();
-        d.text_centered(LATCH.0 + LATCH.2 * 0.5, LATCH.1 + 28.0, "Latch", 16.0, GOLD);
+        style::Icon::Lock.draw(d, LATCH.0 + 15.0, LATCH.1 + 24.0, GOLD);
+        d.text_centered(LATCH.0 + LATCH.2 * 0.5 + 9.0, LATCH.1 + 28.0, "Latch", 14.0, GOLD);
         d.text_centered(
             LATCH.0 + LATCH.2 * 0.5,
             LATCH.1 + 45.0,
             "Shift",
-            10.0,
+            11.0,
             MUTED,
         );
         d.font = self.ui_font.get();
@@ -160,7 +134,7 @@ impl ChordboardView {
         self.button_tinted(
             d,
             Menu::Key.trigger_rect(),
-            &format!("Key {} ▾", self.key_name()),
+            &format!("Key {} ▾", music::label(&self.key_name())),
             true,
             GOLD,
         );
@@ -181,6 +155,9 @@ impl ChordboardView {
             true,
             GOLD,
         );
+        if let Some(control) = self.control("root_on_select") {
+            self.draw_control(d, &control, ROOT_ON_SELECT, GOLD);
+        }
 
         let current_key = self.current_chord_key();
         for i in 0..KEY_COUNT {
@@ -271,6 +248,7 @@ impl ChordboardView {
                     self.note_name(recipe.root),
                     harmony::QUALITY_SUFFIX[recipe.quality as usize]
                 );
+                let chord = music::label(&chord);
                 let key_size =
                     (18.0 * (w - 8.0) / self.text_width(d, &chord, 18.0).max(1.0)).min(18.0);
                 d.text(
@@ -288,6 +266,7 @@ impl ChordboardView {
                     self.params.scale.value() as u8,
                     self.params.key_spelling.value(),
                 );
+                let roman = music::label(&roman);
                 let roman_size =
                     (11.0 * (w - 8.0) / self.text_width(d, &roman, 11.0).max(1.0)).min(11.0);
                 d.text(

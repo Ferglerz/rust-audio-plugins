@@ -136,7 +136,10 @@ impl ChordboardView {
 
     pub(super) fn control_octave_bounds(&self) -> Rect {
         let base = self.params.control_base.load(Ordering::Relaxed);
-        let base = if base < 0 { 12 } else { base.min(116) } as u8;
+        if base < 0 {
+            return (0.0, 0.0, 0.0, 0.0);
+        }
+        let base = base.min(116) as u8;
         let first = piano_key_rect(base);
         let last = piano_key_rect(base + 11);
         (
@@ -147,7 +150,51 @@ impl ChordboardView {
         )
     }
 
+    pub(super) fn control_octave_delete_rect(&self) -> Rect {
+        let r = self.control_octave_bounds();
+        (r.0 + r.2 - 22.0, r.1, 22.0, 22.0)
+    }
+
+    fn control_octave_add_rect() -> Rect {
+        (PIANO_LEADING.0, PIANO_LEADING.1 + 2.0, 148.0, 24.0)
+    }
+
+    fn clear_control_octave(&mut self, cx: &mut EventContext) {
+        if self.params.control_base.load(Ordering::Relaxed) < 0 {
+            return;
+        }
+        self.params.control_base.store(-1, Ordering::Relaxed);
+        if self.learning() == 4 {
+            self.request_learn(0);
+        }
+        cx.needs_redraw();
+    }
+
+    pub(super) fn press_piano_right(&mut self, cx: &mut EventContext, x: f32, y: f32) -> bool {
+        if self.params.control_base.load(Ordering::Relaxed) >= 0
+            && hit(self.control_octave_bounds(), x, y)
+            && piano_note_at(x, y).is_none()
+        {
+            self.clear_control_octave(cx);
+            return true;
+        }
+        false
+    }
+
     pub(super) fn press_piano(&mut self, cx: &mut EventContext, x: f32, y: f32) -> bool {
+        if self.params.control_base.load(Ordering::Relaxed) >= 0
+            && hit(self.control_octave_delete_rect(), x, y)
+        {
+            self.clear_control_octave(cx);
+            return true;
+        }
+        if self.params.control_base.load(Ordering::Relaxed) < 0
+            && hit(Self::control_octave_add_rect(), x, y)
+        {
+            self.request_learn(if self.learning() == 4 { 0 } else { 4 });
+            cx.needs_redraw();
+            return true;
+        }
         let control_octave = self.control_octave_bounds();
         if hit(control_octave, x, y)
             && (self.learning() == 0 || (self.learning() == 4 && y > PIANO_KEYS.1 + PIANO_KEYS.3))
@@ -289,16 +336,7 @@ impl ChordboardView {
             self.set_split_at(cx, x, y);
             return true;
         }
-        if hit(INTERLOCK, x, y) {
-            let param = &self.params.interlock;
-            Self::emit(
-                cx,
-                param.as_ptr(),
-                param.preview_normalized((param.value() + 1) % 3),
-            );
-            return true;
-        }
-        if hit(PIANO_LEADING, x, y) {
+        if hit(self.voice_leading_rect(), x, y) {
             let param = &self.params.voice_leading;
             Self::emit(
                 cx,
@@ -353,8 +391,23 @@ impl ChordboardView {
                 ));
             }
         }
+        if self.params.control_base.load(Ordering::Relaxed) < 0
+            && hit(Self::control_octave_add_rect(), x, y)
+        {
+            return Some(
+                "Add control octave · Learn C from a MIDI key or click an onscreen key".into(),
+            );
+        }
         if hit(self.control_octave_bounds(), x, y) && piano_note_at(x, y).is_none() {
-            return Some("Learn the control octave from a MIDI key or click an onscreen key · Coral keys select chord qualities silently".into());
+            return Some(
+                "Learn the control octave from a MIDI key or click an onscreen key · Right-click or × to remove · Coral keys select chord qualities silently"
+                    .into(),
+            );
+        }
+        if self.params.control_base.load(Ordering::Relaxed) >= 0
+            && hit(self.control_octave_delete_rect(), x, y)
+        {
+            return Some("Remove control octave".into());
         }
         if hit(
             keyboard_control_rect("bass_split", self.params.mpe_enabled()),
@@ -416,13 +469,7 @@ impl ChordboardView {
             }
             return Some(parts.join(" · "));
         }
-        if hit(INTERLOCK, x, y) {
-            return Some(
-                "Interlock: arp strikes that land on a chord strike · Avoid chords softens and shortens them · Match chords accents them · Works with every voice-leading mode · An Arp sequencer page can override it"
-                    .into(),
-            );
-        }
-        if hit(PIANO_LEADING, x, y) {
+        if hit(self.voice_leading_rect(), x, y) {
             let from = self.snapshot.leading_from;
             let to = self.snapshot.leading_to;
             if self.params.voice_leading.value() != 2 && from.len > 0 && to.len > 0 {
@@ -490,11 +537,11 @@ impl ChordboardView {
             },
         );
         let split_note = self.params.split_note.value() as u8;
-        self.button(
+        self.icon_button(
             d,
             melody_split_rect(self.params.mpe_enabled()),
             if self.learning() == 6 {
-                "Cancel Learn"
+                "Cancel"
             } else {
                 "Learn Split"
             },
@@ -504,6 +551,7 @@ impl ChordboardView {
             } else {
                 MUTED
             },
+            style::Icon::Learn,
         );
         let base = self.params.control_base.load(Ordering::Relaxed);
         if !self.params.bass_enabled.value() {
@@ -603,12 +651,14 @@ impl ChordboardView {
         }
         // Paths land on the keys; split handles and their rails paint over them.
         self.draw_piano_leading(d);
-        self.draw_interlock(d);
+
         let control_rect = self.control_octave_bounds();
-        let control_hover = self
-            .hover_pointer()
-            .is_some_and(|(x, y)| hit(control_rect, x, y));
-        if control_hover || self.learning() == 4 {
+        let control_enabled = base >= 0;
+        let control_hover = control_enabled
+            && self
+                .hover_pointer()
+                .is_some_and(|(x, y)| hit(control_rect, x, y));
+        if control_enabled && (control_hover || self.learning() == 4) {
             let pulse = self.voicing_pulse.sin() * 0.5 + 0.5;
             let keys = (
                 control_rect.0,
@@ -649,16 +699,58 @@ impl ChordboardView {
                 alpha(COLORS[4], 0.8),
                 1.0,
             );
+            style::Icon::Learn.draw(d, cx - width * 0.5 + 12.0, y + 8.0, COLORS[4]);
             d.text_centered(
-                cx,
+                cx + 10.0,
                 y + 11.5,
-                if self.learning() == 4 {
-                    "Cancel learn"
-                } else {
-                    "Learn octave"
-                },
-                TEXT_SMALL,
+                if self.learning() == 4 { "Cancel" } else { "Learn octave" },
+                11.0,
                 COLORS[4],
+            );
+            if control_hover && self.learning() != 4 {
+                let close = self.control_octave_delete_rect();
+                let hot = self
+                    .hover_pointer()
+                    .is_some_and(|(x, y)| hit(close, x, y));
+                d.rect(close.0, close.1, close.2, close.3, PANEL);
+                d.text_centered(
+                    close.0 + close.2 / 2.0,
+                    close.1 + 16.0,
+                    "×",
+                    16.0,
+                    if hot { TEXT } else { MUTED },
+                );
+            }
+        } else if base < 0 {
+            let add = Self::control_octave_add_rect();
+            let hot = self.hover_pointer().is_some_and(|(x, y)| hit(add, x, y));
+            d.rounded_rect(add.0, add.1, add.2, add.3, 3.0, PANEL);
+            d.outline_rounded(
+                add.0,
+                add.1,
+                add.2,
+                add.3,
+                3.0,
+                alpha(COLORS[4], if hot { 0.75 } else { 0.35 }),
+                1.0,
+            );
+            style::Icon::Learn.draw(d, add.0 + 15.0, add.1 + add.3 / 2.0, if hot { TEXT } else { MUTED });
+            d.text_centered(
+                add.0 + add.2 / 2.0 + 9.0,
+                add.1 + 17.5,
+                if self.learning() == 4 {
+                    "Cancel"
+                } else {
+                    "Control octave"
+                },
+                11.0,
+                if self.learning() == 4 {
+                    COLORS[4]
+                } else if hot {
+                    TEXT
+                } else {
+                    MUTED
+                },
             );
         }
         let voicing_hover = self
@@ -833,26 +925,48 @@ impl ChordboardView {
         }
     }
 
-    fn draw_interlock(&self, d: &mut Draw) {
+    pub(super) fn draw_interlock(&self, d: &mut Draw) {
+        let state = self.params.sequencer.snapshot();
+        let page = &state.lanes[0][self.sequencer_ui.edit_pages[0]];
+        let label = page.interlock_override.map_or("Page: use global", |value| ["Page: independent", "Page: soften arp", "Page: accent arp"][value.min(2) as usize]);
+        self.button(d, ARP_PAGE_ACCENT, label, page.interlock_override.is_some(), COLORS[1]);
         let value = self.params.interlock.value();
         d.rounded_rect(INTERLOCK.0, INTERLOCK.1, INTERLOCK.2, INTERLOCK.3, 6.0, PANEL);
         self.button(
             d,
             INTERLOCK,
-            &format!(
-                "Interlock: {}",
-                crate::params::INTERLOCK_NAMES[value.clamp(0, 2) as usize]
-            ),
+            "",
             value != 0,
             COLORS[1],
         );
+        let cx = INTERLOCK.0 + INTERLOCK.2 * 0.5;
+        d.text_centered(cx, INTERLOCK.1 + 11.0, "Arp–Chord Accent", 11.0, MUTED);
+        d.text_centered(
+            cx,
+            INTERLOCK.1 + 24.0,
+            crate::params::ARP_CHORD_ACCENT_NAMES[value.clamp(0, 2) as usize],
+            11.0,
+            if value == 0 { TEXT } else { COLORS[1] },
+        );
+    }
+
+    pub(super) fn voice_leading_rect(&self) -> Rect {
+        let fallback = [48, 55, 60, 64, 67];
+        let notes = self.snapshot.full_notes.as_slice();
+        let visible = if notes.is_empty() { &fallback[..] } else { notes };
+        let low = self.snapshot.leading_from.as_slice().iter()
+            .chain(self.snapshot.leading_to.as_slice()).chain(visible).copied().min().unwrap_or(48);
+        let high = self.snapshot.leading_from.as_slice().iter()
+            .chain(self.snapshot.leading_to.as_slice()).chain(visible).copied().max().unwrap_or(67);
+        let x = piano_note_x(low) - 10.0;
+        (x, PIANO_LEADING.1, (piano_note_x(high) - x + 10.0).max(40.0), PIANO_LEADING.3)
     }
 
     fn draw_piano_leading(&self, d: &mut Draw) {
         let leading_y = PIANO_LEADING.1 + PIANO_LEADING.3 * 0.5;
         let from = self.snapshot.leading_from;
         let to = self.snapshot.leading_to;
-        let hover = self.hover_amount(PIANO_LEADING);
+        let hover = self.hover_amount(self.voice_leading_rect());
         let notes = self.snapshot.full_notes.as_slice();
         let low = from
             .as_slice()
@@ -894,26 +1008,19 @@ impl ChordboardView {
                 ),
                 2.0,
             );
-
+        }
+        if active || hover > 0.005 {
             let label = ["Nearest", "Furthest", "Off"][mode.clamp(0, 2) as usize];
-            let cx = (x + width + 64.0).min(INTERLOCK.0 - 62.0);
+            let cx = if x + width + 122.0 <= PIANO_LEADING.0 + PIANO_LEADING.2 {
+                x + width + 64.0
+            } else {
+                (x - 64.0).max(PIANO_LEADING.0 + 54.0)
+            };
             d.rounded_rect(cx - 54.0, PIANO_LEADING.1 + 6.0, 108.0, 16.0, 3.0, BG);
-            d.outline_rounded(
-                cx - 54.0,
-                PIANO_LEADING.1 + 6.0,
-                108.0,
-                16.0,
-                3.0,
-                alpha(COLORS[1], if active { 0.8 } else { hover * 0.8 }),
-                1.0,
-            );
-            d.text_centered(
-                cx,
-                PIANO_LEADING.1 + 17.5,
-                label,
-                TEXT_SMALL,
-                if active { COLORS[1] } else { MUTED },
-            );
+            d.outline_rounded(cx - 54.0, PIANO_LEADING.1 + 6.0, 108.0, 16.0,
+                3.0, alpha(COLORS[1], if active { 0.8 } else { hover * 0.8 }), 1.0);
+            d.text_centered(cx, PIANO_LEADING.1 + 17.5, label, TEXT_SMALL,
+                if active { COLORS[1] } else { MUTED });
         }
         if mode == 2 || from.len == 0 || to.len == 0 {
             let notes = self.snapshot.full_notes.as_slice();
@@ -1017,16 +1124,17 @@ impl ChordboardView {
                 TEAL
             };
             if c.id == "bass_split" {
-                self.button(
+                self.icon_button(
                     d,
                     r,
                     if self.learning() == 5 {
-                        "Cancel Learn"
+                        "Cancel"
                     } else {
                         "Learn Split"
                     },
                     self.learning() == 5,
                     GOLD,
+                    style::Icon::Learn,
                 );
                 continue;
             }

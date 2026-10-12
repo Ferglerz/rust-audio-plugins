@@ -2,6 +2,7 @@ use super::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Menu {
+    Meter(bool),
     RouteSource,
     RouteTarget,
     Key,
@@ -9,6 +10,7 @@ pub(super) enum Menu {
     KeyboardParam(&'static str),
     YTarget,
     StrumRate,
+    ArpRate,
     MappingKind,
     MappingChannel(bool),
     MappingCc(bool),
@@ -17,6 +19,7 @@ pub(super) enum Menu {
 impl Menu {
     pub(super) fn items(self) -> Vec<String> {
         let labels: &[&str] = match self {
+            Self::Meter(den) => return if den { (0..=5).map(|n| (1 << n).to_string()).collect() } else { (1..=32).map(|n| n.to_string()).collect() },
             Self::RouteSource => &crate::engine::routing::SOURCES,
             Self::RouteTarget => {
                 return crate::engine::routing::available_targets()
@@ -43,7 +46,7 @@ impl Menu {
                 "Custom CC",
             ],
             Self::MappingKind => &["Off", "CC · Auto 7/14-bit", "Pitch bend"],
-            Self::StrumRate => {
+            Self::StrumRate | Self::ArpRate => {
                 return ARP_RATES
                     .iter()
                     .map(|(label, _)| label.to_string())
@@ -66,6 +69,7 @@ impl Menu {
 
     pub(super) fn title(self) -> &'static str {
         match self {
+            Self::Meter(den) => if den { "Beat unit" } else { "Beats per bar" },
             Self::RouteSource => "Source",
             Self::RouteTarget => "Destination",
             Self::Key => "Key centre",
@@ -78,6 +82,7 @@ impl Menu {
             },
             Self::YTarget => "Y destination",
             Self::StrumRate => "Sweep duration",
+            Self::ArpRate => "Arp rate",
             Self::MappingKind => "Controller source",
             Self::MappingChannel(_) => "MIDI channel",
             Self::MappingCc(_) => "Controller number",
@@ -89,8 +94,8 @@ impl Menu {
             Self::RouteSource | Self::RouteTarget => 146.0,
             Self::Key => 60.0,
             Self::Scale => 146.0,
-            Self::KeyboardParam(_) => 40.0,
-            Self::YTarget | Self::StrumRate => 112.0,
+            Self::Meter(_) | Self::KeyboardParam(_) => 40.0,
+            Self::YTarget | Self::StrumRate | Self::ArpRate => 112.0,
             Self::MappingKind => 130.0,
             Self::MappingChannel(_) => 40.0,
             Self::MappingCc(_) => 34.0,
@@ -101,11 +106,11 @@ impl Menu {
         match self {
             Self::RouteSource => 2,
             Self::RouteTarget => 4,
-            Self::Scale | Self::MappingKind | Self::StrumRate | Self::YTarget => 2,
+            Self::Scale | Self::MappingKind | Self::StrumRate | Self::ArpRate | Self::YTarget => 2,
             Self::MappingChannel(_) => 6,
             Self::MappingCc(_) => 16,
             Self::Key => 3,
-            Self::KeyboardParam(_) => 6,
+            Self::Meter(_) | Self::KeyboardParam(_) => 6,
         }
     }
 
@@ -115,6 +120,7 @@ impl Menu {
                 ("Routing", vec![0]),
                 ("MIDI expression", (1..7).collect()),
                 ("Performance", (7..10).collect()),
+                ("Sequencer modulators", (10..12).collect()),
             ],
             Self::RouteTarget => {
                 let targets: Vec<_> = crate::engine::routing::available_targets().collect();
@@ -124,9 +130,11 @@ impl Menu {
                     ("Arpeggiator", Vec::new()),
                     ("Performance", Vec::new()),
                     ("Controllers & MIDI", Vec::new()),
+                    ("Modulators", Vec::new()),
                 ];
                 for (index, (_, target)) in targets.iter().enumerate() {
                     let group = match target.id {
+                        _ if target.source_index().is_some() => 5,
                         "spread" | "quality" | "inversion" | "transpose" | "filter" => 0,
                         "strings" | "strings_played" | "x" => 1,
                         "arp_pattern" | "rate" | "strum_ms" | "strum_sync" | "strum_hold"
@@ -213,16 +221,41 @@ impl Menu {
 
     pub(super) fn trigger_rect(self) -> Rect {
         match self {
+            Self::Meter(den) => if den { METER_DEN } else { METER_NUM },
             Self::RouteSource => ROUTE_SOURCE,
             Self::RouteTarget => ROUTE_TARGET,
-            Self::Key => (104.0, 100.0, 104.0, 28.0),
-            Self::Scale => (216.0, 100.0, 238.0, 28.0),
+            Self::Key => KEY_MENU,
+            Self::Scale => SCALE_MENU,
             Self::KeyboardParam(id) => keyboard_control_rect(id, false),
             Self::StrumRate => STRUM_RATE,
+            Self::ArpRate => SEQ_RATE,
             Self::YTarget => (772.0, 472.0, 224.0, 30.0),
             Self::MappingKind => (776.0, 324.0, 200.0, 30.0),
             Self::MappingChannel(_) => (984.0, 324.0, 110.0, 30.0),
             Self::MappingCc(_) => (1102.0, 324.0, 130.0, 30.0),
         }
+    }
+}
+
+impl ChordboardView {
+    /// Navigate the displayed rows, including grouped menus and disabled choices.
+    pub(super) fn menu_neighbor(&self, menu: Menu, index: usize, code: Code) -> usize {
+        let current = self.menu_option_rect(menu, index);
+        let horizontal = matches!(code, Code::ArrowLeft | Code::ArrowRight);
+        let forward = matches!(code, Code::ArrowRight | Code::ArrowDown);
+        let mut candidates: Vec<_> = (0..menu.items().len())
+            .filter(|&next| next != index && self.route_menu_allowed(menu, next))
+            .filter_map(|next| {
+                let r = self.menu_option_rect(menu, next);
+                let primary = if horizontal { r.0 - current.0 } else { r.1 - current.1 };
+                if (horizontal && (r.1 - current.1).abs() > 0.5)
+                    || (forward && primary <= 0.5) || (!forward && primary >= -0.5) {
+                    return None;
+                }
+                let secondary = if horizontal { 0.0 } else { (r.0 - current.0).abs() };
+                Some((next, primary.abs(), secondary))
+            }).collect();
+        candidates.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.2.total_cmp(&b.2)));
+        candidates.first().map_or(index, |candidate| candidate.0)
     }
 }

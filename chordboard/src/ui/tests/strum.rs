@@ -271,7 +271,7 @@ fn expanded_strum_consumes_covered_chord_clicks_and_keeps_the_play_pad() {
         .any(|(ptr, _)| *ptr == view.params.x.as_ptr()));
 }
 #[test]
-fn arp_mode_collapses_an_open_strum_field() {
+fn arp_repeat_choice_preserves_an_open_strum_field() {
     let mut view = view(2, false);
     let (mut cx, target, _) = context();
     view.expand_progress = 1.0;
@@ -280,10 +280,10 @@ fn arp_mode_collapses_an_open_strum_field() {
     view.params = super::support::view(3, false).params.clone();
     view.last_frame = Instant::now();
     view.tick(&mut EventContext::new_with_current(&mut cx, target));
-    assert_eq!(view.expand_target, 0.0);
+    assert_eq!(view.expand_target, 1.0);
     for _ in 0..3 {
         view.last_frame = Instant::now() - Duration::from_millis(100);
         view.tick(&mut EventContext::new_with_current(&mut cx, target));
     }
-    assert_eq!(view.expand_progress, 0.0);
+    assert_eq!(view.expand_progress, 1.0);
 }

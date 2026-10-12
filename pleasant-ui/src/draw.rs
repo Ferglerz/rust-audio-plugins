@@ -79,6 +79,10 @@ pub struct Draw<'a> {
     pub ox: f32,
     pub oy: f32,
     pub font: Option<FontId>,
+    /// Optional symbol font, after the primary text face.
+    pub fallback_font: Option<FontId>,
+    /// Optional UI icon font, independent of text and music symbols.
+    pub icon_font: Option<FontId>,
     pub offset_x: f32,
     pub alpha_mul: f32,
     /// Desaturate and dim disabled module content without changing its geometry.
@@ -120,6 +124,8 @@ impl<'a> Draw<'a> {
             ox,
             oy,
             font,
+            fallback_font: None,
+            icon_font: None,
             offset_x: 0.0,
             alpha_mul: 1.0,
             disabled: false,

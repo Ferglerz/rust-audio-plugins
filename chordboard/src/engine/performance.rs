@@ -87,7 +87,7 @@ impl Engine {
         }
     }
     fn emit_expression(&self, channel: u8, out: &mut impl FnMut(Out)) {
-        let e = self.expression;
+        let e = self.routed_expression();
         let pressure = if self.y_active && self.config.y_target == 2 {
             self.y
         } else {
@@ -106,6 +106,7 @@ impl Engine {
         out(Out::Pressure(channel, pressure));
         out(Out::Cc(channel, 74, timbre));
         out(Out::Bend(channel, bend));
+        self.emit_routed_controllers(channel, out);
         if self.y_active && self.config.y_target == 5 {
             out(Out::Cc(channel, self.config.y_cc, self.y));
         }
@@ -127,37 +128,31 @@ impl Engine {
         gate_step: Option<u64>,
         out: &mut impl FnMut(Out),
     ) {
-        // Publish the final, contoured velocity before evaluating destinations
-        // or emitting MIDI. Do not reconfigure here: that would revoice harmony
-        // and discard other pending strum notes.
-        let velocity = velocity.clamp(0.01, 1.0);
-        self.sources[6] = velocity;
-        let previous = self.config;
-        let mut config = previous;
-        self.apply_routes(&mut config);
-        self.config = config;
-        let has_velocity_route = |id: &str| {
-            self.host_config.routes.iter().any(|r| {
-                r.active() && r.source == 7 && routing::TARGETS[r.target as usize].id == id
-            })
-        };
-        let duration = if duration == u64::MAX {
-            duration
-        } else if has_velocity_route("length_ms") {
-            self.duration()
-        } else if previous.mode == ARP && has_velocity_route("gate") {
-            gate_step.map_or(duration, |step| (step as f32 * config.gate).max(1.0) as u64)
-        } else {
-            duration
-        };
-        self.strike_prepared(note, velocity, duration, out);
-        self.config = previous;
+        self.strike_owned_with_gate(note, velocity, duration, gate_step, 0, out);
+    }
+    pub(super) fn strike_selection_root(&mut self, note: u8, out: &mut impl FnMut(Out)) {
+        self.strike_owned_with_gate(
+            note, self.strike_velocity(), self.duration(), None, SELECT_ROOT_OWNER, out,
+        );
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn strike_owned_with_gate(
+        &mut self,
+        note: u8,
+        velocity: f32,
+        duration: u64,
+        _gate_step: Option<u64>,
+        owner: u8,
+        out: &mut impl FnMut(Out),
+    ) {
+        self.strike_prepared(note, velocity.clamp(0.01, 1.0), duration, owner, out);
     }
     fn strike_prepared(
         &mut self,
         note: u8,
         velocity: f32,
         duration: u64,
+        owner: u8,
         out: &mut impl FnMut(Out),
     ) {
         self.setup(out);
@@ -166,7 +161,7 @@ impl Engine {
             .voices
             .iter_mut()
             .flatten()
-            .find(|v| v.note == note && v.layer && v.owner == 0)
+            .find(|v| v.note == note && v.layer && v.owner == owner)
         {
             // A shared sustained note must never receive a premature Note Off.
             voice.off = off;
@@ -174,11 +169,11 @@ impl Engine {
             return;
         }
         for i in 0..self.voices.len() {
-            if self.voices[i].is_some_and(|v| v.note == note && v.owner == 0) {
+            if self.voices[i].is_some_and(|v| v.note == note && v.owner == owner) {
                 self.end_voice(i, 0.0, out);
             }
         }
-        self.allocate_voice(note, velocity, off, false, out);
+        self.allocate_owned_voice(note, velocity, off, false, owner, None, out);
         self.mark_strike(note);
     }
     pub(super) fn allocate_voice(
@@ -208,7 +203,7 @@ impl Engine {
         self.setup(out);
         let capacity = if self.config.mpe {
             self.config.members.clamp(1, 15) as usize
-        } else if self.config.mode == SEQUENCER {
+        } else if self.config.seq_enabled {
             self.voices.len()
         } else {
             15
@@ -260,7 +255,7 @@ impl Engine {
     }
     fn mark_strike(&mut self, note: u8) {
         self.note_strikes[note as usize] = self.note_strikes[note as usize].wrapping_add(1);
-        for i in 0..self.config.strings as usize {
+        for i in 0..self.string_count() {
             if self.notes.string(i) == Some(note) {
                 self.strikes[i] = self.strikes[i].wrapping_add(1);
             }
@@ -273,6 +268,15 @@ impl Engine {
         // A full scheduler drops the new strike, never a pending Note Off.
     }
     pub(super) fn strike_velocity(&self) -> f32 {
+        let base = self.base_strike_velocity();
+        if self.y_active && self.config.y_target == 0
+            && !self.host_config.routes.iter().any(|r| r.active() && routing::TARGETS[r.target as usize].id == "velocity") {
+            (base * self.y / 0.8).clamp(0.01, 1.0)
+        } else {
+            base
+        }
+    }
+    pub(super) fn base_strike_velocity(&self) -> f32 {
         if self
             .host_config
             .routes
@@ -281,6 +285,9 @@ impl Engine {
         {
             return self.config.velocity.clamp(0.01, 1.0);
         }
+        if let Some(velocity) = self.source_overrides[6] {
+            return (velocity * self.config.velocity / 0.8).clamp(0.01, 1.0);
+        }
         let base = self.root.map_or(self.config.velocity, |s| {
             if s.channel == 16 {
                 self.config.velocity
@@ -288,11 +295,7 @@ impl Engine {
                 s.velocity * self.config.velocity / 0.8
             }
         });
-        if self.y_active && self.config.y_target == 0 {
-            (base * self.y / 0.8).clamp(0.01, 1.0)
-        } else {
-            base.clamp(0.01, 1.0)
-        }
+        base.clamp(0.01, 1.0)
     }
     pub(super) fn duration(&self) -> u64 {
         self.ms(self.config.length_ms
@@ -312,10 +315,10 @@ impl Engine {
             if let Some(x) = self.config.routed_x {
                 self.position_value(x, axis, out);
             } else {
-                self.position_value(value, axis, out);
+                self.position_value(self.source_overrides[7].unwrap_or(value), axis, out);
             }
         } else {
-            self.position_value(value, axis, out);
+            self.position_value(self.source_overrides[8].unwrap_or(value), axis, out);
         }
     }
     // Routed positions do not feed back into source modulation.
@@ -341,8 +344,9 @@ impl Engine {
             return;
         }
         self.x = value;
-        let count = self.config.strings.clamp(3, 12) as i16;
+        let count = self.string_count() as i16;
         let location = value * (count - 1) as f32;
+        self.last_string = self.last_string.min(count - 1);
         if !self.x_primed || !self.manual_active() || self.notes.len == 0 {
             self.last_string = location.round() as i16;
             self.x_primed = true;
@@ -358,9 +362,12 @@ impl Engine {
             self.pluck_string(self.last_string as usize, out);
         }
     }
+    pub(super) fn string_count(&self) -> usize {
+        harmony::string_count(self.notes.len, self.config.octaves)
+    }
     pub(super) fn pluck_string(&mut self, index: usize, out: &mut impl FnMut(Out)) {
         if let Some(note) = self.notes.string(index) {
-            let ratio = index as f32 / (self.config.strings.saturating_sub(1)).max(1) as f32;
+            let ratio = index as f32 / self.string_count().saturating_sub(1).max(1) as f32;
             let velocity = self.strike_velocity()
                 * contour_factor(ratio, self.config.contour, self.config.contour_curve);
             self.strike(note, velocity.clamp(0.01, 1.0), self.duration(), out);
@@ -389,6 +396,9 @@ impl Engine {
         self.arp_cycle_step = 0;
         self.arp_next = self.now;
         self.arp_fraction = 0.0;
+        if !self.config.seq_loop {
+            self.restart_sequence_arp();
+        }
     }
 
     /// Advance a span without scanning every voice and pending strike per sample.
@@ -407,6 +417,7 @@ impl Engine {
                 // The arp clock and RNG also advance in the other modes.
                 .chain((self.notes.len > 0).then_some(self.arp_next))
                 .chain(self.sequencer_deadline())
+                .chain(self.smoothing_active().then_some(self.now))
                 .min()
                 .unwrap_or(u64::MAX);
             // Stop at MAX even when idle: tick owns the wrapping clock and
@@ -424,6 +435,7 @@ impl Engine {
     }
 
     pub fn tick(&mut self, out: &mut impl FnMut(Out)) {
+        self.tick_route_smoothing(out);
         for i in 0..self.voices.len() {
             if self.voices[i].is_some_and(|v| !v.layer && v.off <= self.now) {
                 self.end_voice(i, 0.0, out);
@@ -452,7 +464,8 @@ impl Engine {
             let exact_step = (base * swing).max(1.0) + self.arp_fraction;
             let step = exact_step.floor() as u64;
             self.arp_fraction = exact_step - step as f64;
-            let random = self.random() as f32 / u32::MAX as f32;
+            // Advance the RNG every arp step in every mode (keeps clock/RNG state mode-independent).
+            let _ = self.random();
             if let Some(note) = self.notes.string(index) {
                 let already_started = self.config.root_on_select
                     && self.selected_root() == Some(note)
@@ -462,9 +475,11 @@ impl Engine {
                         .flatten()
                         .any(|v| v.note == note && v.started == self.now);
                 if self.config.mode == ARP && !already_started {
+                    let at = self.humanized_at(self.now, step as f64, self.now);
+                    let human_vel = self.humanize_velocity_factor();
                     self.schedule(Scheduled {
                         gate_step: Some(step),
-                        at: self.now + (step as f32 * 0.1 * self.config.humanize * random) as u64,
+                        at,
                         note,
                         velocity: (self.strike_velocity()
                             * contour_factor(
@@ -472,7 +487,7 @@ impl Engine {
                                 self.config.contour,
                                 self.config.contour_curve,
                             )
-                            * (1.0 - self.config.humanize * 0.2 * random))
+                            * human_vel)
                             .clamp(0.01, 1.0),
                         duration: (step as f32 * self.config.gate).max(1.0) as u64,
                     });

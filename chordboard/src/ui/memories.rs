@@ -285,21 +285,13 @@ impl ChordboardView {
                 TEXT_SMALL,
                 MUTED,
             );
-            let label = chord.map_or_else(|| "+".into(), harmony::chord_name);
-            let label = self.fit_text(d, &label, r.2 - 4.0, 12.0);
-            d.text_centered(
-                r.0 + r.2 / 2.0,
-                r.1 + 32.0,
-                &label,
-                12.0,
-                if source {
-                    MUTED
-                } else if chord.is_some() {
-                    GOLD
-                } else {
-                    MUTED
-                },
-            );
+            if let Some(chord) = chord {
+                let label = music::label(&harmony::chord_name(chord));
+                let label = self.fit_text(d, &label, r.2 - 4.0, 12.0);
+                d.text_centered(r.0 + r.2 / 2.0, r.1 + 32.0, &label, 12.0, if source { MUTED } else { GOLD });
+            } else {
+                style::Icon::Add.draw(d, r.0 + r.2 / 2.0, r.1 + 28.0, MUTED);
+            }
             d.text_right(
                 r.0 + r.2 - 4.0,
                 r.1 + r.3 - 4.0,
@@ -311,13 +303,7 @@ impl ChordboardView {
                 let close = memory_delete_rect(i);
                 let hot = self.hover_pointer().is_some_and(|(x, y)| hit(close, x, y));
                 d.rect(close.0, close.1, close.2, close.3, PANEL);
-                d.text_centered(
-                    close.0 + close.2 / 2.0,
-                    close.1 + 16.0,
-                    "×",
-                    16.0,
-                    if hot { TEXT } else { MUTED },
-                );
+                style::Icon::Trash.draw(d, close.0 + close.2 / 2.0, close.1 + close.3 / 2.0, if hot { TEXT } else { MUTED });
             }
         }
     }
@@ -350,6 +336,7 @@ mod tests {
         SavedChord {
             root,
             second: None,
+            additions: 0,
             quality: 0,
             inversion: 0,
             spread: 0,

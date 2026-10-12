@@ -28,6 +28,8 @@ impl ChordboardView {
             if !self.focused
                 || self.edit.is_some()
                 || self.sequencer_editing()
+                || self.fine_adjustment_active()
+                || self.pointer.is_some_and(|(x, y)| self.fine_adjustment_at(x, y))
                 || self.menu.is_some()
                 || cx.modifiers().command()
             {
@@ -56,13 +58,24 @@ impl ChordboardView {
             false
         }
     }
+    pub(super) fn fine_adjustment_active(&self) -> bool {
+        matches!(self.drag, Some(Drag::Control(_) | Drag::StrumBound(..)
+            | Drag::RouteContour { .. } | Drag::RouteNode(..)
+            | Drag::Split | Drag::BassSplit))
+            || self.sequencer_dragging()
+    }
+    fn fine_adjustment_at(&self, x: f32, y: f32) -> bool {
+        self.placed_controls().iter().any(|(c, r)| !c.toggle && hit(*r, x, y))
+            || self.strum_bound_at(x, y).is_some()
+            || (self.panel == Some(Panel::Routes) && hit(ROUTE_GRAPH, x, y))
+            || self.sequencer_value_at(x, y)
+    }
     fn press_expanded_strum(&mut self, cx: &mut EventContext, x: f32, y: f32) -> bool {
         if hit(strum_bypass_rect(self.expand_t()), x, y) {
             self.toggle_strum_bypass(cx);
             return true;
         }
-        if hit(strum_selection_rect(self.expand_t()), x, y) {
-            self.cycle_selection_mode(cx);
+        if self.press_octaves(cx, x, y) {
             return true;
         }
         if self.can_expand_strum() && hit(self.expand_button(), x, y) {
@@ -85,6 +98,7 @@ impl ChordboardView {
         if self.manual_playing() {
             if let Some((y_axis, right)) = self.strum_bound_at(x, y) {
                 self.end_pad_hover(cx);
+                self.restore_shift_latch(cx);
                 self.drag = Some(Drag::StrumBound(y_axis, right));
                 cx.capture();
                 cx.emit(RawParamEvent::BeginSetParameter(
@@ -96,6 +110,19 @@ impl ChordboardView {
                 self.begin_pad(cx, x, y, true);
                 return true;
             }
+        }
+        true
+    }
+    fn press_octaves(&mut self, cx: &mut EventContext, x: f32, y: f32) -> bool {
+        let Some(i) = (0..4).find(|&i| hit(octave_button_rect(self.expand_t(), i), x, y)) else {
+            return false;
+        };
+        if !self.explain_modulation("octaves") {
+            Self::emit(
+                cx,
+                self.params.octaves.as_ptr(),
+                self.params.octaves.preview_normalized(i as i32 + 1),
+            );
         }
         true
     }
@@ -134,6 +161,7 @@ impl ChordboardView {
                 {
                     return;
                 }
+                self.restore_shift_latch(cx);
                 let value = pleasant_ui::slider_value_rect(r);
                 self.drag = Some(Drag::Control(ControlDrag {
                     press: pleasant_ui::pointer::ValuePress::new(c.id, value, (x, y)),
@@ -148,6 +176,23 @@ impl ChordboardView {
         }
     }
     pub(super) fn window_event(&mut self, cx: &mut EventContext, event: &WindowEvent) -> bool {
+        if matches!(event, WindowEvent::FocusOut) {
+            self.restore_shift_latch(cx);
+            self.cancel_sequencer();
+            cx.release();
+            self.pending_route_remove = None;
+            self.focused = false;
+            self.memory_held.fill(false);
+            self.pointer = None;
+            self.route_hover = None;
+            cx.needs_redraw();
+            self.end_pad_hover(cx);
+            self.end_drag(cx);
+            self.release_keys();
+            self.edit = None;
+            self.set_panel(None);
+            return false;
+        }
         let bounds = cx.bounds();
         let Some((x, y)) = pleasant_ui::local_xy(
             bounds.x,
@@ -175,25 +220,17 @@ impl ChordboardView {
             }
             return self.window_event(cx, &WindowEvent::MouseDown(MouseButton::Left));
         }
-        if matches!(event, WindowEvent::FocusOut) {
+        // A modifier pressed before a value gesture belongs to that gesture.
+        if self.fine_adjustment_active() && self.latch_shift.is_some() {
             self.restore_shift_latch(cx);
-            self.cancel_sequencer();
-            self.focused = false;
-            self.memory_held.fill(false);
-            self.pointer = None;
-            self.route_hover = None;
-            cx.needs_redraw();
-            self.end_pad_hover(cx);
-            self.end_drag(cx);
-            self.release_keys();
-            self.edit = None;
-            self.set_panel(None);
-            return false;
         }
         if self.shift_latch_event(cx, event) {
             return true;
         }
         if matches!(event, WindowEvent::MouseLeave) {
+            if self.selected_modulator.is_none() {
+                self.pending_route_remove = None;
+            }
             self.pointer = None;
             self.route_hover = None;
             self.end_pad_hover(cx);
@@ -216,11 +253,23 @@ impl ChordboardView {
         {
             return true;
         }
+        // The ordinary value editor has priority over panel dismissal.
+        if self.edit.is_some() && matches!(event, WindowEvent::KeyDown(Code::Escape, _)) {
+            self.edit = None;
+            cx.needs_redraw();
+            return true;
+        }
         // Dismiss the active interaction before leaving Escape to the host.
         if matches!(
             event,
             WindowEvent::KeyDown(Code::Escape, _) | WindowEvent::KeyUp(Code::Escape, _)
         ) {
+            if matches!(event, WindowEvent::KeyDown(Code::Escape, _))
+                && self.pending_route_remove.take().is_some()
+            {
+                cx.needs_redraw();
+                return true;
+            }
             if matches!(self.drag, Some(Drag::Route(_) | Drag::RouteNode(..))) {
                 self.end_drag(cx);
                 cx.needs_redraw();
@@ -304,21 +353,9 @@ impl ChordboardView {
                         Code::Enter | Code::NumpadEnter => {
                             self.select_menu(cx, menu, self.menu_cursor);
                         }
-                        Code::ArrowRight => {
-                            self.menu_cursor = (self.menu_cursor + 1) % menu.items().len();
-                        }
-                        Code::ArrowLeft => {
-                            self.menu_cursor =
-                                (self.menu_cursor + menu.items().len() - 1) % menu.items().len();
-                        }
-                        Code::ArrowDown => {
-                            self.menu_cursor =
-                                (self.menu_cursor + menu.columns()) % menu.items().len();
-                        }
-                        Code::ArrowUp => {
-                            self.menu_cursor = (self.menu_cursor + menu.items().len()
-                                - menu.columns())
-                                % menu.items().len();
+                        Code::ArrowRight | Code::ArrowLeft | Code::ArrowDown | Code::ArrowUp => {
+                            self.menu_cursor = self.menu_neighbor(menu, self.menu_cursor, *code);
+                            cx.needs_redraw();
                         }
                         _ => {}
                     }
@@ -450,6 +487,20 @@ impl ChordboardView {
                     self.route_hover = None;
                     return true;
                 }
+                if self.arp_main() && hit(ARP_PAGE_ACCENT, x, y) {
+                    self.params.sequencer.edit(|state| {
+                        let page = &mut state.lanes[0][self.sequencer_ui.edit_pages[0]];
+                        page.interlock_override = match page.interlock_override {
+                            None => Some(0), Some(0) => Some(1), Some(1) => Some(2), _ => None,
+                        };
+                    });
+                    return true;
+                }
+                if self.arp_main() && hit(INTERLOCK, x, y) {
+                    let param = &self.params.interlock;
+                    Self::emit(cx, param.as_ptr(), param.preview_normalized((param.value() + 1) % 3));
+                    return true;
+                }
                 if hit(PIANO_SURFACE, x, y)
                     && self.panel.is_none_or(|p| !hit(self.panel_rect(p), x, y))
                 {
@@ -543,6 +594,11 @@ impl ChordboardView {
                 {
                     return self.press_piano(cx, x, y);
                 }
+                if !(self.params.tempo_sync.value() && self.snapshot.time_sig_host)
+                    && (hit(METER_NUM, x, y) || hit(METER_DEN, x, y)) {
+                    self.open_menu(Menu::Meter(hit(METER_DEN, x, y)));
+                    return true;
+                }
                 if hit(TEMPO_SYNC, x, y) {
                     self.set(
                         cx,
@@ -555,34 +611,6 @@ impl ChordboardView {
                     );
                     return true;
                 }
-                if self.arp_main() && hit(RATE_SYNC, x, y) {
-                    if !self.explain_modulation("strum_sync") {
-                        self.set(
-                            cx,
-                            "strum_sync",
-                            if self.params.strum_sync.value() {
-                                0.0
-                            } else {
-                                1.0
-                            },
-                        );
-                    }
-                    return true;
-                }
-                if self.arp_main() && self.mode() != 3 && hit(STRUM_HOLD, x, y) {
-                    if !self.explain_modulation("strum_hold") {
-                        self.set(
-                            cx,
-                            "strum_hold",
-                            if self.params.strum_hold.value() {
-                                0.0
-                            } else {
-                                1.0
-                            },
-                        );
-                    }
-                    return true;
-                }
                 if hit(strum_latch_rect(self.expand_t()), x, y) {
                     self.set(
                         cx,
@@ -593,6 +621,9 @@ impl ChordboardView {
                             1.0
                         },
                     );
+                    return true;
+                }
+                if self.press_octaves(cx, x, y) {
                     return true;
                 }
                 for (i, step) in TRANSPOSE_STEPS.iter().enumerate() {
@@ -620,11 +651,6 @@ impl ChordboardView {
                     self.toggle_strum_bypass(cx);
                     return true;
                 }
-                if hit(HEADER_PLAY_TAB, x, y) || hit(HEADER_SEQ_TAB, x, y) {
-                    self.end_drag(cx);
-                    self.set_sequencer_open(cx, hit(HEADER_SEQ_TAB, x, y));
-                    return true;
-                }
                 if hit(HEADER_SEQ_BYPASS, x, y) {
                     Self::emit(
                         cx,
@@ -635,6 +661,11 @@ impl ChordboardView {
                             1.0
                         },
                     );
+                    return true;
+                }
+                if hit(HEADER_PLAY_TAB, x, y) || hit(HEADER_SEQ_TAB, x, y) {
+                    self.end_drag(cx);
+                    self.set_sequencer_open(cx, hit(HEADER_SEQ_TAB, x, y));
                     return true;
                 }
                 if !self.arp_page() && hit(LATCH, x, y) {
@@ -680,6 +711,7 @@ impl ChordboardView {
                 if self.manual_playing() {
                     if let Some((y_axis, right)) = self.strum_bound_at(x, y) {
                         self.end_pad_hover(cx);
+                        self.restore_shift_latch(cx);
                         self.drag = Some(Drag::StrumBound(y_axis, right));
                         cx.capture();
                         cx.emit(RawParamEvent::BeginSetParameter(
@@ -713,28 +745,6 @@ impl ChordboardView {
                             return true;
                         }
                     }
-                    if self.sweep_synced() && hit(RATE_HEADER, x, y) {
-                        if self.explain_modulation("rate") {
-                            return true;
-                        }
-                        if let Some(c) = self.control("rate") {
-                            let r = (
-                                RATE_HEADER.0 + RATE_HEADER.2 - 176.0,
-                                RATE_HEADER.1,
-                                176.0,
-                                RATE_HEADER.3,
-                            );
-                            self.drag = Some(Drag::Control(ControlDrag {
-                                press: pleasant_ui::pointer::ValuePress::new(c.id, r, (x, y)),
-                                ptr: c.ptr,
-                                norm: c.norm,
-                                editable: hit(r, x, y),
-                                started: false,
-                            }));
-                            cx.capture();
-                        }
-                        return true;
-                    }
                     for i in 0..7 {
                         if hit(pattern_rect(i), x, y) {
                             Self::emit(
@@ -745,29 +755,16 @@ impl ChordboardView {
                             return true;
                         }
                     }
-                    for (i, (_, beats)) in ARP_RATES.iter().enumerate() {
-                        if self.sweep_synced() && hit(rate_rect(i), x, y) {
-                            Self::emit(
-                                cx,
-                                self.params.rate.as_ptr(),
-                                self.params.rate.preview_normalized(*beats),
-                            );
-                            return true;
-                        }
-                    }
-                    for i in 0..4 {
-                        if hit(octave_rect(i), x, y) {
-                            Self::emit(
-                                cx,
-                                self.params.octaves.as_ptr(),
-                                self.params.octaves.preview_normalized(i as i32 + 1),
-                            );
-                            return true;
-                        }
-                    }
                 }
                 self.press_control(cx, x, y);
                 return true;
+            }
+            WindowEvent::MouseDown(MouseButton::Right) => {
+                if hit(PIANO_SURFACE, x, y)
+                    && self.panel.is_none_or(|p| !hit(self.panel_rect(p), x, y))
+                {
+                    return self.press_piano_right(cx, x, y);
+                }
             }
             WindowEvent::MouseMove(_, _) => match self.drag {
                 Some(Drag::RouteContour {

@@ -55,6 +55,7 @@ pub struct Runtime {
     pub base: [u8; 4],
     pub steps: [u8; 4],
     pub running: bool,
+    arp_done: bool,
     restore_epoch: u64,
     next: [u64; 4],
     phase: [u64; 4],
@@ -74,6 +75,7 @@ impl Default for Runtime {
             base: [0; 4],
             steps: [0; 4],
             running: false,
+            arp_done: false,
             restore_epoch: 0,
             next: [0; 4],
             phase: [0; 4],
@@ -89,7 +91,7 @@ impl Default for Runtime {
 }
 impl Engine {
     pub(super) fn manual_active(&self) -> bool {
-        self.config.strum_enabled && matches!(self.config.mode, MANUAL | SEQUENCER)
+        self.config.strum_enabled && self.config.mode == MANUAL
     }
     pub fn accept_sequence_generation(&mut self, out: &mut impl FnMut(Out)) {
         if self.seq.restore_epoch != self.seq.data.restore_epoch {
@@ -101,13 +103,21 @@ impl Engine {
         }
     }
     pub fn reset_sequencer(&mut self, out: &mut impl FnMut(Out)) {
+        let changed = self.sources[9..].iter().any(|&value| value != 0.0);
+        self.sources[9..].fill(0.0);
+        self.reset_sequencer_runtime(out);
+        if changed { self.configure_inner(self.host_config, false, out); }
+    }
+    // Routing topology changes release owned voices but retain this step's sources.
+    pub(super) fn reset_sequencer_runtime(&mut self, out: &mut impl FnMut(Out)) {
         for i in 0..self.voices.len() {
-            if self.voices[i].is_some_and(|v| v.owner != 0) {
+            if self.voices[i].is_some_and(|v| matches!(v.owner, 1..=4)) {
                 self.end_voice(i, 0.0, out);
             }
         }
         self.seq.events.fill(None);
         self.seq.running = false;
+        self.seq.arp_done = false;
         self.seq.harmony = None;
         self.seq.phase = [0; 4];
         self.seq.fraction = [0.0; 4];
@@ -120,7 +130,7 @@ impl Engine {
         }
     }
     fn sequence_gated(&self) -> bool {
-        self.config.mode == SEQUENCER
+        self.config.seq_enabled
             && (self.playing
                 || (self.config.latch && self.memory.is_some())
                 || self.root.is_some_and(|s| s.held)
@@ -140,12 +150,27 @@ impl Engine {
         if !self.seq.running {
             return Some(self.now);
         }
-        self.seq
-            .next
-            .iter()
-            .copied()
+        [0, 1]
+            .into_iter()
+            .filter(|&lane| lane != 0 || !self.seq.arp_done)
+            .map(|lane| self.seq.next[lane])
             .chain(self.seq.events.iter().flatten().map(|e| e.at))
             .min()
+    }
+    /// A new selection retriggers Once without restarting the Chords timeline.
+    pub(super) fn restart_sequence_arp(&mut self) {
+        self.seq.arp_done = false;
+        self.seq.next[0] = self.now;
+        self.seq.phase[0] = 0;
+        self.seq.fraction[0] = 0.0;
+        self.seq.early[0] = None;
+        self.seq.early_fired[0] = false;
+        self.seq.early_settings[0] = None;
+        for event in &mut self.seq.events {
+            if event.is_some_and(|e| e.lane == 0) {
+                *event = None;
+            }
+        }
     }
     pub(super) fn apply_sequenced_harmony(&mut self) {
         let Some(recipe) = self.memory else {
@@ -178,14 +203,7 @@ impl Engine {
             let n = n as i16 + step.root_offset as i16;
             (0..=127).contains(&n).then_some(n as u8)
         });
-        self.full_notes = harmony::voice(
-            root as u8,
-            quality,
-            second,
-            recipe.transpose,
-            inversion,
-            spread,
-        );
+        self.full_notes = harmony::voice_recipe(harmony::SavedChord { root: root as u8, quality, second, inversion, spread, ..recipe }, spread);
         if self.config.affect_chords {
             self.full_notes = harmony::melody_harmony(self.full_notes, &self.melody);
         }
@@ -203,7 +221,10 @@ impl Engine {
         } else {
             self.sample_rate as f64 * 60.0 / self.tempo * page.rate as f64
         };
-        (step * swing).max(1.0)
+        let span = (page.end - page.start + 1) as u64;
+        let index = page.start as usize + (phase % span) as usize;
+        let speed = page.steps[index].speed_factor().max(0.01);
+        (step * swing / speed).max(1.0)
     }
     fn enqueue_step(&mut self, lane: usize, page_id: u8, phase: u64, boundary: u64, horizon: u64) {
         let page = self.seq.data.pages[lane][page_id as usize];
@@ -214,6 +235,16 @@ impl Engine {
         let shifted = (boundary as i128 + (period * step.micro as f64 / 100.0) as i128)
             .clamp(horizon as i128, u64::MAX as i128) as u64;
         let ratchets = if lane == 3 { 1 } else { step.ratchets as usize };
+        // Humanize applies to the whole ratchet group, so ratchets stay ordered.
+        let mut step = step;
+        let mut shifted = shifted;
+        if lane != 3 {
+            shifted = self.humanized_at(shifted, period, horizon);
+            if step.velocity > 0 {
+                let factor = self.humanize_velocity_factor();
+                step.velocity = (step.velocity as f32 * factor).round().clamp(1.0, 200.0) as u8;
+            }
+        }
         // Reserve the entire group, so capacity pressure cannot make a partial chord or ratchet.
         if self.seq.events.iter().filter(|e| e.is_none()).count() < ratchets {
             return;
@@ -244,8 +275,9 @@ impl Engine {
             return;
         }
         let requests = self.sequence_requests();
-        for (lane, &requested) in requests.iter().enumerate() {
-            if lane == 3 {
+        for lane in [0, 1] {
+            let requested = requests[lane];
+            if lane == 0 && self.seq.arp_done {
                 continue;
             }
             if let Some((phase, page)) = self.seq.early[lane] {
@@ -287,10 +319,16 @@ impl Engine {
             self.seq.running = true;
             self.seq.next = [self.now; 4];
         }
-        self.refresh_sequence_lookahead();
         let requests = self.sequence_requests();
-        // Harmony is processed before musical lanes at coincident boundaries.
-        for lane in [1, 2, 0] {
+        if self.seq.arp_done && requests[0] != self.seq.active[0] {
+            self.restart_sequence_arp();
+        }
+        self.refresh_sequence_lookahead();
+        // Chords precede Arp so Interlock sees coincident chord strikes.
+        for lane in [1, 0] {
+            if lane == 0 && self.seq.arp_done {
+                continue;
+            }
             if self.now < self.seq.next[lane] {
                 continue;
             }
@@ -315,13 +353,16 @@ impl Engine {
             let period = exact.floor().max(1.0) as u64;
             self.seq.fraction[lane] = exact - period as f64;
             self.seq.phase[lane] = phase.wrapping_add(1);
+            if lane == 0 && !self.config.seq_loop {
+                self.seq.arp_done = self.seq.phase[0] >= (page.end - page.start + 1) as u64;
+            }
             self.seq.next[lane] = boundary.saturating_add(period);
             self.seq.early[lane] = None;
             self.seq.early_fired[lane] = false;
             self.seq.early_settings[lane] = None;
         }
         self.refresh_sequence_lookahead();
-        for lane in [1, 2, 0] {
+        for lane in [1, 0] {
             for slot in 0..self.seq.events.len() {
                 if self.seq.events[slot].is_some_and(|e| e.lane == lane && e.at <= self.now) {
                     let event = self.seq.events[slot].take().unwrap();
@@ -333,6 +374,13 @@ impl Engine {
     fn play_sequence_event(&mut self, event: Event, out: &mut impl FnMut(Out)) {
         if event.first && self.seq.early[event.lane] == Some((event.phase, event.page)) {
             self.seq.early_fired[event.lane] = true;
+        }
+        if event.first && event.lane <= 1 && event.settings.enabled {
+            let values = event.step.mods.map(|value| value.clamp(-100, 100) as f32 / 100.0);
+            if self.sources[9..] != values {
+                self.sources[9..].copy_from_slice(&values);
+                self.configure(self.host_config, out);
+            }
         }
         let mut step = event.step;
         step.tie = false;
@@ -406,7 +454,7 @@ impl Engine {
         if event.lane == 1 && notes.len > 0 {
             self.seq.comp_at = Some(self.now);
         }
-        let mut velocity = self.strike_velocity() * step.velocity as f32 / 100.0;
+        let mut velocity = self.base_strike_velocity() * step.velocity as f32 / 100.0;
         let mut duration = event.duration;
         if event.lane == 0 {
             velocity *= contour_factor(
@@ -488,6 +536,10 @@ impl Engine {
             .map_or(if self.input_upper { 15 } else { 0 }, |s| s.channel) as usize
     }
     pub(super) fn controller_baseline(&self, cc: u8) -> u8 {
+        let index = match cc { 1 => Some(1), 11 => Some(2), 2 => Some(3), 74 => Some(5), _ => None };
+        if let Some(value) = index.and_then(|index| self.source_overrides[index]) {
+            return (value * 127.0).round() as u8;
+        }
         let source = self.controller_source();
         if self.cc_known[source][cc as usize] {
             self.cc[source][cc as usize]
@@ -530,7 +582,7 @@ impl Engine {
         step: StepExpression,
         out: &mut impl FnMut(Out),
     ) {
-        let e = self.expression;
+        let e = self.routed_expression();
         let pressure = if self.y_active && self.config.y_target == 2 {
             self.y
         } else {
@@ -568,6 +620,7 @@ impl Engine {
                         * 2.0))
                 .clamp(0.0, 1.0),
         ));
+        self.emit_routed_controllers(channel, out);
         let source =
             self.root
                 .filter(|s| s.channel < 16)
@@ -575,7 +628,8 @@ impl Engine {
         for i in 0..4 {
             let number = step.numbers[i];
             if crate::sequencer::valid_cc(number)
-                && (step.cc[i] != 0 || self.cc_known[source][number as usize])
+                && (step.cc[i] != 0 || self.cc_known[source][number as usize]
+                    || matches!(number, 1 | 2 | 11) && self.host_config.routes.iter().any(|r| r.active() && routing::TARGETS[r.target as usize].source_index() == Some(match number { 1 => 1, 11 => 2, _ => 3 })))
             {
                 let baseline = self.controller_baseline(number);
                 out(Out::Cc(
@@ -598,7 +652,8 @@ mod tests {
         };
         engine.configure(
             Config {
-                mode: SEQUENCER,
+                mode: MANUAL,
+                seq_enabled: true,
                 ..Config::default()
             },
             &mut |_| {},
@@ -619,6 +674,271 @@ mod tests {
         });
         assert!(store.apply_pending(&mut e.seq.data));
     }
+    #[test]
+    fn step_modulator_revoices_parameter_routes_before_the_strike() {
+        for (value, transpose) in [(50, 12), (-50, -12), (0, 0)] {
+            let mut e = engine();
+            let before = e.full_notes;
+            let mut c = e.host_config;
+            c.routes[0] = routing::Route {
+                source: 10,
+                target: routing::TARGETS.iter().position(|t| t.id == "transpose").unwrap() as u8,
+                min: 0.5, max: 1.0, ..routing::Route::default()
+            };
+            e.configure(c, &mut |_| {});
+            prepare(&mut e, |state| {
+                state.lanes[1][0].enabled = false;
+                state.lanes[0][0].steps[0].mods = [value, 0];
+            });
+            e.tick_sequencer(&mut |_| {});
+            assert_eq!(e.config.transpose, transpose);
+            assert_eq!(e.full_notes.as_slice(), before.as_slice().iter().map(|&n| (n as i16 + transpose as i16) as u8).collect::<Vec<_>>());
+        }
+    }
+
+    #[test]
+    fn dedicated_step_modulators_follow_rests_and_reset_with_playback() {
+        let mut e = engine();
+        prepare(&mut e, |state| {
+            state.lanes[1][0].enabled = false;
+            state.lanes[0][0].steps[0].mods = [25, 75];
+            state.lanes[0][0].steps[0].enabled = false;
+        });
+        e.tick_sequencer(&mut |_| {});
+        assert_eq!(e.sources[9..], [0.25, 0.75]);
+        e.reset_sequencer(&mut |_| {});
+        assert_eq!(e.sources[9..], [0.0, 0.0]);
+    }
+
+    #[test]
+    fn sequencer_power_preserves_manual_voices_and_selected_voicing() {
+        let mut e = engine();
+        e.configure(
+            Config {
+                voice_leading: 0,
+                ..e.host_config
+            },
+            &mut |_| {},
+        );
+        e.command(Command::BeginGesture(1.0, 0.8), &mut |_| {});
+        e.tick(&mut |_| {});
+        let manual: Vec<_> = e
+            .voices
+            .iter()
+            .flatten()
+            .filter(|v| v.owner == 0)
+            .map(|v| (v.note, v.off))
+            .collect();
+        let voiced = e.full_notes;
+        assert!(!manual.is_empty());
+        e.configure(
+            Config {
+                seq_enabled: false,
+                ..e.host_config
+            },
+            &mut |_| {},
+        );
+        assert!(!e.seq.running);
+        assert!(e.voices.iter().flatten().all(|v| v.owner == 0));
+        assert_eq!(e.full_notes, voiced);
+        assert_eq!(
+            e.voices
+                .iter()
+                .flatten()
+                .map(|v| (v.note, v.off))
+                .collect::<Vec<_>>(),
+            manual
+        );
+        let mut events = Vec::new();
+        e.advance(1000, &mut |_, event| events.push(event));
+        assert!(!events.iter().any(|event| matches!(event, Out::On(..))));
+    }
+
+    #[test]
+    fn selection_playback_is_independent_of_strum_and_sequence_power() {
+        for seq_enabled in [false, true] {
+            for strum_enabled in [false, true] {
+                for selection in 0..3 {
+                    let mut e = Engine::default();
+                    e.configure(
+                        Config {
+                            mode: MANUAL,
+                            seq_enabled,
+                            strum_enabled,
+                            root_on_select: selection == 1,
+                            always_chord: selection == 2,
+                            ..Config::default()
+                        },
+                        &mut |_| {},
+                    );
+                    let mut events = Vec::new();
+                    e.note_on(2048, 60, 16, 0.8, Some(0), &mut |v| events.push(v));
+                    let ons: Vec<_> = events
+                        .iter()
+                        .filter_map(|event| match event {
+                            Out::On(_, note, _) => Some(*note),
+                            _ => None,
+                        })
+                        .collect();
+                    let expected = match selection {
+                        1 => vec![60],
+                        2 => vec![60, 64, 67],
+                        _ => vec![],
+                    };
+                    assert_eq!(
+                        ons, expected,
+                        "selection {selection}, seq {seq_enabled}, strum {strum_enabled}"
+                    );
+                    e.tick(&mut |_| {});
+                    e.configure(
+                        Config {
+                            seq_enabled: false,
+                            ..e.host_config
+                        },
+                        &mut |_| {},
+                    );
+                    if selection == 2 {
+                        assert_eq!(e.voices.iter().flatten().filter(|v| v.layer).count(), 3);
+                        e.advance(500, &mut |_, _| {});
+                        assert_eq!(e.voices.iter().flatten().filter(|v| v.layer).count(), 3);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn power_changes_preserve_root_on_select_deadline() {
+        let mut e = engine();
+        e.configure(Config { root_on_select: true, ..e.host_config }, &mut |_| {});
+        let root = *e.voices.iter().flatten().find(|v| v.owner == SELECT_ROOT_OWNER).unwrap();
+        e.tick(&mut |_| {});
+        e.configure(Config { strum_enabled: false, seq_enabled: false, ..e.host_config }, &mut |_| {});
+        assert!(e.voices.iter().flatten().any(|v| v.owner == SELECT_ROOT_OWNER && v.off == root.off));
+        e.advance(root.off as usize, &mut |_, _| {});
+        assert!(!e.voices.iter().flatten().any(|v| v.owner == SELECT_ROOT_OWNER));
+    }
+
+    #[test]
+    fn selected_chord_never_borrows_sequencer_ownership() {
+        let mut e = engine();
+        e.tick(&mut |_| {});
+        e.configure(
+            Config {
+                always_chord: true,
+                ..e.host_config
+            },
+            &mut |_| {},
+        );
+        assert!(e
+            .voices
+            .iter()
+            .flatten()
+            .filter(|v| v.owner != 0)
+            .all(|v| !v.layer));
+        e.configure(
+            Config {
+                seq_enabled: false,
+                ..e.host_config
+            },
+            &mut |_| {},
+        );
+        assert_eq!(e.voices.iter().flatten().filter(|v| v.layer).count(), 3);
+    }
+
+    #[test]
+    fn interlock_never_changes_voicing_in_any_leading_mode() {
+        for leading in 0..3 {
+            let mut expected = None;
+            for interlock in 0..3 {
+                let mut e = engine();
+                e.configure(
+                    Config {
+                        voice_leading: leading,
+                        interlock,
+                        ..e.host_config
+                    },
+                    &mut |_| {},
+                );
+                e.command(Command::KeyUp(0), &mut |_| {});
+                e.command(Command::KeyDown(1, 67, 0), &mut |_| {});
+                e.tick(&mut |_| {});
+                if let Some(notes) = expected {
+                    assert_eq!(e.full_notes, notes);
+                }
+                expected = Some(e.full_notes);
+                if leading == 2 {
+                    assert_eq!(e.full_notes.as_slice(), &[67, 71, 74]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn once_finishes_arp_page_but_chords_keep_running_and_new_selection_retriggers() {
+        let mut e = engine();
+        e.configure(
+            Config {
+                seq_loop: false,
+                ..e.host_config
+            },
+            &mut |_| {},
+        );
+        prepare(&mut e, |s| {
+            s.lanes[0][0].length = 2;
+            s.lanes[0][0].end = 1;
+            s.lanes[0][0].steps[0].tone = 0;
+            s.lanes[0][0].steps[1].tone = 1;
+            s.lanes[1][0].steps[0].enabled = true;
+        });
+        e.advance(1000, &mut |_, _| {});
+        assert!(e.seq.arp_done);
+        assert_eq!(e.seq.phase[0], 2);
+        assert!(e.seq.phase[1] > 2);
+        e.command(Command::KeyUp(0), &mut |_| {});
+        e.command(Command::KeyDown(1, 67, 0), &mut |_| {});
+        assert!(!e.seq.arp_done);
+        e.tick(&mut |_| {});
+        assert_eq!(e.seq.phase[0], 1);
+        e.configure(
+            Config {
+                seq_loop: true,
+                ..e.host_config
+            },
+            &mut |_| {},
+        );
+        e.advance(1000, &mut |_, _| {});
+        assert!(!e.seq.arp_done);
+        assert!(e.seq.phase[0] > 2);
+    }
+
+    #[test]
+    fn manual_pad_velocity_does_not_change_arp_or_chords() {
+        let sequence = |y| {
+            let mut e = engine();
+            prepare(&mut e, |s| {
+                s.lanes[0][0].steps[0].enabled = true;
+                s.lanes[0][0].steps[0].octave = 1;
+                s.lanes[1][0].steps[0].enabled = true;
+            });
+            let mut manual = Vec::new();
+            e.command(Command::BeginGesture(0.0, y), &mut |out| {
+                if let Out::On(_, _, v) = out { manual.push(v); }
+            });
+            let mut sequence = Vec::new();
+            e.advance(4, &mut |_, out| {
+                if let Out::On(_, note, v) = out { sequence.push((note, v)); }
+            });
+            (manual, sequence)
+        };
+        let (soft, a) = sequence(0.2);
+        let (hard, b) = sequence(0.9);
+        assert!(!soft.is_empty() && !hard.is_empty());
+        assert!(soft[0] < hard[0]);
+        assert!(!a.is_empty());
+        assert_eq!(a, b);
+    }
+
     #[test]
     fn sequencer_always_accepts_manual_strumming() {
         let mut e = engine();
@@ -782,6 +1102,7 @@ mod tests {
             max: 1.0,
             enabled: true,
             curve: 0.0,
+            smoothing_ms: 0.0,
         };
         e.configure(c, &mut |_| {});
         e.tick(&mut |_| {});
@@ -898,6 +1219,7 @@ mod tests {
             Command::RecallMemory(
                 2,
                 harmony::SavedChord {
+                    additions: 0,
                     root: 60,
                     second: None,
                     quality: 0,
@@ -1037,5 +1359,90 @@ mod tests {
             assert_eq!(e.notes.values[0], 60);
             assert_eq!(e.memory.unwrap().root, 60);
         }
+    }
+    fn arp_hits(humanize: f32, samples: usize) -> Vec<(u64, f32)> {
+        let mut e = engine();
+        e.config.rate = 0.5;
+        e.config.humanize = humanize;
+        prepare(&mut e, |s| {
+            for step in &mut s.lanes[0][0].steps {
+                step.enabled = true;
+                step.velocity = 100;
+            }
+        });
+        let mut hits = Vec::new();
+        for _ in 0..samples {
+            let at = e.now;
+            e.tick(&mut |o| {
+                if let Out::On(_, _, v) = o {
+                    hits.push((at, v));
+                }
+            });
+        }
+        hits
+    }
+    #[test]
+    fn double_speed_step_halves_interval_to_next_step() {
+        let next_after_first = |speed: u8, fine: i8| {
+            let mut e = engine();
+            e.config.rate = 0.5;
+            prepare(&mut e, |s| {
+                s.lanes[0][0].steps[0].speed = speed;
+                s.lanes[0][0].steps[0].fine = fine;
+            });
+            e.tick(&mut |_| {});
+            e.seq.next[0]
+        };
+        let base = next_after_first(2, 0);
+        assert_eq!(next_after_first(4, 0) * 2, base);
+        assert_eq!(next_after_first(1, 0), base * 2);
+        assert!((next_after_first(2, 50) * 3).abs_diff(base * 2) <= 3);
+    }
+    #[test]
+    fn humanize_zero_is_exact_and_full_humanize_spreads_time_and_velocity() {
+        let exact = arp_hits(0.0, 3000);
+        assert!(exact.len() >= 8);
+        assert!(exact.windows(2).all(|w| w[1].0 - w[0].0 == 250));
+        assert!(exact.iter().all(|h| h.1 == exact[0].1));
+        let loose = arp_hits(1.0, 3000);
+        assert!(loose.len() >= 8);
+        let lo = loose.iter().map(|h| h.1).fold(f32::MAX, f32::min);
+        let hi = loose.iter().map(|h| h.1).fold(0.0, f32::max);
+        assert!(hi - lo > 0.1 * exact[0].1, "velocity spread {lo}..{hi}");
+        let mut late = 0;
+        let mut offsets = std::collections::BTreeSet::new();
+        for (i, h) in loose.iter().enumerate() {
+            let off = h.0 as i64 - 250 * i as i64;
+            offsets.insert(off);
+            late += (off > 0) as usize;
+        }
+        assert!(offsets.len() >= 4 && late > 0, "offsets {offsets:?}");
+        assert!(offsets.iter().all(|o| (0..=63).contains(o)), "{offsets:?}");
+    }
+}
+
+#[cfg(test)]
+mod extension_recipe_tests {
+    use super::*;
+    #[test]
+    fn sequencer_transforms_full_recipe_and_melody_never_changes_capture() {
+        let mut e = Engine::default();
+        e.command(Command::Recall(harmony::SavedChord {
+            root: 48, second: Some(58), quality: 0, additions: (1 << 1) | (1 << 2) | (1 << 5),
+            inversion: 0, spread: 0, transpose: 0,
+        }.encode()), &mut |_|{});
+        let captured = e.memory.unwrap();
+        e.seq.harmony = Some(Step { root_offset: 5, quality: 3, inversion: 1, ..Step::default() });
+        e.apply_sequenced_harmony();
+        let expected = harmony::voice_recipe(harmony::SavedChord { root:53, second:Some(63), quality:3, inversion:1, ..captured },0);
+        assert_eq!(e.full_notes, expected);
+        assert_eq!(e.memory,Some(captured));
+        e.config.affect_chords = true;
+        e.melody[2][74] = true;
+        e.apply_sequenced_harmony();
+        assert_eq!(e.memory,Some(captured));
+        e.command(Command::Capture(3),&mut |_|{});
+        assert_eq!(e.saved,Some((3,captured.encode())));
+        assert_eq!(harmony::SavedChord::decode(captured.encode()),Some(captured));
     }
 }

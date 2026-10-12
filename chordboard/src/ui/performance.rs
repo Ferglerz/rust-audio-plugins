@@ -1,14 +1,31 @@
 use super::*;
 
 impl ChordboardView {
+    pub(super) fn meter(&self) -> (u8, u8) {
+        if self.params.tempo_sync.value() && self.snapshot.time_sig_host {
+            (self.snapshot.time_sig_num, self.snapshot.time_sig_den)
+        } else {
+            (self.params.meter_num.value() as u8, 1 << self.params.meter_den.value())
+        }
+    }
     pub(super) fn draw_tempo_header(&self, d: &mut Draw) {
         let synced = self.params.tempo_sync.value();
-        self.button_tinted(
+        let (num, den) = self.meter();
+        let host_meter = synced && self.snapshot.time_sig_host;
+        if host_meter {
+            d.text(METER_NUM.0 + 8.0, 43.5, &format!("{num}/{den}"), 13.0, TEXT);
+        } else {
+            self.button(d, METER_NUM, &num.to_string(), false, GOLD);
+            d.text(METER_NUM.0 + 49.0, 43.5, "/", 13.0, MUTED);
+            self.button(d, METER_DEN, &den.to_string(), false, GOLD);
+        }
+        self.icon_button(
             d,
             TEMPO_SYNC,
             if synced { "Host tempo" } else { "Manual tempo" },
             true,
             if synced { TEAL } else { GOLD },
+            if synced { style::Icon::Host } else { style::Icon::Manual },
         );
         if synced {
             d.text(
@@ -24,13 +41,16 @@ impl ChordboardView {
     pub(super) fn draw_page_tabs(&self, d: &mut Draw) {
         let open = self.sequencer_open();
         self.button(d, HEADER_PLAY_TAB, "Play", !open, TEAL);
-        self.button(d, HEADER_SEQ_TAB, "Sequencer", open, TEAL);
-        d.bypass_button(
-            HEADER_SEQ_BYPASS,
-            !self.params.seq_enabled.value(),
-            TEAL,
-            self.hover_amount(HEADER_SEQ_BYPASS) > 0.01,
-            0.0,
+        self.button(d, HEADER_SEQ_TAB, "", open, TEAL);
+        d.text(
+            HEADER_SEQ_BYPASS.0 + HEADER_SEQ_BYPASS.2 + 10.0,
+            HEADER_SEQ_TAB.1 + HEADER_SEQ_TAB.3 * 0.5 + 13.0 * 0.35,
+            "Sequencer", 13.0, if open { TEAL } else { TEXT },
+        );
+        d.power_icon(
+            HEADER_SEQ_BYPASS.0 + HEADER_SEQ_BYPASS.2 * 0.5,
+            HEADER_SEQ_BYPASS.1 + HEADER_SEQ_BYPASS.3 * 0.5,
+            if self.params.seq_enabled.value() { TEAL } else { MUTED },
         );
     }
 
@@ -55,8 +75,20 @@ impl ChordboardView {
             TEXT,
         );
         d.font = self.ui_font.get();
-        if let Some(control) = self.control("root_on_select") {
-            self.draw_control(d, &control, strum_selection_rect(self.expand_t()), GOLD);
+        let expand = self.expand_t();
+        let first = octave_button_rect(expand, 0);
+        d.text_right(
+            first.0 - 8.0,
+            first.1 + first.3 * 0.5 + TEXT_SMALL * 0.35,
+            "Octaves",
+            TEXT_SMALL,
+            MUTED,
+        );
+        let octaves = self.params.octaves.value();
+        for i in 0..4 {
+            let r = octave_button_rect(expand, i);
+            self.button(d, r, &(i + 1).to_string(), octaves == i as i32 + 1, GOLD);
+            self.live_choice(d, "octaves", i as f32 + 1.0, r);
         }
         self.touch_latch_button(
             d,
@@ -125,71 +157,61 @@ impl ChordboardView {
         );
     }
 
-    pub(super) fn arp_string_count(&self, mode: i32) -> usize {
+    pub(super) fn string_count(&self) -> usize {
         let octaves = self
             .routed_plain("octaves")
-            .unwrap_or(self.params.octaves.value() as f32) as usize;
-        if mode == 1 {
-            self.routed_plain("strings")
-                .unwrap_or(self.params.strings.value() as f32) as usize
-                + self.snapshot.notes.len * octaves.saturating_sub(1)
-        } else {
-            self.snapshot.notes.len * octaves
-        }
+            .unwrap_or(self.params.octaves.value() as f32);
+        harmony::string_count(self.snapshot.notes.len, octaves as u8)
     }
 
-    fn draw_arp_strings(&self, d: &mut Draw, mode: i32) {
-        let r = (
-            ARP_STRINGS.0,
-            ARP_STRINGS.1,
-            ARP_STRINGS.2,
-            ARP_STRINGS.3 - 30.0,
-        );
-        d.rounded_rect(r.0, r.1, r.2, r.3, 6.0, alpha(TEXT, 0.025));
-        let count = self.arp_string_count(mode).max(1);
+    // Shared by Play and Sequencer pages, manual and auto fields, and the expanded pad.
+    fn draw_strings(&self, d: &mut Draw, field: Rect, span: (f32, f32), reverse: bool) {
         if self.snapshot.notes.len == 0 {
             d.text_centered(
-                r.0 + r.2 * 0.5,
-                r.1 + r.3 * 0.5 + 4.0,
+                field.0 + field.2 * 0.5,
+                field.1 + field.3 * 0.5 + 4.0,
                 "Play a chord to see its strings",
                 TEXT_SMALL,
                 MUTED,
             );
             return;
         }
-        let rows = count.div_ceil(18);
-        let columns = count.div_ceil(rows);
-        let height = r.3 / rows as f32;
-        for i in 0..count {
-            let Some(note) = self.snapshot.notes.string(i) else {
+        let (min, max) = span;
+        let n = self.string_count();
+        let (top, bottom) = (field.1, field.1 + field.3);
+        for i in 0..n {
+            let string = if reverse { n - 1 - i } else { i };
+            let Some(note) = self.snapshot.notes.string(string) else {
                 continue;
             };
-            let x = r.0 + (i % columns) as f32 * (r.2 - 32.0) / (columns - 1).max(1) as f32 + 16.0;
-            let y = r.1 + (i / columns) as f32 * height + 4.0;
-            let bottom = y + height - 22.0;
-            let pulse = self.note_anim[note as usize];
+            let x = field.0 + (min + i as f32 * (max - min) / (n - 1).max(1) as f32) * field.2;
+            let pulse = self.note_anim[note as usize].max(self.string_anim[string]);
             let sounding = self.snapshot.sounding_notes[note as usize];
             let color = if sounding { GOLD } else { TEAL };
             if sounding || pulse > 0.01 {
                 d.rounded_rect(
                     x - 6.0,
-                    y,
+                    top,
                     12.0,
-                    bottom - y,
+                    bottom - top,
                     3.0,
                     alpha(color, 0.08 + pulse * 0.12),
                 );
             }
             let displacement = (pulse * 24.0).sin() * pulse * 3.0;
             d.poly(
-                &[(x, y), (x + displacement, (y + bottom) * 0.5), (x, bottom)],
+                &[
+                    (x, top),
+                    (x + displacement, (top + bottom) * 0.5),
+                    (x, bottom),
+                ],
                 alpha(color, if sounding { 0.95 } else { 0.25 + pulse * 0.65 }),
                 1.0 + pulse,
             );
             d.text_centered(
                 x,
-                bottom + 13.0,
-                &self.note_name(note),
+                bottom + 14.0,
+                &music::label(&self.note_name(note)),
                 TEXT_SMALL,
                 if sounding || pulse > 0.1 {
                     color
@@ -206,16 +228,15 @@ impl ChordboardView {
         d.rounded_rect(pad.0, pad.1, pad.2, pad.3, 8.0, BG);
         d.font = self.ui_font.get();
         for loop_choice in [false, true] {
-            self.button(
+            self.icon_button(
                 d,
                 repeat_rect(loop_choice),
                 if loop_choice { "Loop" } else { "Once" },
                 looping == loop_choice,
                 GOLD,
+                if loop_choice { style::Icon::Loop } else { style::Icon::Once },
             );
         }
-        self.draw_arp_strings(d, mode);
-        self.draw_arp_pattern_settings(d);
         // Glyphs illustrate each ordering rule; they are not a playback position.
         let contours = [
             [0, 1, 2, 3, 4],
@@ -249,129 +270,7 @@ impl ChordboardView {
                 i as f32,
             );
         }
-        d.text(OCTAVE_LABEL.0, OCTAVE_LABEL.1, "Octaves", TEXT_SMALL, MUTED);
-        for i in 0..4 {
-            self.button(
-                d,
-                octave_rect(i),
-                &(i + 1).to_string(),
-                self.params.octaves.value() == i as i32 + 1,
-                GOLD,
-            );
-            self.live_choice(d, "octaves", i as f32 + 1.0, octave_rect(i));
-        }
-        self.button(
-            d,
-            RATE_SYNC,
-            if self.sweep_synced() {
-                "Tempo sync"
-            } else {
-                "Free · ms"
-            },
-            self.sweep_synced(),
-            TEAL,
-        );
-        self.live_choice(d, "strum_sync", 1.0, RATE_SYNC);
-        if self.sweep_synced() {
-            let header = RATE_HEADER;
-            d.text(header.0, header.1 + 15.0, "Rate", TEXT_SMALL, MUTED);
-            self.draw_modulation_badge(d, "rate", (header.0 + 46.0, header.1, 194.0, 20.0));
-            let beats = self
-                .routed_plain("rate")
-                .unwrap_or(self.params.rate.value());
-            d.text_right(
-                header.0 + header.2,
-                header.1 + 15.0,
-                &format!("{beats:.3} beats"),
-                TEXT_SMALL,
-                if self.routed_plain("rate").is_some() {
-                    TEAL
-                } else {
-                    MUTED
-                },
-            );
-            let active_rate = self.params.rate.value();
-            for (i, (label, beats)) in ARP_RATES.iter().enumerate() {
-                self.button(
-                    d,
-                    rate_rect(i),
-                    label,
-                    (active_rate - beats).abs() < 0.0001,
-                    GOLD,
-                );
-                self.live_choice(d, "rate", *beats, rate_rect(i));
-            }
-        }
-        if !looping {
-            self.button(
-                d,
-                STRUM_HOLD,
-                "Hold notes",
-                self.params.strum_hold.value(),
-                TEAL,
-            );
-            self.live_choice(d, "strum_hold", 1.0, STRUM_HOLD);
-        }
-        for (id, r) in arp_controls()
-            .into_iter()
-            .skip(1)
-            .filter(|(id, _)| *id != "gate")
-        {
-            let gate = self
-                .routed_plain("gate")
-                .unwrap_or(self.params.gate.value());
-            let swing = self
-                .routed_plain("swing")
-                .unwrap_or(self.params.swing.value());
-            let is_gate = id == "gate";
-            d.rounded_rect(r.0, r.1, r.2, r.3, 6.0, alpha(TEXT, 0.025));
-            self.draw_modulation_badge(d, id, (r.0 + 66.0, r.1, (r.2 - 148.0).max(0.0), 20.0));
-            d.text(
-                r.0 + 12.0,
-                r.1 + 17.0,
-                if is_gate { "Gate" } else { "Swing" },
-                TEXT_SMALL,
-                MUTED,
-            );
-            d.text_right(
-                r.0 + r.2 - 12.0,
-                r.1 + 17.0,
-                &format!("{:.0}%", if is_gate { gate * 100.0 } else { swing * 100.0 }),
-                TEXT_SMALL,
-                if self.routed_plain(id).is_some() {
-                    TEAL
-                } else {
-                    GOLD
-                },
-            );
-            let step = (r.2 - 24.0) / 8.0;
-            for i in 0..8 {
-                let start = if i % 2 == 0 {
-                    i as f32
-                } else {
-                    i as f32 + swing
-                };
-                let duration = if i % 2 == 0 { 1.0 + swing } else { 1.0 - swing };
-                let x = r.0 + 12.0 + start * step;
-                d.line(
-                    r.0 + 12.0 + i as f32 * step,
-                    r.1 + 26.0,
-                    r.0 + 12.0 + i as f32 * step,
-                    r.1 + 46.0,
-                    LINE,
-                    1.0,
-                );
-                d.rounded_rect(
-                    x,
-                    r.1 + 29.0,
-                    (step * duration * if is_gate { gate } else { 0.8 }).max(2.0),
-                    13.0,
-                    3.0,
-                    if i % 2 == 0 { GOLD } else { alpha(GOLD, 0.5) },
-                );
-            }
-        }
-        self.draw_arp_pattern_edit(d);
+
     }
     pub(super) fn draw_pad(&self, d: &mut Draw, mode: i32) {
         let pad = self.pad();
@@ -393,45 +292,12 @@ impl ChordboardView {
                     value
                 } * (y_max - y_min)
         };
-        let n = self
-            .routed_plain("strings")
-            .unwrap_or(self.params.strings.value() as f32) as usize;
-        for i in 0..n {
-            let x = field.0 + (min + i as f32 * (max - min) / (n - 1) as f32) * field.2;
-            let string = if manual && self.params.x_reverse.value() {
-                n - 1 - i
-            } else {
-                i
-            };
-            let pulse = self.string_anim[string];
-            let color = if self.snapshot.notes.string(string).is_some() {
-                TEAL
-            } else {
-                MUTED
-            };
-            if pulse > 0.01 {
-                d.rect(x - 5.0, field.1, 10.0, field.3, alpha(color, pulse * 0.10));
-            }
-            let displacement = (pulse * 24.0).sin() * pulse * 3.0;
-            d.poly(
-                &[
-                    (x, field.1),
-                    (x + displacement, field.1 + field.3 / 2.0),
-                    (x, field.1 + field.3),
-                ],
-                alpha(color, 0.15 + pulse * 0.7),
-                1.0 + pulse,
-            );
-            if let Some(note) = self.snapshot.notes.string(string) {
-                d.text_centered(
-                    x,
-                    field.1 + field.3 + 14.0,
-                    &self.note_name(note),
-                    TEXT_SMALL,
-                    if pulse > 0.1 { color } else { MUTED },
-                );
-            }
-        }
+        self.draw_strings(
+            d,
+            field,
+            (min, max),
+            manual && self.params.x_reverse.value(),
+        );
         if !manual {
             self.button(
                 d,
@@ -443,29 +309,30 @@ impl ChordboardView {
             self.button(
                 d,
                 strum_hold_rect(self.expand_t()),
-                "HOLD",
+                if self.routed_plain("strum_hold").is_some() { "" } else { "HOLD" },
                 self.params.strum_hold.value(),
                 TEAL,
             );
             if let Some(live) = self.routed_plain("strum_sync") {
                 let r = strum_sync_rect(self.expand_t());
                 self.live_highlight(d, r);
-                d.text_right(
-                    r.0 + r.2 - 4.0,
-                    r.1 + r.3 - 3.0,
+                d.text(
+                    r.0 + r.2 + 6.0,
+                    r.1 + r.3 * 0.5 + 4.0,
                     if live >= 0.5 { "ON" } else { "OFF" },
-                    8.0,
+                    11.0,
                     TEAL,
                 );
             }
             if let Some(live) = self.routed_plain("strum_hold") {
                 let r = strum_hold_rect(self.expand_t());
                 self.live_highlight(d, r);
+                d.text_centered(r.0 + r.2 * 0.5, r.1 + 14.0, "HOLD", 11.0, MUTED);
                 d.text_right(
                     r.0 + r.2 - 4.0,
                     r.1 + r.3 - 3.0,
                     if live >= 0.5 { "ON" } else { "OFF" },
-                    8.0,
+                    11.0,
                     TEAL,
                 );
             }
@@ -525,6 +392,7 @@ impl ChordboardView {
                 );
             }
         }
+        let y_labels = expression_bound_labels(field, y_min, y_max);
         for (y_axis, low, high) in [(false, min, max), (true, y_min, y_max)] {
             for (maximum, value) in [(false, low), (true, high)] {
                 let (ax, ay, pointer) = strum_bound_anchor_in(field, y_axis, value);
@@ -544,7 +412,14 @@ impl ChordboardView {
                     "MIN".into()
                 };
                 if y_axis {
-                    d.text_centered(ax - 22.0, ay + 22.0, &label, TEXT_SMALL, color);
+                    let r = y_labels[maximum as usize];
+                    let center_y = r.1 + r.3 * 0.5;
+
+                    if dragging {
+                        d.rounded_rect(r.0, r.1, r.2, r.3, 3.0, alpha(color, 0.16));
+                        d.circle(ax, ay, 4.0, color, false);
+                    }
+                    d.text_centered(r.0 + r.2 * 0.5, center_y + TEXT_SMALL * 0.35, &label, TEXT_SMALL, color);
                 } else if maximum {
                     d.text_right(ax - 14.0, ay - 17.0, &label, TEXT_SMALL, color);
                 } else {
@@ -571,39 +446,33 @@ impl ChordboardView {
         if self.snapshot.full_notes.len > 0 {
             self.snapshot.full_notes
         } else {
-            harmony::voice(
-                (self.params.keyboard_octave.value() + self.params.key.value()).clamp(0, 127) as u8,
-                self.params.quality.value() as u8,
-                None,
-                self.params.transpose.value() as i8,
-                self.params.inversion.value() as u8,
-                self.params.spread.value() as u8,
-            )
+            let chord = SavedChord::decode(self.snapshot.captured).unwrap_or(SavedChord {
+                root: (self.params.keyboard_octave.value() + self.params.key.value()).clamp(0, 127) as u8,
+                quality: self.params.quality.value() as u8,
+                second: None,
+                additions: 0,
+                transpose: self.params.transpose.value() as i8,
+                inversion: self.params.inversion.value() as u8,
+                spread: self.params.spread.value() as u8,
+            });
+            harmony::voice_recipe(chord, self.params.spread.value() as u8)
         }
     }
 
     pub(super) fn draw_meters(&self, d: &mut Draw) {
         use crate::engine::routing::SOURCE_SHORT;
         d.font = self.font.get();
-        let sequencer = self.sequencer_open();
         d.text(
-            if sequencer {
-                meter_rect(7).0 + 8.0
-            } else {
-                MOD_SURFACE.0 + 10.0
-            },
+            MOD_SURFACE.0 + 10.0,
             module_title_y(MOD_SURFACE.1, MODULE_TITLE_SIZE),
             "MODULATORS",
             MODULE_TITLE_SIZE,
             TEXT,
         );
+        style::Icon::Routing.draw(d, MOD_SURFACE.0 + 18.0, MOD_SURFACE.1 + 46.0, MUTED);
         d.text(
-            if sequencer {
-                meter_rect(8).0 + 8.0
-            } else {
-                MOD_SURFACE.0 + 132.0
-            },
-            module_title_y(MOD_SURFACE.1, 11.0),
+            MOD_SURFACE.0 + 31.0,
+            MOD_SURFACE.1 + 50.0,
             "Drag to route",
             11.0,
             MUTED,
@@ -611,6 +480,7 @@ impl ChordboardView {
         for (i, label) in SOURCE_SHORT.iter().enumerate() {
             let r = meter_rect(i);
             let value = self.snapshot.sources[i];
+            let accent = if i >= 9 { GOLD } else { TEAL };
             let hover = self.hover_amount(r);
             let r = (r.0, r.1 - hover * 2.0, r.2, r.3);
             let dragging = matches!(self.drag, Some(Drag::Route(drag)) if drag.source == i);
@@ -635,7 +505,7 @@ impl ChordboardView {
                 r.2,
                 r.3,
                 4.0,
-                alpha(TEAL, 0.025 + emphasis * 0.12),
+                alpha(accent, 0.025 + emphasis * 0.12),
             );
             d.outline_rounded(
                 r.0,
@@ -644,13 +514,13 @@ impl ChordboardView {
                 r.3,
                 4.0,
                 alpha(
-                    if linked || emphasis > 0.0 { TEAL } else { LINE },
+                    if linked || emphasis > 0.0 { accent } else { LINE },
                     0.55 + emphasis * 0.4,
                 ),
                 1.0,
             );
             for dot in 0..route_count {
-                d.circle(r.0 + 8.0 + dot as f32 * 6.0, r.1 + 7.0, 1.5, TEAL, true);
+                d.circle(r.0 + 8.0 + dot as f32 * 6.0, r.1 + 7.0, 1.5, accent, true);
             }
             if selected {
                 d.outline_rounded(
@@ -659,10 +529,10 @@ impl ChordboardView {
                     r.2 + 2.0,
                     r.3 + 2.0,
                     5.0,
-                    alpha(TEAL, emphasis),
+                    alpha(accent, emphasis),
                     2.0,
                 );
-                d.rect(r.0 + 8.0, r.1 + r.3 - 3.0, r.2 - 16.0, 2.0, TEAL);
+                d.rect(r.0 + 8.0, r.1 + r.3 - 3.0, r.2 - 16.0, 2.0, accent);
             }
             let x = r.0 + 8.0;
             let y = r.1 + 20.0;
@@ -670,33 +540,26 @@ impl ChordboardView {
             d.rounded_rect(x, y, width, 6.0, 2.0, BG);
             let (start, end) = meter_fill(i, value);
             if end > start {
-                d.rounded_rect(x + width * start, y, width * (end - start), 6.0, 2.0, TEAL);
+                d.rounded_rect(x + width * start, y, width * (end - start), 6.0, 2.0, accent);
             }
-            if i == 0 {
+            if i == 0 || i >= 9 {
                 let center = x + width * 0.5;
                 d.line(center, y - 2.0, center, y + 8.0, MUTED, 1.0);
             }
-            d.text_centered(
-                r.0 + r.2 * 0.5,
-                r.1 + 14.0,
-                label,
-                TEXT_SMALL,
-                if linked || dragging || hover > 0.3 {
-                    TEAL
-                } else {
-                    MUTED
-                },
-            );
+            let color = if i >= 9 || linked || dragging || hover > 0.3 { accent } else { MUTED };
+            let label_width = d.text_width(label, TEXT_SMALL);
+            let left = x + (width - label_width - 22.0) * 0.5;
+            style::MODULATOR_ICONS[i].draw(d, left + 8.0, r.1 + 10.0, color);
+            d.text(left + 22.0, r.1 + 14.0, label, TEXT_SMALL, color);
         }
         d.font = self.ui_font.get();
-        self.draw_expression_modes(d);
     }
 }
 
-// Only pitch is bipolar. Timbre and all other sources fill from zero.
+// Pitch uses a normalized center; dedicated step modulators use signed offsets.
 pub(super) fn meter_fill(source: usize, value: f32) -> (f32, f32) {
-    let value = value.clamp(0.0, 1.0);
-    if source == 0 {
+    let value = if source >= 9 { (value.clamp(-1.0, 1.0) + 1.0) * 0.5 } else { value.clamp(0.0, 1.0) };
+    if source == 0 || source >= 9 {
         (value.min(0.5), value.max(0.5))
     } else {
         (0.0, value)

@@ -6,7 +6,11 @@ use std::sync::{
     atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering},
     Arc,
 };
-pub const INTERLOCK_NAMES: [&str; 3] = ["Off", "Avoid chords", "Match chords"];
+pub const ARP_CHORD_ACCENT_NAMES: [&str; 3] = [
+    "Independent",
+    "Soften with Chords",
+    "Accent with Chords",
+];
 #[derive(Params)]
 pub struct ChordboardParams {
     #[id = "always_bass"]
@@ -91,6 +95,7 @@ pub struct ChordboardParams {
     pub velocity: FloatParam,
     #[id = "length_ms"]
     pub length_ms: FloatParam,
+    // Kept for preset compatibility; the string count now follows chord tones × octaves.
     #[id = "strings"]
     pub strings: IntParam,
     #[id = "strings_played"]
@@ -107,6 +112,10 @@ pub struct ChordboardParams {
     pub tempo_sync: BoolParam,
     #[id = "tempo"]
     pub tempo: FloatParam,
+    #[id = "meter_num"]
+    pub meter_num: IntParam,
+    #[id = "meter_den"]
+    pub meter_den: IntParam,
     #[id = "direction"]
     pub direction: IntParam,
     #[id = "contour"]
@@ -279,7 +288,7 @@ impl Default for ChordboardParams {
             slot_9: AtomicU64::new(0),
             mode: IntParam::new("Play mode", 1, IntRange::Linear { min: 1, max: 3 })
                 .with_value_to_string(Arc::new(|v| {
-                    ["Arpeggiator Once", "Manual Strum", "Arpeggiator Loop"][(v - 1) as usize]
+                    ["Arp Once", "Arp Loop (legacy Manual)", "Arp Loop"][(v - 1) as usize]
                         .to_string()
                 })),
             quality: IntParam::new("Base quality", 0, IntRange::Linear { min: 0, max: 11 })
@@ -295,11 +304,11 @@ impl Default for ChordboardParams {
                     ["Nearest resolution", "Furthest dominant resolution", "Off"][v as usize]
                         .to_string()
                 })),
-            interlock: IntParam::new("Interlock", 0, IntRange::Linear { min: 0, max: 2 })
+            interlock: IntParam::new("Arp–Chord Accent", 0, IntRange::Linear { min: 0, max: 2 })
                 .with_value_to_string(Arc::new(|v| {
-                    INTERLOCK_NAMES[v.clamp(0, 2) as usize].to_string()
+                    ARP_CHORD_ACCENT_NAMES[v.clamp(0, 2) as usize].to_string()
                 })),
-            inversion: IntParam::new("Inversion", 0, IntRange::Linear { min: 0, max: 5 }),
+            inversion: IntParam::new("Inversion", 0, IntRange::Linear { min: 0, max: 11 }),
             transpose: IntParam::new("Transpose", 0, IntRange::Linear { min: -24, max: 24 }),
             spread: IntParam::new(
                 "Voicing",
@@ -358,6 +367,8 @@ impl Default for ChordboardParams {
                 },
             )
             .hide(),
+            meter_num: IntParam::new("Meter numerator", 4, IntRange::Linear { min: 1, max: 32 }),
+            meter_den: IntParam::new("Meter denominator power", 2, IntRange::Linear { min: 0, max: 5 }),
             tempo_sync: BoolParam::new("Host sync", true),
             tempo: FloatParam::new(
                 "Tempo BPM",
@@ -611,11 +622,11 @@ impl ChordboardParams {
             strum_enabled: self.strum_enabled.value(),
             root_on_select: self.root_on_select.value(),
             routes: std::array::from_fn(|i| self.routes[i].route()),
-            mode: if self.seq_enabled.value() {
-                crate::engine::SEQUENCER
-            } else {
-                self.mode.value() as u8
-            },
+            // Play is always the live strumfield. The legacy mode ID now selects
+            // Once/Loop for automatic Arp playback without changing Play.
+            mode: crate::engine::MANUAL,
+            seq_enabled: self.seq_enabled.value(),
+            seq_loop: self.mode.value() != crate::engine::AUTO as i32,
             seq_pages: std::array::from_fn(|i| self.seq_pages[i].page.value() as u8),
             quality: self.quality.value() as u8,
             voice_leading: self.voice_leading.value() as u8,
@@ -679,6 +690,36 @@ impl ChordboardParams {
 macro_rules! control_catalog {
     ($($builder:ident($field:ident, $group:literal)),* $(,)?) => {
         impl ChordboardParams {
+            /// Update the polling signature without allocating formatted controls.
+            pub fn update_control_signature(&self, signature: &mut Vec<f32>) -> bool {
+                let mut index = 0;
+                let mut changed = false;
+                let mut visit = |value| {
+                    if let Some(previous) = signature.get_mut(index) {
+                        if *previous != value {
+                            *previous = value;
+                            changed = true;
+                        }
+                    } else {
+                        signature.push(value);
+                        changed = true;
+                    }
+                    index += 1;
+                };
+                $(visit(self.$field.unmodulated_normalized_value());)*
+                for route in &self.routes {
+                    visit(route.enabled.unmodulated_normalized_value());
+                    visit(route.source.unmodulated_normalized_value());
+                    visit(route.target.unmodulated_normalized_value());
+                    visit(route.min.unmodulated_normalized_value());
+                    visit(route.max.unmodulated_normalized_value());
+                    visit(route.curve.unmodulated_normalized_value());
+                }
+                changed |= signature.len() != index;
+                signature.truncate(index);
+                changed
+            }
+
             pub fn controls(&self) -> Vec<Control> {
                 let mut controls = vec![$($builder(stringify!($field), $group, &self.$field)),*];
                 for route in &self.routes { controls.extend(route.controls()); }
@@ -852,6 +893,7 @@ mod tests {
     fn saved_fields_roundtrip_without_held_notes() {
         let params = ChordboardParams::default();
         let chord = crate::harmony::SavedChord {
+            additions: 0,
             root: 60,
             second: Some(66),
             quality: 0,
@@ -903,10 +945,16 @@ pub struct RouteParams {
     pub max: FloatParam,
     #[id = "route_curve"]
     pub curve: FloatParam,
+    #[id = "route_smoothing_ms"]
+    pub smoothing_ms: FloatParam,
 }
 impl Default for RouteParams {
     fn default() -> Self {
         Self {
+            smoothing_ms: FloatParam::new("Smoothing", 0.0, FloatRange::Linear { min: 0.0, max: 2000.0 })
+                .with_unit(" ms")
+                .with_value_to_string(Arc::new(|v| format!("{v:.0}")))
+                .with_string_to_value(Arc::new(|s| s.trim().trim_end_matches("ms").trim().parse().ok())),
             enabled: BoolParam::new("Enabled", true),
             source: IntParam::new(
                 "Source",
@@ -1004,6 +1052,7 @@ impl RouteParams {
             min: self.min.value(),
             max: self.max.value(),
             curve: self.curve.value(),
+            smoothing_ms: self.smoothing_ms.value(),
         }
     }
     pub fn controls(&self) -> Vec<Control> {
@@ -1014,6 +1063,7 @@ impl RouteParams {
             control("route_min", 6, &self.min),
             control("route_max", 6, &self.max),
             control("route_curve", 6, &self.curve),
+            control("route_smoothing_ms", 6, &self.smoothing_ms),
         ]
     }
     pub fn control(&self, id: &str) -> Option<Control> {
@@ -1025,6 +1075,21 @@ impl RouteParams {
 mod routing_state_tests {
     use super::*;
     #[test]
+    fn legacy_arp_choice_never_changes_live_play_or_sequencer_power() {
+        for mode in 1..=3 {
+            for enabled in [false, true] {
+                let p = ChordboardParams {
+                    mode: IntParam::new("Play mode", mode, IntRange::Linear { min: 1, max: 3 }),
+                    seq_enabled: BoolParam::new("Sequencer", enabled),
+                    ..ChordboardParams::default()
+                };
+                assert_eq!(p.config().mode, crate::engine::MANUAL);
+                assert_eq!(p.config().seq_enabled, enabled);
+                assert_eq!(p.config().seq_loop, mode != 1);
+            }
+        }
+    }
+    #[test]
     fn all_route_fields_have_stable_unique_host_ids_and_default_strumfield_link() {
         let p = ChordboardParams::default();
         let ids: Vec<_> = p.param_map().into_iter().map(|v| v.0).collect();
@@ -1035,6 +1100,7 @@ mod routing_state_tests {
             "route_max",
             "route_curve",
             "route_enabled",
+            "route_smoothing_ms",
         ] {
             assert_eq!(
                 ids.iter().filter(|id| id.starts_with(field)).count(),
@@ -1070,5 +1136,25 @@ impl SeqPageParams {
             )
             .with_value_to_string(Arc::new(|v| format!("{}", v + 1))),
         }
+    }
+}
+
+#[cfg(test)]
+mod signature_tests {
+    use super::*;
+
+    #[test]
+    fn polling_matches_catalog_and_reuses_storage_when_values_change() {
+        let mut params = ChordboardParams::default();
+        let mut signature = Vec::new();
+        assert!(params.update_control_signature(&mut signature));
+        let storage = signature.as_ptr();
+        assert!(!params.update_control_signature(&mut signature));
+        params.latch = BoolParam::new("Latch", !params.latch.value());
+        params.routes[0].min = FloatParam::new("Minimum", 0.37, FloatRange::Linear { min: 0.0, max: 1.0 });
+        assert!(params.update_control_signature(&mut signature));
+        assert_eq!(signature, params.controls().iter().map(|control| control.norm).collect::<Vec<_>>());
+        assert_eq!(storage, signature.as_ptr());
+        assert!(!params.update_control_signature(&mut signature));
     }
 }

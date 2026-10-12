@@ -199,16 +199,16 @@ fn module_grid_and_keyboard_midi_controls_fit_without_overlapping() {
     }
 
     assert_eq!(CHORDS_SURFACE.1, PERF_SURFACE.1);
-    assert_eq!(MOD_SURFACE.1 - PERF_SURFACE.1 - PERF_SURFACE.3, 12.0);
+    assert_eq!(MOD_SURFACE.1, PERF_SURFACE.1);
     assert_eq!(
         CHORDS_SURFACE.1 + CHORDS_SURFACE.3,
         PERF_SURFACE.1 + PERF_SURFACE.3
     );
-    assert_eq!(PIANO_SURFACE.1 - MOD_SURFACE.1 - MOD_SURFACE.3, 12.0);
+    assert_eq!(PIANO_SURFACE.1 - PERF_SURFACE.1 - PERF_SURFACE.3, 12.0);
     assert_eq!(CHORDS_SURFACE.0, PIANO_SURFACE.0);
     assert_eq!(PERF_SURFACE.0 - CHORDS_SURFACE.0 - CHORDS_SURFACE.2, 12.0);
-    assert_eq!(MOD_SURFACE.0, PIANO_SURFACE.0);
-    assert_eq!(MOD_SURFACE.2, PIANO_SURFACE.2);
+    assert_eq!(MOD_SURFACE.0 - PIANO_SURFACE.0 - PIANO_SURFACE.2, 16.0);
+    assert_eq!(MOD_SURFACE.1 + MOD_SURFACE.3, PIANO_SURFACE.1 + PIANO_SURFACE.3);
     for mpe in [false, true] {
         let view = view(1, mpe);
         for (id, module) in [
@@ -313,6 +313,16 @@ fn bass_marker_follows_the_default_control_octave() {
         "bass marker must appear by default even before learn"
     );
     assert_eq!(view.bass_boundary(), Some(12));
+}
+#[test]
+fn control_octave_delete_clears_base() {
+    let mut view = view(3, false);
+    view.params.control_base.store(36, Ordering::Relaxed);
+    let (mut cx, target, _) = context();
+    let delete = view.control_octave_delete_rect();
+    click(&mut view, &mut cx, target, delete);
+    assert_eq!(view.params.control_base.load(Ordering::Relaxed), -1);
+    assert_eq!(view.learning(), 0);
 }
 #[test]
 fn onscreen_piano_key_learns_control_octave_and_stops_listening() {

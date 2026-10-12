@@ -1,4 +1,5 @@
 mod chords;
+mod music;
 mod events;
 mod layout;
 mod mapping;
@@ -6,6 +7,7 @@ mod menu;
 mod routing;
 mod sequencer;
 mod style;
+mod tuning_fork;
 use menu::Menu;
 mod memories;
 use memories::{MemoryDrag, MemoryUi};
@@ -140,6 +142,8 @@ struct ChordboardView {
     font: Cell<Option<FontId>>,
     ui_font: Cell<Option<FontId>>,
     bold_font: Cell<Option<FontId>>,
+    music_font: Cell<Option<FontId>>,
+    icon_font: Cell<Option<FontId>>,
     motion: Vec<style::ControlMotion>,
     action_flash: Option<(Rect, f32)>,
     memory_ui: MemoryUi,
@@ -211,6 +215,8 @@ impl ChordboardView {
             font: Cell::new(None),
             ui_font: Cell::new(None),
             bold_font: Cell::new(None),
+            music_font: Cell::new(None),
+            icon_font: Cell::new(None),
             motion: Vec::new(),
             action_flash: None,
             memory_ui: MemoryUi::default(),
@@ -331,6 +337,7 @@ impl ChordboardView {
         self.edit = None;
     }
     fn set_panel(&mut self, panel: Option<Panel>) {
+        self.pending_route_remove = None;
         self.release_keys();
         self.memory_held.fill(false);
         self.request_learn(0);
@@ -373,20 +380,18 @@ impl ChordboardView {
     fn base_controls(&self) -> Vec<(Control, Rect)> {
         self.controls_for_mode(self.mode())
     }
-    fn controls_for_mode(&self, mode: i32) -> Vec<(Control, Rect)> {
+    fn controls_for_mode(&self, _mode: i32) -> Vec<(Control, Rect)> {
         let mut positions = Vec::new();
-        let mode = if mode == 4 { 2 } else { mode.max(1) };
         if !self.arp_page() {
             positions.extend(voicing_controls());
+            positions.push(("root_on_select", ROOT_ON_SELECT));
         }
-        positions.push(("root_on_select", strum_selection_rect(self.expand_t())));
         positions.extend(output_controls(2));
         if self.arp_main() {
-            positions.extend(arp_controls().into_iter().filter(|(id, _)| *id != "gate"));
-            if !self.sweep_synced() {
-                positions.extend(strum_controls());
-            }
-            positions.extend(output_controls(if mode == 3 { 3 } else { 1 }));
+            positions.extend(arp_controls(true));
+        }
+        if self.sequencer_open() && !self.sweep_synced() {
+            positions.push(("strum_ms", SEQ_RATE));
         }
         positions.extend(self.keyboard_controls().into_iter().map(|(c, r)| (c.id, r)));
         if !self.params.tempo_sync.value() {
@@ -414,6 +419,7 @@ impl ChordboardView {
     fn menu_trigger_rect(&self, menu: Menu) -> Rect {
         let r = mapping_panel_rect(self.mapping_axis);
         match menu {
+            Menu::Meter(den) => if den { METER_DEN } else { METER_NUM },
             Menu::MappingKind => (r.0 + 12.0, r.1 + 48.0, 132.0, 28.0),
             Menu::MappingCc(_) | Menu::MappingChannel(true) => {
                 (r.0 + 152.0, r.1 + 48.0, 96.0, 28.0)
@@ -421,6 +427,7 @@ impl ChordboardView {
             Menu::MappingChannel(false) => (r.0 + 256.0, r.1 + 48.0, 116.0, 28.0),
             Menu::YTarget => (r.0 + 12.0, r.1 + 84.0, 172.0, 28.0),
             Menu::StrumRate => strum_rate_rect(self.expand_t()),
+            Menu::ArpRate => SEQ_RATE,
             Menu::KeyboardParam(id) => keyboard_control_rect(id, self.params.mpe_enabled()),
             _ => menu.trigger_rect(),
         }
@@ -457,7 +464,7 @@ impl ChordboardView {
             if !self.has_selected_route() {
                 return Vec::new();
             }
-            return ["route_enabled"]
+            return ["route_enabled", "route_smoothing_ms"]
                 .into_iter()
                 .filter_map(|id| self.control(id).map(|c| (c, route_control_rect(id))))
                 .collect();
@@ -502,6 +509,7 @@ impl ChordboardView {
     }
     fn menu_selection(&self, menu: Menu) -> usize {
         match menu {
+            Menu::Meter(den) => if den { self.params.meter_den.value() as usize } else { self.params.meter_num.value() as usize - 1 },
             Menu::RouteSource => self.params.routes[self.route_slot].source.value() as usize,
             Menu::RouteTarget => crate::engine::routing::available_targets()
                 .position(|(i, _)| i == self.params.routes[self.route_slot].target.value() as usize)
@@ -515,6 +523,10 @@ impl ChordboardView {
             Menu::StrumRate => ARP_RATES
                 .iter()
                 .position(|(_, beats)| (*beats - self.params.strum_beats.value()).abs() < 0.0001)
+                .unwrap_or(3),
+            Menu::ArpRate => ARP_RATES
+                .iter()
+                .position(|(_, beats)| (*beats - self.params.rate.value()).abs() < 0.0001)
                 .unwrap_or(3),
             Menu::Key => harmony::KEY_CHOICES
                 .iter()
@@ -531,6 +543,7 @@ impl ChordboardView {
         }
     }
     fn open_menu(&mut self, menu: Menu) {
+        self.pending_route_remove = None;
         self.release_keys();
         self.memory_held.fill(false);
         self.memory_ui.armed = false;
@@ -538,8 +551,14 @@ impl ChordboardView {
         self.menu = Some(menu);
     }
     fn select_menu(&mut self, cx: &mut EventContext, menu: Menu, index: usize) {
+        self.pending_route_remove = None;
         self.menu = None;
         match menu {
+            Menu::Meter(den) => {
+                let param = if den { &self.params.meter_den } else { &self.params.meter_num };
+                Self::emit(cx, param.as_ptr(), param.preview_normalized(index as i32 + if den { 0 } else { 1 }));
+            }
+
             Menu::KeyboardParam(id) => {
                 if let Some(c) = self.control(id) {
                     let (min, max) = keyboard_menu_range(id).expect("keyboard dropdown");
@@ -584,6 +603,11 @@ impl ChordboardView {
                 self.params
                     .strum_beats
                     .preview_normalized(ARP_RATES[index].1),
+            ),
+            Menu::ArpRate => Self::emit(
+                cx,
+                self.params.rate.as_ptr(),
+                self.params.rate.preview_normalized(ARP_RATES[index].1),
             ),
             Menu::YTarget => Self::emit(
                 cx,
@@ -725,13 +749,6 @@ impl ChordboardView {
     fn toggle_strum_bypass(&mut self, cx: &mut EventContext) {
         let enabled = !self.params.strum_enabled.value();
         self.end_pad_hover(cx);
-        if enabled && self.playback_mode() != 4 {
-            Self::emit(
-                cx,
-                self.params.mode.as_ptr(),
-                self.params.mode.preview_normalized(2),
-            );
-        }
         self.set(cx, "strum_enabled", if enabled { 1.0 } else { 0.0 });
     }
     fn cycle_selection_mode(&self, cx: &mut EventContext) {
@@ -771,7 +788,7 @@ impl ChordboardView {
         )
     }
     fn strum_bound_at(&self, x: f32, y: f32) -> Option<(bool, bool)> {
-        if self.mode() != 2 {
+        if !self.manual_playing() {
             return None;
         }
         let play = self.play_pad();
@@ -1055,11 +1072,7 @@ impl ChordboardView {
             self.meters[i] = prev + (target - prev) * (1.0 - (-dt / 0.055).exp());
             changed |= (prev - self.meters[i]).abs() > 0.001;
         }
-        let signature: Vec<f32> = self.params.controls().iter().map(|c| c.norm).collect();
-        if signature != self.controls_signature {
-            self.controls_signature = signature;
-            changed = true;
-        }
+        changed |= self.params.update_control_signature(&mut self.controls_signature);
         for i in 0..2 {
             let value = self.params.mapping(i).load(Ordering::Relaxed);
             if value != self.mapping_signature[i] {

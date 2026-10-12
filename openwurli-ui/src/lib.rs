@@ -54,7 +54,7 @@ impl FastFinish {
                     self.sag_release
                 };
                 self.sag_envelope += coefficient * (magnitude - self.sag_envelope);
-                *sample /= 1.0 + 1.2 * self.sag_envelope;
+                *sample /= 1.0 + 12.0 * self.sag_envelope;
             }
         }
         if !sag_enabled {
@@ -632,8 +632,44 @@ mod tests {
         finish.process(&mut sagged, true);
         assert!(sagged[1023] < original[1023]);
         assert!(sagged[1023] > 0.0);
+        // At a sustained 0.2 level, Extra Sag should settle near -10.6 dB.
+        // The former strength settled near -1.9 dB and fails this bound.
+        let mut sustained = [0.2; 44_100];
+        finish.process(&mut sustained, true);
+        let gain = sustained[44_099] / 0.2;
+        assert!((0.29..0.30).contains(&gain), "sustained sag gain: {gain}");
+        finish.process(&mut sustained, false);
+        assert_eq!(finish.sag_envelope, 0.0);
         finish.reset();
         assert_eq!(finish.sag_envelope, 0.0);
+    }
+
+    #[test]
+    fn extra_sag_reduces_rendered_chords_in_both_modes() {
+        with_circuit_stack(|| {
+            for mode in [CircuitMode::Fast, CircuitMode::Heavy] {
+                let mut engine = WurliEngine::new(44_100.0);
+                engine.set_circuit_mode(mode);
+                engine.set_noise_enabled(false);
+                for note in [48, 60, 64, 67] {
+                    engine.note_on_extended(note, 0.8);
+                }
+                let mut clean = vec![0.0; 44_100];
+                for chunk in clean.chunks_mut(256) {
+                    engine.render(chunk);
+                }
+                let mut sagged = clean.clone();
+                FastFinish::new(44_100.0).process(&mut sagged, true);
+                let energy = |samples: &[f32]| samples.iter().map(|s| s * s).sum::<f32>();
+                let reduction_db = 10.0 * (energy(&clean) / energy(&sagged)).log10();
+                eprintln!("{mode:?} Extra Sag chord reduction: {reduction_db:.2} dB");
+                assert!(sagged.iter().all(|s| s.is_finite()));
+                assert!(
+                    reduction_db > 1.0,
+                    "{mode:?}: sag reduction {reduction_db} dB"
+                );
+            }
+        });
     }
 
     #[test]

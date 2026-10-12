@@ -189,12 +189,13 @@ fn extended_keyboard_tracks_last_key_and_releases_every_pointer_token() {
     assert!(e.down[2048..].iter().all(|&down| !down));
 }
 #[test]
-fn extended_ignored_keys_have_distinct_snapshot_bits() {
+fn extended_added_keys_have_distinct_snapshot_bits() {
     let mut e = Engine::default();
     send(&mut e, Command::KeyDown(0, 60, 0));
     send(&mut e, Command::KeyDown(1, 61, 0));
     send(&mut e, Command::KeyDown(35, 71, 2));
-    assert_eq!(e.snapshot().ignored, 1_u64 << 35);
+    assert_eq!(e.snapshot().accepted, 3 | (1_u64 << 35));
+    assert_eq!(e.snapshot().ignored, 0);
     send(&mut e, Command::ReleaseKeyboard);
     assert_eq!(e.snapshot().ignored, 0);
 }
@@ -243,6 +244,8 @@ fn once_rate_uses_beats_or_milliseconds_per_note() {
             &mut e,
             Config {
                 mode: 1,
+                octaves: 3,
+                strings_played: 8,
                 strum_sync: sync,
                 rate: 0.5,
                 strum_ms: 120.0,
@@ -382,6 +385,7 @@ fn recalled_base_voicing_returns_after_disabling_a_route() {
     e.command(
         Command::Recall(
             harmony::SavedChord {
+                additions: 0,
                 root: 60,
                 second: None,
                 quality: 0,

@@ -96,6 +96,7 @@ fn memory_row_keys_recall_once_per_press_and_leave_escape_to_host() {
     view.focused = true;
     for (slot, code) in MEMORY_CODES.into_iter().enumerate() {
         let word = SavedChord {
+            additions: 0,
             root: 60 + slot as u8,
             second: None,
             quality: 0,
@@ -140,6 +141,7 @@ fn memory_shortcuts_capture_with_shift_and_do_not_interrupt_text_entry() {
     let (mut cx, target, _) = context();
     view.focused = true;
     view.snapshot.captured = SavedChord {
+        additions: 0,
         root: 60,
         second: None,
         quality: 0,
@@ -429,6 +431,7 @@ fn save_requires_a_chord_and_confirms_only_after_slot_update() {
     view.request_capture(0);
     assert!(view.bridge.commands.pop().is_none());
     let word = SavedChord {
+        additions: 0,
         root: 60,
         second: None,
         quality: 0,
@@ -503,12 +506,7 @@ fn direct_selection_pairs_parameter_gestures() {
     for (r, ptr) in [
         (view.voicing_bounds().unwrap(), view.params.spread.as_ptr()),
         (
-            (
-                PIANO_LEADING.0 + 100.0,
-                PIANO_LEADING.1,
-                20.0,
-                PIANO_LEADING.3,
-            ),
+            view.voice_leading_rect(),
             view.params.voice_leading.as_ptr(),
         ),
     ] {
@@ -583,6 +581,7 @@ fn all_popover_choices_fit_inside_the_window_and_clear_the_heading() {
         Menu::Scale,
         Menu::YTarget,
         Menu::StrumRate,
+        Menu::ArpRate,
         Menu::MappingKind,
         Menu::MappingChannel(true),
         Menu::MappingChannel(false),
@@ -637,18 +636,19 @@ fn split_drags_suppress_other_hovers_until_release() {
         view.drag = Some(drag);
         // Even a previously animated hover disappears immediately on drag capture.
         assert_eq!(view.hover_amount(split), 0.0);
-        view.pointer = Some((PIANO_LEADING.0 + 2.0, PIANO_LEADING.1 + 2.0));
+        let leading = view.voice_leading_rect();
+        view.pointer = Some((leading.0 + 2.0, leading.1 + 2.0));
         assert_eq!(view.hover_pointer(), None);
         view.tick_motion(0.1);
-        assert_eq!(view.hover_amount(PIANO_LEADING), 0.0);
+        assert_eq!(view.hover_amount(view.voice_leading_rect()), 0.0);
         view.drag = None;
         assert_eq!(view.hover_amount(split), 0.0);
-        assert_eq!(view.hover_amount(PIANO_LEADING), 0.0);
+        assert_eq!(view.hover_amount(view.voice_leading_rect()), 0.0);
     }
 
     view.drag = None;
     assert_eq!(view.hover_pointer(), view.pointer);
     view.tick_motion(0.1);
-    assert_eq!(view.hover_amount(PIANO_LEADING), 1.0);
+    assert_eq!(view.hover_amount(view.voice_leading_rect()), 1.0);
     assert!(view.bridge.commands.pop().is_none());
 }

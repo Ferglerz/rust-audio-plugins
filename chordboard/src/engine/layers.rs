@@ -241,6 +241,9 @@ impl Engine {
         // layer never cuts off an overlapping strum that is still ringing.
         for i in 0..self.voices.len() {
             if let Some(voice) = self.voices[i].as_mut() {
+                if voice.owner != 0 {
+                    continue;
+                }
                 let was_layer = voice.layer;
                 voice.layer = desired[voice.note as usize];
                 if was_layer && !voice.layer && voice.off <= self.now {
@@ -254,7 +257,7 @@ impl Engine {
                     .voices
                     .iter()
                     .flatten()
-                    .any(|v| v.note as usize == note)
+                    .any(|v| v.note as usize == note && v.owner == 0)
             {
                 self.allocate_voice(note as u8, self.strike_velocity(), self.now, true, out);
             }

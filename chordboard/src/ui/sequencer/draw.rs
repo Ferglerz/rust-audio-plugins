@@ -1,76 +1,19 @@
 use super::*;
 
 impl ChordboardView {
-
-    pub(super) fn arp_items(&self, state: &State) -> Vec<Item> {
-        let p = &state.lanes[0][self.sequencer_ui.edit_pages[0]];
-        let mut items = Vec::new();
-        item(
-            &mut items,
-            arp_interlock_rect(),
-            format!(
-                "Interlock: {}",
-                field_value(Field::Interlock, p, &p.steps[0], &self.sequencer_ui)
-            ),
-            Action::Choice(Field::Interlock),
-            p.interlock_override.is_some(),
-        );
-        items
-    }
-
-    pub(in crate::ui) fn draw_arp_pattern_settings(&self, d: &mut Draw) {
-        let state = self.params.sequencer.snapshot();
-        for item in self.arp_items(&state) {
-            d.button(item.rect, &item.label, item.on, TEAL);
-        }
-    }
-
-    pub(in crate::ui) fn draw_arp_pattern_edit(&self, d: &mut Draw) {
-        if let Some(edit) = &self.sequencer_ui.edit {
-            if hit(ARP_PAD, edit.rect.0, edit.rect.1) {
-                d.value_edit(edit, TEAL);
-            }
-        }
-    }
-
-    pub(super) fn expression_mode_items(&self) -> Vec<Item> {
-        if !self.sequencer_open() {
+    pub(in crate::ui) fn sequencer_button_rects(&self) -> Vec<(Rect, bool)> {
+        if self.sequencer_ui.progress <= 0.0 {
             return Vec::new();
         }
-        let mut items = Vec::new();
-        let mut add = |source, label: &str, field| {
-            let r = meter_rect(source);
-            item(
-                &mut items,
-                (r.0, MOD_SURFACE.1 + 10.0, r.2, 24.0),
-                label,
-                Action::Modifier(Some(field)),
-                self.sequencer_ui.modifier == Some(field),
-            );
-        };
-        for (source, label, field) in EXPRESSION_MODES {
-            add(source, label, field);
-        }
         let state = self.params.sequencer.snapshot();
-        let lane = if self.sequencer_ui.lane == 1 { 1 } else { 0 };
-        let page = &state.lanes[lane][self.sequencer_ui.edit_pages[lane]];
-        for (source, number, label) in [(1, 1, "Mod"), (2, 11, "Expression"), (3, 2, "Breath")] {
-            if let Some(track) = page.cc_numbers.iter().position(|&cc| cc == number) {
-                add(source, label, Field::Cc(track));
-            }
-        }
-        items
-    }
-
-    pub(in crate::ui) fn draw_expression_modes(&self, d: &mut Draw) {
-        for c in self.expression_mode_items() {
-            d.button(c.rect, &c.label, c.on, TEAL);
-        }
+        self.seq_items(&state).into_iter()
+            .filter(|item| !matches!(item.action, Action::SelectStep(..)))
+            .map(|item| (item.rect, item.on))
+            .collect()
     }
 
     pub(super) fn seq_items(&self, state: &State) -> Vec<Item> {
         let u = &self.sequencer_ui;
-        let r = surface();
         let mut items = Vec::new();
         item(
             &mut items,
@@ -80,10 +23,9 @@ impl ChordboardView {
             self.params.seq_length_lock.value(),
         );
         for lane in VISIBLE_LANES {
-            let y = lane_y(lane);
             item(
                 &mut items,
-                (r.0 + 8.0, y, 78.0, 20.0),
+                lane_label_rect(lane),
                 LANES[lane],
                 Action::LaneEnabled(lane),
                 state.lanes[lane][u.edit_pages[lane]].enabled,
@@ -91,12 +33,7 @@ impl ChordboardView {
             for page in 0..8 {
                 item(
                     &mut items,
-                    (
-                        page_row_rect(lane).0 + page as f32 * 26.0,
-                        y,
-                        23.0,
-                        27.0,
-                    ),
+                    page_rect(lane, page),
                     (page + 1).to_string(),
                     Action::EditPage(lane, page),
                     u.edit_pages[lane] == page,
@@ -128,7 +65,9 @@ impl ChordboardView {
         } else {
             0
         };
-        items.extend(self.seq_inspector_items(state, lane, inspector_rect(), true));
+        if self.arp_main() {
+            items.extend(self.seq_inspector_items(state, lane, inspector_rect(), true));
+        }
         items
     }
 
@@ -145,21 +84,12 @@ impl ChordboardView {
         for (label, field) in MODIFIERS {
             entries.push(((*label).to_string(), Action::Modifier(field), u.modifier == field));
         }
-        let mut fields = vec![
-            ("Gate %", Field::Gate),
-            ("Octave", Field::Octave),
-            ("Chance %", Field::Probability),
-            ("Repeats", Field::Ratchets),
-            ("Timing %", Field::Micro),
-        ];
+        // Modifier buttons already expose the other step values on the cells.
         if lane != 1 {
-            fields.push(("Note", Field::Tone));
-        }
-        for (label, field) in fields {
             entries.push((
-                format!("{label}: {}", field_value(field, page, step, u)),
-                Action::Field(field),
-                u.modifier == Some(field),
+                "Note".into(),
+                Action::Field(Field::Tone),
+                u.modifier == Some(Field::Tone),
             ));
         }
         entries.push((
@@ -167,6 +97,16 @@ impl ChordboardView {
             Action::Enabled,
             step.enabled,
         ));
+        if lane != 0 {
+            let label = ARP_RATES
+                .iter()
+                .find(|(_, beats)| (*beats - page.rate).abs() < 0.0001)
+                .map_or_else(
+                    || format!("{:.3}", page.rate),
+                    |(label, _)| label.to_string(),
+                );
+            entries.push((format!("Rate: {label}"), Action::PageRate, false));
+        }
         let modifiers = MODIFIERS.len();
         let rects = header_slots(modifiers, entries.len() - modifiers);
         entries
@@ -179,6 +119,19 @@ impl ChordboardView {
                 on,
             })
             .collect()
+    }
+
+    pub(in crate::ui) fn draw_step_controls(&self, d: &mut Draw) {
+        let state = self.params.sequencer.snapshot();
+        for c in self.seq_inspector_items(&state, 0, inspector_rect(), true) {
+            let color = if matches!(c.action, Action::Modifier(Some(Field::Mod(_)))) { GOLD } else { TEAL };
+            self.button(d, c.rect, &c.label, c.on, color);
+        }
+        if let Some(edit) = &self.sequencer_ui.edit {
+            if hit(ARP_PAD, edit.rect.0, edit.rect.1) {
+                d.value_edit(edit, TEAL);
+            }
+        }
     }
 
     pub(super) fn draw_sequencer_rows(&self, d: &mut Draw, state: &State) {
@@ -207,34 +160,7 @@ impl ChordboardView {
                 }
                 d.offset_x = offset + slide;
                 let page = &state.lanes[lane][page_index];
-                let beats = if lane == 0 {
-                    self.params.rate.value()
-                } else {
-                    page.rate
-                };
-                let per_bar = steps_per_bar(
-                    beats,
-                    self.snapshot.time_sig_num,
-                    self.snapshot.time_sig_den,
-                );
-                let shown = page.length as usize;
-                let mut bar = 0;
-                while bar < shown.min(visible_steps()) {
-                    let end = (bar + per_bar).min(shown).min(visible_steps());
-                    if (bar / per_bar) % 2 == 1 {
-                        let a = step_rect(lane, bar);
-                        let b = step_rect(lane, end - 1);
-                        d.rounded_rect(
-                            a.0 - 1.0,
-                            a.1 - 3.0,
-                            b.0 + b.2 - a.0 + 2.0,
-                            a.3 + 6.0,
-                            4.0,
-                            alpha(TEXT, 0.06),
-                        );
-                    }
-                    bar = end;
-                }
+                let per_group = cells_per_group(self.meter().0);
                 for visible in 0..visible_steps() {
                     let step = first_step() + visible;
                     if step >= page.length as usize {
@@ -258,6 +184,17 @@ impl ChordboardView {
                             && step <= page.end as usize,
                     };
                     d.button(rect, "", c.on, lane_color(lane));
+                    // Paint on the opaque face, before values and selection indicators.
+                    // Preserve the lower 2px strike accent and keep rests shaded too.
+                    if light_bar(step, per_group) {
+                        let tint = if d.light { BG } else { TEXT };
+                        // Transform the opaque palette color first: changing its alpha
+                        // before theme lookup bypasses the exact light-theme palette.
+                        let opacity = d.alpha_mul;
+                        d.alpha_mul *= if d.light { 0.3 } else { 0.14 };
+                        d.rect(rect.0, rect.1, rect.2, rect.3 - 2.0, tint);
+                        d.alpha_mul = opacity;
+                    }
                     if u.modifier.is_none() {
                         d.text_centered(
                             rect.0 + rect.2 / 2.0,
@@ -271,13 +208,13 @@ impl ChordboardView {
                         let p = page;
                         let value = field_value(field, p, &p.steps[step], u);
                         let (min, max) = slider_range(field);
-                        let t = (slider_value(field, &p.steps[step]) - min) / (max - min);
+                        let (fill_start, fill_end) = slider_fill(field, &p.steps[step]);
                         d.rect(
                             c.rect.0,
-                            c.rect.1 + c.rect.3 * (1.0 - t),
+                            c.rect.1 + c.rect.3 * fill_start,
                             c.rect.2,
-                            c.rect.3 * t,
-                            alpha(lane_color(lane), if c.on { 0.55 } else { 0.2 }),
+                            c.rect.3 * (fill_end - fill_start),
+                            alpha(if matches!(field, Field::Mod(_)) { GOLD } else { lane_color(lane) }, if c.on { 0.55 } else { 0.2 }),
                         );
                         if min < 0.0 {
                             let zero = c.rect.1 + c.rect.3 * (1.0 + min / (max - min));
@@ -294,7 +231,7 @@ impl ChordboardView {
                             c.rect.0 + c.rect.2 / 2.0,
                             c.rect.1 + 20.0,
                             &value,
-                            10.0,
+                            11.0,
                             alpha(TEXT, number_alpha),
                         );
                     }
@@ -339,6 +276,47 @@ impl ChordboardView {
         d.scissor(r.0, r.1, r.2, r.3);
     }
 
+    pub(super) fn arp_rate_label(&self) -> String {
+        let beats = self
+            .routed_plain("rate")
+            .unwrap_or(self.params.rate.value());
+        ARP_RATES
+            .iter()
+            .find(|(_, b)| (b - beats).abs() < 0.0001)
+            .map_or_else(|| format!("{beats:.3} beats"), |(label, _)| label.to_string())
+    }
+
+    fn draw_sequencer_rate(&self, d: &mut Draw) {
+        let synced = self.sweep_synced();
+        self.button(
+            d,
+            SEQ_RATE_SYNC,
+            if synced { "Tempo sync" } else { "Free · ms" },
+            synced,
+            TEAL,
+        );
+        self.live_choice(d, "strum_sync", 1.0, SEQ_RATE_SYNC);
+        if synced {
+            self.button(
+                d,
+                SEQ_RATE,
+                &format!("Rate: {} ▾", self.arp_rate_label()),
+                self.menu == Some(Menu::ArpRate),
+                GOLD,
+            );
+            if self.routed_plain("rate").is_some() {
+                self.live_highlight(d, SEQ_RATE);
+            }
+        } else if let Some((c, r)) = self
+            .base_controls()
+            .into_iter()
+            .find(|(c, _)| c.id == "strum_ms")
+        {
+            d.rounded_rect(r.0, r.1, r.2, r.3, 6.0, alpha(TEXT, 0.025));
+            self.draw_control(d, &c, r, GOLD);
+        }
+    }
+
     pub(in crate::ui) fn draw_sequencer(&self, d: &mut Draw) {
         let u = &self.sequencer_ui;
         if u.progress > 0.0 {
@@ -368,22 +346,26 @@ impl ChordboardView {
                     track.0 + track.2 * 0.5,
                     track.1 + track.3 * 0.5 + 3.0,
                     &format!("Length · {length}"),
-                    9.0,
+                    11.0,
                     TEXT,
                 );
             }
             let items = self.seq_items(&state);
             for c in items
                 .iter()
-                .filter(|c| !matches!(c.action, Action::SelectStep(..)))
+                .filter(|c| !matches!(c.action, Action::SelectStep(..)) && hit(surface(), c.rect.0, c.rect.1))
             {
                 let color = match c.action {
                     Action::SelectStep(l, _) | Action::EditPage(l, _) | Action::LaneEnabled(l) => {
                         lane_color(l)
                     }
+                    Action::Modifier(Some(Field::Mod(_))) => GOLD,
                     _ => TEAL,
                 };
-                d.button(c.rect, &c.label, c.on, color);
+                self.button(d, c.rect, &c.label, c.on, color);
+                if matches!(c.action, Action::Modifier(Some(Field::Mod(_)))) && !c.on {
+                    d.text_centered(c.rect.0 + c.rect.2 * 0.5, c.rect.1 + c.rect.3 * 0.5 + 4.0, &c.label, 11.0, GOLD);
+                }
                 if let Action::EditPage(lane, page) = c.action {
                     if self.snapshot.seq_pages[lane] as usize == page {
                         d.line(
@@ -400,6 +382,7 @@ impl ChordboardView {
                     }
                 }
             }
+            self.draw_sequencer_rate(d);
             self.draw_sequencer_rows(d, &state);
             if let Some(edit) = &u.edit {
                 if hit(r, edit.rect.0, edit.rect.1) {

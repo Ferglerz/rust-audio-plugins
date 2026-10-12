@@ -1,23 +1,34 @@
-//! Fixed-capacity, audio-thread routing. Sources never feed back from destinations.
+//! Fixed-capacity routing with bounded source-to-source resolution.
 use super::{Config, Engine, Out};
 pub const ROUTE_COUNT: usize = 16;
-pub const SOURCE_COUNT: usize = 9;
+pub const SOURCE_COUNT: usize = 11;
 pub const SOURCES: [&str; SOURCE_COUNT + 1] = [
     "Off",
     "Pitch wheel",
-    "Mod wheel",
+    "Modwheel",
     "Expression",
     "Breath",
     "Pressure",
     "Timbre",
-    "Velocity",
+    "Input Vel",
     "X controller",
     "Y controller",
+    "Mod 1",
+    "Mod 2",
 ];
 pub const SOURCE_SHORT: [&str; SOURCE_COUNT] = [
-    "Pitch", "Mod", "Expr", "Breath", "Press", "Timbre", "Vel", "X", "Y",
+    "Pitch", "Modwheel", "Expr", "Breath", "Press", "Timbre", "Input Vel", "X", "Y", "Mod 1", "Mod 2",
 ];
-pub const SOURCE_DEFAULTS: [f32; SOURCE_COUNT] = [0.5, 0.0, 0.0, 0.0, 0.0, 0.5, 0.8, 0.0, 0.8];
+pub const SOURCE_DEFAULTS: [f32; SOURCE_COUNT] = [0.5, 0.0, 0.0, 0.0, 0.0, 0.5, 0.8, 0.0, 0.8, 0.0, 0.0];
+
+#[derive(Clone, Copy, Default)]
+pub(super) struct RouteSmoother {
+    route: Option<Route>,
+    value: f32,
+    target: f32,
+    increment: f32,
+    remaining: u64,
+}
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Route {
     pub enabled: bool,
@@ -26,6 +37,7 @@ pub struct Route {
     pub min: f32,
     pub max: f32,
     pub curve: f32,
+    pub smoothing_ms: f32,
 }
 impl Default for Route {
     fn default() -> Self {
@@ -36,10 +48,20 @@ impl Default for Route {
             min: 0.0,
             max: 1.0,
             curve: 0.0,
+            smoothing_ms: 0.0,
         }
     }
 }
 impl Route {
+    pub fn additive(self) -> bool { self.source >= 10 }
+    /// Bipolar routes preserve zero and use the contour's span as their depth.
+    pub fn output(self, input: f32) -> f32 {
+        if self.additive() {
+            let input = input.clamp(-1.0, 1.0);
+            input.signum() * (self.max - self.min)
+                * input.abs().powf(2.0_f32.powf(self.curve.clamp(-1.0, 1.0) * 3.0))
+        } else { self.value(input) }
+    }
     pub fn active(self) -> bool {
         self.enabled
             && (1..=SOURCE_COUNT as u8).contains(&self.source)
@@ -88,7 +110,7 @@ pub const TARGETS: &[Target] = &[
         name: "Inversion",
         id: "inversion",
         min: 0.0,
-        max: 5.0,
+        max: 11.0,
         discrete: true,
     },
     Target {
@@ -364,23 +386,92 @@ pub const TARGETS: &[Target] = &[
         max: 7.0,
         discrete: true,
     },
+    Target { name: "Pitch wheel", id: "source_0", min: 0.0, max: 1.0, discrete: false },
+    Target { name: "Modwheel", id: "source_1", min: 0.0, max: 1.0, discrete: false },
+    Target { name: "Expression", id: "source_2", min: 0.0, max: 1.0, discrete: false },
+    Target { name: "Breath", id: "source_3", min: 0.0, max: 1.0, discrete: false },
+    Target { name: "Pressure", id: "source_4", min: 0.0, max: 1.0, discrete: false },
+    Target { name: "Timbre", id: "source_5", min: 0.0, max: 1.0, discrete: false },
+    Target { name: "Input velocity", id: "source_6", min: 0.0, max: 1.0, discrete: false },
+    Target { name: "X controller", id: "source_7", min: 0.0, max: 1.0, discrete: false },
+    Target { name: "Y controller", id: "source_8", min: 0.0, max: 1.0, discrete: false },
+    Target { name: "Mod 1", id: "source_9", min: -1.0, max: 1.0, discrete: false },
+    Target { name: "Mod 2", id: "source_10", min: -1.0, max: 1.0, discrete: false },
 ];
 impl Target {
+    fn normalized(&self, c: &Config) -> f32 {
+        let v = match self.id {
+            "seq_page_0" => c.seq_pages[0] as f32,
+            "seq_page_1" => c.seq_pages[1] as f32,
+            "seq_page_2" => c.seq_pages[2] as f32,
+            "seq_page_3" => c.seq_pages[3] as f32,
+            "strings" => c.strings as f32,
+            "strings_played" => c.strings_played as f32,
+            "x" => c.routed_x.unwrap_or(0.0),
+            "spread" => c.spread as f32,
+            "quality" => c.quality as f32,
+            "inversion" => c.inversion as f32,
+            "transpose" => c.transpose as f32,
+            "velocity" => c.velocity,
+            "length_ms" => c.length_ms,
+            "strum_ms" => c.strum_ms,
+            "strum_sync" => c.strum_sync as u8 as f32,
+            "strum_beats" => c.strum_beats,
+            "strum_hold" => c.strum_hold as u8 as f32,
+            "direction" => c.direction as f32,
+            "contour" => c.contour,
+            "arp_pattern" => c.arp_pattern as f32,
+            "rate" => c.rate,
+            "gate" => c.gate,
+            "swing" => c.swing,
+            "octaves" => c.octaves as f32,
+            "humanize" => c.humanize,
+            "root_on_select" => c.root_on_select as u8 as f32,
+            "latch" => c.latch as u8 as f32,
+            "filter" => c.filter as f32,
+            "mode" => if c.seq_loop { super::ARP as f32 } else { super::AUTO as f32 },
+            "y_target" => c.y_target as f32,
+            "y_cc" => c.y_cc as f32,
+            "x_reverse" => c.x_reverse as u8 as f32,
+            "y_reverse" => c.y_reverse as u8 as f32,
+            "x_min" => c.x_min,
+            "x_max" => c.x_max,
+            "y_min" => c.y_min,
+            "y_max" => c.y_max,
+            "members" => c.members as f32,
+            "bend_range" => c.bend_range,
+            "master_range" => c.master_range,
+            "output_channel" => c.output_channel as f32,
+            "bass_channel" => c.bass_channel as f32,
+            "upper_channel" => c.upper_channel as f32,
+            _ => self.min,
+        };
+        ((v - self.min) / (self.max - self.min)).clamp(0.0, 1.0)
+    }
+    pub fn source_index(&self) -> Option<usize> {
+        self.id.strip_prefix("source_").and_then(|n| n.parse().ok())
+    }
+
     // Keep saved destination indices stable; touch bounds are no longer routable.
     pub fn available(&self) -> bool {
         !matches!(
             self.id,
-            "x_min" | "x_max" | "y_min" | "y_max" | "direction" | "strum_beats" | "contour"
+            "x_min"
+                | "x_max"
+                | "y_min"
+                | "y_max"
+                | "direction"
+                | "strum_beats"
+                | "contour"
+                | "strings"
         )
     }
 
     // Controller setup belongs to the input, so it cannot be changed by that
     // same input. The Strumfield destination is separate from the X controller.
-    pub fn uses_input_velocity(&self) -> bool {
-        matches!(self.id, "velocity" | "contour" | "humanize")
-    }
     pub fn accepts_source(&self, source: u8) -> bool {
         self.available()
+            && !(source > 0 && self.source_index() == Some(source as usize - 1))
             && !(source == 8 && self.id == "x_reverse")
             && !(source == 9 && matches!(self.id, "y_reverse" | "y_target" | "y_cc"))
     }
@@ -398,9 +489,7 @@ impl Target {
         match self.id {
             "spread" => crate::harmony::VOICING_NAMES[v as usize].into(),
             "quality" => crate::harmony::QUALITY_NAMES[v as usize].into(),
-            "mode" => {
-                ["Arpeggiator Once", "Manual Strum", "Arpeggiator Loop"][v as usize - 1].into()
-            }
+            "mode" => ["Arp Once", "Arp Loop (legacy Manual)", "Arp Loop"][v as usize - 1].into(),
             "direction" => {
                 ["Up", "Down", "Alternate", "Up in 3rds", "Down in 3rds"][v as usize].into()
             }
@@ -481,7 +570,7 @@ impl Target {
             "root_on_select" => c.root_on_select = v >= 0.5,
             "latch" => c.latch = v >= 0.5,
             "filter" => c.filter = v as u8,
-            "mode" => c.mode = v as u8,
+            "mode" => c.seq_loop = v as u8 != super::AUTO,
             "y_target" => c.y_target = v as u8,
             "y_cc" => c.y_cc = v as u8,
             "x_reverse" => c.x_reverse = v >= 0.5,
@@ -501,25 +590,129 @@ impl Target {
     }
 }
 impl Engine {
-    fn route_input(&self, route: Route) -> f32 {
-        if route.source == 7 && TARGETS[route.target as usize].uses_input_velocity() {
-            self.input_velocity
-        } else {
-            self.sources[route.source as usize - 1]
+    fn route_output(&self, slot: usize, input: f32) -> f32 {
+        let route = self.host_config.routes[slot];
+        let smoother = self.route_smoothers[slot];
+        if route.smoothing_ms > 0.0 && smoother.route.is_some_and(|old| old.source == route.source && old.target == route.target) { smoother.value }
+        else { route.output(input) }
+    }
+    pub(super) fn prepare_route_smoothing(&mut self) {
+        let sources = self.effective_sources();
+        for (slot, route) in self.host_config.routes.iter().copied().enumerate() {
+            let smoother = &mut self.route_smoothers[slot];
+            if !route.active() { *smoother = RouteSmoother::default(); continue; }
+            let target = route.output(sources[route.source as usize - 1]);
+            let fresh = smoother.route.is_none_or(|old| old.source != route.source || old.target != route.target);
+            let time_changed = smoother.route.is_some_and(|old| old.smoothing_ms != route.smoothing_ms);
+            smoother.route = Some(route);
+            if fresh || route.smoothing_ms <= 0.0 {
+                smoother.value = target;
+                smoother.target = target;
+                smoother.remaining = 0;
+            } else if smoother.target != target || time_changed {
+                smoother.target = target;
+                smoother.remaining = (route.smoothing_ms.clamp(0.0, 2000.0) * self.sample_rate / 1000.0).round().max(1.0) as u64;
+                smoother.increment = (target - smoother.value) / smoother.remaining as f32;
+            }
         }
     }
-    pub(super) fn apply_routes(&self, config: &mut Config) {
+    pub(super) fn smoothing_active(&self) -> bool {
+        self.route_smoothers.iter().any(|s| s.remaining > 0)
+    }
+    pub(super) fn tick_route_smoothing(&mut self, out: &mut impl FnMut(Out)) {
+        if !self.smoothing_active() { return; }
+        for smoother in &mut self.route_smoothers {
+            if smoother.remaining > 0 {
+                smoother.remaining -= 1;
+                smoother.value = if smoother.remaining == 0 { smoother.target } else { smoother.value + smoother.increment };
+            }
+        }
+        // Advance ramps per sample, but refresh MIDI/parameter destinations at
+        // most once per millisecond so smoothing cannot flood the host queue.
+        let interval = (self.sample_rate / 1000.0).round().max(1.0) as u64;
+        if self.now.is_multiple_of(interval) || !self.smoothing_active() {
+            self.configure(self.host_config, out);
+        }
+    }
+    pub(super) fn resolved_source_overrides(&self) -> [Option<f32>; SOURCE_COUNT] {
+        let effective = self.effective_sources();
+        let mut values = [None; SOURCE_COUNT];
         for route in self.host_config.routes {
             if route.active() {
-                TARGETS[route.target as usize].apply(config, route.value(self.route_input(route)));
+                if let Some(index) = TARGETS[route.target as usize].source_index() {
+                    values[index] = Some(effective[index]);
+                }
             }
+        }
+        values
+    }
+    pub(super) fn routed_expression(&self) -> super::Expression {
+        super::Expression {
+            bend: self.source_overrides[0].unwrap_or(self.expression.bend),
+            pressure: self.source_overrides[4].unwrap_or(self.expression.pressure),
+            timbre: self.source_overrides[5].unwrap_or(self.expression.timbre),
+        }
+    }
+    pub(super) fn emit_routed_controllers(&self, channel: u8, out: &mut impl FnMut(Out)) {
+        for (index, cc) in [(1, 1), (2, 11), (3, 2)] {
+            if let Some(value) = self.source_overrides[index] { out(Out::Cc(channel, cc, value)); }
+        }
+    }
+    /// Resolve each input once. A back edge reads the original input, so cycles
+    /// stay deterministic and bounded instead of accumulating across samples.
+    pub fn effective_sources(&self) -> [f32; SOURCE_COUNT] {
+        fn resolve(engine: &Engine, index: usize, values: &mut [f32; SOURCE_COUNT], marks: &mut [u8; SOURCE_COUNT]) -> f32 {
+            if marks[index] == 2 { return values[index]; }
+            if marks[index] == 1 { return engine.sources[index]; }
+            marks[index] = 1;
+            if let Some((slot, route)) = engine.host_config.routes.iter().enumerate().rev().find(|(_, route)| {
+                route.active() && !route.additive() && TARGETS[route.target as usize].source_index() == Some(index)
+            }) {
+                let input = resolve(engine, route.source as usize - 1, values, marks);
+                values[index] = TARGETS[route.target as usize].plain(engine.route_output(slot, input));
+            }
+            let mut value = values[index];
+            for (slot, route) in engine.host_config.routes.iter().enumerate() {
+                if route.active() && route.additive() && TARGETS[route.target as usize].source_index() == Some(index) {
+                    let input = resolve(engine, route.source as usize - 1, values, marks);
+                    value += engine.route_output(slot, input);
+                }
+            }
+            values[index] = value.clamp(if index >= 9 { -1.0 } else { 0.0 }, 1.0);
+            marks[index] = 2;
+            values[index]
+        }
+        let mut values = self.sources;
+        let mut marks = [0; SOURCE_COUNT];
+        for index in 0..SOURCE_COUNT { resolve(self, index, &mut values, &mut marks); }
+        values
+    }
+    pub(super) fn apply_routes(&self, config: &mut Config) {
+        let sources = self.effective_sources();
+        let mut values = std::array::from_fn::<_, TARGET_COUNT, _>(|i| {
+            if TARGETS[i].id == "x" && config.routed_x.is_none() { sources[7] }
+            else { TARGETS[i].normalized(config) }
+        });
+        let mut touched = [false; TARGET_COUNT];
+        for additive in [false, true] {
+            for (slot, route) in self.host_config.routes.iter().enumerate() {
+                if !route.active() || route.additive() != additive { continue; }
+                let index = route.target as usize;
+                if TARGETS[index].source_index().is_some() { continue; }
+                let output = self.route_output(slot, sources[route.source as usize - 1]);
+                if additive { values[index] += output; } else { values[index] = output; }
+                touched[index] = true;
+            }
+        }
+        for (index, target) in TARGETS.iter().enumerate() {
+            if touched[index] { target.apply(config, values[index].clamp(0.0, 1.0)); }
         }
     }
     pub(super) fn source(&mut self, index: usize, value: f32, out: &mut impl FnMut(Out)) {
         if !value.is_finite() || index >= SOURCE_COUNT {
             return;
         }
-        let value = value.clamp(0.0, 1.0);
+        let value = value.clamp(if index >= 9 { -1.0 } else { 0.0 }, 1.0);
         if self.sources[index] == value {
             return;
         }
@@ -528,16 +721,20 @@ impl Engine {
             .host_config
             .routes
             .iter()
-            .any(|r| r.active() && r.source as usize == index + 1)
+            .any(|r| r.active() && (r.source as usize == index + 1 || TARGETS[r.target as usize].source_index() == Some(index)))
         {
             self.configure(self.host_config, out);
         }
     }
     pub fn routed_values(&self) -> [Option<f32>; TARGET_COUNT] {
+        let sources = self.effective_sources();
         let mut values = [None; TARGET_COUNT];
         for route in self.host_config.routes {
             if route.active() {
-                values[route.target as usize] = Some(route.value(self.route_input(route)));
+                let index = route.target as usize;
+                values[index] = Some(if let Some(source) = TARGETS[index].source_index() {
+                    ((sources[source] - TARGETS[index].min) / (TARGETS[index].max - TARGETS[index].min)).clamp(0.0, 1.0)
+                } else { TARGETS[index].normalized(&self.config) });
             }
         }
         values
@@ -589,6 +786,180 @@ mod tests {
                 }
             })
             .collect()
+    }
+
+    #[test]
+    fn bipolar_offsets_preserve_bases_sum_before_clamping_and_never_accumulate() {
+        let mut e = Engine::default();
+        let mut c = Config { transpose: 3, velocity: 0.6, ..Config::default() };
+        c.routes[0] = route(10, "transpose");
+        c.routes[1] = route(11, "transpose");
+        c.routes[2] = route(10, "velocity");
+        e.configure(c, &mut |_| {});
+        assert_eq!(e.config.transpose, 3);
+        assert!((e.config.velocity - 0.6).abs() < 1e-6);
+        e.source(9, -0.25, &mut |_| {});
+        e.source(10, 0.125, &mut |_| {});
+        assert_eq!(e.config.transpose, -3);
+        let expected_velocity = TARGETS[target("velocity") as usize].plain(
+            TARGETS[target("velocity") as usize].normalized(&c) - 0.25);
+        assert!((e.config.velocity - expected_velocity).abs() < 1e-6);
+        for _ in 0..20 { e.configure(c, &mut |_| {}); }
+        assert_eq!(e.config.transpose, -3);
+        assert_eq!(e.host_config.transpose, 3);
+        e.source(9, 0.0, &mut |_| {});
+        e.source(10, 0.0, &mut |_| {});
+        assert_eq!(e.config.transpose, 3);
+        assert!((e.config.velocity - 0.6).abs() < 1e-6);
+    }
+
+    #[test]
+    fn additive_modulators_offset_live_controllers_and_signed_modulators() {
+        let mut e = Engine::default();
+        let mut c = Config::default();
+        c.routes[0] = route(10, "source_0");
+        c.routes[1] = route(10, "source_10");
+        e.sources[0] = 0.5;
+        e.sources[10] = -0.1;
+        e.configure(c, &mut |_| {});
+        e.source(9, -0.25, &mut |_| {});
+        assert_eq!(e.effective_sources()[0], 0.25);
+        assert!((e.effective_sources()[10] + 0.35).abs() < 1e-6);
+        assert_eq!(e.sources[0], 0.5);
+        assert_eq!(e.sources[10], -0.1);
+        e.source(0, 0.6, &mut |_| {});
+        assert!((e.source_overrides[0].unwrap() - 0.35).abs() < 1e-6);
+        c.routes[0].enabled = false;
+        e.configure(c, &mut |_| {});
+        assert_eq!(e.effective_sources()[0], 0.6);
+    }
+
+    #[test]
+    fn smoothing_ramps_in_milliseconds_and_advance_matches_ticks() {
+        for source in 1..=SOURCE_COUNT {
+            let mut c = Config::default();
+            c.routes[0] = Route { smoothing_ms: 10.0, ..route(source as u8, "velocity") };
+            let mut e = Engine { sample_rate: 1000.0, ..Engine::default() };
+            e.configure(c, &mut |_| {});
+            let initial = e.config.velocity;
+            let value = if source >= 10 { -0.2 } else { 0.75 };
+            e.source(source - 1, value, &mut |_| {});
+            assert_eq!(e.config.velocity, initial);
+            e.advance(5, &mut |_, _| {});
+            let midpoint = e.config.velocity;
+            let mut reference = Engine { sample_rate: 1000.0, ..Engine::default() };
+            reference.configure(c, &mut |_| {});
+            reference.source(source - 1, value, &mut |_| {});
+            for _ in 0..5 { reference.tick(&mut |_| {}); }
+            assert_eq!(midpoint, reference.config.velocity);
+            e.advance(5, &mut |_, _| {});
+            assert!(!e.smoothing_active());
+            let destination = &TARGETS[target("velocity") as usize];
+            let norm = if source >= 10 { destination.normalized(&c) + value } else { value };
+            let expected = destination.plain(norm);
+            assert!((e.config.velocity - expected).abs() < 1e-6, "source {source}");
+            assert!((midpoint - (initial + expected) * 0.5).abs() < 1e-5, "source {source}");
+            c.routes[0].enabled = false;
+            e.configure(c, &mut |_| {});
+            assert!(!e.smoothing_active());
+            assert_eq!(e.config.velocity, c.velocity);
+        }
+    }
+
+    #[test]
+    fn smoothing_controller_output_is_bounded_and_reaches_the_final_value() {
+        let mut e = Engine { sample_rate: 48000.0, ..Engine::default() };
+        let mut c = Config { mode: MANUAL, mpe: false, ..Config::default() };
+        c.routes[0] = Route { smoothing_ms: 10.0, ..route(10, "source_4") };
+        e.configure(c, &mut |_| {});
+        e.midi_note(true, 0, 60, 0.8, &mut |_| {});
+        e.strike(60, 0.8, 1000, &mut |_| {});
+        e.source(9, 1.0, &mut |_| {});
+        let mut pressure = Vec::new();
+        e.advance(480, &mut |_, out| {
+            if let Out::Pressure(_, value) = out { pressure.push(value); }
+        });
+        assert!(pressure.len() > 2 && pressure.len() <= 12, "{} pressure events", pressure.len());
+        assert_eq!(pressure.last(), Some(&1.0));
+        assert!(pressure.windows(2).all(|pair| pair[1] >= pair[0]));
+    }
+
+    #[test]
+    fn routed_velocity_and_axis_sources_affect_performance_without_default_x_route() {
+        let mut e = Engine::default();
+        let mut c = Config { mode: MANUAL, ..Config::default() };
+        c.routes[0] = route(10, "source_6");
+        c.routes[1] = route(10, "source_7");
+        c.routes[2] = route(10, "source_8");
+        e.configure(c, &mut |_| {});
+        e.sources[9] = 0.25;
+        e.configure(c, &mut |_| {});
+        assert!((e.base_strike_velocity() - 1.0).abs() < 0.0001);
+        assert_eq!(e.x, 0.25);
+        assert_eq!(e.y, 1.0);
+        assert_eq!(e.sources[6], 0.8);
+    }
+
+    #[test]
+    fn routed_midi_modulators_reach_owned_notes_and_restore_live_baselines() {
+        let mut e = Engine::default();
+        let mut c = Config { mode: MANUAL, mpe: false, ..Config::default() };
+        c.routes[0] = route(10, "source_4");
+        c.routes[1] = route(10, "source_0");
+        c.routes[2] = route(10, "source_1");
+        e.configure(c, &mut |_| {});
+        e.midi_note(true, 0, 60, 0.8, &mut |_| {});
+        e.sources[9] = 0.75;
+        e.configure(c, &mut |_| {});
+        let mut events = Vec::new();
+        e.strike(60, 0.8, 1000, &mut |event| events.push(event));
+        assert!(events.iter().any(|event| matches!(event, Out::Pressure(_, value) if *value == 0.75)));
+        assert!(events.iter().any(|event| matches!(event, Out::Bend(_, value) if *value == 1.0)));
+        assert!(events.iter().any(|event| matches!(event, Out::Cc(_, 1, value) if *value == 0.75)));
+        assert_eq!(e.expression.pressure, 0.0);
+        events.clear();
+        c.routes = [Route::default(); ROUTE_COUNT];
+        e.configure(c, &mut |event| events.push(event));
+        assert!(events.iter().any(|event| matches!(event, Out::Pressure(_, value) if *value == 0.0)));
+        assert!(events.iter().any(|event| matches!(event, Out::Bend(_, value) if *value == 0.5)));
+        assert!(events.iter().any(|event| matches!(event, Out::Cc(_, 1, value) if *value == 0.0)));
+    }
+
+    #[test]
+    fn modulator_chains_resolve_independent_of_route_order_and_preserve_inputs() {
+        let mut e = Engine::default();
+        let mut c = Config::default();
+        c.routes = [Route::default(); ROUTE_COUNT];
+        c.routes[0] = route(11, "velocity");
+        c.routes[1] = route(10, "source_10");
+        c.routes[2] = route(2, "source_9");
+        e.configure(c, &mut |_| {});
+        e.source(1, 0.7, &mut |_| {});
+        assert!(e.effective_sources()[9..].iter().all(|v| (*v - 0.4).abs() < 1e-6));
+        assert!((e.config.velocity - 1.0).abs() < 0.0001);
+        assert_eq!(e.sources[9..], [0.0, 0.0]);
+        assert!((e.snapshot().sources[10] - 0.4).abs() < 1e-6);
+        c.routes[2].enabled = false;
+        e.configure(c, &mut |_| {});
+        assert_eq!(e.effective_sources()[9..], [0.0, 0.0]);
+    }
+
+    #[test]
+    fn circular_modulator_routes_are_bounded_and_do_not_accumulate() {
+        let mut e = Engine::default();
+        let mut c = Config::default();
+        c.routes[0] = route(10, "source_10");
+        c.routes[1] = route(11, "source_9");
+        e.sources[9] = 0.25;
+        e.sources[10] = 0.75;
+        e.configure(c, &mut |_| {});
+        let expected = e.effective_sources();
+        for _ in 0..100 {
+            e.configure(c, &mut |_| {});
+            assert_eq!(e.effective_sources(), expected);
+        }
+        assert_eq!(e.sources[9..], [0.25, 0.75]);
+        assert!(!route(10, "source_9").active());
     }
 
     #[test]
@@ -671,29 +1042,43 @@ mod tests {
         e.position(0.5, 1, &mut |_| {});
         assert_eq!(
             e.snapshot().sources,
-            [0.9, 0.2, 0.3, 0.4, 0.6, 0.7, 0.8, 0.1, 0.5]
+            [0.9, 0.2, 0.3, 0.4, 0.6, 0.7, 0.8, 0.1, 0.5, 0.0, 0.0]
         );
     }
     #[test]
-    fn one_controller_drives_strings_and_spread_and_disable_restores_base() {
+    fn one_controller_drives_octaves_and_spread_and_disable_restores_base() {
         let mut e = Engine::default();
         let mut c = Config {
             mode: MANUAL,
-            strings: 8,
+            octaves: 2,
             spread: 1,
             ..Config::default()
         };
-        c.routes[0] = route(2, "strings");
+        c.routes[0] = route(2, "octaves");
         c.routes[1] = route(2, "spread");
         e.configure(c, &mut |_| {});
         e.midi_note(true, 0, 60, 0.8, &mut |_| {});
         e.control(0, 1, 1.0, &mut |_| {});
-        assert_eq!((e.config.strings, e.config.spread), (12, 4));
-        assert_eq!((e.host_config.strings, e.host_config.spread), (8, 1));
+        assert_eq!((e.config.octaves, e.config.spread), (4, 4));
+        assert_eq!((e.host_config.octaves, e.host_config.spread), (2, 1));
         c.routes[0].enabled = false;
         c.routes[1].enabled = false;
         e.configure(c, &mut |_| {});
-        assert_eq!((e.config.strings, e.config.spread), (8, 1));
+        assert_eq!((e.config.octaves, e.config.spread), (2, 1));
+    }
+    #[test]
+    fn legacy_strings_routes_stay_inert() {
+        let mut e = Engine::default();
+        let mut c = Config {
+            strings: 8,
+            ..Config::default()
+        };
+        c.routes[0] = route(2, "strings");
+        assert!(!c.routes[0].active());
+        assert!(available_targets().all(|(_, t)| t.id != "strings"));
+        e.configure(c, &mut |_| {});
+        e.control(0, 1, 1.0, &mut |_| {});
+        assert_eq!(e.config.strings, 8);
     }
     #[test]
     fn reversed_and_curved_ranges_keep_endpoints() {
@@ -701,7 +1086,7 @@ mod tests {
             min: 0.8,
             max: 0.2,
             curve: 1.0,
-            ..route(1, "strings")
+            ..route(1, "octaves")
         };
         assert!((r.value(0.0) - 0.8).abs() < 1e-6);
         assert!((r.value(1.0) - 0.2).abs() < 1e-6);
@@ -712,15 +1097,15 @@ mod tests {
     fn later_routes_win_and_never_feed_destination_values_back_into_sources() {
         let mut e = Engine::default();
         let mut c = Config::default();
-        c.routes[0] = route(2, "strings");
+        c.routes[0] = route(2, "octaves");
         c.routes[1] = Route {
             min: 0.0,
             max: 0.0,
-            ..route(3, "strings")
+            ..route(3, "octaves")
         };
         e.configure(c, &mut |_| {});
         e.control(0, 1, 1.0, &mut |_| {});
-        assert_eq!(e.config.strings, 3);
+        assert_eq!(e.config.octaves, 1);
         assert_eq!(e.sources[1], 1.0);
         assert_eq!(e.sources[2], 0.0);
     }
@@ -765,7 +1150,7 @@ mod tests {
         let mut e = Engine::default();
         let mut c = Config {
             mode: AUTO,
-            strings: 12,
+            octaves: 4,
             strum_ms: 0.0,
             strum_sync: false,
             ..Config::default()
@@ -774,7 +1159,7 @@ mod tests {
         e.configure(c, &mut |_| {});
         for (value, count) in [(0.0, 1), (0.5, 7), (1.0, 12)] {
             e.control(0, 1, value, &mut |_| {});
-            assert_eq!(e.config.strings, 12);
+            assert_eq!(e.config.octaves, 4);
             assert_eq!(e.config.strings_played, count);
             e.midi_note(true, 0, 63, 0.8, &mut |_| {});
             let mut events = Vec::new();
@@ -789,6 +1174,7 @@ mod tests {
             let mut e = Engine::default();
             let mut c = Config {
                 mode: MANUAL,
+                octaves: 3,
                 ..Config::default()
             };
             c.routes[0] = route(source, "x");
@@ -801,7 +1187,7 @@ mod tests {
                 4 => e.control(0, 2, 1.0, &mut |v| events.push(v)),
                 _ => e.position(1.0, 0, &mut |v| events.push(v)),
             }
-            assert_eq!(ons(&events), vec![67, 70, 75, 79, 82, 87, 91]);
+            assert_eq!(ons(&events), vec![67, 70, 75, 79, 82, 87, 91, 94]);
             events.clear();
             e.configure(c, &mut |v| events.push(v));
             assert!(ons(&events).is_empty());

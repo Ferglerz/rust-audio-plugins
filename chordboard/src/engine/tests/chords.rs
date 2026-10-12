@@ -2,13 +2,14 @@ use super::super::*;
 use super::support::*;
 
 #[test]
-fn last_ignored_key_restarts_with_its_original_quality() {
+fn last_added_key_restarts_with_its_original_quality() {
     for release_order in [[0, 1], [1, 0]] {
         let mut e = Engine::default();
         send(&mut e, Command::KeyDown(0, 60, 0));
         send(&mut e, Command::KeyDown(1, 62, 0));
         send(&mut e, Command::KeyDown(12, 65, 1));
-        assert_eq!(e.snapshot().ignored, 1 << 12);
+        assert_eq!(e.snapshot().ignored, 0);
+        assert_eq!(e.snapshot().accepted, (1 << 0) | (1 << 1) | (1 << 12));
         send(&mut e, Command::KeyUp(release_order[0]));
         let events = send(&mut e, Command::KeyUp(release_order[1]));
         assert_eq!(notes(&events), vec![65, 68, 72]);
@@ -27,7 +28,7 @@ fn ignored_release_can_leave_a_single_pending_midi_root() {
     e.midi_note(true, 4, 69, 0.4, &mut |_| {});
     off(&mut e, 60, 1);
     off(&mut e, 62, 2);
-    assert!(e.root.is_none());
+    assert_eq!(e.root.map(|s| s.note), Some(60));
     e.pressure(4, None, 0.7, &mut |_| {});
     let events = off(&mut e, 65, 3);
     assert_eq!(notes(&events), vec![69, 73, 76]);
@@ -44,13 +45,14 @@ fn last_string_tracks_first_inversion_chord_roots() {
         Config {
             mode: MANUAL,
             inversion: 1,
+            octaves: 3,
             ..Config::default()
         },
     );
     for root in [48, 50, 53, 55, 59, 60] {
         on(&mut e, root, 1);
         let events = send(&mut e, Command::BeginGesture(1.0, 0.8));
-        assert_eq!(notes(&events), vec![root + 31]);
+        assert_eq!(notes(&events), vec![root + 36]);
         off(&mut e, root, 1);
     }
 }
@@ -62,19 +64,20 @@ fn overlapping_first_inversion_chords_update_the_last_string() {
         Config {
             mode: MANUAL,
             inversion: 1,
+            octaves: 3,
             ..Config::default()
         },
     );
     send(&mut e, Command::KeyDown(0, 60, 0));
     assert_eq!(
         notes(&send(&mut e, Command::BeginGesture(1.0, 0.8))),
-        vec![91]
+        vec![96]
     );
     send(&mut e, Command::KeyDown(5, 65, 0));
     send(&mut e, Command::KeyUp(0));
     assert_eq!(
         notes(&send(&mut e, Command::BeginGesture(1.0, 0.8))),
-        vec![96]
+        vec![101]
     );
 }
 #[test]
@@ -116,7 +119,7 @@ fn full_strings_emit_the_displayed_d_sharp_major_pitches() {
                     &mut e,
                     Config {
                         mode: MANUAL,
-                        strings: 12,
+                        octaves: 4,
                         mpe,
                         inversion,
                         spread,
@@ -233,7 +236,7 @@ fn auto_full_strings_match_display_in_both_directions() {
                 &mut e,
                 Config {
                     mode: AUTO,
-                    strings: 12,
+                    octaves: 4,
                     strum_ms: 0.0,
                     strum_sync: false,
                     spread,
@@ -300,7 +303,8 @@ fn released_strums_ring_across_the_next_chord_without_hold() {
 }
 #[test]
 fn auto_strings_played_limits_sweeps_without_changing_the_layout() {
-    for total in [3, 8, 12] {
+    for octaves in 1..=4u8 {
+        let total = harmony::string_count(3, octaves);
         for played in 1..=12 {
             for direction in 0..2 {
                 let mut e = Engine::default();
@@ -308,7 +312,7 @@ fn auto_strings_played_limits_sweeps_without_changing_the_layout() {
                     &mut e,
                     Config {
                         mode: AUTO,
-                        strings: total,
+                        octaves,
                         strings_played: played,
                         arp_pattern: direction,
                         strum_ms: 0.0,
@@ -318,15 +322,16 @@ fn auto_strings_played_limits_sweeps_without_changing_the_layout() {
                 );
                 on(&mut e, 63, 1);
                 let layout = e.snapshot().notes;
+                assert_eq!(e.string_count(), total);
                 for sweep in 0..2 {
                     if sweep == 1 {
                         e.rebuild(&mut |_| {});
                     }
                     let reverse = direction == 1;
-                    let expected = (0..played.min(total) as usize)
+                    let expected = (0..(played as usize).min(total))
                         .map(|i| {
                             layout
-                                .string(if reverse { total as usize - 1 - i } else { i })
+                                .string(if reverse { total - 1 - i } else { i })
                                 .unwrap()
                         })
                         .collect::<Vec<_>>();
@@ -335,6 +340,43 @@ fn auto_strings_played_limits_sweeps_without_changing_the_layout() {
                 }
             }
         }
+    }
+}
+#[test]
+fn string_count_is_chord_tones_times_octaves_clamped_to_engine_limits() {
+    for (tones, octaves, expected) in [
+        (0, 1, 3),
+        (2, 1, 3),
+        (3, 1, 3),
+        (3, 2, 6),
+        (4, 2, 8),
+        (3, 4, 12),
+        (4, 4, 12),
+        (2, 0, 3),
+        (3, 9, 12),
+    ] {
+        assert_eq!(
+            harmony::string_count(tones, octaves),
+            expected,
+            "{tones}×{octaves}"
+        );
+    }
+    for (quality, octaves) in [(0u8, 1u8), (0, 3), (3, 2), (10, 4)] {
+        let mut e = Engine::default();
+        configure(
+            &mut e,
+            Config {
+                mode: MANUAL,
+                quality,
+                octaves,
+                ..Config::default()
+            },
+        );
+        on(&mut e, 60, 1);
+        let expected = (e.notes.len * octaves as usize).clamp(3, 12);
+        assert_eq!(e.string_count(), expected);
+        let top = notes(&send(&mut e, Command::BeginGesture(1.0, 0.8)));
+        assert_eq!(top, vec![e.notes.string(expected - 1).unwrap()]);
     }
 }
 #[test]

@@ -22,6 +22,13 @@ impl Default for Bridge {
     }
 }
 impl Bridge {
+    /// Construct display telemetry only while an editor can consume it.
+    pub fn publish_with(&self, snapshot: impl FnOnce() -> Snapshot) {
+        if self.visible.load(Ordering::Relaxed) {
+            self.publish(snapshot());
+        }
+    }
+
     pub fn send(&self, command: Command) {
         if self.commands.push(command).is_err() {
             self.panic.store(true, Ordering::Release);
@@ -35,5 +42,31 @@ impl Bridge {
             let _ = self.snapshots.pop();
             let _ = self.snapshots.push(snapshot);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn hidden_editor_skips_snapshot_and_reopening_publishes_current_state() {
+        let bridge = Bridge::default();
+        let constructed = Cell::new(0);
+        let snapshot = || {
+            constructed.set(constructed.get() + 1);
+            Snapshot { root: 67, ..Snapshot::default() }
+        };
+        bridge.publish_with(snapshot);
+        assert_eq!(constructed.get(), 0);
+        assert!(bridge.snapshots.is_empty());
+        bridge.visible.store(true, Ordering::Relaxed);
+        bridge.publish_with(snapshot);
+        assert_eq!(constructed.get(), 1);
+        assert_eq!(bridge.snapshots.pop().unwrap().root, 67);
+        bridge.visible.store(false, Ordering::Relaxed);
+        bridge.publish_with(snapshot);
+        assert_eq!(constructed.get(), 1);
     }
 }

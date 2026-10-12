@@ -374,6 +374,7 @@ fn split_recall_preserves_held_melody_and_updates_layer() {
     on(&mut e, 48, 0);
     on(&mut e, 72, 2);
     let chord = harmony::SavedChord {
+        additions: 0,
         root: 50,
         second: None,
         quality: 0,

@@ -10,6 +10,8 @@ pub use types::*;
 pub struct Engine {
     pub seq: sequencer::Runtime,
     pub sources: [f32; routing::SOURCE_COUNT],
+    route_smoothers: [routing::RouteSmoother; routing::ROUTE_COUNT],
+    pub(super) source_overrides: [Option<f32>; routing::SOURCE_COUNT],
     input_velocity: f32,
     pub host_config: Config,
     pub memory: Option<harmony::SavedChord>,
@@ -26,6 +28,8 @@ pub struct Engine {
     pub now: u64,
     pub root: Option<Slot>,
     pub second: Option<Slot>,
+    pub additions: u16,
+    addition_inputs: [bool; 2048 + KEY_TOKEN_COUNT],
     pub notes: Notes,
     pub expression: Expression,
     pub channels: [Expression; 16],
@@ -74,6 +78,7 @@ pub struct Engine {
     pub rng: u32,
     pub tempo: f64,
     pub playing: bool,
+    pub time_sig_host: bool,
     pub time_sig_num: u8,
     pub time_sig_den: u8,
 }
@@ -82,6 +87,8 @@ impl Default for Engine {
         Self {
             seq: sequencer::Runtime::default(),
             sources: routing::SOURCE_DEFAULTS,
+            route_smoothers: [routing::RouteSmoother::default(); routing::ROUTE_COUNT],
+            source_overrides: [None; routing::SOURCE_COUNT],
             input_velocity: 0.8,
             host_config: Config::default(),
             memory: None,
@@ -98,6 +105,8 @@ impl Default for Engine {
             now: 0,
             root: None,
             second: None,
+            additions: 0,
+            addition_inputs: [false; 2048 + KEY_TOKEN_COUNT],
             notes: Notes::default(),
             expression: Expression::default(),
             channels: [Expression::default(); 16],
@@ -150,6 +159,7 @@ impl Default for Engine {
             rng: 0x43484f52,
             tempo: 120.0,
             playing: false,
+            time_sig_host: false,
             time_sig_num: 4,
             time_sig_den: 4,
         }
@@ -160,6 +170,7 @@ impl Engine {
         self.configure_inner(config, true, out);
     }
     fn configure_inner(&mut self, config: Config, restart: bool, out: &mut impl FnMut(Out)) {
+        let previous_sources = self.source_overrides;
         let previous_host = self.host_config;
         let old = self.config;
         self.host_config = config;
@@ -176,7 +187,10 @@ impl Engine {
                 config.transpose = *transpose;
             }
         }
+        let unrouted_config = config;
+        self.prepare_route_smoothing();
         self.apply_routes(&mut config);
+        self.source_overrides = self.resolved_source_overrides();
         if config.bass_enabled && config.key_split && config.bass_boundary() >= 0 {
             let (bass, melody) = ordered_splits(config.bass_boundary() as u8, config.split_note);
             if bass as i16 != config.bass_boundary() {
@@ -196,8 +210,17 @@ impl Engine {
                 self.seq.base[lane] = self.host_config.seq_pages[lane].min(7);
             }
         }
-        if mode || route {
-            self.reset_sequencer(out);
+        if mode || route || old.seq_enabled != config.seq_enabled {
+            if old.seq_enabled == config.seq_enabled && config.seq_enabled {
+                self.reset_sequencer_runtime(out);
+            } else {
+                self.reset_sequencer(out);
+            }
+            // Reset clears the dedicated sources; use their reset values.
+            config = unrouted_config;
+            self.prepare_route_smoothing();
+            self.apply_routes(&mut config);
+            self.source_overrides = self.resolved_source_overrides();
         }
         if route {
             self.stop_bass(out);
@@ -211,7 +234,10 @@ impl Engine {
             self.needs_setup = true;
         }
         self.config = config;
-        if old.strum_enabled && !config.strum_enabled && matches!(config.mode, MANUAL | SEQUENCER) {
+        if old.seq_loop != config.seq_loop {
+            self.restart_sequence_arp();
+        }
+        if old.strum_enabled && !config.strum_enabled && config.mode == MANUAL {
             self.x_primed = false;
             for i in 0..self.voices.len() {
                 if self.voices[i].is_some_and(|voice| voice.owner == 0 && !voice.layer) {
@@ -220,6 +246,8 @@ impl Engine {
             }
         }
         if old.quality != config.quality {
+            self.additions = 0;
+            self.refresh_additions();
             self.quality = config.quality;
             self.control_alteration = None;
         }
@@ -237,6 +265,8 @@ impl Engine {
             }
         }
         if old.latch && !config.latch && !config.key_split {
+            self.additions = 0;
+            self.refresh_additions();
             // Return released, retained inputs to ordinary note-off semantics.
             for slot in [self.second, self.root].into_iter().flatten() {
                 if !slot.held {
@@ -259,7 +289,7 @@ impl Engine {
         {
             self.panic(out);
         }
-        if old.mappings != config.mappings || old.strings != config.strings {
+        if old.mappings != config.mappings || old.octaves != config.octaves {
             self.x_primed = false;
         }
         if old.voice_leading != config.voice_leading
@@ -269,6 +299,8 @@ impl Engine {
             || mode
         {
             self.leading_history = None;
+            self.leading_from = Notes::default();
+            self.leading_to = Notes::default();
         }
         let revoice = old.affect_chords != config.affect_chords
             || old.voice_leading != config.voice_leading
@@ -300,6 +332,24 @@ impl Engine {
         {
             self.sync_layers(out);
         }
+        if previous_sources != self.source_overrides {
+            // Restore a removed controller route even if its live baseline is unknown.
+            for channel in 0..16 {
+                if self.newest_voice(channel).is_none() || self.melody_channel(channel) { continue; }
+                for (index, cc) in [(1, 1), (2, 11), (3, 2)] {
+                    if previous_sources[index].is_some() && self.source_overrides[index].is_none() {
+                        out(Out::Cc(channel, cc, self.controller_baseline(cc) as f32 / 127.0));
+                    }
+                }
+            }
+            if self.config.routed_x.is_none() && (self.source_overrides[7].is_some() || previous_sources[7].is_some()) {
+                self.position_value(self.source_overrides[7].unwrap_or(self.sources[7]), 0, out);
+            }
+            if self.source_overrides[8].is_some() || previous_sources[8].is_some() {
+                self.position_value(self.source_overrides[8].unwrap_or(self.sources[8]), 1, out);
+            }
+            self.fan_expression(out);
+        }
         if route
             && self
                 .melody
@@ -312,6 +362,18 @@ impl Engine {
                     self.emit_melody_expression(channel, out);
                 }
             }
+        }
+    }
+    /// Recompute contributions by identity; released latched pitches retain their recipe.
+    fn refresh_additions(&mut self) {
+        let Some(root_note) = self.root.map(|s| s.note).or(self.memory.map(|m| m.root)) else { return; };
+        if !self.config.latch {
+            self.additions = 0;
+        }
+        for (slot, _) in self.held_inputs.iter().flatten() {
+            if !self.addition_inputs[slot.id as usize] || self.root.is_some_and(|r| slot.id == r.id) || self.second.is_some_and(|s| s.id == slot.id) { continue; }
+            let pc = (slot.note as i16 - root_note as i16).rem_euclid(12) as usize;
+            self.additions |= 1 << pc;
         }
     }
     pub fn note_on(
@@ -327,6 +389,8 @@ impl Engine {
             return;
         }
         self.down[id as usize] = true;
+        self.input_velocity = velocity.clamp(0.0, 1.0);
+        self.sources[6] = self.input_velocity;
         if self.recalled {
             self.root = None;
             self.second = None;
@@ -349,9 +413,16 @@ impl Engine {
         };
         self.held_inputs[id as usize] = Some((slot, quality));
         if self.root.is_some() && self.second.is_some() {
+            self.addition_inputs[id as usize] = true;
+            self.refresh_additions();
+            self.configure_inner(self.host_config, false, out);
+            self.rebuild_harmony(self.config.mode == CHORD, out);
+            self.sync_layers(out);
             return;
         }
         if self.root.is_none() {
+            self.addition_inputs[id as usize] = false;
+            self.additions = 0;
             self.scheduled.fill(None);
             self.root = Some(slot);
             self.quality = quality.unwrap_or(self.quality);
@@ -367,7 +438,7 @@ impl Engine {
         } else {
             self.second = Some(slot);
         }
-        self.input_velocity = velocity.clamp(0.0, 1.0);
+        self.refresh_additions();
         self.configure_inner(self.host_config, false, out);
         self.rebuild(out);
     }
@@ -379,8 +450,11 @@ impl Engine {
             return;
         }
         self.down[id as usize] = false;
+        self.addition_inputs[id as usize] = false;
         self.held_inputs[id as usize] = None;
         if self.config.latch || self.config.key_split {
+            let old_additions = self.additions;
+            self.refresh_additions();
             // Releases never change held harmony or restart strums/arp timing.
             // Retain a released alteration until a new input replaces it.
             for slot in [&mut self.root, &mut self.second].into_iter().flatten() {
@@ -388,14 +462,20 @@ impl Engine {
                     slot.held = false;
                 }
             }
-            if self.root.is_none_or(|s| !s.held) && self.second.is_none_or(|s| !s.held) {
+            if self.root.is_none_or(|s| !s.held) && self.second.is_none_or(|s| !s.held)
+                && !self.held_inputs.iter().flatten().any(|(s,_)| self.addition_inputs[s.id as usize]) {
                 self.root = None;
                 self.second = None;
             }
+            if old_additions != self.additions { self.rebuild_harmony(self.config.mode == CHORD, out); }
             self.sync_layers(out);
             return;
         }
+        let extra = self.root.is_some_and(|r| r.id != id) && self.second.is_none_or(|s| s.id != id);
+        self.refresh_additions();
         self.release_harmony_input(id, velocity, out);
+        if extra && self.root.is_some() { self.rebuild_harmony(self.config.mode == CHORD, out); }
+
         self.sync_layers(out);
     }
     fn release_harmony_input(&mut self, id: u16, velocity: f32, out: &mut impl FnMut(Out)) {
@@ -434,6 +514,7 @@ impl Engine {
         }
         if self.second.is_some_and(|s| s.id == id) {
             self.second = None;
+            self.refresh_additions();
             if self.root.is_some_and(|s| s.held) {
                 self.rebuild(out);
                 return;
@@ -444,6 +525,11 @@ impl Engine {
             return;
         }
         if self.root.is_some_and(|s| !s.held) && self.second.is_none() {
+            if self.held_inputs.iter().flatten().count() >= 2 {
+                // Keep the original register while several admitted contributors remain.
+                self.rebuild_harmony(self.config.mode == CHORD, out);
+                return;
+            }
             self.root = None;
             if !self.config.latch && !self.pedal {
                 self.notes = Notes::default();
@@ -479,6 +565,8 @@ impl Engine {
                 }
             }
             Command::SetControlChord(interval) => {
+                self.additions = 0;
+                self.refresh_additions();
                 let (quality, alteration) = harmony::CONTROL_CHORDS[interval.min(11) as usize];
                 self.quality = quality;
                 self.control_alteration = alteration;
@@ -490,7 +578,9 @@ impl Engine {
                 self.rebuild_harmony(self.config.mode != ARP, out);
             }
             Command::SetQuality(quality) => {
-                if self.quality != quality.min(11) || self.control_alteration.is_some() {
+                if self.quality != quality.min(11) || self.control_alteration.is_some() || self.additions != 0 {
+                    self.additions = 0;
+                    self.refresh_additions();
                     self.quality = quality.min(11);
                     self.control_alteration = None;
                     self.rebuild_harmony(self.config.mode != ARP, out);
@@ -525,6 +615,7 @@ impl Engine {
                     self.scheduled.fill(None);
                     self.down.fill(false);
                     self.held_inputs.fill(None);
+                    self.addition_inputs.fill(false);
                     for channel in 0..16 {
                         for note in 0..128 {
                             self.down[channel * 128 + note] = self.melody[channel][note];
@@ -544,6 +635,7 @@ impl Engine {
                         held: false,
                         velocity: self.config.velocity,
                     });
+                    self.additions = chord.additions;
                     self.quality = chord.quality;
                     self.control_alteration = None;
                     self.inversion = chord.inversion;
@@ -589,6 +681,7 @@ impl Engine {
         self.scheduled.fill(None);
         self.root = None;
         self.second = None;
+        self.additions = 0;
         self.notes = Notes::default();
         self.full_notes = Notes::default();
         self.leading_from = Notes::default();
@@ -599,6 +692,7 @@ impl Engine {
         self.recall_voicing = None;
         self.down.fill(false);
         self.held_inputs.fill(None);
+        self.addition_inputs.fill(false);
         self.pedal = false;
         self.x_primed = false;
         self.y_active = false;
@@ -616,6 +710,7 @@ impl Engine {
         self.rebuild_harmony(true, out);
     }
     fn rebuild_harmony(&mut self, play: bool, out: &mut impl FnMut(Out)) {
+        let previous_notes = self.notes;
         let Some(root_note) = self.root.map(|s| s.note).or(self.memory.map(|m| m.root)) else {
             return;
         };
@@ -630,6 +725,7 @@ impl Engine {
                 .or(self.memory.and_then(|m| m.second))
         };
         let recipe = harmony::SavedChord {
+            additions: self.additions,
             root: root_note,
             second,
             quality: self.quality,
@@ -642,14 +738,7 @@ impl Engine {
         } else {
             recipe.spread
         };
-        let base = harmony::voice(
-            root_note,
-            recipe.quality,
-            second,
-            recipe.transpose,
-            recipe.inversion,
-            spread,
-        );
+        let base = harmony::voice_recipe(recipe, spread);
         self.full_notes = match self.leading_history {
             Some((previous, notes)) if self.config.voice_leading < 2 => {
                 if previous == recipe {
@@ -691,16 +780,24 @@ impl Engine {
         }
         self.notes = harmony::filter_notes(self.full_notes, self.config.filter);
         self.memory = Some(recipe);
-        if self.config.mode == SEQUENCER {
+        if self.config.seq_enabled {
             self.apply_sequenced_harmony();
         }
-        let count = harmony::intervals(
-            self.quality,
-            second.map(|n| (n as i16 - root_note as i16).rem_euclid(12) as u8),
-        )
-        .len;
+        let count = harmony::recipe_intervals(recipe).len;
         self.inversion %= count.max(1) as u8;
-        self.scheduled.fill(None);
+        if play { self.scheduled.fill(None); }
+        else {
+            for event in &mut self.scheduled {
+                if let Some(scheduled) = event.as_mut() {
+                    if let Some(&note) = self.notes.as_slice().iter().find(|n| **n % 12 == scheduled.note % 12) {
+                        let old = previous_notes.as_slice().iter().find(|n| **n % 12 == scheduled.note % 12).copied().unwrap_or(scheduled.note);
+                        let remapped = scheduled.note as i16 + note as i16 - old as i16;
+                        if (0..=127).contains(&remapped) { scheduled.note = remapped as u8; }
+                        else { *event = None; }
+                    } else { *event = None; }
+                }
+            }
+        }
         if self.root.is_some() || self.config.latch || self.config.key_split || self.pedal {
             if play {
                 self.start_mode(out);
@@ -740,12 +837,10 @@ impl Engine {
                         }
                     }
                 }
-                let count = self.config.strings.clamp(3, 12) as usize;
+                let count = self.string_count();
                 let played = (self.config.strings_played as usize).clamp(1, count);
-                let octaves = self.config.octaves.clamp(1, 4) as usize;
                 let pattern = self.config.arp_pattern;
-                let strikes = Self::pattern_length(pattern, played * octaves);
-                let total = played * octaves;
+                let strikes = Self::pattern_length(pattern, played);
                 let offset = if matches!(pattern, 1 | 4) {
                     count - played
                 } else {
@@ -754,10 +849,10 @@ impl Engine {
                 let base = self.rate_samples();
                 let mut at = 0.0;
                 for step in 0..strikes {
-                    let index = self.arp_index(pattern, step, total);
-                    let string = offset + index % played + index / played * self.notes.len;
+                    let string = offset + self.arp_index(pattern, step, played);
                     let ratio = step as f32 / (strikes - 1).max(1) as f32;
-                    let random = self.random() as f32 / u32::MAX as f32;
+                    // Same per-strike RNG advance as the looping arp.
+                    let _ = self.random();
                     let swing = if step.is_multiple_of(2) {
                         1.0 + self.config.swing as f64
                     } else {
@@ -769,12 +864,12 @@ impl Engine {
                     let Some(note) = self.notes.string(string) else {
                         continue;
                     };
+                    let strike_base = self.now.saturating_add(strike_at as u64);
+                    let at = self.humanized_at(strike_base, spacing, self.now);
+                    let human_vel = self.humanize_velocity_factor();
                     self.schedule(Scheduled {
                         gate_step: None,
-                        at: self.now
-                            + (strike_at
-                                + spacing * 0.1 * self.config.humanize as f64 * random as f64)
-                                as u64,
+                        at,
                         note,
                         velocity: (self.strike_velocity()
                             * contour_factor(
@@ -782,7 +877,7 @@ impl Engine {
                                 self.config.contour,
                                 self.config.contour_curve,
                             )
-                            * (1.0 - self.config.humanize * 0.2 * random))
+                            * human_vel)
                             .clamp(0.01, 1.0),
                         duration: if self.config.strum_hold {
                             u64::MAX
@@ -799,17 +894,20 @@ impl Engine {
             ARP => {}
             _ => {}
         }
-        if self.config.root_on_select
-            && (!matches!(self.config.mode, MANUAL | SEQUENCER) || self.config.strum_enabled)
-        {
+        if self.config.root_on_select {
             if let Some(root) = self.selected_root() {
                 for slot in &mut self.scheduled {
                     if slot.is_some_and(|e| e.note == root) {
                         *slot = None;
                     }
                 }
-                if !self.voices.iter().flatten().any(|v| v.note == root) {
-                    self.strike(root, self.strike_velocity(), self.duration(), out);
+                if !self
+                    .voices
+                    .iter()
+                    .flatten()
+                    .any(|v| v.note == root && v.owner == SELECT_ROOT_OWNER)
+                {
+                    self.strike_selection_root(root, out);
                 }
             }
         }
@@ -824,6 +922,7 @@ impl Engine {
                 if self.down[id as usize] {
                     if self.root.is_some_and(|s| s.id == id)
                         || self.second.is_some_and(|s| s.id == id)
+                        || self.addition_inputs[id as usize]
                     {
                         accepted |= 1 << key;
                     } else {
@@ -853,7 +952,7 @@ impl Engine {
             bass_note: (0..128)
                 .find(|&note| self.bass.iter().any(|input| input[note].is_some()))
                 .map(|note| note as u8),
-            sources: self.sources,
+            sources: self.effective_sources(),
             input_velocity: self.input_velocity,
             routed: self.routed_values(),
             captured: self.memory.map_or(0, |m| m.encode()),
@@ -866,6 +965,7 @@ impl Engine {
             second: self.second.map_or(-1, |s| s.note as i16),
             quality: self.quality,
             control_alteration: self.control_alteration,
+            additions: self.additions,
             inversion: self.inversion,
             accepted,
             ignored,
@@ -892,6 +992,7 @@ impl Engine {
             }),
             seq_steps: self.seq.steps,
             seq_running: self.seq.running,
+            time_sig_host: self.time_sig_host,
             time_sig_num: self.time_sig_num,
             time_sig_den: self.time_sig_den,
         }
@@ -916,6 +1017,30 @@ impl Engine {
         } else {
             self.sample_rate as f64 * self.config.strum_ms as f64 / 1000.0
         }
+    }
+    /// Humanize timing: bipolar offset up to ±25% of `span` samples at 100%.
+    /// Draws no randomness when humanize is off.
+    fn humanize_timing(&mut self, span: f64) -> f64 {
+        let h = self.config.humanize.clamp(0.0, 1.0) as f64;
+        if h <= 0.0 {
+            return 0.0;
+        }
+        let r = self.random() as f64 / u32::MAX as f64;
+        span * 0.25 * h * (r * 2.0 - 1.0)
+    }
+    /// Humanize velocity: bipolar gain factor, 1 ± 30% at 100%.
+    fn humanize_velocity_factor(&mut self) -> f32 {
+        let h = self.config.humanize.clamp(0.0, 1.0);
+        if h <= 0.0 {
+            return 1.0;
+        }
+        let r = self.random() as f32 / u32::MAX as f32;
+        1.0 + 0.3 * h * (r * 2.0 - 1.0)
+    }
+    /// `base` plus humanize jitter, never earlier than `floor`.
+    fn humanized_at(&mut self, base: u64, span: f64, floor: u64) -> u64 {
+        let off = self.humanize_timing(span);
+        (base as i128 + off as i128).clamp(floor as i128, u64::MAX as i128) as u64
     }
     fn ms(&self, ms: f32) -> u64 {
         (ms.max(0.0) * self.sample_rate / 1000.0) as u64

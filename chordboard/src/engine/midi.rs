@@ -84,6 +84,8 @@ impl Engine {
         }
         if self.is_control_note(note) {
             if pressed {
+                self.additions = 0;
+                self.refresh_additions();
                 let interval = (note as i16 - self.config.control_base) as usize;
                 let (quality, alteration) = harmony::CONTROL_CHORDS[interval];
                 self.quality = quality;
@@ -307,7 +309,7 @@ impl Engine {
                 mapped = true;
             }
         }
-        if self.config.mode == SEQUENCER && crate::sequencer::valid_cc(cc) {
+        if self.config.seq_enabled && crate::sequencer::valid_cc(cc) {
             let source = self
                 .root
                 .filter(|s| s.channel < 16)
@@ -325,7 +327,7 @@ impl Engine {
                             out(Out::Cc(
                                 output,
                                 cc,
-                                ((raw as i16 + expression.cc[i]) as f32 / 127.0).clamp(0.0, 1.0),
+                                ((self.controller_baseline(cc) as i16 + expression.cc[i]) as f32 / 127.0).clamp(0.0, 1.0),
                             ));
                             sent[output as usize] = true;
                         }
@@ -353,6 +355,8 @@ impl Engine {
                 out(Out::Cc(self.master(), 74, value));
             }
         } else if !self.is_member(channel) {
+            let index = match cc { 1 => Some(1), 11 => Some(2), 2 => Some(3), _ => None };
+            let value = index.and_then(|index| self.source_overrides[index]).unwrap_or(value);
             out(Out::Cc(self.master(), cc, value));
         }
     }

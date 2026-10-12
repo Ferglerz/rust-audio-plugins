@@ -26,7 +26,7 @@ permanent reference code; experimental tables are generated from those equations
 and are **disabled** in this plugin. Original complete engines can be reconstructed
 from pinned Git revisions by the fork's comparison tools.
 
-The wrapper uses OpenWurli's default fast preamp and power amp. Its Reed, Hammer, Pickup, and Tremolo controls still call the fork's engine APIs. Extra Sag applies optional level-dependent output gain reduction and defaults off. Hiss has been removed from the wrapper and native preamps in both circuit modes. The old noise parameter IDs remain hidden and inert for saved-session compatibility. Saved projects with Sag enabled keep that setting.
+The wrapper uses OpenWurli's default fast preamp and power amp. Its Reed, Hammer, Pickup, and Tremolo controls still call the fork's engine APIs. Extra Sag applies optional level-dependent output gain reduction and defaults off. Its strength is now 10× the original, with the same 8 ms attack and 150 ms release, making louder notes and chords compress more strongly. Hiss has been removed from the wrapper and native preamps in both circuit modes. The old noise parameter IDs remain hidden and inert for saved-session compatibility. Saved projects with Sag enabled keep that setting and use the stronger effect.
 
 For future updates, port the optimization branch against the intended upstream
 revision, repeat its native/table comparisons, then integrate it into

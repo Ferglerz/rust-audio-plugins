@@ -34,6 +34,25 @@ pub struct Step {
     pub timbre: i16,
     pub bend: f32,
     pub cc: [i16; CC_TRACKS],
+    /// Index into `SPEED_STEPS`; multiplies the lane rate for this step.
+    pub speed: u8,
+    /// Fine rate trim in percent, applied on top of `speed`.
+    pub fine: i8,
+    /// Dedicated bipolar sequencer modulation offsets, from −100 to +100.
+    pub mods: [i16; 2],
+}
+
+pub const SPEED_STEPS: [f32; 7] = [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0];
+pub const SPEED_NAMES: [&str; 7] = ["×¼", "×½", "×1", "×1.5", "×2", "×3", "×4"];
+pub const DEFAULT_SPEED: u8 = 2;
+pub const FINE_RANGE: i8 = 50;
+
+impl Step {
+    /// Playback speed factor; values above 1 shorten the step.
+    pub fn speed_factor(&self) -> f64 {
+        let coarse = SPEED_STEPS[(self.speed as usize).min(SPEED_STEPS.len() - 1)] as f64;
+        coarse * (1.0 + self.fine.clamp(-FINE_RANGE, FINE_RANGE) as f64 / 100.0)
+    }
 }
 
 impl Default for Step {
@@ -57,6 +76,9 @@ impl Default for Step {
             timbre: 0,
             bend: 0.0,
             cc: [0; CC_TRACKS],
+            speed: DEFAULT_SPEED,
+            fine: 0,
+            mods: [0; 2],
         }
     }
 }
@@ -72,7 +94,7 @@ impl Step {
         self.micro = self.micro.clamp(-49, 49);
         self.root_offset = self.root_offset.clamp(-48, 48);
         self.quality = self.quality.clamp(-1, 11);
-        self.inversion = self.inversion.clamp(-1, 5);
+        self.inversion = self.inversion.clamp(-1, 11);
         self.spread = self.spread.clamp(-1, 4);
         self.pressure = self.pressure.clamp(-127, 127);
         self.timbre = self.timbre.clamp(-127, 127);
@@ -84,6 +106,9 @@ impl Step {
         for offset in &mut self.cc {
             *offset = (*offset).clamp(-127, 127);
         }
+        self.speed = self.speed.min(SPEED_STEPS.len() as u8 - 1);
+        self.fine = self.fine.clamp(-FINE_RANGE, FINE_RANGE);
+        for value in &mut self.mods { *value = (*value).clamp(-100, 100); }
     }
 }
 
@@ -708,5 +733,37 @@ mod tests {
         assert_eq!(p.box_at(2), None);
         let json = serde_json::to_string(&p).unwrap();
         assert_eq!(serde_json::from_str::<Page>(&json).unwrap(), p);
+    }
+    #[test]
+    fn step_speed_and_fine_sanitize_and_roundtrip() {
+        let mut p = Page::default();
+        p.steps[0].speed = 200;
+        p.steps[0].fine = 120;
+        p.steps[1].speed = 4;
+        p.steps[1].fine = -100;
+        p.sanitize();
+        assert_eq!(p.steps[0].speed as usize, SPEED_STEPS.len() - 1);
+        assert_eq!(p.steps[0].fine, FINE_RANGE);
+        assert_eq!(p.steps[1].fine, -FINE_RANGE);
+        assert!((p.steps[1].speed_factor() - 2.0 * 0.5).abs() < 1e-9);
+        let json = serde_json::to_string(&p).unwrap();
+        assert_eq!(serde_json::from_str::<Page>(&json).unwrap(), p);
+    }
+}
+
+#[cfg(test)]
+mod inversion_extension_tests {
+    use super::*;
+    #[test]
+    fn step_override_preserves_dense_inversions_and_default_inherits_recipe() {
+        assert_eq!(Step::default().inversion,-1);
+        for inversion in -1..=11 {
+            let mut step=Step { inversion, ..Step::default() };
+            step.sanitize();
+            assert_eq!(step.inversion,inversion);
+        }
+        let mut step=Step { inversion:127, ..Step::default() };
+        step.sanitize();
+        assert_eq!(step.inversion,11);
     }
 }

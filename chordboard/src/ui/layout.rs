@@ -2,8 +2,9 @@
 use super::KEY_COLUMNS;
 const WIDTH_REDUCTION: f32 = 128.0;
 const OLD_MOD_COLUMN: f32 = 122.0;
-pub(super) const W: f32 = 1871.0 - WIDTH_REDUCTION - OLD_MOD_COLUMN;
-pub(super) const H: f32 = 840.0;
+pub(super) const MAIN_W: f32 = 1871.0 - WIDTH_REDUCTION - OLD_MOD_COLUMN;
+pub(super) const W: f32 = MAIN_W + 190.0;
+pub(super) const H: f32 = 740.0;
 pub(super) type Rect = (f32, f32, f32, f32);
 pub(super) const HEADER_H: f32 = 76.0;
 pub(super) const MODULE_HEADER_H: f32 = 44.0;
@@ -24,11 +25,11 @@ const fn field_corner(pad: Rect) -> Rect {
 }
 const fn field_latch(pad: Rect) -> Rect {
     let corner = field_corner(pad);
-    (corner.0 - 96.0, corner.1, 88.0, 28.0)
+    (corner.0 - 136.0, corner.1, 128.0, 28.0)
 }
 const fn manual_field_inset(pad: Rect) -> Rect {
-    // Top inset matches the left inset so the graph fills the spare band under the header.
-    (pad.0 + 60.0, pad.1 + 60.0, pad.2 - 80.0, pad.3 - 125.0)
+    // Left gutter fits separate labels and the 30px bound tags; top stays compact.
+    (pad.0 + 92.0, pad.1 + 60.0, pad.2 - 112.0, pad.3 - 125.0)
 }
 pub(super) const ARP_MAIN_WIDTH: f32 = 612.0;
 pub(super) const ARP_PAD: Rect = (32.0, 136.0, 892.0, 358.0);
@@ -37,26 +38,16 @@ pub(super) const PLAY_PAD: Rect = manual_field_inset(PAD);
 pub(super) const AUTO_FIELD: Rect = (PAD.0 + 20.0, 286.0, PAD.2 - 40.0, 100.0);
 pub(super) const CHORDS_SURFACE: Rect = (16.0, 92.0, 924.0, 418.0);
 pub(super) const PERF_SURFACE: Rect = (1080.0 - WIDTH_REDUCTION, 92.0, 653.0, 418.0);
-// Full-width modulation row between performance and the keyboard.
-pub(super) const MOD_SURFACE: Rect = (16.0, 522.0, W - 32.0, 88.0);
+// Vertical modulation module beside both performance and keyboard surfaces.
+pub(super) const MOD_SURFACE: Rect = (MAIN_W, 92.0, 174.0, 630.0);
 pub(super) const EXPAND: Rect = field_corner(PAD);
-pub(super) const EXPANDED_SURFACE: Rect = (16.0, 92.0, W - 32.0, 418.0);
-pub(super) const EXPANDED_PAD: Rect = (32.0, 108.0, W - 64.0, 390.0);
+pub(super) const EXPANDED_SURFACE: Rect = (16.0, 92.0, MAIN_W - 32.0, 418.0);
+pub(super) const EXPANDED_PAD: Rect = (32.0, 108.0, MAIN_W - 64.0, 390.0);
 pub(super) const EXPANDED_PLAY_PAD: Rect = manual_field_inset(EXPANDED_PAD);
 pub(super) const EXPANDED_EXPAND: Rect = field_corner(EXPANDED_PAD);
 pub(super) const EXPANDED_STRUM_SYNC: Rect =
     (1567.0 - WIDTH_REDUCTION - OLD_MOD_COLUMN, 116.0, 92.0, 28.0);
 pub(super) const STRUM_RATE: Rect = (ARP_PAD.0 + 8.0, 344.0, ARP_MAIN_WIDTH - 16.0, 36.0);
-pub(super) const ARP_STRINGS: Rect = (ARP_PAD.0 + 8.0, 244.0, ARP_MAIN_WIDTH - 16.0, 72.0);
-pub(super) fn arp_interlock_rect() -> Rect {
-    (
-        ARP_STRINGS.0 + ARP_STRINGS.2 - 180.0,
-        ARP_STRINGS.1 + ARP_STRINGS.3 - 26.0,
-        172.0,
-        22.0,
-    )
-}
-pub(super) const RATE_SYNC: Rect = (ARP_PAD.0 + ARP_MAIN_WIDTH - 156.0, 320.0, 148.0, 24.0);
 pub(super) const EXPANDED_STRUM_RATE: Rect = (
     1339.0 - WIDTH_REDUCTION - OLD_MOD_COLUMN,
     116.0,
@@ -69,29 +60,61 @@ pub(super) const LATCH: Rect = (
     78.0,
     TILE_HEIGHT,
 );
-pub(super) const ORDER: Rect = (462.0, 100.0, 152.0, 28.0);
-pub(super) const TRANSPOSE: Rect = (622.0, 100.0, 302.0, 28.0);
+// Chords header row: Key, Scale, Order, selection mode, Transpose on an 8px rhythm.
+pub(super) const KEY_MENU: Rect = (104.0, 100.0, 104.0, 28.0);
+pub(super) const SCALE_MENU: Rect = (216.0, 100.0, 148.0, 28.0);
+pub(super) const ORDER: Rect = (372.0, 100.0, 116.0, 28.0);
+pub(super) const ROOT_ON_SELECT: Rect = (496.0, 100.0, 148.0, 28.0);
+pub(super) const TRANSPOSE: Rect = (652.0, 100.0, 272.0, 28.0);
 pub(super) const APPEARANCE: Rect = (1681.0 - WIDTH_REDUCTION - OLD_MOD_COLUMN, 24.0, 138.0, 30.0);
 pub(super) const STRUM_BYPASS: Rect = (PERF_SURFACE.0 + 10.0, 100.0, 28.0, 28.0);
 pub(super) fn strum_bypass_rect(expand: f32) -> Rect {
     let r = perf_surface_rect(expand);
     (r.0 + 10.0, STRUM_BYPASS.1, 28.0, 28.0)
 }
-pub(super) fn strum_selection_rect(expand: f32) -> Rect {
+// Octaves label and buttons share the header slot left of the touch latch.
+pub(super) fn strum_octaves_rect(expand: f32) -> Rect {
     let latch = strum_latch_rect(expand);
     (latch.0 - 205.0, latch.1, 197.0, 28.0)
 }
-pub(super) fn repeat_rect(looping: bool) -> Rect {
+pub(super) fn octave_button_rect(expand: f32, i: usize) -> Rect {
+    let slot = strum_octaves_rect(expand);
     (
-        ARP_PAD.0 + if looping { 78.0 } else { 8.0 },
-        144.0,
-        66.0,
+        slot.0 + slot.2 - 4.0 * 28.0 - 3.0 * 4.0 + i as f32 * 32.0,
+        slot.1,
+        28.0,
         28.0,
     )
 }
-pub(super) const HEADER_PLAY_TAB: Rect = (410.0, 24.0, 84.0, 30.0);
-pub(super) const HEADER_SEQ_TAB: Rect = (500.0, 24.0, 116.0, 30.0);
-pub(super) const HEADER_SEQ_BYPASS: Rect = (626.0, 25.0, 28.0, 28.0);
+#[cfg(test)]
+pub(super) fn octave_rect(i: usize) -> Rect {
+    octave_button_rect(0.0, i)
+}
+// Arp page grid: four rows with a shared 20px rhythm inside ARP_PAD.
+const ARP_X: f32 = ARP_PAD.0 + 8.0;
+const ARP_INNER_W: f32 = ARP_PAD.2 - 16.0;
+const ARP_GAP: f32 = 20.0;
+const ARP_ROW1: f32 = ARP_PAD.1 + 8.0;
+const ARP_ROW1_H: f32 = 38.0;
+const ARP_ROW4_H: f32 = 38.0;
+const ARP_ROW4: f32 = ARP_PAD.1 + ARP_PAD.3 - 8.0 - ARP_ROW4_H;
+const ARP_ROW2: f32 = ARP_ROW1 + ARP_ROW1_H + ARP_GAP;
+const PATTERN_HEIGHT: f32 = 128.0;
+const ARP_ROW3: f32 = ARP_ROW2 + PATTERN_HEIGHT + ARP_GAP;
+const ARP_ROW3_H: f32 = ARP_ROW4 - ARP_GAP - ARP_ROW3;
+const REPEAT_W: f32 = 88.0;
+const HOLD_W: f32 = 200.0;
+pub(super) fn repeat_rect(looping: bool) -> Rect {
+    (
+        ARP_X + if looping { REPEAT_W + 8.0 } else { 0.0 },
+        ARP_ROW1 + (ARP_ROW1_H - 28.0) * 0.5,
+        REPEAT_W,
+        28.0,
+    )
+}
+pub(super) const HEADER_PLAY_TAB: Rect = (650.0, 20.0, 108.0, 38.0);
+pub(super) const HEADER_SEQ_TAB: Rect = (766.0, 20.0, 164.0, 38.0);
+pub(super) const HEADER_SEQ_BYPASS: Rect = (772.0, 25.0, 28.0, 28.0);
 #[cfg(test)]
 pub(super) fn inversion_rect(i: usize) -> Rect {
     inversion_control_rect(false, i)
@@ -104,31 +127,25 @@ pub(super) fn inversion_control_rect(mpe: bool, i: usize) -> Rect {
         28.0,
     )
 }
-const PERFORMANCE_CONTROL_WIDTH: f32 = ARP_MAIN_WIDTH - 16.0;
-const PATTERN_WIDTH: f32 = (PERFORMANCE_CONTROL_WIDTH - 6.0 * 6.0) / 7.0;
-const PATTERN_HEIGHT: f32 = 48.0;
+const PATTERN_GAP: f32 = 8.0;
+const PATTERN_WIDTH: f32 = (ARP_INNER_W - 6.0 * PATTERN_GAP) / 7.0;
 pub(super) fn output_controls(mode: i32) -> Vec<(&'static str, Rect)> {
     let ids: &[&str] = match mode {
-        1 => &["velocity", "length_ms", "strings", "strings_played"],
-        2 => &["length_ms", "strings"],
-        _ => &["velocity"],
+        1 => &["length_ms", "strings_played"],
+        2 => &["length_ms"],
+        _ => &[],
     };
-    let width =
-        ((if mode == 2 { PAD.2 } else { ARP_MAIN_WIDTH }) - 16.0 - (ids.len() - 1) as f32 * 12.0)
-            / ids.len() as f32;
+    if ids.is_empty() { return Vec::new(); }
+    let (x, y, row) = if mode == 2 {
+        (PAD.0 + 8.0, 450.0, PAD.2 - 16.0)
+    } else {
+        (ARP_X, ARP_ROW4, ARP_INNER_W)
+    };
+    let gap = 12.0;
+    let width = (row - (ids.len() - 1) as f32 * gap) / ids.len() as f32;
     ids.iter()
         .enumerate()
-        .map(|(i, &id)| {
-            (
-                id,
-                (
-                    if mode == 2 { PAD.0 } else { ARP_PAD.0 } + 8.0 + i as f32 * (width + 12.0),
-                    450.0,
-                    width,
-                    38.0,
-                ),
-            )
-        })
+        .map(|(i, &id)| (id, (x + i as f32 * (width + gap), y, width, 38.0)))
         .collect()
 }
 
@@ -144,55 +161,19 @@ pub(super) const ARP_RATES: [(&str, f32); 8] = [
 ];
 pub(super) fn pattern_rect(i: usize) -> Rect {
     (
-        ARP_PAD.0 + 8.0 + i as f32 * (PATTERN_WIDTH + 6.0),
-        190.0,
+        ARP_X + i as f32 * (PATTERN_WIDTH + PATTERN_GAP),
+        ARP_ROW2,
         PATTERN_WIDTH,
         PATTERN_HEIGHT,
     )
 }
-pub(super) fn rate_rect(i: usize) -> Rect {
-    let width = (PERFORMANCE_CONTROL_WIDTH - 7.0 * 6.0) / 8.0;
-    (
-        ARP_PAD.0 + 8.0 + i as f32 * (width + 6.0),
-        348.0,
-        width,
-        30.0,
-    )
-}
-pub(super) const RATE_HEADER: Rect = (
-    ARP_PAD.0 + 8.0,
-    320.0,
-    PERFORMANCE_CONTROL_WIDTH - 156.0,
-    20.0,
-);
-pub(super) const OCTAVE_LABEL: (f32, f32) = (ARP_PAD.0 + 156.0, 163.0);
-pub(super) fn octave_rect(i: usize) -> Rect {
-    (ARP_PAD.0 + 210.0 + i as f32 * 32.0, 144.0, 28.0, 28.0)
-}
-pub(super) fn arp_controls() -> [(&'static str, Rect); 3] {
+// Humanize and Swing share the top row to leave the lower body for step editing.
+pub(super) fn arp_controls(_looping: bool) -> [(&'static str, Rect); 2] {
+    let left = ARP_X + 2.0 * REPEAT_W + 8.0 + 16.0;
+    let width = (ARP_X + ARP_INNER_W - left - 12.0) * 0.5;
     [
-        (
-            "humanize",
-            (ARP_PAD.0 + 350.0, 144.0, ARP_MAIN_WIDTH - 366.0, 38.0),
-        ),
-        (
-            "gate",
-            (
-                ARP_PAD.0 + 8.0 + PERFORMANCE_CONTROL_WIDTH * 0.5 + 4.0,
-                388.0,
-                PERFORMANCE_CONTROL_WIDTH * 0.5 - 4.0,
-                50.0,
-            ),
-        ),
-        (
-            "swing",
-            (
-                ARP_PAD.0 + 8.0,
-                388.0,
-                PERFORMANCE_CONTROL_WIDTH * 0.5 - 4.0,
-                50.0,
-            ),
-        ),
+        ("humanize", (left, ARP_ROW1, width, ARP_ROW1_H)),
+        ("swing", (left + width + 12.0, ARP_ROW1, width, ARP_ROW1_H)),
     ]
 }
 pub(super) const MPE: Rect = (CHORD_CONTAINER.0 + 160.0, KEYBOARD_CONTROL_Y, 208.0, 28.0);
@@ -210,12 +191,7 @@ pub(super) const TEMPO_CONTROL: Rect = (
     TEMPO_SYNC.3,
 );
 pub(super) const STRUM_SYNC: Rect = (PAD.0 + 8.0, 430.0, 130.0, 28.0);
-pub(super) const STRUM_HOLD: Rect = (
-    ARP_PAD.0 + 8.0 + PERFORMANCE_CONTROL_WIDTH * 0.5 + 4.0,
-    398.0,
-    PERFORMANCE_CONTROL_WIDTH * 0.5 - 4.0,
-    28.0,
-);
+pub(super) const STRUM_HOLD: Rect = (ARP_X + ARP_INNER_W - HOLD_W, ARP_ROW3, HOLD_W, ARP_ROW3_H);
 pub(super) const EXPANDED_STRUM_HOLD: Rect =
     (1667.0 - WIDTH_REDUCTION - OLD_MOD_COLUMN, 116.0, 66.0, 28.0);
 pub(super) const STRUM_LATCH: Rect = field_latch(PAD);
@@ -264,7 +240,7 @@ pub(super) fn transpose_rect(i: usize) -> Rect {
     transpose_control_rect(false, i)
 }
 pub(super) fn transpose_control_rect(_mpe: bool, i: usize) -> Rect {
-    let widths = [48.0, 40.0, 126.0, 40.0, 48.0];
+    let widths = [46.0, 38.0, 104.0, 38.0, 46.0];
     (
         TRANSPOSE.0 + widths[..i].iter().sum::<f32>(),
         TRANSPOSE.1,
@@ -276,18 +252,14 @@ pub(super) fn voicing_controls() -> [(&'static str, Rect); 0] {
     []
 }
 pub(super) fn meter_rect(i: usize) -> Rect {
-    let gap = 8.0;
-    let width = (MOD_SURFACE.2 - 32.0 - gap * 8.0) / 9.0;
     (
-        MOD_SURFACE.0 + 16.0 + i as f32 * (width + gap),
-        MOD_SURFACE.1 + MODULE_HEADER_H,
-        width,
+        MOD_SURFACE.0 + 12.0,
+        MOD_SURFACE.1 + 62.0 + i as f32 * 46.0,
+        MOD_SURFACE.2 - 24.0,
         30.0,
     )
 }
-pub(super) fn strum_controls() -> [(&'static str, Rect); 1] {
-    [("strum_ms", STRUM_RATE)]
-}
+
 pub(super) const KEY_PITCH: f32 = 70.0;
 pub(super) const TILE_WIDTH: f32 = KEY_PITCH - 4.0;
 pub(super) const TILE_HEIGHT: f32 = 78.0;
@@ -422,8 +394,6 @@ pub(super) fn strum_bound_anchor_in(
     }
 }
 
-#[cfg(test)]
-pub(super) const ROOT_ON_SELECT: Rect = (STRUM_LATCH.0 - 205.0, STRUM_LATCH.1, 197.0, 28.0);
 pub(super) fn route_slot_rect(i: usize) -> Rect {
     (
         32.0 + (i % 6) as f32 * 150.0,
@@ -438,33 +408,37 @@ pub(super) const ROUTE_ENABLED: Rect = (752.0, 100.0, 126.0, 28.0);
 pub(super) const ROUTE_CLEAR: Rect = (674.0, 100.0, 68.0, 28.0);
 pub(super) const ROUTE_GRAPH: Rect = (44.0, 288.0, 868.0, 158.0);
 pub(super) const ROUTE_LINEAR: Rect = (832.0, 466.0, 92.0, 28.0);
-pub(super) fn route_control_rect(_id: &str) -> Rect {
-    ROUTE_ENABLED
+pub(super) fn route_control_rect(id: &str) -> Rect {
+    if id == "route_smoothing_ms" { (456.0, 100.0, 208.0, 28.0) } else { ROUTE_ENABLED }
 }
 
-pub(super) const PIANO_SURFACE: Rect = (16.0, 622.0, W - 32.0, 200.0);
-const KEYBOARD_MODULE_W: f32 = (W - 64.0 - 24.0) / 3.0;
-const KEYBOARD_CONTROL_Y: f32 = 774.0;
-pub(super) const BASS_CONTAINER: Rect = (32.0, 766.0, KEYBOARD_MODULE_W, 44.0);
-pub(super) const CHORD_CONTAINER: Rect = (44.0 + KEYBOARD_MODULE_W, 766.0, KEYBOARD_MODULE_W, 44.0);
+pub(super) const PIANO_SURFACE: Rect = (16.0, 522.0, MAIN_W - 32.0, 200.0);
+// Arp rate lives at the right end of the sequencer header; the free-rate slider shares the slot.
+pub(super) const SEQ_RATE: Rect = (
+    PIANO_SURFACE.0 + PIANO_SURFACE.2 - 16.0 - 240.0,
+    PIANO_SURFACE.1 + 8.0,
+    240.0,
+    28.0,
+);
+pub(super) const SEQ_RATE_SYNC: Rect = (SEQ_RATE.0 - 8.0 - 104.0, SEQ_RATE.1, 104.0, 28.0);
+const KEYBOARD_MODULE_W: f32 = (MAIN_W - 64.0 - 24.0) / 3.0;
+const KEYBOARD_CONTROL_Y: f32 = 674.0;
+pub(super) const BASS_CONTAINER: Rect = (32.0, 666.0, KEYBOARD_MODULE_W, 44.0);
+pub(super) const CHORD_CONTAINER: Rect = (44.0 + KEYBOARD_MODULE_W, 666.0, KEYBOARD_MODULE_W, 44.0);
 pub(super) const MELODY_CONTAINER: Rect = (
     56.0 + KEYBOARD_MODULE_W * 2.0,
-    766.0,
+    666.0,
     KEYBOARD_MODULE_W,
     44.0,
 );
-pub(super) const BASS_BYPASS: Rect = (42.0, 776.0, 24.0, 24.0);
+pub(super) const BASS_BYPASS: Rect = (42.0, 676.0, 24.0, 24.0);
 pub(super) const ALWAYS_BASS: Rect = (BASS_CONTAINER.0 + 116.0, KEYBOARD_CONTROL_Y, 112.0, 28.0);
-pub(super) const SPLIT_NOTE: Rect = (MELODY_CONTAINER.0 + 236.0, KEYBOARD_CONTROL_Y, 100.0, 28.0);
-pub(super) const PIANO_KEYS: Rect = (32.0, 694.0, W - 64.0, 60.0);
-pub(super) const PIANO_SPLITS: Rect = (32.0, 666.0, W - 64.0, 24.0);
-pub(super) const PIANO_LEADING: Rect = (32.0, 632.0, W - 64.0, 28.0);
-pub(super) const INTERLOCK: Rect = (
-    PIANO_LEADING.0 + PIANO_LEADING.2 - 160.0,
-    PIANO_LEADING.1 + 2.0,
-    160.0,
-    24.0,
-);
+pub(super) const SPLIT_NOTE: Rect = (MELODY_CONTAINER.0 + 236.0, KEYBOARD_CONTROL_Y, 112.0, 28.0);
+pub(super) const PIANO_KEYS: Rect = (32.0, 594.0, MAIN_W - 64.0, 60.0);
+pub(super) const PIANO_SPLITS: Rect = (32.0, 566.0, MAIN_W - 64.0, 24.0);
+pub(super) const PIANO_LEADING: Rect = (32.0, 532.0, MAIN_W - 64.0, 28.0);
+pub(super) const ARP_PAGE_ACCENT: Rect = (520.0, 100.0, 204.0, 28.0);
+pub(super) const INTERLOCK: Rect = (732.0, 100.0, 192.0, 28.0);
 
 pub(super) fn piano_black(note: u8) -> bool {
     matches!(note % 12, 1 | 3 | 6 | 8 | 10)
@@ -545,10 +519,10 @@ pub(super) fn output_protocol_rect(_mpe: bool, _i: usize) -> Rect {
 pub(super) fn keyboard_control_rect(id: &str, mpe: bool) -> Rect {
     match id {
         "bass_channel" => keyboard_channel_rect(BASS_CONTAINER),
-        "bass_split" => (BASS_CONTAINER.0 + 236.0, KEYBOARD_CONTROL_Y, 100.0, 28.0),
+        "bass_split" => (BASS_CONTAINER.0 + 236.0, KEYBOARD_CONTROL_Y, 112.0, 28.0),
         "output_channel" => keyboard_channel_rect(chord_container(mpe)),
         "upper_channel" => keyboard_channel_rect(melody_container(mpe)),
-        "upper" => (MELODY_CONTAINER.0 + 344.0, KEYBOARD_CONTROL_Y, 76.0, 28.0),
+        "upper" => (MELODY_CONTAINER.0 + 356.0, KEYBOARD_CONTROL_Y, 64.0, 28.0),
         "members" => keyboard_channel_rect(melody_container(mpe)),
         _ => unreachable!("unknown keyboard control"),
     }
@@ -562,13 +536,15 @@ pub(super) fn keyboard_menu_range(id: &str) -> Option<(i32, i32)> {
     }
 }
 
-// Keep the chord readout and its tooltip beside the memory row.
+// Chord names share the header and keep enough room for extensions and slash bass.
 pub(super) fn chord_readout_rect() -> Rect {
-    let x = memory_rect(super::MEMORY_COUNT - 1).0 + TILE_WIDTH + 16.0;
-    (
-        x,
-        memory_rect(0).1,
-        CHORDS_SURFACE.0 + CHORDS_SURFACE.2 - 16.0 - x,
-        TILE_HEIGHT,
-    )
+    (202.0, 18.0, HEADER_PLAY_TAB.0 - 218.0, 40.0)
+}
+
+pub(super) const METER_NUM: Rect = (1007.0, 24.0, 44.0, 30.0);
+pub(super) const METER_DEN: Rect = (1067.0, 24.0, 44.0, 30.0);
+
+/// Bound labels remain centered next to their handle, including at either edge.
+pub(super) fn expression_bound_labels(field: Rect, low: f32, high: f32) -> [Rect; 2] {
+    [low, high].map(|value| (field.0 - 89.0, field.1 + (1.0 - value) * field.3 - 9.0, 44.0, 18.0))
 }

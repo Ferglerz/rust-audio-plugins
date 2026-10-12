@@ -23,6 +23,7 @@ impl RouteDrag {
 
 impl ChordboardView {
     pub(super) fn toggle_modulator(&mut self, source: usize) {
+        self.pending_route_remove = None;
         if self.panel == Some(Panel::Routes) && self.selected_modulator == Some(source) {
             self.set_panel(None);
             return;
@@ -82,16 +83,23 @@ impl ChordboardView {
             r.active() && TARGETS[r.target as usize].id == id
         })
     }
+    fn replacing_modulation_route(&self, id: &str) -> Option<usize> {
+        self.params.routes.iter().rposition(|p| {
+            let route = p.route();
+            route.active() && !route.additive() && TARGETS[route.target as usize].id == id
+        })
+    }
     pub(super) fn modulation_hint(&self, id: &str) -> Option<String> {
         let slot = self.modulation_route(id)?;
         let r = self.params.routes[slot].route();
+        if r.additive() { return Some(format!("{} is offset by {} · Adjust the base value or edit its route", TARGETS[r.target as usize].name, SOURCES[r.source as usize])); }
         Some(format!(
             "{} is controlled by {} · Edit or remove its route to change it manually",
             TARGETS[r.target as usize].name, SOURCES[r.source as usize]
         ))
     }
     pub(super) fn explain_modulation(&mut self, id: &str) -> bool {
-        let Some(slot) = self.modulation_route(id) else {
+        let Some(slot) = self.replacing_modulation_route(id) else {
             return false;
         };
         self.status = self.modulation_hint(id).unwrap_or_default();
@@ -144,7 +152,9 @@ impl ChordboardView {
         let columns = slots.len().clamp(1, 3);
         let width = columns as f32 * 158.0 - 6.0;
         let meter = meter_rect(source);
-        let x = (meter.0 + meter.2 / 2.0 - width / 2.0).clamp(16.0, W - width - 16.0);
+        let x = meter.0 - width - 8.0;
+        let rows = slots.len().div_ceil(columns);
+        let y = meter.1.min(H - 24.0 - rows as f32 * 30.0);
         slots
             .into_iter()
             .enumerate()
@@ -153,7 +163,7 @@ impl ChordboardView {
                     slot,
                     (
                         x + (i % columns) as f32 * 158.0,
-                        meter.1 + meter.3 + 6.0 + (i / columns) as f32 * 30.0,
+                        y + (i / columns) as f32 * 30.0,
                         152.0,
                         26.0,
                     ),
@@ -165,6 +175,9 @@ impl ChordboardView {
         if let Some(source) =
             (0..crate::engine::routing::SOURCE_COUNT).find(|&i| hit(meter_rect(i), x, y))
         {
+            if self.selected_modulator.or(self.route_hover) != Some(source) {
+                self.pending_route_remove = None;
+            }
             self.route_hover = Some(source);
             return;
         }
@@ -177,7 +190,7 @@ impl ChordboardView {
                 .map(|(_, r)| r.0 + r.2)
                 .fold(meter.0 + meter.2, f32::max);
             if hit(
-                (left, meter.1, right - left, last.1 + last.3 - meter.1),
+                (left, chips[0].1.1.min(meter.1), right - left, (last.1 + last.3).max(meter.1 + meter.3) - chips[0].1.1.min(meter.1)),
                 x,
                 y,
             ) {
@@ -185,6 +198,9 @@ impl ChordboardView {
             }
         }
         self.route_hover = None;
+        if self.selected_modulator.is_none() {
+            self.pending_route_remove = None;
+        }
     }
     pub(super) fn route_chip_at(&self, x: f32, y: f32) -> Option<usize> {
         self.route_chips()
@@ -212,12 +228,13 @@ impl ChordboardView {
                 d.rounded_rect(r.0, r.1, r.2, r.3, 5.0, alpha(color, 0.12));
             }
             d.text_centered(r.0 + (r.2 - 28.0) / 2.0, r.1 + 17.0, &label, 11.0, color);
-            self.close_icon(
-                d,
-                Self::route_remove_rect(r),
-                color,
-                self.pending_route_remove == Some(slot),
-            );
+            let remove = Self::route_remove_rect(r);
+            if self.pending_route_remove == Some(slot) {
+                self.close_icon(d, remove, color, true);
+            } else {
+                self.button_surface(d, remove, false, color);
+                style::Icon::Trash.draw(d, remove.0 + remove.2 * 0.5, remove.1 + remove.3 * 0.5, color);
+            }
         }
     }
 
@@ -241,7 +258,7 @@ impl ChordboardView {
             .collect();
         targets.extend([
             ("latch", LATCH),
-            ("voice_leading", PIANO_LEADING),
+            ("voice_leading", self.voice_leading_rect()),
             ("spread", PIANO_KEYS),
             (
                 "inversion",
@@ -254,39 +271,18 @@ impl ChordboardView {
             ),
             ("transpose", TRANSPOSE),
             ("strum_enabled", strum_bypass_rect(self.expand_t())),
+            ("octaves", strum_octaves_rect(self.expand_t())),
         ]);
         if self.arp_page() {
             targets.retain(|(id, _)| !matches!(*id, "latch" | "transpose"));
         }
-        match self.mode() {
-            _ if self.arp_main() => {
-                targets.push(("octaves", (octave_rect(0).0, octave_rect(0).1, 124.0, 28.0)));
-                targets.push((
-                    "arp_pattern",
-                    (
-                        pattern_rect(0).0,
-                        pattern_rect(0).1,
-                        PAD.2 - 16.0,
-                        pattern_rect(0).3,
-                    ),
-                ));
-                targets.push(("strum_sync", RATE_SYNC));
-                if self.mode() != 3 {
-                    targets.push(("strum_hold", STRUM_HOLD));
-                }
-                if self.sweep_synced() {
-                    targets.push((
-                        "rate",
-                        (
-                            rate_rect(0).0,
-                            RATE_HEADER.1,
-                            PAD.2 - 16.0,
-                            rate_rect(0).1 + rate_rect(0).3 - RATE_HEADER.1,
-                        ),
-                    ));
-                }
-            }
-            _ => {}
+        if self.arp_main() {
+            let first = pattern_rect(0);
+            let last = pattern_rect(6);
+            targets.push((
+                "arp_pattern",
+                (first.0, first.1, last.0 + last.2 - first.0, first.3),
+            ));
         }
         if self.manual_playing() {
             targets.push(("x", self.play_pad()));
@@ -320,6 +316,8 @@ impl ChordboardView {
             })
             .collect();
         mapped.extend(self.sequencer_route_targets());
+        mapped.extend(crate::engine::routing::TARGETS.iter().enumerate()
+            .filter_map(|(target, t)| t.source_index().map(|source| (target, meter_rect(source)))));
         mapped
     }
 
@@ -359,7 +357,9 @@ impl ChordboardView {
             self.status = "A controller cannot modulate its own setup".into();
             return;
         }
-        let existing = self.route_for_target(target);
+        let existing = if source >= 9 {
+            self.params.routes.iter().position(|p| p.source.value() as usize == source + 1 && p.target.value() as usize == target)
+        } else { self.route_for_target(target) };
         let slot = existing.or_else(|| {
             self.params
                 .routes
@@ -381,6 +381,7 @@ impl ChordboardView {
             Self::emit(cx, route.min.as_ptr(), 0.0);
             Self::emit(cx, route.max.as_ptr(), 1.0);
             Self::emit(cx, route.curve.as_ptr(), 0.5);
+            Self::emit(cx, route.smoothing_ms.as_ptr(), 0.0);
         }
         if !route.enabled.value() {
             Self::emit(cx, route.enabled.as_ptr(), 1.0);
@@ -473,11 +474,11 @@ impl ChordboardView {
             );
             if linked && !active {
                 let origin = meter_rect(source);
-                self.draw_route_connection(
-                    d,
-                    route_anchor(origin, r.1 + r.3 * 0.5),
-                    route_anchor(r, origin.1 + origin.3 * 0.5),
-                );
+                let mod_target = TARGETS[target].source_index().is_some();
+                let (start, end) = if mod_target { mod_route_anchors(origin, r) } else {
+                    (route_anchor(origin, r.1 + r.3 * 0.5), route_anchor(r, origin.1 + origin.3 * 0.5))
+                };
+                self.draw_route_connection(d, start, end, source, mod_target);
             }
             if active && TARGETS[target].id == "x" {
                 d.text_centered(r.0 + r.2 / 2.0, r.1 + r.3 / 2.0, "STRUMFIELD", 13.0, TEAL);
@@ -487,8 +488,9 @@ impl ChordboardView {
             return;
         }
         let r = meter_rect(source);
-        let start = route_anchor(r, y);
-        self.draw_route_connection(d, start, (x, y));
+        let mod_target = self.route_target_at(x, y).and_then(|t| TARGETS[t].source_index());
+        let (start, end) = mod_target.map_or_else(|| (route_anchor(r, y), (x, y)), |i| mod_route_anchors(r, meter_rect(i)));
+        self.draw_route_connection(d, start, end, source, mod_target.is_some());
         if let Some(label) = self.route_drag_hint() {
             let label = if self.route_target_at(x, y).is_some() {
                 label
@@ -504,10 +506,11 @@ impl ChordboardView {
         }
     }
 
-    fn draw_route_connection(&self, d: &mut Draw, start: (f32, f32), end: (f32, f32)) {
+    fn draw_route_connection(&self, d: &mut Draw, start: (f32, f32), end: (f32, f32), source: usize, mod_target: bool) {
+        let color = if source >= 9 { GOLD } else { TEAL };
         let bend = ((end.1 - start.1).abs() * 0.4).clamp(24.0, 180.0)
             * if end.1 >= start.1 { 1.0 } else { -1.0 };
-        let points: Vec<_> = (0..=32)
+        let points: Vec<_> = if mod_target { rounded_mod_connection(start, end) } else { (0..=32)
             .map(|i| {
                 let t = i as f32 / 32.0;
                 let u = 1.0 - t;
@@ -522,15 +525,15 @@ impl ChordboardView {
                         + t.powi(3) * end.1,
                 )
             })
-            .collect();
+            .collect() };
         let pulse = if self.selected_modulator.is_some() {
             0.6 + 0.4 * self.modulator_pulse.sin().abs()
         } else {
             0.75
         };
-        d.poly(&points, alpha(TEAL, pulse), 1.5 + pulse);
-        d.circle(start.0, start.1, 3.0, TEAL, true);
-        d.circle(end.0, end.1, 4.0, TEAL, false);
+        d.poly(&points, alpha(color, pulse), 1.5 + pulse);
+        d.circle(start.0, start.1, 3.0, color, true);
+        d.circle(end.0, end.1, 4.0, color, false);
     }
 
     pub(super) fn route_menu_allowed(&self, menu: Menu, index: usize) -> bool {
@@ -607,6 +610,7 @@ impl ChordboardView {
         for (node, (nx, ny)) in self.route_nodes().into_iter().enumerate() {
             if (x - nx).hypot(y - ny) <= 12.0 {
                 self.end_drag(cx);
+                self.restore_shift_latch(cx);
                 let route = &self.params.routes[self.route_slot];
                 let ptr = match node {
                     0 => route.min.as_ptr(),
@@ -621,6 +625,7 @@ impl ChordboardView {
         }
         if hit(ROUTE_GRAPH, x, y) {
             self.end_drag(cx);
+            self.restore_shift_latch(cx);
             let route = &self.params.routes[self.route_slot];
             cx.emit(RawParamEvent::BeginSetParameter(route.min.as_ptr()));
             cx.emit(RawParamEvent::BeginSetParameter(route.max.as_ptr()));
@@ -637,6 +642,7 @@ impl ChordboardView {
         for (slot, r) in self.editor_route_chips() {
             if hit(r, x, y) {
                 self.end_drag(cx);
+                self.pending_route_remove = None;
                 self.route_slot = slot;
                 self.edit = None;
                 return true;
@@ -649,6 +655,7 @@ impl ChordboardView {
                 .iter()
                 .position(|p| p.source.value() == 0)
             {
+                self.pending_route_remove = None;
                 self.route_slot = slot;
                 let route = &self.params.routes[slot];
                 if let Some(source) = self.selected_modulator {
@@ -683,6 +690,7 @@ impl ChordboardView {
             Self::emit(cx, route.min.as_ptr(), 0.0);
             Self::emit(cx, route.max.as_ptr(), 1.0);
             Self::emit(cx, route.curve.as_ptr(), 0.5);
+            Self::emit(cx, route.smoothing_ms.as_ptr(), 0.0);
             return true;
         }
         false
@@ -771,24 +779,21 @@ impl ChordboardView {
         d.text(
             x,
             y - 10.0,
-            &format!("Min {}", target.label(route.min)),
+            &if route.additive() { format!("Depth start {:.0}%", route.min * 100.0) } else { format!("Min {}", target.label(route.min)) },
             11.0,
             TEAL,
         );
         d.text_right(
             x + w,
             y - 10.0,
-            &format!("Max {}", target.label(route.max)),
+            &if route.additive() { format!("Depth end {:.0}%", route.max * 100.0) } else { format!("Max {}", target.label(route.max)) },
             11.0,
             TEAL,
         );
-        self.button(d, ROUTE_LINEAR, "Linear ↺", route.curve.abs() < 0.001, GOLD);
+        self.icon_button(d, ROUTE_LINEAR, "Linear", route.curve.abs() < 0.001, GOLD, style::Icon::Reset);
         if route.active() {
-            let input = if route.source == 7 && target.uses_input_velocity() {
-                self.snapshot.input_velocity
-            } else {
-                self.snapshot.sources[route.source as usize - 1]
-            };
+            let source_value = self.snapshot.sources[route.source as usize - 1];
+            let input = if route.additive() { source_value.abs() } else { source_value };
             d.circle(
                 x + w * input,
                 y + h * (1.0 - route.value(input)),
@@ -799,11 +804,9 @@ impl ChordboardView {
             d.text(
                 44.0,
                 484.0,
-                &format!(
-                    "In {:.0}% → {}",
-                    input * 100.0,
-                    target.label(route.value(input))
-                ),
+                &if route.additive() {
+                    format!("In {:+.0}% → offset {:+.0}% · Base stays editable", source_value * 100.0, route.output(source_value) * 100.0)
+                } else { format!("In {:.0}% → {}", input * 100.0, target.label(route.value(input))) },
                 11.0,
                 MUTED,
             );
@@ -824,10 +827,12 @@ impl ChordboardView {
             .skip(self.route_slot + 1)
             .find(|(_, p)| {
                 let other = p.route();
-                other.active() && other.target == route.target
+                other.active() && !other.additive() && !route.additive() && other.target == route.target
             });
         let help = if let Some((i, _)) = overridden.filter(|_| route.active()) {
             format!("Route {} has priority for this destination", i + 1)
+        } else if route.additive() {
+            format!("Zero keeps the base value · Offset depth {:.0}% · Drag contour to adjust", (route.max - route.min) * 100.0)
         } else if route.min > route.max {
             "Reversed range".into()
         } else {
@@ -858,26 +863,26 @@ impl ChordboardView {
     }
     pub(super) fn mode(&self) -> i32 {
         // Performance page choice is independent of sequencer playback.
-        self.routed_plain("mode")
+        let mode = self
+            .routed_plain("mode")
             .map_or(self.params.mode.value(), |v| {
                 if (1.0..=3.0).contains(&v) {
                     v as i32
                 } else {
                     self.params.mode.value()
                 }
-            })
+            });
+        if mode == 1 {
+            1
+        } else {
+            3
+        }
     }
     pub(super) fn playback_mode(&self) -> i32 {
-        self.routed_plain("mode").map_or(
-            if self.params.seq_enabled.value() {
-                4
-            } else {
-                self.params.mode.value()
-            },
-            |v| v as i32,
-        )
+        crate::engine::MANUAL as i32
     }
     pub(super) fn routed_control(&self, c: &Control) -> Option<Control> {
+        if self.modulation_route(c.id).is_some() && self.replacing_modulation_route(c.id).is_none() { return None; }
         let (i, target) = TARGETS.iter().enumerate().find(|(_, t)| t.id == c.id)?;
         let norm = self.snapshot.routed[i]?;
         let mut routed = c.clone();
@@ -906,4 +911,37 @@ pub(super) fn route_anchor(r: Rect, toward_y: f32) -> (f32, f32) {
             r.1 + r.3
         },
     )
+}
+
+fn mod_route_anchors(start: Rect, end: Rect) -> ((f32, f32), (f32, f32)) {
+    if (end.1 - start.1).abs() > (end.0 - start.0).abs() {
+        ((start.0 + start.2, start.1 + start.3 * 0.5), (end.0 + end.2, end.1 + end.3 * 0.5))
+    } else { (route_anchor(start, f32::MAX), route_anchor(end, f32::MAX)) }
+}
+
+/// Two rounded right-angle bends joined by a straight segment outside the meters.
+pub(super) fn rounded_mod_connection(start: (f32, f32), end: (f32, f32)) -> Vec<(f32, f32)> {
+    if (end.1 - start.1).abs() > (end.0 - start.0).abs() {
+        // Rotate the same geometry for a vertical modulator column.
+        return elbow_points((start.1, start.0), (end.1, end.0), 8.0).into_iter().map(|(y, x)| (x, y)).collect();
+    }
+    elbow_points(start, end, 14.0)
+}
+
+fn elbow_points(start: (f32, f32), end: (f32, f32), margin: f32) -> Vec<(f32, f32)> {
+    let direction = (end.0 - start.0).signum();
+    let radius = ((end.0 - start.0).abs() * 0.25).min(margin - 2.0);
+    let bottom = start.1.max(end.1) + margin;
+    let mut points = vec![start, (start.0, bottom - radius)];
+    for i in 1..=8 {
+        let angle = i as f32 / 8.0 * std::f32::consts::FRAC_PI_2;
+        points.push((start.0 + direction * radius * (1.0 - angle.cos()), bottom - radius + radius * angle.sin()));
+    }
+    points.push((end.0 - direction * radius, bottom));
+    for i in 1..=8 {
+        let angle = i as f32 / 8.0 * std::f32::consts::FRAC_PI_2;
+        points.push((end.0 - direction * radius + direction * radius * angle.sin(), bottom - radius + radius * angle.cos()));
+    }
+    points.push(end);
+    points
 }

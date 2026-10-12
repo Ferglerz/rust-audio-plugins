@@ -1,5 +1,94 @@
 use super::*;
-use nih_plug_vizia::vizia::vg::Paint;
+
+/// Small vector marks shared by Chordboard controls.
+#[derive(Clone, Copy)]
+pub(super) enum Icon {
+    Lock, Once, Loop, Host, Manual, Learn, Trash, Add, Routing, Reset, Touch, TuningFork, Glyph(&'static str),
+}
+
+pub(super) const MODULATOR_ICONS: [Icon; crate::engine::routing::SOURCE_COUNT] = [
+    Icon::TuningFork,
+    Icon::Glyph("\u{ecd4}"), // wave-sine: modulation
+    Icon::Glyph("\u{ea03}"), // adjustments: expression
+    Icon::Glyph("\u{ec34}"), // wind: breath
+    Icon::Glyph("\u{ee94}"), // hand-finger: pressure
+    Icon::Glyph("\u{eb01}"), // palette: timbre
+    Icon::Glyph("\u{eab1}"), // gauge: input velocity
+    Icon::Glyph("\u{eb59}"), // arrows-horizontal: X
+    Icon::Glyph("\u{eb5b}"), // arrows-vertical: Y
+    Icon::Glyph("\u{ecd4}"), // Mod 1
+    Icon::Glyph("\u{ecd4}"), // Mod 2
+];
+
+impl Icon {
+    pub(super) fn draw(self, d: &mut Draw, x: f32, y: f32, color: Color) {
+        let line = |d: &mut Draw, a: (f32, f32), b: (f32, f32)| {
+            d.line(x + a.0, y + a.1, x + b.0, y + b.1, color, 1.4);
+        };
+        match self {
+            Self::Touch => d.touch_icon(x, y, color),
+            Self::TuningFork => {
+                use nih_plug_vizia::vizia::vg::Paint;
+                let path = tuning_fork::path();
+                let paint = Paint::color(d.color(color));
+                d.c.save();
+                d.c.translate(d.ox + (x + d.offset_x) * d.s, d.oy + y * d.s);
+                d.c.scale(d.s * 0.7, d.s * 0.7);
+                d.c.translate(-12.0, -12.0);
+                d.c.fill_path(&path, &paint);
+                d.c.restore();
+            }
+            Self::Once | Self::Loop | Self::Lock | Self::Reset | Self::Host | Self::Glyph(_) => {
+                use nih_plug_vizia::vizia::vg::{Align, Baseline, Paint};
+                // Verified against the cmap and glyph names in Vizia's bundled
+                // Tabler font; this Vizia version exports only some codepoints.
+                let glyph = match self {
+                    Self::Once => nih_plug_vizia::vizia::icons::ICON_PLAYER_SKIP_FORWARD,
+                    Self::Loop => nih_plug_vizia::vizia::icons::ICON_REPEAT,
+                    Self::Lock => "\u{eae2}", // lock
+                    Self::Reset => "\u{eb16}", // rotate
+                    Self::Host => "\u{eade}", // link
+                    Self::Glyph(glyph) => glyph,
+                    _ => unreachable!(),
+                };
+                if let Some(font) = d.icon_font {
+                    let mut paint = Paint::color(d.color(color));
+                    paint.set_font(&[font]);
+                    paint.set_font_size(18.0 * d.s);
+                    paint.set_text_align(Align::Center);
+                    paint.set_text_baseline(Baseline::Middle);
+                    let _ = d.c.fill_text(
+                        d.ox + (x + d.offset_x) * d.s,
+                        d.oy + y * d.s,
+                        glyph,
+                        &paint,
+                    );
+                }
+            }
+            Self::Manual => {
+                d.poly(&[(x-6.0,y+6.0),(x,y-7.0),(x+6.0,y+6.0),(x-6.0,y+6.0)],color,1.4);
+                line(d,(0.0,3.0),(5.0,-5.0));
+                line(d,(-3.0,3.0),(3.0,3.0));
+            }
+            Self::Learn => {
+                d.outline((x-7.0,y-5.0,14.0,10.0),color);
+                for key in [-3.0,1.0,4.0] { line(d,(key,-5.0),(key,1.0)); }
+            }
+            Self::Trash => {
+                line(d,(-7.0,-4.0),(7.0,-4.0));
+                line(d,(-3.0,-7.0),(3.0,-7.0));
+                d.poly(&[(x-5.0,y-4.0),(x-4.0,y+7.0),(x+4.0,y+7.0),(x+5.0,y-4.0)],color,1.4);
+                for dx in [-1.5,1.5] { line(d,(dx,-1.0),(dx,4.0)); }
+            }
+            Self::Add => { line(d,(-6.0,0.0),(6.0,0.0)); line(d,(0.0,-6.0),(0.0,6.0)); }
+            Self::Routing => {
+                d.poly(&[(x-6.0,y+5.0),(x-6.0,y-4.0),(x+5.0,y-4.0)],color,1.4);
+                d.poly(&[(x+1.0,y-7.0),(x+5.0,y-4.0),(x+1.0,y-1.0)],color,1.4);
+                d.circle(x-6.0,y+5.0,2.0,color,false);
+            }
+        }
+    }
+}
 
 pub(super) struct ControlMotion {
     rect: Rect,
@@ -109,8 +198,11 @@ impl ChordboardView {
         targets.extend((0..KEY_COUNT).map(|i| (self.keyboard_key_rect(i), false)));
         targets.extend((0..8).map(|i| (memory_rect(i), self.memory_ui.armed)));
         targets.push((BASS_BYPASS, !self.params.bass_enabled.value()));
-        targets.push((INTERLOCK, self.params.interlock.value() != 0));
-        targets.push((PIANO_LEADING, self.params.voice_leading.value() != 2));
+        if self.arp_main() {
+            targets.push((ARP_PAGE_ACCENT, false));
+            targets.push((INTERLOCK, self.params.interlock.value() != 0));
+        }
+        targets.push((self.voice_leading_rect(), self.params.voice_leading.value() != 2));
         targets.push((self.split_marker(), false));
         if let Some(r) = self.bass_marker() {
             targets.push((r, false));
@@ -127,6 +219,13 @@ impl ChordboardView {
             .extend((0..2).map(|i| (inversion_control_rect(self.params.mpe_enabled(), i), false)));
         targets
             .extend((0..5).map(|i| (transpose_control_rect(self.params.mpe_enabled(), i), false)));
+        if self.sequencer_open() {
+            targets.push((SEQ_RATE_SYNC, self.sweep_synced()));
+            if self.sweep_synced() {
+                targets.push((SEQ_RATE, self.menu == Some(Menu::ArpRate)));
+            }
+            targets.extend(self.sequencer_button_rects());
+        }
         targets.push((HEADER_PLAY_TAB, !self.sequencer_open()));
         targets.push((HEADER_SEQ_TAB, self.sequencer_open()));
         targets.push((
@@ -150,33 +249,21 @@ impl ChordboardView {
                 },
             )
         }));
-        match self.mode() {
-            1 | 3 => {
-                targets.push((RATE_SYNC, self.sweep_synced()));
-                if self.mode() == 1 {
-                    targets.push((STRUM_HOLD, self.params.strum_hold.value()));
-                }
-                targets.extend(
-                    (0..7).map(|i| (pattern_rect(i), self.params.arp_pattern.value() == i as i32)),
-                );
-                if self.sweep_synced() {
-                    targets.extend(ARP_RATES.iter().enumerate().map(|(i, (_, beats))| {
-                        (
-                            rate_rect(i),
-                            (self.params.rate.value() - beats).abs() < 0.0001,
-                        )
-                    }));
-                }
-                targets.extend(
-                    (0..4).map(|i| (octave_rect(i), self.params.octaves.value() == i as i32 + 1)),
-                );
-            }
-            2 | 4 => targets.push((
-                strum_latch_rect(self.expand_t()),
-                self.params.strum_latch.value(),
-            )),
-            _ => {}
+        targets.extend((0..4).map(|i| {
+            (
+                octave_button_rect(self.expand_t(), i),
+                self.params.octaves.value() == i as i32 + 1,
+            )
+        }));
+        if self.arp_main() {
+            targets.extend(
+                (0..7).map(|i| (pattern_rect(i), self.params.arp_pattern.value() == i as i32)),
+            );
         }
+        targets.push((
+            strum_latch_rect(self.expand_t()),
+            self.params.strum_latch.value(),
+        ));
         targets
     }
 
@@ -246,15 +333,19 @@ impl ChordboardView {
     }
 
     pub(super) fn button(&self, d: &mut Draw, r: Rect, label: &str, on: bool, color: Color) {
-        self.paint_button(d, r, label, on, color, false);
+        self.paint_button(d, r, label, on, color, None);
     }
 
     pub(super) fn button_tinted(&self, d: &mut Draw, r: Rect, label: &str, on: bool, color: Color) {
-        self.paint_button(d, r, label, on, color, false);
+        self.paint_button(d, r, label, on, color, None);
     }
 
     pub(super) fn touch_latch_button(&self, d: &mut Draw, r: Rect, on: bool, color: Color) {
-        self.paint_button(d, r, "Latch", on, color, true);
+        self.paint_button(d, r, "Hover strum", on, color, Some(Icon::Touch));
+    }
+
+    pub(super) fn icon_button(&self, d: &mut Draw, r: Rect, label: &str, on: bool, color: Color, icon: Icon) {
+        self.paint_button(d, r, label, on, color, Some(icon));
     }
 
     pub(super) fn button_surface(&self, d: &mut Draw, r: Rect, on: bool, color: Color) {
@@ -278,21 +369,22 @@ impl ChordboardView {
         label: &str,
         on: bool,
         color: Color,
-        touch: bool,
+        icon: Option<Icon>,
     ) {
         self.button_surface(d, r, on, color);
         let old = d.font;
         d.font = self.font.get();
         let label_color = if on { color } else { MUTED };
         let padding = if r.2 < 90.0 { 6.0 } else { 12.0 };
-        let text = self.fit_text(d, label, r.2 - padding, 11.0);
-        if touch {
+        let reserved = if icon.is_some() { 23.0 } else { 0.0 };
+        let text = self.fit_text(d, label, (r.2 - padding - reserved).max(0.0), 11.0);
+        if let Some(icon) = icon {
             const ICON_WIDTH: f32 = 18.0;
             const GAP: f32 = 5.0;
             let text_w = self.text_width(d, &text, 11.0);
             let left = r.0 + (r.2 - ICON_WIDTH - GAP - text_w) * 0.5;
             let center_y = r.1 + r.3 * 0.5;
-            d.touch_icon(left + ICON_WIDTH * 0.5, center_y, label_color);
+            icon.draw(d, left + ICON_WIDTH * 0.5, center_y, label_color);
             d.text_middle(left + ICON_WIDTH + GAP, center_y, &text, 11.0, label_color);
         } else {
             d.text_centered(
@@ -307,15 +399,7 @@ impl ChordboardView {
     }
 
     pub(super) fn text_width(&self, d: &Draw, text: &str, size: f32) -> f32 {
-        let mut paint = Paint::color(TEXT);
-        if let Some(font) = d.font {
-            paint.set_font(&[font]);
-        }
-        paint.set_font_size(size * d.s);
-        d.c.measure_text(0.0, 0.0, text, &paint)
-            .map_or(text.chars().count() as f32 * size * 0.6, |m| {
-                m.width() / d.s
-            })
+        d.text_width(text, size)
     }
 
     pub(super) fn fit_text(&self, d: &Draw, text: &str, width: f32, size: f32) -> String {

@@ -429,9 +429,13 @@ impl Plugin for Chordboard {
             .configure(self.current_config(), &mut |e| emitted.push(0, e));
         self.engine
             .transport(playing, tempo, jump, &mut |e| emitted.push(0, e));
+        let host_meter = self.params.tempo_sync.value()
+            && transport.time_sig_numerator.is_some_and(|n| n > 0)
+            && transport.time_sig_denominator.is_some_and(|d| d > 0);
+        self.engine.time_sig_host = host_meter;
         self.engine.set_time_signature(
-            transport.time_sig_numerator,
-            transport.time_sig_denominator,
+            if host_meter { transport.time_sig_numerator } else { Some(self.params.meter_num.value()) },
+            if host_meter { transport.time_sig_denominator } else { Some(1 << self.params.meter_den.value()) },
         );
         let axes = [self.params.x.value(), self.params.y.value()];
         for (axis, &value) in axes.iter().enumerate() {
@@ -499,7 +503,7 @@ impl Plugin for Chordboard {
         self.params
             .selected_quality
             .store(self.engine.quality as u32, Ordering::Relaxed);
-        self.bridge.publish(self.engine.snapshot());
+        self.bridge.publish_with(|| self.engine.snapshot());
         ProcessStatus::Normal
     }
 }

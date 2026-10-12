@@ -7,7 +7,7 @@ fn auto_strum_orders_notes_in_ascending_and_descending_thirds() {
     let config_up_3rds = Config {
         mode: AUTO,
         arp_pattern: 3, // Up in 3rds
-        strings: 6,
+        octaves: 2,
         strings_played: 6,
         ..Config::default()
     };
@@ -33,7 +33,7 @@ fn auto_strum_orders_notes_in_ascending_and_descending_thirds() {
     let config_down_3rds = Config {
         mode: AUTO,
         arp_pattern: 4, // Down in 3rds
-        strings: 6,
+        octaves: 2,
         strings_played: 6,
         ..Config::default()
     };

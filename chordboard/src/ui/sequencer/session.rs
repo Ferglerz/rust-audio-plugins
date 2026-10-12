@@ -2,15 +2,12 @@ use super::*;
 
 impl ChordboardView {
 
-    pub(super) fn set_step_slider(&self, lane: usize, page: usize, step: usize, field: Field, y: f32) {
-        let rect = step_rect(lane,
-            step - first_step(),
-        );
-        let (min, max) = slider_range(field);
-        let value = min + (1.0 - (y - rect.1) / rect.3).clamp(0.0, 1.0) * (max - min);
-        self.params.sequencer.edit(|state| {
-            set_slider_value(field, value, &mut state.lanes[lane][page], step);
-        });
+    /// Relative drag: the full range takes `SLIDER_FRICTION` cell heights of travel.
+    pub(super) fn drag_step_slider(&self, drag: &mut SliderDrag, y: f32, fine: bool) {
+        let (min, max) = slider_range(drag.field);
+        let scale = (max - min) / (STEP_H * SLIDER_FRICTION) * if fine { SLIDER_FINE } else { 1.0 };
+        drag.value = (drag.value - (y - drag.last_y) * scale).clamp(min, max);
+        drag.last_y = y;
     }
 
     pub(in crate::ui) fn sequencer_route_targets(&self) -> Vec<(usize, Rect)> {
@@ -24,17 +21,107 @@ impl ChordboardView {
                 crate::engine::routing::TARGETS
                     .iter()
                     .position(|target| target.id == id)
-                    .map(|target| (target, page_row_rect(lane)))
+                    .map(|target| (target, page_block_rect(lane)))
             })
+            .chain(self.sequencer_rate_targets().into_iter().filter_map(|(id, r)| {
+                crate::engine::routing::TARGETS
+                    .iter()
+                    .position(|target| target.available() && target.id == id)
+                    .map(|target| (target, r))
+            }))
             .collect()
+    }
+
+    fn sequencer_rate_targets(&self) -> Vec<(&'static str, Rect)> {
+        vec![
+            ("strum_sync", SEQ_RATE_SYNC),
+            (if self.sweep_synced() { "rate" } else { "strum_ms" }, SEQ_RATE),
+        ]
+    }
+
+    /// Arp rate controls in the sequencer header. Free mode uses the shared control drag.
+    fn press_sequencer_rate(&mut self, cx: &mut EventContext, x: f32, y: f32) -> bool {
+        if hit(SEQ_RATE_SYNC, x, y) {
+            if !self.explain_modulation("strum_sync") {
+                self.set(
+                    cx,
+                    "strum_sync",
+                    if self.params.strum_sync.value() { 0.0 } else { 1.0 },
+                );
+            }
+            return true;
+        }
+        if !hit(SEQ_RATE, x, y) {
+            return false;
+        }
+        if self.sweep_synced() {
+            if !self.explain_modulation("rate") {
+                self.open_menu(Menu::ArpRate);
+            }
+        } else {
+            self.press_control(cx, x, y);
+        }
+        true
+    }
+
+    pub(in crate::ui) fn sequencer_hint(&self, x: f32, y: f32) -> Option<String> {
+        if !self.sequencer_open() || self.sequencer_ui.progress < 1.0 {
+            return None;
+        }
+        if VISIBLE_LANES.into_iter().any(|lane| hit(length_rect(lane), x, y)) {
+            return Some("Pattern length · Drag to choose 1–32 steps · Length lock applies the same length to both lanes".into());
+        }
+        if self.sequencer_open() {
+            let state = self.params.sequencer.snapshot();
+            if let Some(item) = self
+                .seq_items(&state)
+                .into_iter()
+                .find(|item| hit(item.rect, x, y))
+            {
+                match item.action {
+                    Action::PageRate => return Some("Chords page rate · Click to cycle note divisions · Independent of the Arp rate".into()),
+                    Action::SelectStep(_, _) => return Some(if self.sequencer_ui.modifier.is_some() {
+                        "Drag up or down to set the value · Drag across to paint · Shift for fine · Ctrl/Cmd-drag resets cells".into()
+                    } else {
+                        "Click to toggle hit/rest · Right-click to select a step for editing".into()
+                    }),
+                    Action::EditPage(_, _) => return Some("Pattern page · Click to edit and play this lane’s page".into()),
+                    Action::LaneEnabled(_) => return Some("Click to enable or mute this sequencer lane".into()),
+                    Action::LengthLock => return Some("Length lock · Keep both lanes at the same number of steps".into()),
+                    Action::Modifier(None) => return Some("Hits/rests · Click cells to toggle steps".into()),
+                    Action::Modifier(Some(_)) => return Some(format!("{} · Select this value, then drag cells vertically or paint across", item.label)),
+                    Action::Field(_) => return Some(format!("{} · Click to select a cell value · Double-click to type", item.label)),
+                    Action::Enabled => return Some("Click to toggle the selected step’s hit/rest".into()),
+                }
+            }
+        }
+        if hit(SEQ_RATE_SYNC, x, y) {
+            return Some("Arp rate: use the header tempo in beat divisions, or run free in milliseconds".into());
+        }
+        if hit(SEQ_RATE, x, y) {
+            return Some(if self.sweep_synced() {
+                "Arp step rate · Click to choose a note value".into()
+            } else {
+                "Free arp rate · Drag anywhere to adjust · Click value to type · Shift for fine adjustment".into()
+            });
+        }
+        None
     }
 
     pub(in crate::ui) fn sequencer_open(&self) -> bool {
         self.sequencer_ui.open
     }
 
-    pub(super) fn arp_ready(&self) -> bool {
-        self.arp_main() && self.page_elapsed >= pleasant_ui::page_slide::DURATION
+    pub(in crate::ui) fn sequencer_value_at(&self, x: f32, y: f32) -> bool {
+        self.sequencer_open() && VISIBLE_LANES.into_iter().any(|lane| {
+            hit(length_rect(lane), x, y)
+                || (self.sequencer_ui.modifier.is_some()
+                    && (0..visible_steps()).any(|step| hit(step_rect(lane, step), x, y)))
+        })
+    }
+
+    pub(in crate::ui) fn sequencer_dragging(&self) -> bool {
+        self.sequencer_ui.slider_drag.is_some() || self.sequencer_ui.length_drag.is_some()
     }
 
     pub(in crate::ui) fn sequencer_editing(&self) -> bool {
@@ -116,9 +203,11 @@ impl ChordboardView {
         }
         self.release_keys();
         self.memory_held.fill(false);
+        self.pending_route_remove = None;
         self.menu = None;
         self.edit = None;
         self.cancel_sequencer();
+        cx.release();
         let u = &mut self.sequencer_ui;
         u.start = u.progress;
         u.elapsed = 0.0;
@@ -162,6 +251,24 @@ impl ChordboardView {
         }
         cx.needs_redraw();
         valid
+    }
+
+    pub(super) fn inherit_sequencer_length(&self, lane: usize, page: usize) {
+        if !self.params.seq_length_lock.value() { return; }
+        let mut pages = self.sequencer_ui.edit_pages;
+        self.params.sequencer.edit(|state| {
+            let length = VISIBLE_LANES.into_iter()
+                .map(|l| state.lanes[l][pages[l]].length)
+                .chain(std::iter::once(state.lanes[lane][page].length))
+                .max().unwrap_or(1);
+            pages[lane] = page;
+            for l in VISIBLE_LANES {
+                let p = &mut state.lanes[l][pages[l]];
+                p.length = length;
+                p.end = length - 1;
+                p.start = p.start.min(p.end);
+            }
+        });
     }
 
     pub(super) fn set_sequencer_length(&mut self, lane: usize, x: f32) {
@@ -214,18 +321,23 @@ impl ChordboardView {
             cx.needs_redraw();
             return true;
         }
-        if let Some((lane, page, step, field)) = self.sequencer_ui.slider_drag {
+        if let Some(mut drag) = self.sequencer_ui.slider_drag {
             match event {
                 WindowEvent::MouseMove(_, _) => {
+                    let (lane, page, step, field) = (drag.lane, drag.page, drag.step, drag.field);
                     let length = self.params.sequencer.snapshot().lanes[lane][page].length as usize;
-                    let next = step_at(lane, x,
-                        y,
-                    )
-                    .min(length - 1);
-                    for index in step.min(next)..=step.max(next) {
-                        self.set_step_slider(lane, page, index, field, y);
+                    let next = step_at(lane, x, y).min(length - 1);
+                    if !drag.reset {
+                        self.drag_step_slider(&mut drag, y, cx.modifiers().shift());
                     }
-                    self.sequencer_ui.slider_drag = Some((lane, page, next, field));
+                    let value = drag.value;
+                    self.params.sequencer.edit(|state| {
+                        for index in step.min(next)..=step.max(next) {
+                            set_slider_value(field, value, &mut state.lanes[lane][page], index);
+                        }
+                    });
+                    drag.step = next;
+                    self.sequencer_ui.slider_drag = Some(drag);
                     self.sequencer_ui.step = next;
                     if lane == 0 {
                         self.sequencer_ui.arp_step = next;
@@ -281,11 +393,24 @@ impl ChordboardView {
                 | WindowEvent::MouseDoubleClick(MouseButton::Left)
                 | WindowEvent::MouseTripleClick(MouseButton::Left)
         );
+        if press
+            && self.sequencer_open()
+            && self.sequencer_ui.progress == 1.0
+            && self.press_sequencer_rate(cx, x, y)
+        {
+            cx.focus();
+            self.focused = true;
+            cx.needs_redraw();
+            return true;
+        }
         if press && self.sequencer_open() {
             if let Some(lane) = VISIBLE_LANES
                 .into_iter()
                 .find(|&lane| hit(length_rect(lane), x, y))
             {
+                cx.focus();
+                self.focused = true;
+                self.restore_shift_latch(cx);
                 self.set_sequencer_length(lane, x);
                 self.sequencer_ui.length_drag = Some(lane);
                 cx.capture();
@@ -293,39 +418,21 @@ impl ChordboardView {
                 return true;
             }
         }
-        if press {
-            if let Some(c) = self
-                .expression_mode_items()
-                .into_iter()
-                .find(|c| hit(c.rect, x, y))
-            {
-                if let Action::Modifier(field) = c.action {
-                    let u = &mut self.sequencer_ui;
-                    u.modifier = if u.modifier == field { None } else { field };
-                    if !u.open {
-                        u.start = u.progress;
-                        u.elapsed = 0.0;
-                        u.open = true;
-                    }
-                    cx.needs_redraw();
-                    return true;
-                }
-            }
-        }
         if !self.sequencer_open() {
             return false;
         }
         let u = &self.sequencer_ui;
-        let arp_ready = self.arp_ready();
-        let in_surface = hit(surface(), x, y) || (arp_ready && hit(ARP_PAD, x, y));
-        if !in_surface {
+        let step_controls = self.arp_main()
+            && self.page_position == 1.0
+            && self.route_progress == 0.0
+            && self.expand_t() == 0.0
+            && self.seq_inspector_items(&self.params.sequencer.snapshot(), 0, inspector_rect(), true)
+                .iter().any(|item| hit(item.rect, x, y));
+        if self.route_chip_at(x, y).is_some() || (!hit(surface(), x, y) && !step_controls) {
             return false;
         }
         let edit_only = matches!(event, WindowEvent::MouseDown(MouseButton::Right));
         if let WindowEvent::MouseScroll(_, dy) = event {
-            if arp_ready && hit(ARP_PAD, x, y) {
-                return false;
-            }
             if *dy != 0.0 && u.progress == 1.0 {
                 let state = self.params.sequencer.snapshot();
                 if let Some((lane, step)) = self.seq_items(&state).iter().find_map(|item| {
@@ -358,18 +465,15 @@ impl ChordboardView {
                     | WindowEvent::MouseScroll(_, _)
             );
         }
-        if u.progress < 1.0 && !hit(ARP_PAD, x, y) {
+        cx.focus();
+        self.focused = true;
+        if self.sequencer_ui.progress < 1.0 {
             return true;
         }
         let state = self.params.sequencer.snapshot();
-        let arp = arp_ready && hit(ARP_PAD, x, y) && !hit(ARP_EDITOR, x, y);
-        let items = if arp {
-            self.arp_items(&state)
-        } else {
-            self.seq_items(&state)
-        };
+        let items = self.seq_items(&state);
         let Some(c) = items.iter().rev().find(|c| hit(c.rect, x, y)) else {
-            return !arp;
+            return true;
         };
         if matches!(c.action, Action::SelectStep(..)) {
             if self.panel.is_some() {
@@ -384,11 +488,13 @@ impl ChordboardView {
         if edit_only && !matches!(c.action, Action::SelectStep(..)) {
             return true;
         }
-        let u = &mut self.sequencer_ui;
-        if arp {
-            u.lane = 0;
-            u.step = u.arp_step;
+        if let Action::EditPage(lane, page) = c.action {
+            self.inherit_sequencer_length(lane, page);
         }
+        if matches!(c.action, Action::SelectStep(..)) && self.sequencer_ui.modifier.is_some() && !edit_only {
+            self.restore_shift_latch(cx);
+        }
+        let u = &mut self.sequencer_ui;
         let (lane, page, index) = (u.lane, u.edit_pages[u.lane], u.step);
         match c.action {
             Action::Modifier(field) => u.modifier = field,
@@ -424,16 +530,22 @@ impl ChordboardView {
                     if l == 0 {
                         u.arp_step = s;
                     }
-                    if cx.modifiers().command() {
+                    let reset = cx.modifiers().command() || cx.modifiers().contains(Modifiers::CTRL);
+                    if reset {
                         let value = slider_value(field, &Step::default());
                         self.params.sequencer.edit(|state| {
                             set_slider_value(field, value, &mut state.lanes[l][page], s)
                         });
-                        cx.needs_redraw();
-                        return true;
                     }
-                    u.slider_drag = Some((l, page, s, field));
-                    self.set_step_slider(l, page, s, field, y);
+                    u.slider_drag = Some(SliderDrag {
+                        lane: l,
+                        page,
+                        step: s,
+                        field,
+                        last_y: y,
+                        value: if reset { slider_value(field, &Step::default()) } else { slider_value(field, &state.lanes[l][page].steps[s]) },
+                        reset,
+                    });
                     cx.capture();
                     cx.needs_redraw();
                     return true;
@@ -459,7 +571,7 @@ impl ChordboardView {
                     if enabled { 1.0 } else { 0.0 },
                 );
                 if enabled {
-                    let length = state.lanes[u.lane][u.edit_pages[u.lane]].length;
+                    let length = VISIBLE_LANES.into_iter().map(|lane| state.lanes[lane][u.edit_pages[lane]].length).max().unwrap_or(1);
                     self.params.sequencer.edit(|state| {
                         for lane in VISIBLE_LANES {
                             let p = &mut state.lanes[lane][u.edit_pages[lane]];
@@ -469,21 +581,6 @@ impl ChordboardView {
                         }
                     });
                 }
-            }
-            Action::Choice(field) => {
-                self.params.sequencer.edit(|state| {
-                    let p = &mut state.lanes[lane][page];
-                    match field {
-                        Field::Interlock => {
-                            p.interlock_override = match p.interlock_override {
-                                None => Some(0),
-                                Some(v) if v < 2 => Some(v + 1),
-                                Some(_) => None,
-                            }
-                        }
-                        _ => {}
-                    }
-                });
             }
             Action::Field(field)
                 if is_step_value(field)
@@ -517,6 +614,14 @@ impl ChordboardView {
             Action::Enabled => self.params.sequencer.edit(|state| {
                 let p = &mut state.lanes[lane][page];
                 p.steps[index].enabled = !p.steps[index].enabled;
+            }),
+            Action::PageRate => self.params.sequencer.edit(|state| {
+                let p = &mut state.lanes[1][u.edit_pages[1]];
+                let next = ARP_RATES
+                    .iter()
+                    .position(|(_, beats)| (*beats - p.rate).abs() < 0.0001)
+                    .map_or(0, |index| (index + 1) % ARP_RATES.len());
+                p.rate = ARP_RATES[next].1;
             }),
         }
         cx.needs_redraw();

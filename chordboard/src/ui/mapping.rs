@@ -84,11 +84,11 @@ impl ChordboardView {
                 r.0 + 256.0,
                 r.1 + 66.0,
                 if self.mapping_axis == 1 { &channel } else { "" },
-                10.0,
+                11.0,
                 MUTED,
             );
             if self.mapping_axis == 0 {
-                d.text(r.0 + 12.0, r.1 + 95.0, &channel, 10.0, MUTED);
+                d.text(r.0 + 12.0, r.1 + 95.0, &channel, 11.0, MUTED);
             }
         }
     }
