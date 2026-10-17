@@ -29,7 +29,6 @@ fn trackpad_latch_button_toggles_hover_strum_without_a_click() {
     assert!(drain_commands(&view).is_empty());
 
     view.params = Arc::new(ChordboardParams {
-        mode: IntParam::new("Play mode", 2, IntRange::Linear { min: 0, max: 3 }),
         strum_latch: BoolParam::new("Trackpad latch", true),
         ..ChordboardParams::default()
     });
@@ -89,7 +88,6 @@ fn trackpad_latch_button_toggles_hover_strum_without_a_click() {
 fn trackpad_latch_hover_promotes_to_a_captured_drag_once() {
     let mut view = view(2, false);
     view.params = Arc::new(ChordboardParams {
-        mode: IntParam::new("Play mode", 2, IntRange::Linear { min: 0, max: 3 }),
         strum_latch: BoolParam::new("Trackpad latch", true),
         ..ChordboardParams::default()
     });
@@ -128,7 +126,6 @@ fn trackpad_latch_hover_promotes_to_a_captured_drag_once() {
 fn trackpad_latch_skips_range_grips_and_still_lets_them_calibrate() {
     let mut view = view(2, false);
     view.params = Arc::new(ChordboardParams {
-        mode: IntParam::new("Play mode", 2, IntRange::Linear { min: 0, max: 3 }),
         strum_latch: BoolParam::new("Trackpad latch", true),
         ..ChordboardParams::default()
     });
@@ -161,7 +158,6 @@ fn trackpad_latch_skips_range_grips_and_still_lets_them_calibrate() {
 fn trackpad_latch_hover_follows_an_expanded_strum_field() {
     let mut view = view(2, false);
     view.params = Arc::new(ChordboardParams {
-        mode: IntParam::new("Play mode", 2, IntRange::Linear { min: 0, max: 3 }),
         strum_latch: BoolParam::new("Trackpad latch", true),
         ..ChordboardParams::default()
     });

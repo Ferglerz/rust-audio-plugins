@@ -293,6 +293,7 @@ impl ChordboardView {
                 targets.push(("y_target", self.menu_trigger_rect(Menu::YTarget)));
             }
         }
+        if self.arp_editor_overlay_visible() {targets.retain(|(_,r)|!hit(ARP_SURFACE,r.0+r.2/2.0,r.1+r.3/2.0));}
         let mut mapped: Vec<_> = targets
             .into_iter()
             .filter_map(|(id, r)| {
@@ -302,7 +303,7 @@ impl ChordboardView {
                     .map(|i| (i, r))
             })
             .collect();
-        mapped.extend(self.sequencer_route_targets());
+        mapped.extend(self.arp_editor_route_targets());
         mapped.extend(crate::engine::routing::TARGETS.iter().enumerate()
             .filter_map(|(target, t)| t.source_index().map(|source| (target, meter_rect(source)))));
         mapped
@@ -344,7 +345,7 @@ impl ChordboardView {
             self.status = "A controller cannot modulate its own setup".into();
             return;
         }
-        let existing = if source >= 9 {
+        let existing = if matches!(source, 9 | 10) {
             self.params.routes.iter().position(|p| p.source.value() as usize == source + 1 && p.target.value() as usize == target)
         } else { self.route_for_target(target) };
         let slot = existing.or_else(|| {
@@ -494,7 +495,7 @@ impl ChordboardView {
     }
 
     fn draw_route_connection(&self, d: &mut Draw, start: (f32, f32), end: (f32, f32), source: usize, mod_target: bool) {
-        let color = if source >= 9 { GOLD } else { TEAL };
+        let color = if matches!(source, 9 | 10) { GOLD } else { TEAL };
         let bend = ((end.1 - start.1).abs() * 0.4).clamp(24.0, 180.0)
             * if end.1 >= start.1 { 1.0 } else { -1.0 };
         let points: Vec<_> = if mod_target { rounded_mod_connection(start, end) } else { (0..=32)
@@ -848,23 +849,7 @@ impl ChordboardView {
         let (i, target) = TARGETS.iter().enumerate().find(|(_, t)| t.id == id)?;
         self.snapshot.routed[i].map(|v| target.plain(v))
     }
-    pub(super) fn mode(&self) -> i32 {
-        // Performance page choice is independent of sequencer playback.
-        let mode = self
-            .routed_plain("mode")
-            .map_or(self.params.mode.value(), |v| {
-                if (1.0..=3.0).contains(&v) {
-                    v as i32
-                } else {
-                    self.params.mode.value()
-                }
-            });
-        if mode == 1 {
-            1
-        } else {
-            3
-        }
-    }
+    pub(super) fn mode(&self) -> i32 { if self.arp_params().arp_mode.value()==0 {1} else {3} }
     pub(super) fn playback_mode(&self) -> i32 {
         crate::engine::MANUAL as i32
     }

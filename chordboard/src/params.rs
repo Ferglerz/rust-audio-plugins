@@ -6,11 +6,6 @@ use std::sync::{
     atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering},
     Arc,
 };
-pub const ARP_CHORD_ACCENT_NAMES: [&str; 3] = [
-    "Independent",
-    "Soften with Chords",
-    "Accent with Chords",
-];
 #[derive(Params)]
 pub struct ChordboardParams {
     #[id = "always_bass"]
@@ -33,14 +28,14 @@ pub struct ChordboardParams {
     pub root_on_select: BoolParam,
     #[nested(array, group = "Modulation")]
     pub routes: [RouteParams; ROUTE_COUNT],
-    #[persist = "sequencer-v1"]
-    pub sequencer: Arc<crate::sequencer::Store>,
-    #[nested(array, group = "Sequencer")]
-    pub seq_pages: [SeqPageParams; 4],
-    #[id = "seq_length_lock"]
-    pub seq_length_lock: BoolParam,
-    #[id = "seq_enabled"]
-    pub seq_enabled: BoolParam,
+    #[persist = "arpeggiator-v1"]
+    pub arpeggiator: Arc<crate::arpeggiator::Store>,
+    #[nested(array, group = "Arpeggiator Pages")]
+    pub arp_pages: [ArpPageParams; 8],
+    #[id = "arp_page"]
+    pub arp_page: IntParam,
+    #[id = "arp_enabled"]
+    pub arp_enabled: BoolParam,
     #[persist = "editor-state"]
     pub editor_state: Arc<ViziaState>,
     #[persist = "schema-version"]
@@ -73,14 +68,10 @@ pub struct ChordboardParams {
     pub slot_8: AtomicU64,
     #[persist = "chord-slot-10-v1"]
     pub slot_9: AtomicU64,
-    #[id = "mode"]
-    pub mode: IntParam,
     #[id = "quality"]
     pub quality: IntParam,
     #[id = "voice_leading"]
     pub voice_leading: IntParam,
-    #[id = "interlock"]
-    pub interlock: IntParam,
     #[id = "inversion"]
     pub inversion: IntParam,
     #[id = "transpose"]
@@ -122,18 +113,8 @@ pub struct ChordboardParams {
     pub contour: FloatParam,
     #[id = "contour_curve"]
     pub contour_curve: FloatParam,
-    #[id = "arp_pattern"]
-    pub arp_pattern: IntParam,
-    #[id = "rate"]
-    pub rate: FloatParam,
-    #[id = "gate"]
-    pub gate: FloatParam,
-    #[id = "swing"]
-    pub swing: FloatParam,
     #[id = "octaves"]
     pub octaves: IntParam,
-    #[id = "humanize"]
-    pub humanize: FloatParam,
     #[id = "mpe"]
     pub mpe: BoolParam,
     #[id = "output_mode"]
@@ -261,12 +242,10 @@ impl Default for ChordboardParams {
             routes: std::array::from_fn(|i| {
                 RouteParams::from_route(crate::engine::routing::default_routes()[i])
             }),
-            sequencer: crate::sequencer::Store::new(),
-            seq_pages: std::array::from_fn(|lane| {
-                SeqPageParams::new(crate::sequencer::LANE_NAMES[lane])
-            }),
-            seq_length_lock: BoolParam::new("Lock sequencer lengths", true),
-            seq_enabled: BoolParam::new("Sequencer", false),
+            arpeggiator: crate::arpeggiator::Store::new(),
+            arp_pages: std::array::from_fn(|_| ArpPageParams::default()),
+            arp_page: IntParam::new("Arp page", 0, IntRange::Linear { min: 0, max: 7 }),
+            arp_enabled: BoolParam::new("Arpeggiator", false),
             editor_state: ViziaState::new_screen_sized(
                 "Chordboard",
                 crate::ui::initial_editor_size,
@@ -286,11 +265,6 @@ impl Default for ChordboardParams {
             slot_7: AtomicU64::new(0),
             slot_8: AtomicU64::new(0),
             slot_9: AtomicU64::new(0),
-            mode: IntParam::new("Play mode", 1, IntRange::Linear { min: 1, max: 3 })
-                .with_value_to_string(Arc::new(|v| {
-                    ["Arp Once", "Arp Loop (legacy Manual)", "Arp Loop"][(v - 1) as usize]
-                        .to_string()
-                })),
             quality: IntParam::new("Base quality", 0, IntRange::Linear { min: 0, max: 11 })
                 .with_value_to_string(Arc::new(|v| {
                     [
@@ -303,10 +277,6 @@ impl Default for ChordboardParams {
                 .with_value_to_string(Arc::new(|v| {
                     ["Nearest resolution", "Furthest dominant resolution", "Off"][v as usize]
                         .to_string()
-                })),
-            interlock: IntParam::new("Arp–Chord Accent", 0, IntRange::Linear { min: 0, max: 2 })
-                .with_value_to_string(Arc::new(|v| {
-                    ARP_CHORD_ACCENT_NAMES[v.clamp(0, 2) as usize].to_string()
                 })),
             inversion: IntParam::new("Inversion", 0, IntRange::Linear { min: 0, max: 11 }),
             transpose: IntParam::new("Transpose", 0, IntRange::Linear { min: -24, max: 24 }),
@@ -368,7 +338,11 @@ impl Default for ChordboardParams {
             )
             .hide(),
             meter_num: IntParam::new("Meter numerator", 4, IntRange::Linear { min: 1, max: 32 }),
-            meter_den: IntParam::new("Meter denominator power", 2, IntRange::Linear { min: 0, max: 5 }),
+            meter_den: IntParam::new(
+                "Meter denominator power",
+                2,
+                IntRange::Linear { min: 0, max: 5 },
+            ),
             tempo_sync: BoolParam::new("Host sync", true),
             tempo: FloatParam::new(
                 "Tempo BPM",
@@ -407,49 +381,11 @@ impl Default for ChordboardParams {
                 },
             )
             .hide(),
-            arp_pattern: IntParam::new("Arp pattern", 0, IntRange::Linear { min: 0, max: 6 })
-                .with_value_to_string(Arc::new(|v| {
-                    [
-                        "Up",
-                        "Down",
-                        "Up / Down",
-                        "Up in 3rds",
-                        "Down in 3rds",
-                        "Played order",
-                        "Random",
-                    ][v as usize]
-                        .to_string()
-                })),
-            rate: FloatParam::new(
-                "Rate beats",
-                0.25,
-                FloatRange::Linear {
-                    min: 0.0625,
-                    max: 2.0,
-                },
-            )
-            .with_value_to_string(Arc::new(|v| format!("{v:.2}"))),
-            gate: FloatParam::new(
-                "Arp gate",
-                0.65,
-                FloatRange::Linear {
-                    min: 0.05,
-                    max: 1.0,
-                },
-            )
-            .with_value_to_string(Arc::new(|v| format!("{v:.2}"))),
-            swing: FloatParam::new(
-                "Swing",
-                0.0,
-                FloatRange::Linear {
-                    min: -0.75,
-                    max: 0.75,
-                },
-            )
-            .with_value_to_string(Arc::new(|v| format!("{v:.2}"))),
-            octaves: IntParam::new("Arp octaves", 1, IntRange::Linear { min: 1, max: 4 }),
-            humanize: FloatParam::new("Humanize", 0.0, FloatRange::Linear { min: 0.0, max: 1.0 })
-                .with_value_to_string(Arc::new(|v| format!("{v:.2}"))),
+            octaves: IntParam::new(
+                "Manual strum octaves",
+                1,
+                IntRange::Linear { min: 1, max: 4 },
+            ),
             mpe: BoolParam::new("MPE output (legacy)", false).hide(),
             output_mode: IntParam::new("Output protocol", 2, IntRange::Linear { min: 0, max: 2 })
                 .with_value_to_string(Arc::new(|v| ["AUTO", "MPE", "REG"][v as usize].into())),
@@ -622,15 +558,12 @@ impl ChordboardParams {
             strum_enabled: self.strum_enabled.value(),
             root_on_select: self.root_on_select.value(),
             routes: std::array::from_fn(|i| self.routes[i].route()),
-            // Play is always the live strumfield. The legacy mode ID now selects
-            // Once/Loop for automatic Arp playback without changing Play.
             mode: crate::engine::MANUAL,
-            seq_enabled: self.seq_enabled.value(),
-            seq_loop: self.mode.value() != crate::engine::AUTO as i32,
-            seq_pages: std::array::from_fn(|i| self.seq_pages[i].page.value() as u8),
+            arp_enabled: self.arp_enabled.value(),
+            arp_page: self.arp_page.value() as u8,
+            arp_settings: std::array::from_fn(|i| self.arp_pages[i].settings()),
             quality: self.quality.value() as u8,
             voice_leading: self.voice_leading.value() as u8,
-            interlock: self.interlock.value() as u8,
             inversion: self.inversion.value() as u8,
             transpose: self.transpose.value() as i8,
             spread: self.spread.value() as u8,
@@ -648,12 +581,29 @@ impl ChordboardParams {
             direction: self.direction.value() as u8,
             contour: self.contour.value(),
             contour_curve: self.contour_curve.value(),
-            arp_pattern: self.arp_pattern.value() as u8,
-            rate: self.rate.value(),
-            gate: self.gate.value(),
-            swing: self.swing.value(),
+            arp_pattern: self.arp_pages[self.arp_page.value() as usize]
+                .arp_pattern
+                .value() as u8,
+            rate: self.arp_pages[self.arp_page.value() as usize].rate.value(),
+            gate: 0.65,
+            swing: self.arp_pages[self.arp_page.value() as usize].swing.value(),
+            arp_mode: self.arp_pages[self.arp_page.value() as usize]
+                .settings()
+                .mode,
+            arp_octaves: self.arp_pages[self.arp_page.value() as usize]
+                .arp_octaves
+                .value() as u8,
+            arp_sync: self.arp_pages[self.arp_page.value() as usize]
+                .arp_sync
+                .value(),
+            arp_free_ms: self.arp_pages[self.arp_page.value() as usize]
+                .arp_free_ms
+                .value(),
+            host_sync: self.tempo_sync.value(),
             octaves: self.octaves.value() as u8,
-            humanize: self.humanize.value(),
+            humanize: self.arp_pages[self.arp_page.value() as usize]
+                .humanize
+                .value(),
             mpe: self.mpe_enabled(),
             upper: self.upper.value(),
             members: self.members.value() as u8,
@@ -714,7 +664,9 @@ macro_rules! control_catalog {
                     visit(route.min.unmodulated_normalized_value());
                     visit(route.max.unmodulated_normalized_value());
                     visit(route.curve.unmodulated_normalized_value());
+                    visit(route.smoothing_ms.unmodulated_normalized_value());
                 }
+                for value in self.arp_pages[self.arp_page.value() as usize].values() { visit(value); }
                 changed |= signature.len() != index;
                 signature.truncate(index);
                 changed
@@ -723,13 +675,14 @@ macro_rules! control_catalog {
             pub fn controls(&self) -> Vec<Control> {
                 let mut controls = vec![$($builder(stringify!($field), $group, &self.$field)),*];
                 for route in &self.routes { controls.extend(route.controls()); }
+                controls.extend(self.arp_pages[self.arp_page.value() as usize].controls());
                 controls
             }
 
             pub fn control(&self, id: &str) -> Option<Control> {
                 match id {
                     $(stringify!($field) => Some($builder(stringify!($field), $group, &self.$field)),)*
-                    _ => None,
+                    _ => self.arp_pages[self.arp_page.value() as usize].controls().into_iter().find(|c| c.id == id),
                 }
             }
         }
@@ -743,9 +696,8 @@ control_catalog! {
     toggle(bass_enabled, 0),
     control(split_note, 0),
     control(bass_split, 0),
-    control(mode, 0),
-    toggle(seq_enabled, 0),
-    toggle(seq_length_lock, 0),
+    toggle(arp_enabled, 0),
+    control(arp_page, 0),
     control(quality, 0),
     control(inversion, 0),
     control(voice_leading, 0),
@@ -768,12 +720,7 @@ control_catalog! {
     control(direction, 1),
     control(contour, 1),
     control(contour_curve, 1),
-    control(arp_pattern, 1),
-    control(rate, 1),
-    control(gate, 1),
-    control(swing, 1),
     control(octaves, 1),
-    control(humanize, 1),
     control(output_mode, 2),
     toggle(upper, 2),
     control(members, 2),
@@ -951,10 +898,19 @@ pub struct RouteParams {
 impl Default for RouteParams {
     fn default() -> Self {
         Self {
-            smoothing_ms: FloatParam::new("Smoothing", 0.0, FloatRange::Linear { min: 0.0, max: 2000.0 })
-                .with_unit(" ms")
-                .with_value_to_string(Arc::new(|v| format!("{v:.0}")))
-                .with_string_to_value(Arc::new(|s| s.trim().trim_end_matches("ms").trim().parse().ok())),
+            smoothing_ms: FloatParam::new(
+                "Smoothing",
+                0.0,
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: 2000.0,
+                },
+            )
+            .with_unit(" ms")
+            .with_value_to_string(Arc::new(|v| format!("{v:.0}")))
+            .with_string_to_value(Arc::new(|s| {
+                s.trim().trim_end_matches("ms").trim().parse().ok()
+            })),
             enabled: BoolParam::new("Enabled", true),
             source: IntParam::new(
                 "Source",
@@ -1075,19 +1031,15 @@ impl RouteParams {
 mod routing_state_tests {
     use super::*;
     #[test]
-    fn legacy_arp_choice_never_changes_live_play_or_sequencer_power() {
-        for mode in 1..=3 {
-            for enabled in [false, true] {
-                let p = ChordboardParams {
-                    mode: IntParam::new("Play mode", mode, IntRange::Linear { min: 1, max: 3 }),
-                    seq_enabled: BoolParam::new("Sequencer", enabled),
-                    ..ChordboardParams::default()
-                };
-                assert_eq!(p.config().mode, crate::engine::MANUAL);
-                assert_eq!(p.config().seq_enabled, enabled);
-                assert_eq!(p.config().seq_loop, mode != 1);
-            }
-        }
+    fn arp_pages_are_independent_of_manual_play() {
+        let p = ChordboardParams::default();
+        assert_eq!(p.config().mode, crate::engine::MANUAL);
+        assert!(!p.config().arp_enabled);
+        assert!(p
+            .config()
+            .arp_settings
+            .iter()
+            .all(|p| p.mode == crate::arpeggiator::ArpMode::SyncLoop));
     }
     #[test]
     fn all_route_fields_have_stable_unique_host_ids_and_default_strumfield_link() {
@@ -1122,20 +1074,116 @@ mod routing_state_tests {
 }
 
 #[derive(Params)]
-pub struct SeqPageParams {
-    #[id = "seq_page"]
-    pub page: IntParam,
+pub struct ArpPageParams {
+    #[id = "arp_mode"]
+    pub arp_mode: IntParam,
+    #[id = "arp_pattern"]
+    pub arp_pattern: IntParam,
+    #[id = "arp_octaves"]
+    pub arp_octaves: IntParam,
+    #[id = "arp_sync"]
+    pub arp_sync: BoolParam,
+    #[id = "arp_free_ms"]
+    pub arp_free_ms: FloatParam,
+    #[id = "rate"]
+    pub rate: FloatParam,
+    #[id = "swing"]
+    pub swing: FloatParam,
+    #[id = "humanize"]
+    pub humanize: FloatParam,
 }
-impl SeqPageParams {
-    fn new(lane: &str) -> Self {
+impl Default for ArpPageParams {
+    fn default() -> Self {
         Self {
-            page: IntParam::new(
-                format!("{lane} page"),
-                0,
-                IntRange::Linear { min: 0, max: 7 },
+            arp_mode: IntParam::new("Arp repeat", 2, IntRange::Linear { min: 0, max: 3 })
+                .with_value_to_string(Arc::new(|v| {
+                    crate::arpeggiator::MODE_NAMES[v as usize].into()
+                })),
+            arp_pattern: IntParam::new("Ordering", 0, IntRange::Linear { min: 0, max: 6 })
+                .with_value_to_string(Arc::new(|v| {
+                    [
+                        "Up",
+                        "Down",
+                        "Up / Down",
+                        "Up in 3rds",
+                        "Down in 3rds",
+                        "Played order",
+                        "Random",
+                    ][v as usize]
+                        .into()
+                })),
+            arp_octaves: IntParam::new("Arp octaves", 1, IntRange::Linear { min: 1, max: 4 }),
+            arp_sync: BoolParam::new("Arp tempo sync", true),
+            arp_free_ms: FloatParam::new(
+                "Arp rate ms",
+                125.0,
+                FloatRange::Linear {
+                    min: 1.0,
+                    max: 1500.0,
+                },
+            ),
+            rate: FloatParam::new(
+                "Arp rate beats",
+                0.25,
+                FloatRange::Linear {
+                    min: 0.0625,
+                    max: 2.0,
+                },
+            ),
+            swing: FloatParam::new(
+                "Arp swing",
+                0.0,
+                FloatRange::Linear {
+                    min: -0.75,
+                    max: 0.75,
+                },
             )
-            .with_value_to_string(Arc::new(|v| format!("{}", v + 1))),
+            .with_value_to_string(Arc::new(|v| format!("{:+.0}%", v / 0.75 * 100.0)))
+            .with_string_to_value(Arc::new(|s| s.trim().trim_end_matches('%').trim().parse::<f32>().ok().map(|v| v * 0.75 / 100.0))),
+            humanize: FloatParam::new(
+                "Arp humanize",
+                0.0,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            ),
         }
+    }
+}
+impl ArpPageParams {
+    pub fn settings(&self) -> crate::arpeggiator::Settings {
+        crate::arpeggiator::Settings {
+            mode: crate::arpeggiator::ArpMode::from_index(self.arp_mode.value() as u8),
+            pattern: self.arp_pattern.value() as u8,
+            octaves: self.arp_octaves.value() as u8,
+            sync: self.arp_sync.value(),
+            rate: self.rate.value(),
+            free_ms: self.arp_free_ms.value(),
+            swing: self.swing.value(),
+            humanize: self.humanize.value(),
+        }
+    }
+    fn values(&self) -> [f32; 8] {
+        [
+            self.arp_mode.unmodulated_normalized_value(),
+            self.arp_pattern.unmodulated_normalized_value(),
+            self.arp_octaves.unmodulated_normalized_value(),
+            self.arp_sync.unmodulated_normalized_value(),
+            self.arp_free_ms.unmodulated_normalized_value(),
+            self.rate.unmodulated_normalized_value(),
+            self.swing.unmodulated_normalized_value(),
+            self.humanize.unmodulated_normalized_value(),
+        ]
+    }
+    pub fn controls(&self) -> Vec<Control> {
+        vec![
+            control("arp_mode", 1, &self.arp_mode),
+            control("arp_pattern", 1, &self.arp_pattern),
+            control("arp_octaves", 1, &self.arp_octaves),
+            toggle("arp_sync", 1, &self.arp_sync),
+            control("arp_free_ms", 1, &self.arp_free_ms),
+            control("rate", 1, &self.rate),
+            control("swing", 1, &self.swing),
+            control("humanize", 1, &self.humanize),
+        ]
     }
 }
 
@@ -1151,9 +1199,17 @@ mod signature_tests {
         let storage = signature.as_ptr();
         assert!(!params.update_control_signature(&mut signature));
         params.latch = BoolParam::new("Latch", !params.latch.value());
-        params.routes[0].min = FloatParam::new("Minimum", 0.37, FloatRange::Linear { min: 0.0, max: 1.0 });
+        params.routes[0].min =
+            FloatParam::new("Minimum", 0.37, FloatRange::Linear { min: 0.0, max: 1.0 });
         assert!(params.update_control_signature(&mut signature));
-        assert_eq!(signature, params.controls().iter().map(|control| control.norm).collect::<Vec<_>>());
+        assert_eq!(
+            signature,
+            params
+                .controls()
+                .iter()
+                .map(|control| control.norm)
+                .collect::<Vec<_>>()
+        );
         assert_eq!(storage, signature.as_ptr());
         assert!(!params.update_control_signature(&mut signature));
     }

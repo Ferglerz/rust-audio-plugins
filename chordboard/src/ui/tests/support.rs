@@ -5,13 +5,8 @@ use std::{cell::RefCell, rc::Rc};
 pub(super) type Changes = Rc<RefCell<Vec<(ParamPtr, f32)>>>;
 
 pub(super) fn view(mode: i32, mpe: bool) -> ChordboardView {
-    let view = ChordboardView::new(
+    let mut view = ChordboardView::new(
         Arc::new(ChordboardParams {
-            mode: IntParam::new(
-                "Play mode",
-                mode.min(3),
-                IntRange::Linear { min: 0, max: 3 },
-            ),
             output_mode: IntParam::new(
                 "Output protocol",
                 if mpe { 1 } else { 2 },
@@ -22,13 +17,11 @@ pub(super) fn view(mode: i32, mpe: bool) -> ChordboardView {
         Arc::new(Bridge::default()),
         Arc::new(PreviewContext),
     );
+    Arc::get_mut(&mut view.params).unwrap().arp_pages[0].arp_mode = IntParam::new("Arp repeat", if mode==1 {0} else {2}, IntRange::Linear {min:0,max:3});
     view
 }
 /// The arpeggiator module stays open above the keyboard. Chords stay on their page.
-pub(super) fn open_arp(view: &mut ChordboardView) {
-    view.sequencer_ui.open = true;
-    view.sequencer_ui.progress = 1.0;
-}
+pub(super) fn open_arp(_view: &mut ChordboardView) {}
 pub(super) fn context() -> (Context, Entity, Changes) {
     let mut cx = Context::default();
     let target = Element::new(&mut cx).entity();
@@ -90,6 +83,7 @@ pub(super) fn click(view: &mut ChordboardView, cx: &mut Context, target: Entity,
 pub(super) fn click_menu_trigger(view: &mut ChordboardView, cx: &mut Context, target: Entity, menu: Menu) {
     let r = view.menu_trigger_rect(menu);
     click(view, cx, target, r);
+    if menu == Menu::ArpPattern { view.tick_arp_editor(pleasant_ui::page_slide::DURATION); }
 }
 pub(super) fn click_menu_option(
     view: &mut ChordboardView,
@@ -98,6 +92,7 @@ pub(super) fn click_menu_option(
     menu: Menu,
     index: usize,
 ) {
-    let r = view.menu_option_rect(menu, index);
+    let r = if menu == Menu::ArpPattern { arpeggiator::chooser_card(index) } else { view.menu_option_rect(menu, index) };
     click(view, cx, target, r);
+    if menu == Menu::ArpPattern { view.tick_arp_editor(pleasant_ui::page_slide::DURATION); }
 }

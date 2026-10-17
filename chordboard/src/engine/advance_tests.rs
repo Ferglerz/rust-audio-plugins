@@ -9,6 +9,8 @@ fn engine(mode: u8, pattern: u8) -> Engine {
     engine.configure(
         Config {
             mode,
+            arp_enabled: true,
+            arp_settings: [crate::arpeggiator::Settings { pattern, sync:false,free_ms:13.25,swing:0.43,humanize:0.8,octaves:3,..Default::default() };8],
             arp_pattern: pattern,
             strum_sync: false,
             strum_ms: 13.25,
@@ -46,30 +48,7 @@ fn assert_state(actual: &Engine, reference: &Engine) {
             .scheduled
             .map(|e| e.map(|e| (e.at, e.note, e.velocity, e.duration, e.gate_step)))
     );
-    assert_eq!(
-        (
-            actual.arp_next,
-            actual.arp_step,
-            actual.arp_cycle_step,
-            actual.arp_octaves,
-            actual.arp_pattern,
-            actual.arp_fraction,
-            actual.arp_pair_swing,
-            actual.arp_pair_rate,
-            actual.rng
-        ),
-        (
-            reference.arp_next,
-            reference.arp_step,
-            reference.arp_cycle_step,
-            reference.arp_octaves,
-            reference.arp_pattern,
-            reference.arp_fraction,
-            reference.arp_pair_swing,
-            reference.arp_pair_rate,
-            reference.rng
-        ),
-    );
+    assert_eq!(actual.rng, reference.rng);
 }
 
 fn compare_span(actual: &mut Engine, reference: &mut Engine, samples: usize) -> Vec<(usize, Out)> {
@@ -105,7 +84,7 @@ fn arp_clock_rng_swing_and_fraction_match_in_every_performance_mode() {
             for samples in [1, 0, 3, 64, 17, 511, 1000] {
                 compare_span(&mut actual, &mut reference, samples);
             }
-            assert!(actual.arp_step > 0);
+            assert!(actual.snapshot().arp_running);
             assert_ne!(actual.rng, Engine::default().rng);
         }
     }
@@ -131,7 +110,8 @@ fn overdue_simultaneous_slots_and_voice_stealing_keep_tick_order() {
                 started: 0,
                 off,
                 owner: 0,
-                seq_expression: None,
+                attack_expression: None,
+                token: 0,
                 layer,
             });
         }
@@ -183,7 +163,7 @@ fn overdue_simultaneous_slots_and_voice_stealing_keep_tick_order() {
 }
 
 #[test]
-fn full_scheduler_and_arp_share_the_original_capacity_and_slot_order() {
+fn full_manual_scheduler_keeps_slot_order_alongside_independent_arp() {
     fn fixture() -> Engine {
         let mut engine = engine(ARP, 6);
         engine.voices.fill(None);
@@ -210,7 +190,7 @@ fn full_scheduler_and_arp_share_the_original_capacity_and_slot_order() {
         .collect();
     assert_eq!(
         first,
-        (0..128).map(|i| 36 + (i % 48) as u8).collect::<Vec<_>>()
+        std::iter::once(64).chain((0..128).filter(|&i|i!=28).map(|i|36+(i%48) as u8)).collect::<Vec<_>>()
     );
 }
 
@@ -264,7 +244,8 @@ fn clock_wrap_and_saturated_note_deadlines_match_reference_tick() {
             started: 0,
             off: u64::MAX,
             owner: 0,
-            seq_expression: None,
+            attack_expression: None,
+                token: 0,
             layer: false,
         });
         engine.voices[1] = Some(Voice {
@@ -273,7 +254,8 @@ fn clock_wrap_and_saturated_note_deadlines_match_reference_tick() {
             started: 0,
             off: 0,
             owner: 0,
-            seq_expression: None,
+            attack_expression: None,
+                token: 0,
             layer: true,
         });
         engine.scheduled[90] = Some(Scheduled {

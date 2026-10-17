@@ -3,7 +3,7 @@ use super::*;
 /// Small vector marks shared by Chordboard controls.
 #[derive(Clone, Copy)]
 pub(super) enum Icon {
-    Lock, Once, Loop, Host, Manual, Learn, Trash, Add, Reset, Touch, TuningFork, Glyph(&'static str),
+    Lock, Loop, Host, Manual, Learn, Trash, Add, Reset, Touch, TuningFork, Glyph(&'static str),
 }
 
 pub(super) const MODULATOR_ICONS: [Icon; crate::engine::routing::SOURCE_COUNT] = [
@@ -18,6 +18,7 @@ pub(super) const MODULATOR_ICONS: [Icon; crate::engine::routing::SOURCE_COUNT] =
     Icon::Glyph("\u{eb5b}"), // arrows-vertical: Y
     Icon::Glyph("\u{ecd4}"), // Mod 1
     Icon::Glyph("\u{ecd4}"), // Mod 2
+    Icon::Loop, // Arp position
 ];
 
 impl Icon {
@@ -38,12 +39,11 @@ impl Icon {
                 d.c.fill_path(&path, &paint);
                 d.c.restore();
             }
-            Self::Once | Self::Loop | Self::Lock | Self::Reset | Self::Host | Self::Glyph(_) => {
+            Self::Loop | Self::Lock | Self::Reset | Self::Host | Self::Glyph(_) => {
                 use nih_plug_vizia::vizia::vg::{Align, Baseline, Paint};
                 // Verified against the cmap and glyph names in Vizia's bundled
                 // Tabler font; this Vizia version exports only some codepoints.
                 let glyph = match self {
-                    Self::Once => nih_plug_vizia::vizia::icons::ICON_PLAYER_SKIP_FORWARD,
                     Self::Loop => nih_plug_vizia::vizia::icons::ICON_REPEAT,
                     Self::Lock => "\u{eae2}", // lock
                     Self::Reset => "\u{eb16}", // rotate
@@ -193,13 +193,7 @@ impl ChordboardView {
         targets.extend((0..KEY_COUNT).map(|i| (self.keyboard_key_rect(i), false)));
         targets.extend((0..8).map(|i| (memory_rect(i), self.memory_ui.armed)));
         targets.push((BASS_BYPASS, !self.params.bass_enabled.value()));
-        targets.push((arp_accent_rect(), false));
-        targets.push((interlock_rect(), self.params.interlock.value() != 0));
-        targets.push((seq_power_rect(), self.params.seq_enabled.value()));
-        targets.push((
-            arp_direction_rect(),
-            self.menu == Some(Menu::ArpPattern),
-        ));
+        targets.push((arp_power_rect(), self.params.arp_enabled.value()));
         targets.push((self.voice_leading_rect(), self.params.voice_leading.value() != 2));
         targets.push((self.split_marker(), false));
         if let Some(r) = self.bass_marker() {
@@ -217,20 +211,17 @@ impl ChordboardView {
             .extend((0..2).map(|i| (inversion_control_rect(self.params.mpe_enabled(), i), false)));
         targets
             .extend((0..5).map(|i| (transpose_control_rect(self.params.mpe_enabled(), i), false)));
-        if self.sequencer_open() {
-            targets.push((seq_rate_sync_rect(), self.sweep_synced()));
+        if self.arp_editor_open() {
+            targets.push((arp_rate_sync_rect(), self.sweep_synced()));
             if self.sweep_synced() {
-                targets.push((seq_rate_rect(), self.menu == Some(Menu::ArpRate)));
+                targets.push((arp_rate_rect(), self.menu == Some(Menu::ArpRate)));
             }
-            targets.extend(self.sequencer_button_rects());
+            targets.extend(self.arp_editor_button_rects());
         }
         targets.push((
             strum_bypass_rect(self.expand_t()),
             self.params.strum_enabled.value(),
         ));
-        targets.extend(
-            [false, true].map(|looping| (repeat_rect(looping), (self.mode() == 3) == looping)),
-        );
         targets.extend(self.base_controls().iter().map(|(c, r)| {
             (
                 *r,
@@ -417,7 +408,7 @@ impl ChordboardView {
         }
         match c.id {
             "velocity" => format!("{:.0}%", self.params.velocity.value() * 100.0),
-            "humanize" => format!("{:.0}%", self.params.humanize.value() * 100.0),
+            "humanize" => format!("{:.0}%", self.arp_params().humanize.value() * 100.0),
             "contour" => format!("{:+.0}%", self.params.contour.value() * 100.0),
             "y" => format!("{:.0}%", self.params.y.value() * 100.0),
             "length_ms" => format!("{:.0} ms", self.params.length_ms.value()),
@@ -449,9 +440,11 @@ impl ChordboardView {
                 .trim()
                 .parse::<f32>()
                 .ok()?;
-            let v = if matches!(
+            let v = if target.id == "swing" {
+                v * 0.75 / 100.0
+            } else if matches!(
                 target.id,
-                "velocity" | "humanize" | "gate" | "contour" | "swing"
+                "velocity" | "humanize" | "gate" | "contour"
             ) {
                 v / 100.0
             } else if matches!(
@@ -476,7 +469,7 @@ impl ChordboardView {
         };
         match c.id {
             "velocity" => percent().map(|v| self.params.velocity.preview_normalized(v)),
-            "humanize" => percent().map(|v| self.params.humanize.preview_normalized(v)),
+            "humanize" => percent().map(|v| self.arp_params().humanize.preview_normalized(v)),
             "contour" => percent().map(|v| self.params.contour.preview_normalized(v)),
             "y" => percent().map(|v| self.params.y.preview_normalized(v)),
             _ => {
@@ -502,7 +495,6 @@ mod tests {
         {
             let mut view = ChordboardView::new(
                 Arc::new(ChordboardParams {
-                    mode: IntParam::new("Mode", 2, IntRange::Linear { min: 0, max: 3 }),
                     root_on_select: BoolParam::new("Root", root),
                     always_chord: BoolParam::new("Chord", chord),
                     ..ChordboardParams::default()

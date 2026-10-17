@@ -127,7 +127,7 @@ impl Menu {
                 ("Routing", vec![0]),
                 ("MIDI expression", (1..7).collect()),
                 ("Performance", (7..10).collect()),
-                ("Sequencer modulators", (10..12).collect()),
+                ("Arpeggiator", (10..13).collect()),
             ],
             Self::RouteTarget => {
                 let targets: Vec<_> = crate::engine::routing::available_targets().collect();
@@ -145,9 +145,9 @@ impl Menu {
                         "spread" | "quality" | "inversion" | "transpose" | "filter" => 0,
                         "strings" | "strings_played" | "x" => 1,
                         "arp_pattern" | "rate" | "strum_ms" | "strum_sync" | "strum_hold"
-                        | "gate" | "swing" | "octaves" | "humanize" => 2,
+                        | "gate" | "swing" | "octaves" | "humanize" | "arp_octaves" | "arp_sync" | "arp_free_ms" | "arp_mode" | "arp_page" => 2,
                         "velocity" | "length_ms" | "contour" | "root_on_select" | "latch"
-                        | "mode" => 3,
+                        => 3,
                         _ => 4,
                     };
                     groups[group].1.push(index);
@@ -235,7 +235,7 @@ impl Menu {
             Self::Scale => SCALE_MENU,
             Self::KeyboardParam(id) => keyboard_control_rect(id, false),
             Self::StrumRate => STRUM_RATE,
-            Self::ArpRate => seq_rate_rect(),
+            Self::ArpRate => arp_rate_rect(),
             Self::ArpPattern => arp_direction_rect(),
             Self::YTarget => (772.0, 472.0, 224.0, 30.0),
             Self::MappingKind => (776.0, 324.0, 200.0, 30.0),

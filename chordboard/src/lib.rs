@@ -3,7 +3,7 @@ mod bridge;
 pub mod engine;
 pub mod harmony;
 pub mod params;
-pub mod sequencer;
+pub mod arpeggiator;
 mod ui;
 use bridge::Bridge;
 use engine::{Engine, Out};
@@ -271,15 +271,6 @@ impl Chordboard {
 impl Plugin for Chordboard {
     fn filter_state(state: &mut PluginState) {
         use nih_plug::wrapper::state::ParamValue;
-        if !state.fields.contains_key("sequencer-v1") {
-            state.fields.insert(
-                "sequencer-v1".into(),
-                serde_json::to_string(&sequencer::State::default()).unwrap_or_default(),
-            );
-            state
-                .params
-                .insert("seq_enabled".into(), ParamValue::Bool(false));
-        }
         state
             .params
             .entry("bass_split".into())
@@ -410,25 +401,26 @@ impl Plugin for Chordboard {
                 }
             }
         }
-        let mut sequence_updated = false;
+        let mut arp_updated = false;
         for _ in 0..2 {
             if !self
                 .params
-                .sequencer
-                .apply_pending(&mut self.engine.seq.data)
+                .arpeggiator
+                .apply_pending(&mut self.engine.arp.data)
             {
                 break;
             }
-            sequence_updated = true;
+            arp_updated = true;
         }
-        if sequence_updated {
+        if arp_updated {
             self.engine
-                .accept_sequence_generation(&mut |e| emitted.push(0, e));
+                .accept_arp_generation(&mut |e| emitted.push(0, e));
         }
         self.engine
             .configure(self.current_config(), &mut |e| emitted.push(0, e));
         self.engine
             .transport(playing, tempo, jump, &mut |e| emitted.push(0, e));
+        self.engine.set_host_position(transport.pos_beats(), transport.tempo.is_some());
         let host_meter = self.params.tempo_sync.value()
             && transport.time_sig_numerator.is_some_and(|n| n > 0)
             && transport.time_sig_denominator.is_some_and(|d| d > 0);
@@ -552,7 +544,6 @@ mod protocol_tests {
                 ),
                 key_split: BoolParam::new("Key split", true),
                 always_chord: BoolParam::new("Always play full chord", true),
-                mode: IntParam::new("Play mode", 2, IntRange::Linear { min: 1, max: 3 }),
                 ..ChordboardParams::default()
             }),
             ..Chordboard::default()
@@ -776,11 +767,7 @@ mod protocol_tests {
         }
         Chordboard::filter_state(&mut state);
         assert_eq!(state.fields["schema-version"], "1");
-        assert_eq!(state.params.len(), engine::routing::ROUTE_COUNT * 2 + 2);
-        assert!(matches!(
-            state.params["seq_enabled"],
-            ParamValue::Bool(false)
-        ));
+        assert_eq!(state.params.len(), engine::routing::ROUTE_COUNT * 2 + 1);
         let mut config = engine::Config {
             mode: engine::MANUAL,
             legacy_direct_x: true,

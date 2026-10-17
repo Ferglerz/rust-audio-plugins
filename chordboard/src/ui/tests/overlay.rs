@@ -115,11 +115,11 @@ fn modulated_rate_clicks_explain_ownership_without_editing() {
             max: crate::engine::routing::TARGETS.len() as i32 - 1,
         },
     );
-    params.mode = IntParam::new("Mode", 3, IntRange::Linear { min: 0, max: 3 });
+    params.arp_pages[0].arp_mode = IntParam::new("Arp repeat", 2, IntRange::Linear { min: 0, max: 3 });
     view.params = Arc::new(params);
     open_arp(&mut view);
     let (mut cx, target, changes) = context();
-    click(&mut view, &mut cx, target, seq_rate_rect());
+    click(&mut view, &mut cx, target, arp_rate_rect());
     assert!(changes.borrow().is_empty());
     assert!(view
         .status
@@ -217,21 +217,7 @@ fn once_and_loop_share_a_page_with_mode_specific_timing_controls() {
             .iter()
             .any(|(i, _)| crate::engine::routing::TARGETS[*i].id == "octaves"));
     }
-    for mode in [1, 3] {
-        let mut v = view(mode, false);
-        open_arp(&mut v);
-        let (mut cx, target, changes) = context();
-        click(&mut v, &mut cx, target, repeat_rect(mode == 1));
-        assert_eq!(
-            &*changes.borrow(),
-            &[(
-                v.params.mode.as_ptr(),
-                v.params
-                    .mode
-                    .preview_normalized(if mode == 1 { 3 } else { 1 })
-            )]
-        );
-    }
+
 }
 #[test]
 fn selected_modulator_connections_survive_pointer_leaving_and_removal_icons_fit() {
@@ -248,14 +234,13 @@ fn selected_modulator_connections_survive_pointer_leaving_and_removal_icons_fit(
     assert!(v.route_chips().is_empty());
 }
 #[test]
-fn output_controls_follow_the_sequencer_page_and_keep_strumfield_velocity_free() {
+fn output_controls_follow_the_arp_editor_page_and_keep_strumfield_velocity_free() {
     for mode in [1, 2, 3] {
-        let mut v = view(mode, false);
+        let v = view(mode, false);
         let ids: Vec<_> = v.base_controls().into_iter().map(|(c, _)| c.id).collect();
         assert!(!ids.contains(&"velocity"));
         assert!(ids.contains(&"length_ms"));
         assert!(!ids.contains(&"strings"));
-        v.sequencer_ui.open = true;
         let controls = v.base_controls();
         assert!(!controls.iter().any(|(c, _)| c.id == "velocity"));
         assert!(!controls
@@ -373,25 +358,26 @@ fn arp_strings_cover_octaves_and_flash_short_notes_after_they_end() {
 #[test]
 fn arpeggiator_module_sits_above_the_keyboard() {
     let mut view = view(1, false);
-    assert!(view.sequencer_open());
+    assert!(view.arp_editor_open());
     assert!(!view.arp_page());
-    assert!(SEQ_SURFACE.1 + SEQ_SURFACE.3 <= PIANO_SURFACE.1);
-    assert!(arp_direction_rect().1 < SEQ_SURFACE.1 + SEQ_SETTINGS_H);
-    assert!(seq_power_rect().1 < arp_direction_rect().1 + arp_direction_rect().3);
+    assert!(ARP_SURFACE.1 + ARP_SURFACE.3 <= PIANO_SURFACE.1);
+    assert!(arp_direction_rect().1 < ARP_SURFACE.1 + ARP_SETTINGS_H);
+    assert!(arp_power_rect().1 < arp_direction_rect().1 + arp_direction_rect().3);
     let (mut cx, target, changes) = context();
-    click(&mut view, &mut cx, target, seq_power_rect());
+    click(&mut view, &mut cx, target, arp_power_rect());
     assert_eq!(
         changes.borrow().last().copied(),
-        Some((view.params.seq_enabled.as_ptr(), 1.0))
+        Some((view.params.arp_enabled.as_ptr(), 1.0))
     );
 }
 #[test]
-fn sequencer_selection_keeps_legacy_mode_automation_range() {
-    let params = ChordboardParams::default();
-    assert_eq!(params.mode.preview_plain(0.5), 2);
-    assert_eq!(params.mode.preview_plain(1.0), 3);
-    assert!(!params.seq_enabled.value());
+fn arp_repeat_exposes_four_modes_and_sync_loop_default() {
+    let params=ChordboardParams::default();
+    assert_eq!(params.arp_pages[0].arp_mode.preview_plain(1.0),3);
+    assert_eq!(params.arp_pages[0].arp_mode.value(),2);
+    assert!(!params.arp_enabled.value());
 }
+
 #[test]
 fn shift_tap_toggles_and_hold_restores_both_latch_states() {
     for base in [false, true] {
@@ -517,7 +503,8 @@ fn grouped_menu_arrows_follow_visual_rows_and_stop_at_edges() {
     assert_eq!(view.menu_neighbor(menu, 6, Code::ArrowDown), 8);
     assert_eq!(view.menu_neighbor(menu, 8, Code::ArrowRight), 8);
     assert_eq!(view.menu_neighbor(menu, 9, Code::ArrowDown), 10);
-    assert_eq!(view.menu_neighbor(menu, 10, Code::ArrowDown), 10);
+    assert_eq!(view.menu_neighbor(menu, 10, Code::ArrowDown), 12);
+    assert_eq!(view.menu_neighbor(menu, 12, Code::ArrowDown), 12);
     for menu in [Menu::RouteSource, Menu::RouteTarget] {
         for i in 0..menu.items().len() {
             for code in [Code::ArrowLeft, Code::ArrowRight, Code::ArrowUp, Code::ArrowDown] {
@@ -608,14 +595,10 @@ fn arpeggiator_settings_work_while_strumfield_is_expanded() {
     view.expand_progress = 1.0;
     view.expand_target = 1.0;
     let (mut cx, target, changes) = context();
-    click(&mut view, &mut cx, target, repeat_rect(true));
-    assert_eq!(changes.borrow().last().copied(), Some((
-        view.params.mode.as_ptr(), view.params.mode.preview_normalized(3),
-    )));
-    click(&mut view, &mut cx, target, seq_power_rect());
-    assert_eq!(changes.borrow().last().copied(), Some((view.params.seq_enabled.as_ptr(), 1.0)));
+    click(&mut view, &mut cx, target, arp_power_rect());
+    assert_eq!(changes.borrow().last().copied(), Some((view.params.arp_enabled.as_ptr(), 1.0)));
     click(&mut view, &mut cx, target, arp_direction_rect());
-    assert_eq!(view.menu, Some(Menu::ArpPattern));
+    assert!(view.arp_chooser_open());
     view.menu = None;
     let humanize = arp_controls(true)[0].1;
     event(&mut view, &mut cx, target, humanize.0 + 5.0, humanize.1 + 5.0,

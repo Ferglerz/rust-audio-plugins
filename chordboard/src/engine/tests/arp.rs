@@ -54,34 +54,6 @@ fn auto_strum_orders_notes_in_ascending_and_descending_thirds() {
     assert_eq!(notes_down, expected_notes_down);
 }
 #[test]
-fn arp_patterns_in_thirds_step_correctly() {
-    let mut e = Engine::default();
-    let config = Config {
-        mode: ARP,
-        arp_pattern: 3, // Up in 3rds
-        octaves: 1,
-        ..Config::default()
-    };
-    configure(&mut e, config);
-    on(&mut e, 60, 0);
-    let total = e.notes.len;
-    assert!(total >= 3);
-    // Up in 3rds: pairs (0, 2), (1, 3), (2, 4 % total)...
-    let mut played = Vec::new();
-    for _ in 0..(total * 2) {
-        let events = tick(&mut e, 5000);
-        for ev in events {
-            if let Out::On(_, note, _) = ev {
-                played.push(note);
-            }
-        }
-    }
-    assert_eq!(played[0], e.notes.string(0).unwrap());
-    assert_eq!(played[1], e.notes.string(2 % total).unwrap());
-    assert_eq!(played[2], e.notes.string(1).unwrap());
-    assert_eq!(played[3], e.notes.string(3 % total).unwrap());
-}
-#[test]
 fn auto_strum_hold_plays_until_next_chord() {
     let mut e = Engine::default();
     let config = Config {
@@ -277,54 +249,6 @@ fn manual_plucks_apply_velocity_contour_and_curve() {
             .unwrap();
         let expected = (base * contour_factor(index as f32 / 2.0, 1.0, 1.0)).clamp(0.01, 1.0);
         assert!((actual - expected).abs() < 0.00001);
-    }
-}
-#[test]
-fn arp_velocity_contour_follows_each_pattern_cycle_and_repeats() {
-    for pattern in 0..7 {
-        for tilt in [-1.0, 0.0, 1.0] {
-            let mut e = Engine::default();
-            e.sample_rate = 1000.0;
-            configure(
-                &mut e,
-                Config {
-                    mode: ARP,
-                    arp_pattern: pattern,
-                    octaves: 2,
-                    rate: 0.01,
-                    humanize: 0.0,
-                    velocity: 0.4,
-                    contour: tilt,
-                    contour_curve: 0.6,
-                    ..Config::default()
-                },
-            );
-            on(&mut e, 60, 1);
-            let base = e.strike_velocity();
-            let total = e.notes.len * 2;
-            let cycle = match pattern {
-                2 => total * 2 - 2,
-                3 | 4 => total * 2,
-                _ => total,
-            };
-            let mut velocities = Vec::new();
-            while velocities.len() < cycle * 2 {
-                e.tick(&mut |event| {
-                    if let Out::On(_, _, v) = event {
-                        velocities.push(v);
-                    }
-                });
-                assert!(e.now < 1000, "arpeggiator stopped producing notes");
-            }
-            for (step, actual) in velocities.iter().enumerate() {
-                let t = (step % cycle) as f32 / (cycle - 1) as f32;
-                let expected = (base * contour_factor(t, tilt, 0.6)).clamp(0.01, 1.0);
-                assert!(
-                    (actual - expected).abs() < 0.00001,
-                    "pattern {pattern}, step {step}: {actual} != {expected}"
-                );
-            }
-        }
     }
 }
 #[test]

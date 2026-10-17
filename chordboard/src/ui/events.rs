@@ -27,7 +27,8 @@ impl ChordboardView {
         if down {
             if !self.focused
                 || self.edit.is_some()
-                || self.sequencer_editing()
+                || self.arp_editor_editing()
+                || self.arp_chooser_open()
                 || self.fine_adjustment_active()
                 || self.pointer.is_some_and(|(x, y)| self.fine_adjustment_at(x, y))
                 || self.menu.is_some()
@@ -62,13 +63,13 @@ impl ChordboardView {
         matches!(self.drag, Some(Drag::Control(_) | Drag::StrumBound(..)
             | Drag::RouteContour { .. } | Drag::RouteNode(..)
             | Drag::Split | Drag::BassSplit))
-            || self.sequencer_dragging()
+            || self.arp_editor_dragging()
     }
     fn fine_adjustment_at(&self, x: f32, y: f32) -> bool {
         self.placed_controls().iter().any(|(c, r)| !c.toggle && hit(*r, x, y))
             || self.strum_bound_at(x, y).is_some()
             || (self.panel == Some(Panel::Routes) && hit(ROUTE_GRAPH, x, y))
-            || self.sequencer_value_at(x, y)
+            || self.arp_editor_value_at(x, y)
     }
     fn press_expanded_strum(&mut self, cx: &mut EventContext, x: f32, y: f32) -> bool {
         if hit(strum_bypass_rect(self.expand_t()), x, y) {
@@ -178,7 +179,7 @@ impl ChordboardView {
     pub(super) fn window_event(&mut self, cx: &mut EventContext, event: &WindowEvent) -> bool {
         if matches!(event, WindowEvent::FocusOut) {
             self.restore_shift_latch(cx);
-            self.cancel_sequencer();
+            self.cancel_arp_editor();
             cx.release();
             self.pending_route_remove = None;
             self.focused = false;
@@ -214,7 +215,7 @@ impl ChordboardView {
             if self.menu.is_none()
                 && self.edit.is_none()
                 && self.drag.is_none()
-                && self.sequencer_event(cx, event, x, y)
+                && self.arp_editor_event(cx, event, x, y)
             {
                 return true;
             }
@@ -249,7 +250,7 @@ impl ChordboardView {
         if self.menu.is_none()
             && self.edit.is_none()
             && self.drag.is_none()
-            && self.sequencer_event(cx, event, x, y)
+            && self.arp_editor_event(cx, event, x, y)
         {
             return true;
         }
@@ -487,20 +488,6 @@ impl ChordboardView {
                     self.route_hover = None;
                     return true;
                 }
-                if hit(arp_accent_rect(), x, y) {
-                    self.params.sequencer.edit(|state| {
-                        let page = &mut state.lanes[0][self.sequencer_ui.edit_pages[0]];
-                        page.interlock_override = match page.interlock_override {
-                            None => Some(0), Some(0) => Some(1), Some(1) => Some(2), _ => None,
-                        };
-                    });
-                    return true;
-                }
-                if hit(interlock_rect(), x, y) {
-                    let param = &self.params.interlock;
-                    Self::emit(cx, param.as_ptr(), param.preview_normalized((param.value() + 1) % 3));
-                    return true;
-                }
                 if hit(PIANO_SURFACE, x, y)
                     && self.panel.is_none_or(|p| !hit(self.panel_rect(p), x, y))
                 {
@@ -509,7 +496,7 @@ impl ChordboardView {
                     }
                     return self.press_piano(cx, x, y);
                 }
-                if self.expand_t() > 0.0 && y >= HEADER_H && y < SEQ_SURFACE.1 {
+                if self.expand_t() > 0.0 && y >= HEADER_H && y < ARP_SURFACE.1 {
                     return self.press_expanded_strum(cx, x, y);
                 }
                 if self.can_expand_strum() && hit(self.expand_button(), x, y) {
@@ -651,18 +638,6 @@ impl ChordboardView {
                     self.toggle_strum_bypass(cx);
                     return true;
                 }
-                if hit(seq_power_rect(), x, y) && self.sequencer_ui.progress == 1.0 {
-                    Self::emit(
-                        cx,
-                        self.params.seq_enabled.as_ptr(),
-                        if self.params.seq_enabled.value() {
-                            0.0
-                        } else {
-                            1.0
-                        },
-                    );
-                    return true;
-                }
                 if !self.arp_page() && hit(LATCH, x, y) {
                     self.set(
                         cx,
@@ -726,18 +701,6 @@ impl ChordboardView {
                 if hit(inversion_control_rect(self.params.mpe_enabled(), 1), x, y) {
                     self.inversion(cx, 1);
                     return true;
-                }
-                for looping in [false, true] {
-                    if hit(repeat_rect(looping), x, y) {
-                        Self::emit(
-                            cx,
-                            self.params.mode.as_ptr(),
-                            self.params
-                                .mode
-                                .preview_normalized(if looping { 3 } else { 1 }),
-                        );
-                        return true;
-                    }
                 }
                 if hit(arp_direction_rect(), x, y) {
                     if !self.explain_modulation("arp_pattern") {

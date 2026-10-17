@@ -1,7 +1,7 @@
 //! Fixed-capacity routing with bounded source-to-source resolution.
 use super::{Config, Engine, Out};
 pub const ROUTE_COUNT: usize = 16;
-pub const SOURCE_COUNT: usize = 11;
+pub const SOURCE_COUNT: usize = 12;
 pub const SOURCES: [&str; SOURCE_COUNT + 1] = [
     "Off",
     "Pitch wheel",
@@ -15,11 +15,12 @@ pub const SOURCES: [&str; SOURCE_COUNT + 1] = [
     "Y controller",
     "Mod 1",
     "Mod 2",
+    "Arp Position",
 ];
 pub const SOURCE_SHORT: [&str; SOURCE_COUNT] = [
-    "Pitch", "Modwheel", "Expr", "Breath", "Press", "Timbre", "Input Vel", "X", "Y", "Mod 1", "Mod 2",
+    "Pitch", "Modwheel", "Expr", "Breath", "Press", "Timbre", "Input Vel", "X", "Y", "Mod 1", "Mod 2", "Arp Pos",
 ];
-pub const SOURCE_DEFAULTS: [f32; SOURCE_COUNT] = [0.5, 0.0, 0.0, 0.0, 0.0, 0.5, 0.8, 0.0, 0.8, 0.0, 0.0];
+pub const SOURCE_DEFAULTS: [f32; SOURCE_COUNT] = [0.5, 0.0, 0.0, 0.0, 0.0, 0.5, 0.8, 0.0, 0.8, 0.0, 0.0, 0.0];
 
 #[derive(Clone, Copy, Default)]
 pub(super) struct RouteSmoother {
@@ -53,7 +54,7 @@ impl Default for Route {
     }
 }
 impl Route {
-    pub fn additive(self) -> bool { self.source >= 10 }
+    pub fn additive(self) -> bool { matches!(self.source, 10 | 11) }
     /// Bipolar routes preserve zero and use the contour's span as their depth.
     pub fn output(self, input: f32) -> f32 {
         if self.additive() {
@@ -240,9 +241,9 @@ pub const TARGETS: &[Target] = &[
         discrete: true,
     },
     Target {
-        name: "Play mode",
-        id: "mode",
-        min: 1.0,
+        name: "Arp repeat",
+        id: "arp_mode",
+        min: 0.0,
         max: 3.0,
         discrete: true,
     },
@@ -360,28 +361,7 @@ pub const TARGETS: &[Target] = &[
     },
     Target {
         name: "Arp page",
-        id: "seq_page_0",
-        min: 0.0,
-        max: 7.0,
-        discrete: true,
-    },
-    Target {
-        name: "Chords page",
-        id: "seq_page_1",
-        min: 0.0,
-        max: 7.0,
-        discrete: true,
-    },
-    Target {
-        name: "Bass page",
-        id: "seq_page_2",
-        min: 0.0,
-        max: 7.0,
-        discrete: true,
-    },
-    Target {
-        name: "Harmony page",
-        id: "seq_page_3",
+        id: "arp_page",
         min: 0.0,
         max: 7.0,
         discrete: true,
@@ -397,14 +377,18 @@ pub const TARGETS: &[Target] = &[
     Target { name: "Y controller", id: "source_8", min: 0.0, max: 1.0, discrete: false },
     Target { name: "Mod 1", id: "source_9", min: -1.0, max: 1.0, discrete: false },
     Target { name: "Mod 2", id: "source_10", min: -1.0, max: 1.0, discrete: false },
+    Target { name: "Arp position", id: "source_11", min: 0.0, max: 1.0, discrete: false },
+    Target { name: "Arp octaves", id: "arp_octaves", min: 1.0, max: 4.0, discrete: true },
+    Target { name: "Arp sync", id: "arp_sync", min: 0.0, max: 1.0, discrete: true },
+    Target { name: "Arp rate (free)", id: "arp_free_ms", min: 1.0, max: 1500.0, discrete: false },
 ];
 impl Target {
     fn normalized(&self, c: &Config) -> f32 {
         let v = match self.id {
-            "seq_page_0" => c.seq_pages[0] as f32,
-            "seq_page_1" => c.seq_pages[1] as f32,
-            "seq_page_2" => c.seq_pages[2] as f32,
-            "seq_page_3" => c.seq_pages[3] as f32,
+            "arp_page" => c.arp_page as f32,
+            "arp_octaves" => c.arp_octaves as f32,
+            "arp_sync" => c.arp_sync as u8 as f32,
+            "arp_free_ms" => c.arp_free_ms,
             "strings" => c.strings as f32,
             "strings_played" => c.strings_played as f32,
             "x" => c.routed_x.unwrap_or(0.0),
@@ -429,7 +413,7 @@ impl Target {
             "root_on_select" => c.root_on_select as u8 as f32,
             "latch" => c.latch as u8 as f32,
             "filter" => c.filter as f32,
-            "mode" => if c.seq_loop { super::ARP as f32 } else { super::AUTO as f32 },
+            "arp_mode" => c.arp_mode as u8 as f32,
             "y_target" => c.y_target as f32,
             "y_cc" => c.y_cc as f32,
             "x_reverse" => c.x_reverse as u8 as f32,
@@ -489,7 +473,7 @@ impl Target {
         match self.id {
             "spread" => crate::harmony::VOICING_NAMES[v as usize].into(),
             "quality" => crate::harmony::QUALITY_NAMES[v as usize].into(),
-            "mode" => ["Arp Once", "Arp Loop (legacy Manual)", "Arp Loop"][v as usize - 1].into(),
+            "arp_mode" => crate::arpeggiator::MODE_NAMES[v as usize].into(),
             "direction" => {
                 ["Up", "Down", "Alternate", "Up in 3rds", "Down in 3rds"][v as usize].into()
             }
@@ -521,14 +505,15 @@ impl Target {
                 "Even tones",
             ][v as usize]
                 .into(),
-            "strum_sync" | "strum_hold" | "root_on_select" | "latch" | "x_reverse"
+            "arp_sync" | "strum_sync" | "strum_hold" | "root_on_select" | "latch" | "x_reverse"
             | "y_reverse" => if v >= 0.5 { "On" } else { "Off" }.into(),
-            "length_ms" | "strum_ms" => format!("{v:.0} ms"),
+            "length_ms" | "strum_ms" | "arp_free_ms" => format!("{v:.0} ms"),
             "transpose" => format!("{v:+.0} st"),
             "bend_range" | "master_range" => format!("{v:.0} st"),
-            "seq_page_0" | "seq_page_1" | "seq_page_2" | "seq_page_3" => format!("{:.0}", v + 1.0),
+            "arp_page" => format!("{:.0}", v + 1.0),
             "output_channel" | "bass_channel" | "upper_channel" => format!("{:.0}", v + 1.0),
-            "velocity" | "humanize" | "gate" | "contour" | "swing" => format!("{:.0}%", v * 100.0),
+            "swing" => format!("{:+.0}%", v / 0.75 * 100.0),
+            "velocity" | "humanize" | "gate" | "contour" => format!("{:.0}%", v * 100.0),
             _ if self.discrete => format!("{v:.0}"),
             _ => format!("{v:.2}"),
         }
@@ -536,10 +521,10 @@ impl Target {
     fn apply(&self, c: &mut Config, norm: f32) {
         let v = self.plain(norm);
         match self.id {
-            "seq_page_0" => c.seq_pages[0] = v as u8,
-            "seq_page_1" => c.seq_pages[1] = v as u8,
-            "seq_page_2" => c.seq_pages[2] = v as u8,
-            "seq_page_3" => c.seq_pages[3] = v as u8,
+            "arp_page" => c.arp_page = v as u8,
+            "arp_octaves" => c.arp_octaves = v as u8,
+            "arp_sync" => c.arp_sync = v >= 0.5,
+            "arp_free_ms" => c.arp_free_ms = v,
             "strings" => c.strings = v as u8,
             "strings_played" => c.strings_played = v as u8,
             "x" => c.routed_x = Some(v),
@@ -570,7 +555,7 @@ impl Target {
             "root_on_select" => c.root_on_select = v >= 0.5,
             "latch" => c.latch = v >= 0.5,
             "filter" => c.filter = v as u8,
-            "mode" => c.seq_loop = v as u8 != super::AUTO,
+            "arp_mode" => c.arp_mode = crate::arpeggiator::ArpMode::from_index(v as u8),
             "y_target" => c.y_target = v as u8,
             "y_cc" => c.y_cc = v as u8,
             "x_reverse" => c.x_reverse = v >= 0.5,
@@ -678,7 +663,7 @@ impl Engine {
                     value += engine.route_output(slot, input);
                 }
             }
-            values[index] = value.clamp(if index >= 9 { -1.0 } else { 0.0 }, 1.0);
+            values[index] = value.clamp(if matches!(index, 9 | 10) { -1.0 } else { 0.0 }, 1.0);
             marks[index] = 2;
             values[index]
         }
@@ -712,7 +697,7 @@ impl Engine {
         if !value.is_finite() || index >= SOURCE_COUNT {
             return;
         }
-        let value = value.clamp(if index >= 9 { -1.0 } else { 0.0 }, 1.0);
+        let value = value.clamp(if matches!(index, 9 | 10) { -1.0 } else { 0.0 }, 1.0);
         if self.sources[index] == value {
             return;
         }
@@ -842,7 +827,7 @@ mod tests {
             let mut e = Engine { sample_rate: 1000.0, ..Engine::default() };
             e.configure(c, &mut |_| {});
             let initial = e.config.velocity;
-            let value = if source >= 10 { -0.2 } else { 0.75 };
+            let value = if matches!(source,10|11) { -0.2 } else { 0.75 };
             e.source(source - 1, value, &mut |_| {});
             assert_eq!(e.config.velocity, initial);
             e.advance(5, &mut |_, _| {});
@@ -855,7 +840,7 @@ mod tests {
             e.advance(5, &mut |_, _| {});
             assert!(!e.smoothing_active());
             let destination = &TARGETS[target("velocity") as usize];
-            let norm = if source >= 10 { destination.normalized(&c) + value } else { value };
+            let norm = if matches!(source,10|11) { destination.normalized(&c) + value } else { value };
             let expected = destination.plain(norm);
             assert!((e.config.velocity - expected).abs() < 1e-6, "source {source}");
             assert!((midpoint - (initial + expected) * 0.5).abs() < 1e-5, "source {source}");
@@ -935,13 +920,13 @@ mod tests {
         c.routes[2] = route(2, "source_9");
         e.configure(c, &mut |_| {});
         e.source(1, 0.7, &mut |_| {});
-        assert!(e.effective_sources()[9..].iter().all(|v| (*v - 0.4).abs() < 1e-6));
+        assert!(e.effective_sources()[9..11].iter().all(|v| (*v - 0.4).abs() < 1e-6));
         assert!((e.config.velocity - 1.0).abs() < 0.0001);
-        assert_eq!(e.sources[9..], [0.0, 0.0]);
+        assert_eq!(e.sources[9..11], [0.0, 0.0]);
         assert!((e.snapshot().sources[10] - 0.4).abs() < 1e-6);
         c.routes[2].enabled = false;
         e.configure(c, &mut |_| {});
-        assert_eq!(e.effective_sources()[9..], [0.0, 0.0]);
+        assert_eq!(e.effective_sources()[9..11], [0.0, 0.0]);
     }
 
     #[test]
@@ -958,7 +943,7 @@ mod tests {
             e.configure(c, &mut |_| {});
             assert_eq!(e.effective_sources(), expected);
         }
-        assert_eq!(e.sources[9..], [0.25, 0.75]);
+        assert_eq!(e.sources[9..11], [0.25, 0.75]);
         assert!(!route(10, "source_9").active());
     }
 
@@ -1042,7 +1027,7 @@ mod tests {
         e.position(0.5, 1, &mut |_| {});
         assert_eq!(
             e.snapshot().sources,
-            [0.9, 0.2, 0.3, 0.4, 0.6, 0.7, 0.8, 0.1, 0.5, 0.0, 0.0]
+            [0.9, 0.2, 0.3, 0.4, 0.6, 0.7, 0.8, 0.1, 0.5, 0.0, 0.0, 0.0]
         );
     }
     #[test]

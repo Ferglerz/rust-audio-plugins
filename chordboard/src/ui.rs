@@ -5,7 +5,7 @@ mod layout;
 mod mapping;
 mod menu;
 mod routing;
-mod sequencer;
+mod arpeggiator;
 mod style;
 mod tuning_fork;
 use menu::Menu;
@@ -147,7 +147,7 @@ struct ChordboardView {
     motion: Vec<style::ControlMotion>,
     action_flash: Option<(Rect, f32)>,
     memory_ui: MemoryUi,
-    sequencer_ui: sequencer::SequencerUi,
+    arp_ui: arpeggiator::ArpUi,
     mpe_pulse: f32,
     latch_shift: Option<(bool, Instant, bool)>,
     shift_keys: [bool; 2],
@@ -220,7 +220,7 @@ impl ChordboardView {
             motion: Vec::new(),
             action_flash: None,
             memory_ui: MemoryUi::default(),
-            sequencer_ui: sequencer::SequencerUi::default(),
+            arp_ui: arpeggiator::ArpUi::default(),
             mpe_pulse: 0.0,
             latch_shift: None,
             shift_keys: [false; 2],
@@ -246,7 +246,7 @@ impl ChordboardView {
             last_frame: Instant::now(),
             meters: [0.0, 0.5, 0.5],
             page_position: 2.0,
-            page_start: params.mode.value().max(1) as f32,
+            page_start: 2.0,
             page_target: 2,
             page_elapsed: pleasant_ui::page_slide::DURATION,
             expand_progress: 0.0,
@@ -270,10 +270,12 @@ impl ChordboardView {
         }
     }
     fn control(&self, id: &str) -> Option<Control> {
+        if let Some(control) = self.arp_params().controls().into_iter().find(|c| c.id == id) { return Some(control); }
         self.params.routes[self.route_slot]
             .control(id)
             .or_else(|| self.params.control(id))
     }
+    fn arp_params(&self) -> &crate::params::ArpPageParams { &self.params.arp_pages[self.arp_ui.edit_page] }
     fn sweep_synced(&self) -> bool {
         self.routed_plain("strum_sync")
             .map_or(self.params.strum_sync.value(), |v| v >= 0.5)
@@ -281,9 +283,6 @@ impl ChordboardView {
     fn arp_page(&self) -> bool {
         // The arpeggiator is its own module. It no longer replaces the chord grid.
         false
-    }
-    fn arp_main(&self) -> bool {
-        self.arp_page() && self.panel != Some(Panel::Routes)
     }
     fn manual_playing(&self) -> bool {
         self.params.strum_enabled.value() && matches!(self.playback_mode(), 2 | 4)
@@ -389,9 +388,7 @@ impl ChordboardView {
         }
         positions.extend(output_controls(2));
         positions.extend(arp_controls(true));
-        if !self.sweep_synced() {
-            positions.push(("strum_ms", seq_rate_rect()));
-        }
+        if !self.arp_params().arp_sync.value() { positions.push(("arp_free_ms", arp_rate_rect())); }
         positions.extend(self.keyboard_controls().into_iter().map(|(c, r)| (c.id, r)));
         if !self.params.tempo_sync.value() {
             positions.push(("tempo", TEMPO_CONTROL));
@@ -426,7 +423,7 @@ impl ChordboardView {
             Menu::MappingChannel(false) => (r.0 + 256.0, r.1 + 48.0, 116.0, 28.0),
             Menu::YTarget => (r.0 + 12.0, r.1 + 84.0, 172.0, 28.0),
             Menu::StrumRate => strum_rate_rect(self.expand_t()),
-            Menu::ArpRate => seq_rate_rect(),
+            Menu::ArpRate => arp_rate_rect(),
             Menu::ArpPattern => arp_direction_rect(),
             Menu::KeyboardParam(id) => keyboard_control_rect(id, self.params.mpe_enabled()),
             _ => menu.trigger_rect(),
@@ -526,9 +523,9 @@ impl ChordboardView {
                 .unwrap_or(3),
             Menu::ArpRate => ARP_RATES
                 .iter()
-                .position(|(_, beats)| (*beats - self.params.rate.value()).abs() < 0.0001)
+                .position(|(_, beats)| (*beats - self.arp_params().rate.value()).abs() < 0.0001)
                 .unwrap_or(3),
-            Menu::ArpPattern => self.params.arp_pattern.value().clamp(0, 6) as usize,
+            Menu::ArpPattern => self.arp_params().arp_pattern.value().clamp(0, 6) as usize,
             Menu::Key => harmony::KEY_CHOICES
                 .iter()
                 .position(|(name, _, _)| *name == self.key_name())
@@ -607,13 +604,13 @@ impl ChordboardView {
             ),
             Menu::ArpRate => Self::emit(
                 cx,
-                self.params.rate.as_ptr(),
-                self.params.rate.preview_normalized(ARP_RATES[index].1),
+                self.arp_params().rate.as_ptr(),
+                self.arp_params().rate.preview_normalized(ARP_RATES[index].1),
             ),
             Menu::ArpPattern => Self::emit(
                 cx,
-                self.params.arp_pattern.as_ptr(),
-                self.params.arp_pattern.preview_normalized(index as i32),
+                self.arp_params().arp_pattern.as_ptr(),
+                self.arp_params().arp_pattern.preview_normalized(index as i32),
             ),
             Menu::YTarget => Self::emit(
                 cx,
@@ -832,7 +829,7 @@ impl ChordboardView {
     }
     fn can_pad_hover(&self) -> bool {
         self.manual_playing()
-            && !self.sequencer_editing()
+            && !self.arp_editor_editing()
             && self.params.strum_latch.value()
             && self.panel != Some(Panel::Mapping)
             && self.menu.is_none()
@@ -950,7 +947,7 @@ impl ChordboardView {
             self.mpe_pulse = (self.mpe_pulse + dt * 3.0) % std::f32::consts::TAU;
             cx.needs_redraw();
         }
-        if self.tick_sequencer(dt) {
+        if self.tick_arp_editor(dt) {
             cx.needs_redraw();
         }
         if self.selected_modulator.is_some() {
@@ -1116,7 +1113,7 @@ impl View for ChordboardView {
         Some("chordboard")
     }
     fn event(&mut self, cx: &mut EventContext, event: &mut Event) {
-        let was_editing = self.edit.is_some() || self.sequencer_editing();
+        let was_editing = self.edit.is_some() || self.arp_editor_editing();
         event.map(|_: &Tick, _| self.tick(cx));
         event.map(|param: &RawParamEvent, _| {
             if let RawParamEvent::SetParameterNormalized(ptr, value) = param {
@@ -1141,7 +1138,7 @@ impl View for ChordboardView {
         pleasant_ui::value_edit::sync_text_input(
             cx,
             was_editing,
-            self.edit.is_some() || self.sequencer_editing(),
+            self.edit.is_some() || self.arp_editor_editing(),
         );
     }
     fn draw(&self, cx: &mut DrawContext, canvas: &mut Canvas) {

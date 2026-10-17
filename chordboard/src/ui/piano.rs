@@ -925,29 +925,6 @@ impl ChordboardView {
         }
     }
 
-    pub(super) fn draw_interlock(&self, d: &mut Draw) {
-        let state = self.params.sequencer.snapshot();
-        let page = &state.lanes[0][self.sequencer_ui.edit_pages[0]];
-        let label = page.interlock_override.map_or("Page: global", |value| {
-            ["Page: independent", "Page: soften", "Page: accent"][value.min(2) as usize]
-        });
-        self.button(
-            d,
-            arp_accent_rect(),
-            label,
-            page.interlock_override.is_some(),
-            COLORS[1],
-        );
-        let value = self.params.interlock.value().clamp(0, 2) as usize;
-        self.button(
-            d,
-            interlock_rect(),
-            &format!("Accent · {}", crate::params::ARP_CHORD_ACCENT_NAMES[value]),
-            value != 0,
-            COLORS[1],
-        );
-    }
-
     pub(super) fn voice_leading_rect(&self) -> Rect {
         let fallback = [48, 55, 60, 64, 67];
         let notes = self.snapshot.full_notes.as_slice();

@@ -309,35 +309,6 @@ impl Engine {
                 mapped = true;
             }
         }
-        if self.config.seq_enabled && crate::sequencer::valid_cc(cc) {
-            let source = self
-                .root
-                .filter(|s| s.channel < 16)
-                .map_or(self.input_master(), |s| s.channel);
-            if source == channel {
-                let mut sent = [false; 16];
-                for output in 0..16 {
-                    if self.melody_channel(output) {
-                        continue;
-                    }
-                    if let Some(expression) =
-                        self.newest_voice(output).and_then(|v| v.seq_expression)
-                    {
-                        if let Some(i) = expression.numbers.iter().position(|&n| n == cc) {
-                            out(Out::Cc(
-                                output,
-                                cc,
-                                ((self.controller_baseline(cc) as i16 + expression.cc[i]) as f32 / 127.0).clamp(0.0, 1.0),
-                            ));
-                            sent[output as usize] = true;
-                        }
-                    }
-                }
-                if sent[self.master() as usize] {
-                    return;
-                }
-            }
-        }
         if mapped {
             return;
         }

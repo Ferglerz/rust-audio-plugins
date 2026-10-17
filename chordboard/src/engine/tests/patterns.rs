@@ -45,7 +45,7 @@ fn input_velocity_drives_length_independently_of_contoured_output() {
                 }
             })
             .unwrap();
-        assert!((velocity - 0.2).abs() < 0.0001, "mode {mode}");
+        assert!((velocity - if mode==ARP {0.4} else {0.2}).abs() < 0.0001, "mode {mode}");
         assert_eq!(e.snapshot().sources[6], 0.8);
         let voice = e.voices.iter().flatten().find(|v| !v.layer).unwrap();
         let expected = if mode == ARP {
@@ -58,49 +58,6 @@ fn input_velocity_drives_length_independently_of_contoured_output() {
         if mode == AUTO {
             assert!(e.scheduled.iter().flatten().count() >= 2);
         }
-    }
-}
-#[test]
-fn arp_gate_uses_input_velocity_independently_of_each_output_note() {
-    let mut e = Engine {
-        sample_rate: 1000.0,
-        ..Engine::default()
-    };
-    let mut config = Config {
-        mode: ARP,
-        rate: 0.25,
-        contour: 1.0,
-        velocity: 0.4,
-        ..Config::default()
-    };
-    let gate = routing::TARGETS
-        .iter()
-        .position(|t| t.id == "gate")
-        .unwrap();
-    config.routes[1] = routing::Route {
-        source: 7,
-        target: gate as u8,
-        ..routing::Route::default()
-    };
-    configure(&mut e, config);
-    on(&mut e, 60, 1);
-    for _ in 0..3 {
-        let mut emitted = None;
-        while emitted.is_none() {
-            e.tick(&mut |event| {
-                if let Out::On(_, note, velocity) = event {
-                    emitted = Some((note, velocity));
-                }
-            });
-        }
-        let (note, _) = emitted.unwrap();
-        let voice = e.voices.iter().flatten().find(|v| v.note == note).unwrap();
-        let expected_gate: f32 = 0.05 + 0.95 * 0.8;
-        assert_eq!(
-            voice.off - voice.started,
-            (125.0 * expected_gate).max(1.0) as u64
-        );
-        assert_eq!(e.snapshot().sources[6], 0.8);
     }
 }
 #[test]
@@ -193,69 +150,6 @@ fn once_sweep_octaves_feel_and_duration_preserve_scheduled_cycle() {
     assert!(notes(&tick(&mut e, 1200)).is_empty());
 }
 #[test]
-fn once_and_loop_use_identical_patterns_and_per_note_rates() {
-    for pattern in 0..7 {
-        for (sync, tempo, interval) in [
-            (true, 120.0, 125),
-            (true, 60.0, 250),
-            (false, 120.0, 80),
-            (false, 60.0, 80),
-        ] {
-            let make = |mode| {
-                let mut e = Engine {
-                    sample_rate: 1000.0,
-                    ..Engine::default()
-                };
-                e.transport(false, tempo, false, &mut |_| {});
-                configure(
-                    &mut e,
-                    Config {
-                        mode,
-                        strings: 3,
-                        strings_played: 3,
-                        arp_pattern: pattern,
-                        strum_sync: sync,
-                        strum_ms: 80.0,
-                        rate: 0.25,
-                        humanize: 0.0,
-                        ..Config::default()
-                    },
-                );
-                on(&mut e, 60, 1);
-                e
-            };
-            let mut once = make(AUTO);
-            let mut looped = make(ARP);
-            let count = Engine::pattern_length(pattern, 3);
-            let mut finite = Vec::new();
-            let mut repeating = Vec::new();
-            for time in 0..count * interval {
-                once.tick(&mut |out| {
-                    if let Out::On(_, note, _) = out {
-                        finite.push((time, note));
-                    }
-                });
-                looped.tick(&mut |out| {
-                    if let Out::On(_, note, _) = out {
-                        repeating.push((time, note));
-                    }
-                });
-            }
-            assert_eq!(
-                finite, repeating,
-                "pattern {pattern}, sync {sync}, tempo {tempo}"
-            );
-            assert_eq!(finite.len(), count);
-            assert_eq!(
-                finite.iter().map(|(t, _)| *t).collect::<Vec<_>>(),
-                (0..count).map(|step| step * interval).collect::<Vec<_>>()
-            );
-            assert!(notes(&tick(&mut once, interval + 1)).is_empty());
-            assert!(!notes(&tick(&mut looped, interval + 1)).is_empty());
-        }
-    }
-}
-#[test]
 fn once_long_patterns_fit_scheduler_and_played_order_stays_in_range() {
     let mut e = Engine {
         sample_rate: 1000.0,
@@ -296,6 +190,7 @@ fn note_feedback_records_octave_strikes_even_after_short_notes_end() {
             ..Config::default()
         },
     );
+    for step in &mut e.arp.data.pages[0].steps {step.gate=5;}
     on(&mut e, 60, 1);
     tick(&mut e, 285);
     let snapshot = e.snapshot();

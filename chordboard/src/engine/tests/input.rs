@@ -543,10 +543,10 @@ fn addition_identity_dedup_release_and_capture_preserve_recipe_and_clock() {
     configure(&mut e, Config { mode: ARP, ..Config::default() });
     on(&mut e, 60, 1); on(&mut e, 70, 2);
     tick(&mut e, 15);
-    let clock = (e.arp_next, e.arp_step, e.arp_cycle_step);
+    let clock = (e.arp.next, e.arp.phase, e.arp.step);
     on(&mut e, 61, 3); on(&mut e, 74, 4); on(&mut e, 62, 5);
     assert_eq!(e.notes.as_slice(), &[60,64,67,70,73,74]);
-    assert_eq!((e.arp_next,e.arp_step,e.arp_cycle_step), clock);
+    assert_eq!((e.arp.next,e.arp.phase,e.arp.step), clock);
     off(&mut e, 74, 4);
     assert_eq!(e.notes.as_slice(), &[60,64,67,70,73,74]);
     let word = e.memory.unwrap().encode();
@@ -554,7 +554,7 @@ fn addition_identity_dedup_release_and_capture_preserve_recipe_and_clock() {
     assert_eq!(e.saved.unwrap().1, word);
     off(&mut e, 62, 5);
     assert_eq!(e.notes.as_slice(), &[60,64,67,70,73]);
-    assert_eq!((e.arp_next,e.arp_step,e.arp_cycle_step), clock);
+    assert_eq!((e.arp.next,e.arp.phase,e.arp.step), clock);
     send(&mut e, Command::Recall(word));
     assert_eq!(e.notes.as_slice(), &[60,64,67,70,73,74]);
 }

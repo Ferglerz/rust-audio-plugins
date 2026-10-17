@@ -186,7 +186,6 @@ fn selection_button_cycles_all_three_modes_and_preserves_saved_flags() {
     for selected in 0..3 {
         let mut view = view(2, false);
         view.params = Arc::new(ChordboardParams {
-            mode: IntParam::new("Mode", 2, IntRange::Linear { min: 0, max: 3 }),
             root_on_select: BoolParam::new("Root", selected == 1),
             always_chord: BoolParam::new("Chord", selected == 2),
             ..ChordboardParams::default()
@@ -504,20 +503,17 @@ fn modulator_cards_fill_the_module_and_appearance_aligns_with_its_edge() {
 }
 
 #[test]
-fn sequencer_bypass_is_local_and_old_header_location_is_inactive() {
+fn arp_editor_bypass_is_local_and_old_header_location_is_inactive() {
     for enabled in [false, true] {
         let mut view = view(3, false);
-        Arc::get_mut(&mut view.params).unwrap().seq_enabled = BoolParam::new("Sequencer", enabled);
+        Arc::get_mut(&mut view.params).unwrap().arp_enabled = BoolParam::new("Arpeggiator", enabled);
         let (mut cx, target, changes) = context();
         // Removing the navigation tabs leaves the old header power location inactive.
         click(&mut view, &mut cx, target, (772.0, 25.0, 28.0, 28.0));
-        assert!(view.sequencer_open());
+        assert!(view.arp_editor_open());
         assert!(changes.borrow().is_empty());
-        view.sequencer_ui.progress = 0.5;
-        click(&mut view, &mut cx, target, seq_power_rect());
-        assert!(changes.borrow().is_empty(), "moving page must not toggle playback");
         open_arp(&mut view);
-        click(&mut view, &mut cx, target, seq_power_rect());
-        assert_eq!(&*changes.borrow(), &[(view.params.seq_enabled.as_ptr(), if enabled { 0.0 } else { 1.0 })]);
+        click(&mut view, &mut cx, target, arp_power_rect());
+        assert_eq!(&*changes.borrow(), &[(view.params.arp_enabled.as_ptr(), if enabled { 0.0 } else { 1.0 })]);
     }
 }

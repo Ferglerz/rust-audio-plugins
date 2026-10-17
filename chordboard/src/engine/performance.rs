@@ -1,5 +1,12 @@
 use super::*;
 impl Engine {
+    pub(super) fn manual_active(&self) -> bool { self.config.strum_enabled && self.config.mode == MANUAL }
+    pub(super) fn controller_baseline(&self, cc:u8)->u8 {
+        let index=match cc {1=>Some(1),11=>Some(2),2=>Some(3),74=>Some(5),_=>None};
+        if let Some(value)=index.and_then(|i|self.source_overrides[i]) {return (value*127.0).round() as u8;}
+        let source=self.root.filter(|s|s.channel<16).map_or(if self.input_upper {15} else {0},|s|s.channel) as usize;
+        if self.cc_known[source][cc as usize] {self.cc[source][cc as usize]} else {match cc {7|11=>127,10=>64,_=>0}}
+    }
     pub(super) fn setup(&mut self, out: &mut impl FnMut(Out)) {
         if !self.needs_setup {
             return;
@@ -43,25 +50,14 @@ impl Engine {
             if !self.output_owned(v.channel, v.note) {
                 out(Out::Off(v.channel, v.note, release));
             }
-            if let Some(expression) = v.seq_expression {
-                if !self.melody_channel(v.channel) {
-                    let remaining = self.newest_voice(v.channel);
-                    let next = remaining.and_then(|voice| voice.seq_expression);
-                    self.restore_step_cc(v.channel, expression, next, out);
-                    if let Some(voice) = remaining {
-                        if let Some(next) = voice.seq_expression {
-                            self.emit_step_expression(v.channel, next, out);
-                        } else {
-                            self.emit_expression(v.channel, out);
-                        }
-                    }
-                }
-            }
+            if v.owner == delay_output::DELAY_OWNER {
+                if !self.channel_owned(v.channel) {out(Out::Cc(v.channel,10,0.5));out(Out::Bend(v.channel,0.5));}
+            } else { self.release_delay_source(v.token); }
         }
     }
     pub(super) fn stop_voices(&mut self, release: f32, out: &mut impl FnMut(Out)) {
         for i in 0..self.voices.len() {
-            self.end_voice(i, release, out);
+            if self.resetting || self.voices[i].is_some_and(|v| v.owner!=delay_output::DELAY_OWNER && v.owner!=arpeggiator::ARP_OWNER) {self.end_voice(i, release, out);}
         }
     }
     pub(super) fn newest_voice(&self, channel: u8) -> Option<Voice> {
@@ -78,16 +74,17 @@ impl Engine {
                 continue;
             }
             if let Some(v) = self.newest_voice(channel) {
-                if let Some(expression) = v.seq_expression {
-                    self.emit_step_expression(channel, expression, out);
-                } else {
-                    self.emit_expression(channel, out);
-                }
+                if v.owner != delay_output::DELAY_OWNER { self.emit_expression(channel, out); }
             }
         }
     }
+    pub(super) fn attack_expression(&self)->Expression {
+        let mut e=self.routed_expression();
+        if self.y_active { match self.config.y_target {2=>e.pressure=self.y,3=>e.timbre=self.y,4=>e.bend=self.y,_=>{}} }
+        e
+    }
     fn emit_expression(&self, channel: u8, out: &mut impl FnMut(Out)) {
-        let e = self.routed_expression();
+        let e = self.attack_expression();
         let pressure = if self.y_active && self.config.y_target == 2 {
             self.y
         } else {
@@ -147,7 +144,7 @@ impl Engine {
     ) {
         self.strike_prepared(note, velocity.clamp(0.01, 1.0), duration, owner, out);
     }
-    fn strike_prepared(
+    pub(super) fn strike_prepared(
         &mut self,
         note: u8,
         velocity: f32,
@@ -194,7 +191,7 @@ impl Engine {
         off: u64,
         layer: bool,
         owner: u8,
-        seq_expression: Option<sequencer::StepExpression>,
+        attack_expression: Option<Expression>,
         out: &mut impl FnMut(Out),
     ) {
         if self.config.affect_chords && self.melody.iter().any(|notes| notes[note as usize]) {
@@ -203,7 +200,7 @@ impl Engine {
         self.setup(out);
         let capacity = if self.config.mpe {
             self.config.members.clamp(1, 15) as usize
-        } else if self.config.seq_enabled {
+        } else if self.config.arp_enabled {
             self.voices.len()
         } else {
             15
@@ -221,7 +218,7 @@ impl Engine {
                 (0..capacity)
                     .filter(available)
                     .filter(|&i| self.voices[i].is_some_and(|v| !v.layer))
-                    .min_by_key(|&i| self.voices[i].map_or(0, |v| v.started))
+                    .min_by_key(|&i| self.voices[i].map_or((false,0), |v| (v.owner!=delay_output::DELAY_OWNER,v.started)))
             });
         let Some(index) = index else {
             // Melody and sustained accompaniment have priority over new tails.
@@ -233,16 +230,14 @@ impl Engine {
         } else {
             self.member(index)
         };
+        self.reclaim_delay_channel(channel,out);
         if !self.melody_channel(channel) {
-            if let Some(expression) = seq_expression {
-                self.emit_step_expression(channel, expression, out);
-            } else {
-                self.emit_expression(channel, out);
-            }
+            self.emit_expression(channel, out);
         }
         if !self.output_owned(channel, note) {
             out(Out::On(channel, note, velocity.clamp(0.01, 1.0)));
         }
+        let token = self.new_note_token();
         self.voices[index] = Some(Voice {
             note,
             channel,
@@ -250,8 +245,17 @@ impl Engine {
             off,
             layer,
             owner,
-            seq_expression,
+            attack_expression,
+            token,
         });
+        let source = if owner == arpeggiator::ARP_OWNER { crate::arpeggiator::source::ARP }
+            else if layer {
+                let bass=self.config.always_bass && self.selected_root()==Some(note);
+                let chord=self.config.always_chord || self.config.mode==CHORD;
+                (if bass {crate::arpeggiator::source::BASS} else {0}) | (if chord || !bass {crate::arpeggiator::source::CHORDS} else {0})
+            } else if owner == SELECT_ROOT_OWNER || self.config.mode == CHORD { crate::arpeggiator::source::CHORDS }
+            else { crate::arpeggiator::source::STRUM };
+        self.capture_delay_source(source, token, note, velocity, attack_expression.unwrap_or_else(||self.attack_expression()), (!layer && off!=u64::MAX).then_some(off));
     }
     fn mark_strike(&mut self, note: u8) {
         self.note_strikes[note as usize] = self.note_strikes[note as usize].wrapping_add(1);
@@ -380,33 +384,37 @@ impl Engine {
         discontinuity: bool,
         out: &mut impl FnMut(Out),
     ) {
+        let previous_tempo=self.tempo;
         self.tempo = if tempo.is_finite() {
             tempo.clamp(20.0, 400.0)
         } else {
             120.0
         };
+        self.retime_arp(previous_tempo,self.tempo);
         if discontinuity || (self.playing && !playing) {
+            let selected=(self.memory,self.notes,self.full_notes,self.expression);
+            let retain=discontinuity && playing && self.config.arp_mode==crate::arpeggiator::ArpMode::AlignedLoop;
             self.panic(out);
+            if retain {self.memory=selected.0;self.notes=selected.1;self.full_notes=selected.2;self.expression=selected.3;}
         }
         self.playing = playing;
     }
     // Only a newly played/recalled chord establishes a new rhythmic origin.
     pub(super) fn restart_arp(&mut self) {
-        self.arp_step = 0;
-        self.arp_cycle_step = 0;
-        self.arp_next = self.now;
-        self.arp_fraction = 0.0;
-        if !self.config.seq_loop {
-            self.restart_sequence_arp();
+        if !self.promoting && matches!(self.config.arp_mode, crate::arpeggiator::ArpMode::Once | crate::arpeggiator::ArpMode::Loop) {
+            self.restart_automatic_arp();
         }
+
     }
 
     /// Advance a span without scanning every voice and pending strike per sample.
     /// Output offsets are relative to this span. Inputs at an offset must be
     /// applied before advancing the sample at that offset.
     pub fn advance(&mut self, samples: usize, out: &mut impl FnMut(usize, Out)) {
+        self.refresh_arp_events();
         let mut offset = 0;
         while offset < samples {
+            self.refresh_arp_events();
             let deadline = self
                 .voices
                 .iter()
@@ -415,8 +423,8 @@ impl Engine {
                 .map(|voice| voice.off)
                 .chain(self.scheduled.iter().flatten().map(|event| event.at))
                 // The arp clock and RNG also advance in the other modes.
-                .chain((self.notes.len > 0).then_some(self.arp_next))
-                .chain(self.sequencer_deadline())
+                .chain(self.arp_deadline())
+                .chain(self.delay.deadline(self.now, self.beat, self.sample_rate as f64 * 60.0 / self.tempo))
                 .chain(self.smoothing_active().then_some(self.now))
                 .min()
                 .unwrap_or(u64::MAX);
@@ -425,6 +433,7 @@ impl Engine {
             let quiet = deadline.saturating_sub(self.now).min(u64::MAX - self.now);
             let skip = quiet.min((samples - offset) as u64) as usize;
             self.now += skip as u64;
+            self.beat += skip as f64 / (self.sample_rate as f64 * 60.0 / self.tempo);
             offset += skip;
             if offset < samples {
                 // Retain voice-off, arp, and scheduled-slot ordering exactly.
@@ -441,62 +450,8 @@ impl Engine {
                 self.end_voice(i, 0.0, out);
             }
         }
-        self.tick_sequencer(out);
-        if self.notes.len > 0 && self.now >= self.arp_next {
-            // Keep the clock moving while another performance mode is selected.
-            // A new range/pattern takes effect only after the old cycle completes.
-            if self.arp_cycle_step == 0 {
-                self.arp_octaves = self.config.octaves.clamp(1, 4);
-                self.arp_pattern = self.config.arp_pattern;
-            }
-            let total = self.notes.len * self.arp_octaves as usize;
-            let index = self.arp_index(self.arp_pattern, self.arp_cycle_step, total);
-            if self.arp_step.is_multiple_of(2) {
-                self.arp_pair_swing = self.config.swing as f64;
-                self.arp_pair_rate = self.rate_samples();
-            }
-            let base = self.arp_pair_rate;
-            let swing = if self.arp_step.is_multiple_of(2) {
-                1.0 + self.arp_pair_swing
-            } else {
-                1.0 - self.arp_pair_swing
-            };
-            let exact_step = (base * swing).max(1.0) + self.arp_fraction;
-            let step = exact_step.floor() as u64;
-            self.arp_fraction = exact_step - step as f64;
-            // Advance the RNG every arp step in every mode (keeps clock/RNG state mode-independent).
-            let _ = self.random();
-            if let Some(note) = self.notes.string(index) {
-                let already_started = self.config.root_on_select
-                    && self.selected_root() == Some(note)
-                    && self
-                        .voices
-                        .iter()
-                        .flatten()
-                        .any(|v| v.note == note && v.started == self.now);
-                if self.config.mode == ARP && !already_started {
-                    let at = self.humanized_at(self.now, step as f64, self.now);
-                    let human_vel = self.humanize_velocity_factor();
-                    self.schedule(Scheduled {
-                        gate_step: Some(step),
-                        at,
-                        note,
-                        velocity: (self.strike_velocity()
-                            * contour_factor(
-                                self.arp_contour_position(total),
-                                self.config.contour,
-                                self.config.contour_curve,
-                            )
-                            * human_vel)
-                            .clamp(0.01, 1.0),
-                        duration: (step as f32 * self.config.gate).max(1.0) as u64,
-                    });
-                }
-            }
-            self.arp_cycle_step = (self.arp_cycle_step + 1) % self.arp_cycle_length(total);
-            self.arp_step = self.arp_step.wrapping_add(1);
-            self.arp_next = self.now + step;
-        }
+        self.tick_automatic_arp(out);
+        self.tick_delay(out);
         for i in 0..self.scheduled.len() {
             if self.scheduled[i].is_some_and(|e| e.at <= self.now) {
                 if let Some(e) = self.scheduled[i].take() {
@@ -505,6 +460,7 @@ impl Engine {
             }
         }
         self.now = self.now.wrapping_add(1);
+        self.beat += 1.0 / (self.sample_rate as f64 * 60.0 / self.tempo);
     }
     pub(super) fn arp_index(&mut self, pattern: u8, step: usize, total: usize) -> usize {
         match pattern {
@@ -576,14 +532,6 @@ impl Engine {
             3 | 4 => (notes * 2).max(1),
             _ => notes.max(1),
         }
-    }
-    pub(super) fn arp_cycle_length(&self, notes: usize) -> usize {
-        Self::pattern_length(self.arp_pattern, notes)
-    }
-
-    fn arp_contour_position(&self, notes: usize) -> f32 {
-        let cycle = self.arp_cycle_length(notes);
-        (self.arp_cycle_step % cycle) as f32 / cycle.saturating_sub(1).max(1) as f32
     }
     pub(super) fn random(&mut self) -> u32 {
         self.rng ^= self.rng << 13;

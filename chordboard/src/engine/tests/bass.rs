@@ -41,7 +41,7 @@ fn quality_changes_preserve_arp_step_and_deadline_for_held_and_latched_chords() 
             if latched {
                 off(&mut e, 60, 0);
             }
-            let position = (e.arp_step, e.arp_next);
+            let position = (e.arp.phase, e.arp.next);
             let previous = e.notes;
             let mut events = Vec::new();
             match source {
@@ -51,7 +51,7 @@ fn quality_changes_preserve_arp_step_and_deadline_for_held_and_latched_chords() 
                 _ => e.control(0, 1, 1.0 / 11.0, &mut |v| events.push(v)),
             }
             assert_eq!(
-                (e.arp_step, e.arp_next),
+                (e.arp.phase, e.arp.next),
                 position,
                 "source {source}, latched {latched}"
             );
@@ -60,10 +60,10 @@ fn quality_changes_preserve_arp_step_and_deadline_for_held_and_latched_chords() 
                 notes(&events).is_empty(),
                 "quality selection must not strike immediately"
             );
-            let remaining = (e.arp_next - e.now) as usize;
+            let remaining = (e.arp.next - e.now as f64) as usize;
             assert!(notes(&tick(&mut e, remaining)).is_empty());
             assert_eq!(notes(&tick(&mut e, 1)).len(), 1);
-            assert_eq!(e.arp_step, position.0 + 1);
+            assert_eq!(e.arp.phase, position.0 + 1);
         }
     }
 }
@@ -81,11 +81,11 @@ fn quality_changes_with_only_control_notes_do_not_start_an_arp() {
     on(&mut e, 60, 0);
     tick(&mut e, 100);
     off(&mut e, 60, 0);
-    let position = (e.arp_step, e.arp_next);
     assert!(notes(&on(&mut e, 39, 0)).is_empty());
     assert!(notes(&send(&mut e, Command::SetQuality(4))).is_empty());
     assert!(notes(&tick(&mut e, 12000)).is_empty());
-    assert_eq!((e.arp_step, e.arp_next), position);
+    assert!(!e.arp.running);
+    assert_eq!(e.sources[11],0.0);
 }
 #[test]
 fn low_zone_routes_only_to_bass_and_never_changes_harmony() {

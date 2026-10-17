@@ -92,7 +92,7 @@ impl ChordboardView {
             if c.id == "root_on_select" {
                 continue;
             }
-            if hit(SEQ_SURFACE, r.0, r.1) || hit(ARP_PAD, r.0, r.1) {
+            if hit(ARP_SURFACE, r.0, r.1) || hit(ARP_PAD, r.0, r.1) {
                 continue;
             }
             if r.1 >= PIANO_SURFACE.1 {
@@ -107,8 +107,8 @@ impl ChordboardView {
             self.draw_control(&mut d, c, *r, GOLD);
         }
         self.draw_strumfield_header(&mut d);
-        self.surface(&mut d, SEQ_SURFACE);
-        self.draw_sequencer(&mut d);
+        self.surface(&mut d, ARP_SURFACE);
+        self.draw_arp_editor(&mut d);
         d.scissor(
             PIANO_SURFACE.0,
             PIANO_SURFACE.1,
@@ -243,7 +243,7 @@ impl ChordboardView {
                 return Some(hint);
             }
         }
-        if let Some(hint) = self.sequencer_hint(x, y) {
+        if let Some(hint) = self.arp_editor_hint(x, y) {
             return Some(hint);
         }
         if let Some(hint) = self.piano_hint(x, y) {
@@ -254,13 +254,13 @@ impl ChordboardView {
         }
         if hit(METER_NUM, x, y) || hit(METER_DEN, x, y) {
             return Some(if self.params.tempo_sync.value() && self.snapshot.time_sig_host {
-                "Host time signature · Sets the sequencer bar shading".into()
+                "Host time signature".into()
             } else {
                 "Time signature · Click the numerator or denominator to set the meter".into()
             });
         }
-        if hit(seq_power_rect(), x, y) {
-            return Some("Enable or bypass sequencer playback".into());
+        if hit(arp_power_rect(), x, y) {
+            return Some("Enable or bypass arpeggiator playback".into());
         }
         if hit(arp_direction_rect(), x, y) {
             return Some(
@@ -268,12 +268,7 @@ impl ChordboardView {
                     .into(),
             );
         }
-        if hit(repeat_rect(false), x, y) || hit(repeat_rect(true), x, y) {
-            return Some(
-                "Once plays the chord and stops · Loop keeps the arpeggiator strumming".into(),
-            );
-        }
-        if self.expand_t() > 0.0 && y >= HEADER_H && y < SEQ_SURFACE.1 {
+        if self.expand_t() > 0.0 && y >= HEADER_H && y < ARP_SURFACE.1 {
             if self.can_expand_strum() && hit(self.expand_button(), x, y) {
                 return Some("Collapse the strum field".into());
             }
@@ -440,12 +435,6 @@ impl ChordboardView {
                 "Octaves: spread the chord over 1–4 octaves · Strings = chord tones × octaves, 3 to 12"
                     .into(),
             );
-        }
-        if hit(arp_accent_rect(), x, y) {
-            return Some("Accent for the edited Arp page · Use global / Independent / Soften arp / Accent arp".into());
-        }
-        if hit(interlock_rect(), x, y) {
-            return Some("Arp–Chord Accent · When both strike together, keep the arp independent, soften it, or accent it".into());
         }
         for i in 0..crate::engine::routing::SOURCE_COUNT {
             if hit(meter_rect(i), x, y) {
@@ -681,13 +670,13 @@ mod tests {
             Arc::new(Bridge::default()),
             Arc::new(PreviewContext),
         );
-        assert!(view.sequencer_open());
+        assert!(view.arp_editor_open());
         let key = piano_key_rect(60);
         view.pointer = Some((key.0 + key.2 * 0.5, key.1 + key.3 - 2.0));
         assert!(view.hover_hint(&[]).unwrap().contains("MIDI 60"));
-        let power = seq_power_rect();
+        let power = arp_power_rect();
         view.pointer = Some((power.0 + power.2 * 0.5, power.1 + power.3 * 0.5));
-        assert!(view.hover_hint(&[]).unwrap().contains("bypass sequencer"));
+        assert!(view.hover_hint(&[]).unwrap().contains("bypass arpeggiator"));
         view.expand_progress = 1.0;
         let humanize = arp_controls(true)[0].1;
         view.pointer = Some((humanize.0 + 5.0, humanize.1 + 5.0));
@@ -705,25 +694,24 @@ mod tests {
         }
     }
     #[test]
-    fn arp_settings_share_one_row_above_the_sequencer() {
+    fn arp_settings_share_one_row_above_the_strings() {
         let row = [
-            seq_power_rect(),
-            repeat_rect(false),
-            repeat_rect(true),
+            arp_power_rect(),
+            arpeggiator::mode_rect(),
+            arpeggiator::octaves_rect(),
             arp_direction_rect(),
             arp_controls(false)[0].1,
             arp_controls(false)[1].1,
-            seq_rate_sync_rect(),
-            seq_rate_rect(),
-            arp_accent_rect(),
-            interlock_rect(),
+            arp_rate_sync_rect(),
+            arp_rate_rect(),
+            arpeggiator::delay_rect(),
         ];
-        let top = SEQ_SURFACE.1;
-        let bottom = SEQ_SURFACE.1 + SEQ_SETTINGS_H;
+        let top = ARP_SURFACE.1;
+        let bottom = ARP_SURFACE.1 + ARP_SETTINGS_H;
         for r in row {
             assert!(r.1 >= top && r.1 + r.3 <= bottom, "{r:?} leaves the settings row");
             assert!(
-                r.0 >= SEQ_SURFACE.0 && r.0 + r.2 <= SEQ_SURFACE.0 + SEQ_SURFACE.2,
+                r.0 >= ARP_SURFACE.0 && r.0 + r.2 <= ARP_SURFACE.0 + ARP_SURFACE.2,
                 "{r:?} leaves the arpeggiator module"
             );
         }
@@ -732,14 +720,14 @@ mod tests {
         assert_eq!(humanize.1, swing.1);
         assert!(humanize.0 + humanize.2 < swing.0);
         assert!(arp_direction_rect().2 > 0.0);
-        assert!(SEQ_LANE_TOP > SEQ_SETTINGS_H);
-        assert!(SEQ_SURFACE.1 + SEQ_SURFACE.3 <= PIANO_SURFACE.1);
+        assert!(ARP_LANE_TOP > ARP_SETTINGS_H);
+        assert!(ARP_SURFACE.1 + ARP_SURFACE.3 <= PIANO_SURFACE.1);
     }
     #[test]
     fn performance_rows_fill_width_and_share_direction_sizes() {
-        let right = SEQ_SURFACE.0 + SEQ_SURFACE.2 - 12.0;
-        let interlock = interlock_rect();
-        assert!((interlock.0 + interlock.2 - right).abs() < 0.001);
+        let right = ARP_SURFACE.0 + ARP_SURFACE.2 - 12.0;
+        let delay = arpeggiator::delay_rect();
+        assert!((delay.0 + delay.2 - right).abs() < 0.001);
         let [(_, humanize), (_, swing)] = arp_controls(false);
         assert_eq!((swing.1, swing.3), (humanize.1, humanize.3));
         assert!(swing.0 > humanize.0 + humanize.2);

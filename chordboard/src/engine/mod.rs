@@ -2,13 +2,25 @@ mod layers;
 mod midi;
 mod performance;
 pub mod routing;
-pub mod sequencer;
+pub mod arpeggiator;
+mod delay;
+mod delay_output;
 mod types;
 use crate::harmony::{self, Notes};
 pub use types::*;
 
 pub struct Engine {
-    pub seq: sequencer::Runtime,
+    pub arp: arpeggiator::Runtime,
+    delay: delay::Runtime,
+    next_token: u64,
+    beat: f64,
+    host_beat_available: bool,
+    host_tempo_available: bool,
+    resetting: bool,
+    promoting: bool,
+    delay_power: bool,
+    delay_page: u8,
+    delay_bend_ranges: [f32;16],
     pub sources: [f32; routing::SOURCE_COUNT],
     route_smoothers: [routing::RouteSmoother; routing::ROUTE_COUNT],
     pub(super) source_overrides: [Option<f32>; routing::SOURCE_COUNT],
@@ -67,14 +79,6 @@ pub struct Engine {
     pub cc_known: [[bool; 128]; 16],
     cc_lsb_seen: [u32; 16],
     pub needs_setup: bool,
-    pub arp_next: u64,
-    pub arp_step: usize,
-    arp_cycle_step: usize,
-    arp_octaves: u8,
-    arp_pattern: u8,
-    arp_fraction: f64,
-    arp_pair_swing: f64,
-    arp_pair_rate: f64,
     pub rng: u32,
     pub tempo: f64,
     pub playing: bool,
@@ -85,7 +89,17 @@ pub struct Engine {
 impl Default for Engine {
     fn default() -> Self {
         Self {
-            seq: sequencer::Runtime::default(),
+            arp: arpeggiator::Runtime::default(),
+            delay: delay::Runtime::default(),
+            next_token: 1,
+            beat: 0.0,
+            host_beat_available: false,
+            host_tempo_available: false,
+            resetting: false,
+            promoting: false,
+            delay_power: false,
+            delay_page: 0,
+            delay_bend_ranges: [0.0;16],
             sources: routing::SOURCE_DEFAULTS,
             route_smoothers: [routing::RouteSmoother::default(); routing::ROUTE_COUNT],
             source_overrides: [None; routing::SOURCE_COUNT],
@@ -148,14 +162,6 @@ impl Default for Engine {
             cc_known: [[false; 128]; 16],
             cc_lsb_seen: [0; 16],
             needs_setup: true,
-            arp_next: 0,
-            arp_step: 0,
-            arp_cycle_step: 0,
-            arp_octaves: 1,
-            arp_pattern: 0,
-            arp_fraction: 0.0,
-            arp_pair_swing: 0.0,
-            arp_pair_rate: 0.25,
             rng: 0x43484f52,
             tempo: 120.0,
             playing: false,
@@ -187,6 +193,14 @@ impl Engine {
                 config.transpose = *transpose;
             }
         }
+        if !config.arp_enabled { self.arp.active=config.arp_page.min(7); }
+        let settings = config.arp_settings[self.arp.active as usize];
+        if config.arp_enabled {
+        config.arp_mode = settings.mode; config.arp_pattern = settings.pattern;
+        config.arp_octaves = settings.octaves; config.arp_sync = settings.sync;
+        config.arp_free_ms = settings.free_ms; config.rate = settings.rate;
+        config.swing = settings.swing; config.humanize = settings.humanize;
+        }
         let unrouted_config = config;
         self.prepare_route_smoothing();
         self.apply_routes(&mut config);
@@ -205,23 +219,13 @@ impl Engine {
             || old.bass_channel != config.bass_channel
             || old.upper_channel != config.upper_channel;
         let mode = old.mode != config.mode;
-        for lane in 0..4 {
-            if previous_host.seq_pages[lane] != self.host_config.seq_pages[lane] {
-                self.seq.base[lane] = self.host_config.seq_pages[lane].min(7);
-            }
-        }
-        if mode || route || old.seq_enabled != config.seq_enabled {
-            if old.seq_enabled == config.seq_enabled && config.seq_enabled {
-                self.reset_sequencer_runtime(out);
-            } else {
-                self.reset_sequencer(out);
-            }
-            // Reset clears the dedicated sources; use their reset values.
+        if mode || route || old.arp_enabled != config.arp_enabled {
+            self.reset_automatic_arp(out);
             config = unrouted_config;
-            self.prepare_route_smoothing();
-            self.apply_routes(&mut config);
+            self.prepare_route_smoothing(); self.apply_routes(&mut config);
             self.source_overrides = self.resolved_source_overrides();
         }
+        if route { self.reset_delay(out); self.delay_bend_ranges.fill(0.0); }
         if route {
             self.stop_bass(out);
         }
@@ -234,9 +238,10 @@ impl Engine {
             self.needs_setup = true;
         }
         self.config = config;
-        if old.seq_loop != config.seq_loop {
-            self.restart_sequence_arp();
-        }
+        let page_changed=self.arp.applied_page!=self.arp.active;
+        self.arp.applied_page=self.arp.active;
+        if old.arp_mode != config.arp_mode && !page_changed { self.restart_automatic_arp(); }
+        self.update_delay_power(out);
         if old.strum_enabled && !config.strum_enabled && config.mode == MANUAL {
             self.x_primed = false;
             for i in 0..self.voices.len() {
@@ -274,7 +279,7 @@ impl Engine {
                 }
             }
         }
-        if !config.latch && !config.key_split && !self.pedal && self.root.is_none() {
+        if !config.latch && !config.key_split && !self.pedal && self.root.is_none() && !(self.playing && config.arp_enabled && self.memory.is_some()) {
             self.notes = Notes::default();
             if self.config.mode == CHORD {
                 self.stop_voices(0.0, out);
@@ -335,7 +340,7 @@ impl Engine {
         if previous_sources != self.source_overrides {
             // Restore a removed controller route even if its live baseline is unknown.
             for channel in 0..16 {
-                if self.newest_voice(channel).is_none() || self.melody_channel(channel) { continue; }
+                if self.newest_voice(channel).is_none_or(|v|v.owner==delay_output::DELAY_OWNER) || self.melody_channel(channel) { continue; }
                 for (index, cc) in [(1, 1), (2, 11), (3, 2)] {
                     if previous_sources[index].is_some() && self.source_overrides[index].is_none() {
                         out(Out::Cc(channel, cc, self.controller_baseline(cc) as f32 / 127.0));
@@ -489,12 +494,7 @@ impl Engine {
                 self.down[slot.id as usize] = false;
                 // Releasing a key may promote an already-held chord input, but
                 // must not establish a new rhythmic origin.
-                let clock = (
-                    self.arp_step,
-                    self.arp_cycle_step,
-                    self.arp_next,
-                    self.arp_fraction,
-                );
+                self.promoting = true;
                 self.note_on(
                     slot.id,
                     slot.note,
@@ -503,12 +503,7 @@ impl Engine {
                     quality,
                     out,
                 );
-                (
-                    self.arp_step,
-                    self.arp_cycle_step,
-                    self.arp_next,
-                    self.arp_fraction,
-                ) = clock;
+                self.promoting = false;
                 return;
             }
         }
@@ -673,7 +668,9 @@ impl Engine {
         }
     }
     pub fn panic(&mut self, out: &mut impl FnMut(Out)) {
-        self.reset_sequencer(out);
+        self.resetting = true;
+        self.reset_automatic_arp(out);
+        self.reset_delay(out);
         self.learned_note_held.fill(false);
         self.stop_voices(0.0, out);
         self.stop_melody(out);
@@ -699,6 +696,7 @@ impl Engine {
         self.expression = Expression::default();
         self.channels.fill(Expression::default());
         self.input_bend_values.fill(0.5);
+        self.resetting = false;
         self.needs_setup = true;
         let master = self.master();
         out(Out::Cc(master, 64, 0.0));
@@ -780,9 +778,7 @@ impl Engine {
         }
         self.notes = harmony::filter_notes(self.full_notes, self.config.filter);
         self.memory = Some(recipe);
-        if self.config.seq_enabled {
-            self.apply_sequenced_harmony();
-        }
+
         let count = harmony::recipe_intervals(recipe).len;
         self.inversion %= count.max(1) as u8;
         if play { self.scheduled.fill(None); }
@@ -813,7 +809,7 @@ impl Engine {
         match self.config.mode {
             CHORD => {
                 for i in 0..self.voices.len() {
-                    if self.voices[i].is_some_and(|v| !self.notes.as_slice().contains(&v.note)) {
+                    if self.voices[i].is_some_and(|v| v.owner==0 && !self.notes.as_slice().contains(&v.note)) {
                         let end = self.now.saturating_add(self.duration());
                         if let Some(voice) = self.voices[i].as_mut() {
                             voice.off = voice.off.min(end);
@@ -822,7 +818,7 @@ impl Engine {
                 }
                 for i in 0..self.notes.len {
                     let note = self.notes.values[i];
-                    if let Some(voice) = self.voices.iter_mut().flatten().find(|v| v.note == note) {
+                    if let Some(voice) = self.voices.iter_mut().flatten().find(|v| v.owner==0 && v.note == note) {
                         voice.off = u64::MAX;
                     } else {
                         self.strike(note, self.strike_velocity(), u64::MAX, out);
@@ -832,7 +828,7 @@ impl Engine {
             AUTO => {
                 if self.config.strum_hold {
                     for i in 0..self.voices.len() {
-                        if self.voices[i].is_some_and(|v| !v.layer) {
+                        if self.voices[i].is_some_and(|v| v.owner==0 && !v.layer) {
                             self.end_voice(i, 0.0, out);
                         }
                     }
@@ -980,18 +976,14 @@ impl Engine {
             learning: self.learn,
             output_mpe: self.config.mpe,
             tempo: self.tempo as f32,
-            seq_pages: self.seq.active,
-            seq_base: self.seq.base,
-            seq_pending: std::array::from_fn(|lane| {
-                let requested = self.sequence_requests()[lane];
-                if requested != self.seq.active[lane] {
-                    requested
-                } else {
-                    255
-                }
-            }),
-            seq_steps: self.seq.steps,
-            seq_running: self.seq.running,
+            arp_notes: arpeggiator::cycle_notes(self.arp_cycle_chord(), self.arp_live_settings(), self.arp.seed).0,
+            arp_len: arpeggiator::cycle_notes(self.arp_cycle_chord(), self.arp_live_settings(), self.arp.seed).1 as u8,
+            arp_page: self.arp.active,
+            arp_pending: if self.config.arp_page != self.arp.active { self.config.arp_page } else { 255 },
+            arp_step: self.arp.step,
+            arp_phase: self.arp.display_phase,
+            arp_running: self.arp.running && !self.arp.finished,
+            arp_aligned: self.arp_alignment_available(),
             time_sig_host: self.time_sig_host,
             time_sig_num: self.time_sig_num,
             time_sig_den: self.time_sig_den,
@@ -1069,3 +1061,6 @@ impl Engine {
 mod advance_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod arpeggiator_tests;

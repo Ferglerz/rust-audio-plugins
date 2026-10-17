@@ -42,6 +42,7 @@ impl Engine {
         out: &mut impl FnMut(Out),
     ) {
         if let Some(channel) = self.bass[input][note].take() {
+            self.release_delay_source(Self::bass_delay_token(input,note));
             if !self.output_owned(channel, note as u8) {
                 out(Out::Off(channel, note as u8, velocity));
             }
@@ -65,8 +66,10 @@ impl Engine {
         self.down[id] = pressed;
         if pressed {
             let channel = self.config.bass_channel;
+            self.reclaim_delay_channel(channel,out);
             let owned = self.output_owned(channel, note);
             self.bass[input][note_index] = Some(channel);
+            self.capture_bass_delay(input,channel,note,velocity);
             if !owned {
                 out(Out::On(channel, note, velocity.clamp(0.01, 1.0)));
             }
@@ -136,6 +139,7 @@ impl Engine {
         if pressed == self.melody[channel as usize][note as usize] {
             return;
         }
+        if pressed {self.reclaim_delay_channel(channel,out);}
         let already_owned = self.output_owned(channel, note);
         self.melody[channel as usize][note as usize] = pressed;
         self.down[id] = pressed;
@@ -154,18 +158,21 @@ impl Engine {
                             voice.off,
                             voice.layer,
                             voice.owner,
-                            voice.seq_expression,
+                            voice.attack_expression,
                             out,
                         );
                     }
                 }
             }
             self.emit_melody_expression(channel, out);
+            let mut expression=self.channels[channel as usize];expression.bend=self.melody_bend(channel);
+            self.capture_delay_source(crate::arpeggiator::source::MELODY,Self::melody_delay_token(channel,note),note,velocity,expression,None);
             if !already_owned {
                 out(Out::On(channel, note, velocity.clamp(0.01, 1.0)));
             }
-        } else if !self.output_owned(channel, note) {
-            out(Out::Off(channel, note, velocity));
+        } else {
+            self.release_delay_source(Self::melody_delay_token(channel,note));
+            if !self.output_owned(channel,note) { out(Out::Off(channel,note,velocity)); }
         }
         if self.config.affect_chords {
             // Rebuild from the saved recipe, not the previous melody additions.

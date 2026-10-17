@@ -110,7 +110,7 @@ impl ChordboardView {
         harmony::string_count(self.snapshot.notes.len, octaves as u8)
     }
 
-    // Shared by Play and Sequencer pages, manual and auto fields, and the expanded pad.
+    // Shared by manual gestures and the expanded pad.
     fn draw_strings(&self, d: &mut Draw, field: Rect, span: (f32, f32), reverse: bool) {
         if self.snapshot.notes.len == 0 {
             d.text_centered(
@@ -365,7 +365,7 @@ impl ChordboardView {
         for (i, label) in SOURCE_SHORT.iter().enumerate() {
             let r = meter_rect(i);
             let value = self.snapshot.sources[i];
-            let accent = if i >= 9 { GOLD } else { TEAL };
+            let accent = if matches!(i,9|10) { GOLD } else { TEAL };
             let hover = self.hover_amount(r);
             let dragging = matches!(self.drag, Some(Drag::Route(drag)) if drag.source == i);
             let route_count = self
@@ -426,11 +426,11 @@ impl ChordboardView {
             if end > start {
                 d.rounded_rect(x + width * start, y, width * (end - start), 6.0, 2.0, accent);
             }
-            if i == 0 || i >= 9 {
+            if i == 0 || matches!(i,9|10) {
                 let center = x + width * 0.5;
                 d.line(center, y - 2.0, center, y + 8.0, MUTED, 1.0);
             }
-            let color = if i >= 9 || linked || dragging || hover > 0.3 { accent } else { MUTED };
+            let color = if matches!(i,9|10) || linked || dragging || hover > 0.3 { accent } else { MUTED };
             style::MODULATOR_ICONS[i].draw(d, x + 8.0, r.1 + 14.0, color);
             d.text_right(x + width, r.1 + 14.0 + TEXT_SMALL * 0.35, label, TEXT_SMALL, color);
         }
@@ -440,8 +440,8 @@ impl ChordboardView {
 
 // Pitch uses a normalized center; dedicated step modulators use signed offsets.
 pub(super) fn meter_fill(source: usize, value: f32) -> (f32, f32) {
-    let value = if source >= 9 { (value.clamp(-1.0, 1.0) + 1.0) * 0.5 } else { value.clamp(0.0, 1.0) };
-    if source == 0 || source >= 9 {
+    let value = if matches!(source,9|10) { (value.clamp(-1.0, 1.0) + 1.0) * 0.5 } else { value.clamp(0.0, 1.0) };
+    if source == 0 || matches!(source,9|10) {
         (value.min(0.5), value.max(0.5))
     } else {
         (0.0, value)

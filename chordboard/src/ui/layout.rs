@@ -1,5 +1,5 @@
 // Shared geometry for rendering and event hit-testing.
-use super::KEY_COLUMNS;
+use super::{KEY_COLUMNS, arpeggiator};
 const WIDTH_REDUCTION: f32 = 128.0;
 const OLD_MOD_COLUMN: f32 = 122.0;
 pub(super) const MAIN_W: f32 = 1871.0 - WIDTH_REDUCTION - OLD_MOD_COLUMN;
@@ -37,7 +37,6 @@ const fn manual_field_inset(pad: Rect) -> Rect {
 }
 pub(super) const ARP_MAIN_WIDTH: f32 = 612.0;
 pub(super) const ARP_PAD: Rect = (32.0, 136.0, 892.0, 358.0);
-pub(super) const ARP_EDITOR: Rect = (660.0, 136.0, 264.0, 358.0);
 pub(super) const PLAY_PAD: Rect = manual_field_inset(PAD);
 pub(super) const AUTO_FIELD: Rect = (PAD.0 + 20.0, 286.0, PAD.2 - 40.0, 100.0);
 pub(super) const CHORDS_SURFACE: Rect = (16.0, 92.0, 924.0, 418.0);
@@ -112,10 +111,6 @@ const PATTERN_HEIGHT: f32 = 128.0;
 const ARP_ROW3: f32 = ARP_ROW2 + PATTERN_HEIGHT + ARP_GAP;
 const ARP_ROW3_H: f32 = ARP_ROW4 - ARP_GAP - ARP_ROW3;
 const HOLD_W: f32 = 200.0;
-pub(super) fn repeat_rect(looping: bool) -> Rect {
-    let row = arp_setting_rects();
-    if looping { row[1] } else { row[0] }
-}
 #[cfg(test)]
 pub(super) fn inversion_rect(i: usize) -> Rect {
     inversion_control_rect(false, i)
@@ -167,34 +162,18 @@ pub(super) const ARP_PATTERN_NAMES: [&str; 7] = [
     "As played",
     "Random",
 ];
-// Humanize and Swing share the arpeggiator settings row above the sequencer.
-pub(super) fn arp_controls(_looping: bool) -> [(&'static str, Rect); 2] {
-    let row = arp_setting_rects();
-    [("humanize", row[3]), ("swing", row[4])]
-}
+// Humanize and Swing share the arpeggiator settings row above the string editor.
+pub(super) fn arp_controls(_looping: bool) -> [(&'static str, Rect); 2] { [("humanize",arpeggiator::humanize_rect()),("swing",arpeggiator::swing_rect())] }
 pub(super) fn arp_direction_rect() -> Rect {
-    arp_setting_rects()[2]
+    arpeggiator::order_rect()
 }
-pub(super) fn seq_rate_sync_rect() -> Rect {
-    arp_setting_rects()[5]
+pub(super) fn arp_rate_sync_rect() -> Rect {
+    arpeggiator::sync_rect()
 }
-pub(super) fn seq_rate_rect() -> Rect {
-    arp_setting_rects()[6]
+pub(super) fn arp_rate_rect() -> Rect {
+    arpeggiator::rate_rect()
 }
-pub(super) fn arp_accent_rect() -> Rect {
-    arp_setting_rects()[7]
-}
-pub(super) fn interlock_rect() -> Rect {
-    arp_setting_rects()[8]
-}
-pub(super) fn seq_power_rect() -> Rect {
-    (
-        SEQ_SURFACE.0 + 12.0,
-        SEQ_SURFACE.1 + (SEQ_SETTINGS_H - 28.0) * 0.5,
-        28.0,
-        28.0,
-    )
-}
+pub(super) fn arp_power_rect() -> Rect { arpeggiator::power_rect() }
 pub(super) const MPE: Rect = (CHORD_CONTAINER.0 + 160.0, KEYBOARD_CONTROL_Y, 208.0, 28.0);
 pub(super) const AFFECT_CHORDS: Rect =
     (MELODY_CONTAINER.0 + 116.0, KEYBOARD_CONTROL_Y, 112.0, 28.0);
@@ -435,15 +414,16 @@ pub(super) fn route_control_rect(id: &str) -> Rect {
     if id == "route_smoothing_ms" { (456.0, 100.0, 208.0, 28.0) } else { ROUTE_ENABLED }
 }
 
-// Arpeggiator module: settings row, step editors, then the sequencer, above the keyboard.
-pub(super) const SEQ_SETTINGS_H: f32 = 44.0;
-pub(super) const SEQ_LANE_TOP: f32 = 80.0;
-const SEQ_LANE_BODY: f32 = 156.0;
-pub(super) const SEQ_H: f32 = SEQ_LANE_TOP + SEQ_LANE_BODY + 8.0;
-pub(super) const SEQ_SURFACE: Rect = (16.0, 522.0, MAIN_W - 32.0, SEQ_H);
+// Arpeggiator settings and string editor above the keyboard.
+#[cfg(test)]
+pub(super) const ARP_SETTINGS_H: f32 = 44.0;
+pub(super) const ARP_LANE_TOP: f32 = 80.0;
+const ARP_LANE_BODY: f32 = 156.0;
+pub(super) const ARP_H: f32 = ARP_LANE_TOP + ARP_LANE_BODY + 8.0;
+pub(super) const ARP_SURFACE: Rect = (16.0, 522.0, MAIN_W - 32.0, ARP_H);
 pub(super) const PIANO_SURFACE: Rect = (
     16.0,
-    SEQ_SURFACE.1 + SEQ_SURFACE.3 + 12.0,
+    ARP_SURFACE.1 + ARP_SURFACE.3 + 12.0,
     MAIN_W - 32.0,
     200.0,
 );
@@ -568,25 +548,6 @@ pub(super) fn keyboard_menu_range(id: &str) -> Option<(i32, i32)> {
 // Chord names share the header and keep enough room for extensions and slash bass.
 pub(super) fn chord_readout_rect() -> Rect {
     (202.0, 18.0, METER_NUM.0 - 16.0 - 202.0, 40.0)
-}
-
-/// Once, Loop, Direction, Humanize, Swing, Sync, Rate, Page accent, Interlock.
-fn arp_setting_rects() -> [Rect; 9] {
-    let x0 = SEQ_SURFACE.0 + 188.0;
-    let y = SEQ_SURFACE.1 + (SEQ_SETTINGS_H - 28.0) * 0.5;
-    let right = SEQ_SURFACE.0 + SEQ_SURFACE.2 - 12.0;
-    let gap = 8.0;
-    let fixed = [72.0, 72.0, 156.0, 0.0, 0.0, 100.0, 156.0, 168.0, 156.0];
-    let fixed_sum: f32 = 72.0 + 72.0 + 156.0 + 100.0 + 156.0 + 168.0 + 156.0;
-    let flex = (right - x0 - fixed_sum - gap * (fixed.len() - 1) as f32) / 2.0;
-    let mut x = x0;
-    let mut rects = [(0.0, 0.0, 0.0, 0.0); 9];
-    for (i, width) in fixed.iter().enumerate() {
-        let width = if *width == 0.0 { flex } else { *width };
-        rects[i] = (x, y, width, 28.0);
-        x += width + gap;
-    }
-    rects
 }
 
 pub(super) const METER_NUM: Rect = (1007.0, 24.0, 44.0, 30.0);

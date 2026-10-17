@@ -298,7 +298,6 @@ fn spread_keyboard_cycles_all_voicings_without_drag_or_text_entry() {
     for current in 0..harmony::VOICING_NAMES.len() as i32 {
         let mut view = view(2, false);
         view.params = Arc::new(ChordboardParams {
-            mode: IntParam::new("Mode", 2, IntRange::Linear { min: 0, max: 3 }),
             spread: IntParam::new(
                 "Spread",
                 current,
@@ -334,7 +333,7 @@ fn spread_keyboard_cycles_all_voicings_without_drag_or_text_entry() {
 #[test]
 fn defaults_use_auto_strum_zero_sweep_and_unassigned_y_controller() {
     let params = ChordboardParams::default();
-    assert_eq!(params.mode.value(), 1);
+    assert_eq!(params.arp_pages[0].arp_mode.value(), 2);
     assert_eq!(params.strum_ms.value(), 125.0);
     assert_eq!(
         params.config().mappings,
@@ -343,22 +342,22 @@ fn defaults_use_auto_strum_zero_sweep_and_unassigned_y_controller() {
             crate::engine::Mapping::default()
         ]
     );
-    assert!(seq_power_rect().0 + seq_power_rect().2 < arp_direction_rect().0);
+    assert!(arp_power_rect().0 + arp_power_rect().2 < arp_direction_rect().0);
     assert!(METER_NUM.0 + METER_NUM.2 < TEMPO_SYNC.0);
 }
 #[test]
-fn direction_dropdown_selects_exact_patterns() {
+fn direction_chooser_selects_exact_patterns() {
     for selected in 0..7 {
         let mut view = view(1, false);
         open_arp(&mut view);
         let (mut cx, target, changes) = context();
         click_menu_trigger(&mut view, &mut cx, target, Menu::ArpPattern);
-        assert_eq!(view.menu, Some(Menu::ArpPattern));
+        assert!(view.arp_chooser_open());
         click_menu_option(&mut view, &mut cx, target, Menu::ArpPattern, selected);
         assert!(view.menu.is_none());
         assert!(changes.borrow().iter().any(|(ptr, value)| {
-            *ptr == view.params.arp_pattern.as_ptr()
-                && *value == view.params.arp_pattern.preview_normalized(selected as i32)
+            *ptr == view.arp_params().arp_pattern.as_ptr()
+                && *value == view.arp_params().arp_pattern.preview_normalized(selected as i32)
         }));
         assert!(view.drag.is_none() && view.edit.is_none());
     }
@@ -516,7 +515,7 @@ fn direct_selection_pairs_parameter_gestures() {
         gestures.borrow_mut().clear();
     }
     open_arp(&mut view);
-    let ptr = view.params.arp_pattern.as_ptr();
+    let ptr = view.arp_params().arp_pattern.as_ptr();
     click_menu_trigger(&mut view, &mut cx, target, Menu::ArpPattern);
     gestures.borrow_mut().clear();
     click_menu_option(&mut view, &mut cx, target, Menu::ArpPattern, 2);
@@ -526,6 +525,8 @@ fn direct_selection_pairs_parameter_gestures() {
 fn displayed_units_round_trip_through_value_entry() {
     let view = view(1, false);
     for (id, text, expected) in [
+        ("swing", "-100%", view.arp_params().swing.preview_normalized(-0.75)),
+        ("swing", "50%", view.arp_params().swing.preview_normalized(0.375)),
         (
             "velocity",
             "42%",
@@ -534,7 +535,7 @@ fn displayed_units_round_trip_through_value_entry() {
         (
             "humanize",
             "30",
-            view.params.humanize.preview_normalized(0.3),
+            view.arp_params().humanize.preview_normalized(0.3),
         ),
         (
             "contour",
