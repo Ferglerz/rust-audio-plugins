@@ -41,7 +41,6 @@ impl ChordboardView {
         d.appearance_button(APPEARANCE, prefs().label());
         d.font = self.ui_font.get();
         self.draw_tempo_header(&mut d);
-        self.draw_page_tabs(&mut d);
         let expand = self.expand_t();
         let chords = shrink_width(CHORDS_SURFACE, expand);
         let modulation = MOD_SURFACE;
@@ -57,28 +56,7 @@ impl ChordboardView {
             d.scissor(chords.0, chords.1, chords.2.max(0.0), CHORDS_SURFACE.3);
             d.offset_x = -self.route_progress * CHORDS_SURFACE.2;
             if self.route_progress < 1.0 {
-                let route_offset = d.offset_x;
-                for page in [1, 2] {
-                    let offset = (page as f32 - self.page_position) * CHORDS_SURFACE.2;
-                    if offset.abs() >= CHORDS_SURFACE.2 {
-                        continue;
-                    }
-                    d.offset_x = route_offset + offset;
-                    if page == 1 {
-                        self.draw_chord_page_title(&mut d, "ARPEGGIATOR");
-                        self.draw_interlock(&mut d);
-                        self.draw_arp(&mut d, if self.mode() == 3 { 3 } else { 1 });
-                        self.draw_step_controls(&mut d);
-                        for (c, r) in self.base_controls() {
-                            if hit(ARP_PAD, r.0, r.1) && c.id != "gate" {
-                                self.draw_control(&mut d, &c, r, GOLD);
-                            }
-                        }
-                    } else {
-                        self.draw_chords(&mut d);
-                    }
-                }
-                d.offset_x = route_offset;
+                self.draw_chords(&mut d);
             }
             if self.route_progress > 0.0 {
                 d.offset_x = (1.0 - self.route_progress) * CHORDS_SURFACE.2;
@@ -114,7 +92,7 @@ impl ChordboardView {
             if c.id == "root_on_select" {
                 continue;
             }
-            if hit(ARP_PAD, r.0, r.1) {
+            if hit(SEQ_SURFACE, r.0, r.1) || hit(ARP_PAD, r.0, r.1) {
                 continue;
             }
             if r.1 >= PIANO_SURFACE.1 {
@@ -129,17 +107,16 @@ impl ChordboardView {
             self.draw_control(&mut d, c, *r, GOLD);
         }
         self.draw_strumfield_header(&mut d);
+        self.surface(&mut d, SEQ_SURFACE);
+        self.draw_sequencer(&mut d);
         d.scissor(
             PIANO_SURFACE.0,
             PIANO_SURFACE.1,
             PIANO_SURFACE.2,
             PIANO_SURFACE.3,
         );
-        d.offset_x = -self.sequencer_ui.progress * PIANO_SURFACE.2;
         self.draw_piano(&mut d);
-        d.offset_x = 0.0;
         d.reset_scissor();
-        self.draw_sequencer(&mut d);
         if self.panel == Some(Panel::Mapping) {
             self.draw_panel(&mut d);
             for (c, r) in &panel_controls {
@@ -293,14 +270,19 @@ impl ChordboardView {
                 "Time signature · Click the numerator or denominator to set the meter".into()
             });
         }
-        if hit(HEADER_SEQ_BYPASS, x, y) {
+        if hit(seq_power_rect(), x, y) {
             return Some("Enable or bypass sequencer playback".into());
         }
-        if hit(HEADER_PLAY_TAB, x, y) {
-            return Some("Keyboard and chords".into());
+        if hit(arp_direction_rect(), x, y) {
+            return Some(
+                "Strum direction · The arpeggiator walks the chord’s strings in this order"
+                    .into(),
+            );
         }
-        if hit(HEADER_SEQ_TAB, x, y) {
-            return Some("Sequencer replaces the keyboard · Chords area shows the arpeggiator for the selected step".into());
+        if hit(repeat_rect(false), x, y) || hit(repeat_rect(true), x, y) {
+            return Some(
+                "Once plays the chord and stops · Loop keeps the arpeggiator strumming".into(),
+            );
         }
         if self.expand_t() > 0.0 && y >= HEADER_H {
             if self.can_expand_strum() && hit(self.expand_button(), x, y) {
@@ -470,10 +452,10 @@ impl ChordboardView {
                     .into(),
             );
         }
-        if self.arp_main() && hit(ARP_PAGE_ACCENT, x, y) {
+        if hit(arp_accent_rect(), x, y) {
             return Some("Accent for the edited Arp page · Use global / Independent / Soften arp / Accent arp".into());
         }
-        if self.arp_main() && hit(INTERLOCK, x, y) {
+        if hit(interlock_rect(), x, y) {
             return Some("Arp–Chord Accent · When both strike together, keep the arp independent, soften it, or accent it".into());
         }
         for i in 0..crate::engine::routing::SOURCE_COUNT {
@@ -714,51 +696,46 @@ mod tests {
         }
     }
     #[test]
-    fn arp_controls_fit_the_chords_page_without_overlapping() {
-        for looping in [false, true] {
-            let mut rects = (0..7).map(pattern_rect).collect::<Vec<_>>();
-            rects.extend([false, true].map(repeat_rect));
-            rects.extend(arp_controls(looping).map(|(_, r)| r));
-            if !looping {
-                rects.push(STRUM_HOLD);
-            }
-            rects.extend(
-                output_controls(if looping { 3 } else { 1 })
-                    .into_iter()
-                    .map(|(_, r)| r),
+    fn arp_settings_share_one_row_above_the_sequencer() {
+        let row = [
+            seq_power_rect(),
+            repeat_rect(false),
+            repeat_rect(true),
+            arp_direction_rect(),
+            arp_controls(false)[0].1,
+            arp_controls(false)[1].1,
+            seq_rate_sync_rect(),
+            seq_rate_rect(),
+            arp_accent_rect(),
+            interlock_rect(),
+        ];
+        let top = SEQ_SURFACE.1;
+        let bottom = SEQ_SURFACE.1 + SEQ_SETTINGS_H;
+        for r in row {
+            assert!(r.1 >= top && r.1 + r.3 <= bottom, "{r:?} leaves the settings row");
+            assert!(
+                r.0 >= SEQ_SURFACE.0 && r.0 + r.2 <= SEQ_SURFACE.0 + SEQ_SURFACE.2,
+                "{r:?} leaves the arpeggiator module"
             );
-            for r in &rects {
-                assert!(
-                    r.0 >= ARP_PAD.0 + 8.0
-                        && r.1 >= ARP_PAD.1 + 8.0
-                        && r.0 + r.2 <= ARP_PAD.0 + ARP_PAD.2 - 8.0 + 0.001
-                        && r.1 + r.3 <= ARP_PAD.1 + ARP_PAD.3 - 8.0 + 0.001,
-                    "{r:?} outside the arp pad"
-                );
-            }
-            assert_disjoint(&rects);
         }
+        assert_disjoint(&row);
+        let [(_, humanize), (_, swing)] = arp_controls(true);
+        assert_eq!(humanize.1, swing.1);
+        assert!(humanize.0 + humanize.2 < swing.0);
+        assert!(arp_direction_rect().2 > 0.0);
+        assert!(SEQ_LANE_TOP > SEQ_SETTINGS_H);
+        assert!(SEQ_SURFACE.1 + SEQ_SURFACE.3 <= PIANO_SURFACE.1);
     }
     #[test]
     fn performance_rows_fill_width_and_share_direction_sizes() {
-        let right = ARP_PAD.0 + ARP_PAD.2 - 8.0;
-        let first = pattern_rect(0);
-        let last = pattern_rect(6);
-        assert_eq!(first.0, ARP_PAD.0 + 8.0);
-        assert!((last.0 + last.2 - right).abs() < 0.001);
+        let right = SEQ_SURFACE.0 + SEQ_SURFACE.2 - 12.0;
+        let interlock = interlock_rect();
+        assert!((interlock.0 + interlock.2 - right).abs() < 0.001);
         let [(_, humanize), (_, swing)] = arp_controls(false);
-        assert!(humanize.1 + humanize.3 < first.1);
         assert_eq!((swing.1, swing.3), (humanize.1, humanize.3));
-        assert_eq!(swing.0 - humanize.0 - humanize.2, 12.0);
-        assert!((swing.0 + swing.2 - right).abs() < 0.001);
+        assert!(swing.0 > humanize.0 + humanize.2);
         assert!(output_controls(3).is_empty());
-        for mode in [1] {
-            let row = output_controls(mode);
-            let (_, end) = row[row.len() - 1];
-            assert!((end.0 + end.2 - right).abs() < 0.001);
-            assert!(row.iter().all(|(id, _)| *id != "strings"));
-        }
-
+        assert!(output_controls(1).iter().all(|(id, _)| *id != "strings"));
     }
     #[test]
     fn strumfield_header_octaves_clear_latch_expand_and_bypass() {

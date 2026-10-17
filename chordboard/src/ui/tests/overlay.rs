@@ -119,7 +119,7 @@ fn modulated_rate_clicks_explain_ownership_without_editing() {
     view.params = Arc::new(params);
     open_arp(&mut view);
     let (mut cx, target, changes) = context();
-    click(&mut view, &mut cx, target, SEQ_RATE);
+    click(&mut view, &mut cx, target, seq_rate_rect());
     assert!(changes.borrow().is_empty());
     assert!(view
         .status
@@ -371,17 +371,19 @@ fn arp_strings_cover_octaves_and_flash_short_notes_after_they_end() {
     assert!(v.note_anim[96] > 0.0);
 }
 #[test]
-fn sequencer_toggle_uses_the_real_window_event_path() {
+fn arpeggiator_module_sits_above_the_keyboard() {
     let mut view = view(1, false);
-    let (mut cx, target, _) = context();
-    click(&mut view, &mut cx, target, HEADER_SEQ_TAB);
     assert!(view.sequencer_open());
-    assert!(view.arp_page());
-    view.tick_sequencer(0.25);
-    assert_eq!(view.sequencer_ui.progress, 1.0);
-    click(&mut view, &mut cx, target, HEADER_PLAY_TAB);
-    assert!(!view.sequencer_open());
     assert!(!view.arp_page());
+    assert!(SEQ_SURFACE.1 + SEQ_SURFACE.3 <= PIANO_SURFACE.1);
+    assert!(arp_direction_rect().1 < SEQ_SURFACE.1 + SEQ_SETTINGS_H);
+    assert!(seq_power_rect().1 < arp_direction_rect().1 + arp_direction_rect().3);
+    let (mut cx, target, changes) = context();
+    click(&mut view, &mut cx, target, seq_power_rect());
+    assert_eq!(
+        changes.borrow().last().copied(),
+        Some((view.params.seq_enabled.as_ptr(), 1.0))
+    );
 }
 #[test]
 fn sequencer_selection_keeps_legacy_mode_automation_range() {

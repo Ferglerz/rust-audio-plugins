@@ -273,17 +273,7 @@ impl ChordboardView {
             ("strum_enabled", strum_bypass_rect(self.expand_t())),
             ("octaves", strum_octaves_rect(self.expand_t())),
         ]);
-        if self.arp_page() {
-            targets.retain(|(id, _)| !matches!(*id, "latch" | "transpose"));
-        }
-        if self.arp_main() {
-            let first = pattern_rect(0);
-            let last = pattern_rect(6);
-            targets.push((
-                "arp_pattern",
-                (first.0, first.1, last.0 + last.2 - first.0, first.3),
-            ));
-        }
+        targets.push(("arp_pattern", arp_direction_rect()));
         if self.manual_playing() {
             targets.push(("x", self.play_pad()));
         }
@@ -305,9 +295,6 @@ impl ChordboardView {
         }
         let mut mapped: Vec<_> = targets
             .into_iter()
-            .filter(|(_, r)| {
-                !self.sequencer_open() || r.1 < PIANO_SURFACE.1
-            })
             .filter_map(|(id, r)| {
                 TARGETS
                     .iter()

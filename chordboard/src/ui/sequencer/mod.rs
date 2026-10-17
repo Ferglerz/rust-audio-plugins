@@ -53,14 +53,14 @@ const SLIDER_FINE: f32 = 0.25;
 impl Default for SequencerUi {
     fn default() -> Self {
         Self {
-            progress: 0.0,
+            progress: 1.0,
             edit_pages: [0; 4],
             page_positions: [0.0; 4],
             page_starts: [0.0; 4],
             page_elapsed: [pleasant_ui::page_slide::DURATION; 4],
             number_age: [[NUMBER_HOLD + NUMBER_FADE; 32]; 4],
-            open: false,
-            start: 0.0,
+            open: true,
+            start: 1.0,
             elapsed: pleasant_ui::page_slide::DURATION,
             lane: 0,
             step: 0,
@@ -118,9 +118,9 @@ fn item(items: &mut Vec<Item>, rect: Rect, label: impl Into<String>, action: Act
     });
 }
 fn surface() -> Rect {
-    PIANO_SURFACE
+    SEQ_SURFACE
 }
-const STEP_TOP: f32 = MODULE_HEADER_H;
+const STEP_TOP: f32 = SEQ_LANE_TOP;
 const STEP_H: f32 = 56.0;
 const STEP_GAP: f32 = 3.0;
 const LENGTH_H: f32 = 18.0;
@@ -176,24 +176,35 @@ fn step_rect(lane: usize, visible: usize) -> Rect {
         STEP_H,
     )
 }
-fn header_rect(x: f32, width: f32) -> Rect {
-    (surface().0 + x, surface().1 + 8.0, width, 28.0)
+fn step_editor_rect() -> Rect {
+    (
+        surface().0 + 16.0,
+        surface().1 + SEQ_SETTINGS_H + 4.0,
+        surface().2 - 32.0,
+        28.0,
+    )
 }
 fn lock_lengths_rect() -> Rect {
-    header_rect(114.0, 104.0)
+    let row = step_editor_rect();
+    (row.0, row.1, 112.0, row.3)
 }
-/// Step value selectors occupy two rows beneath the arpeggiator patterns.
-fn header_slots(modifiers: usize, rest: usize) -> Vec<Rect> {
-    let columns = 7;
-    let gap = 8.0;
-    let width = (ARP_PAD.2 - 16.0 - (columns - 1) as f32 * gap) / columns as f32;
-    (0..modifiers + rest)
-        .map(|index| (
-            ARP_PAD.0 + 8.0 + (index % columns) as f32 * (width + gap),
-            380.0 + (index / columns) as f32 * 44.0,
-            width,
-            36.0,
-        ))
+/// Step value selectors share one row between the arpeggiator settings and the lanes.
+fn header_slots(count: usize) -> Vec<Rect> {
+    let row = step_editor_rect();
+    let lock = lock_lengths_rect();
+    let left = lock.0 + lock.2 + 8.0;
+    let gap = 6.0;
+    let n = count.max(1) as f32;
+    let width = ((row.0 + row.2 - left) - (n - 1.0) * gap) / n;
+    (0..count)
+        .map(|index| {
+            (
+                left + index as f32 * (width + gap),
+                row.1,
+                width,
+                row.3,
+            )
+        })
         .collect()
 }
 fn cells_per_group(numerator: u8) -> usize {

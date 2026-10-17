@@ -279,7 +279,8 @@ impl ChordboardView {
             .map_or(self.params.strum_sync.value(), |v| v >= 0.5)
     }
     fn arp_page(&self) -> bool {
-        self.sequencer_open()
+        // The arpeggiator is its own module. It no longer replaces the chord grid.
+        false
     }
     fn arp_main(&self) -> bool {
         self.arp_page() && self.panel != Some(Panel::Routes)
@@ -387,11 +388,9 @@ impl ChordboardView {
             positions.push(("root_on_select", ROOT_ON_SELECT));
         }
         positions.extend(output_controls(2));
-        if self.arp_main() {
-            positions.extend(arp_controls(true));
-        }
-        if self.sequencer_open() && !self.sweep_synced() {
-            positions.push(("strum_ms", SEQ_RATE));
+        positions.extend(arp_controls(true));
+        if !self.sweep_synced() {
+            positions.push(("strum_ms", seq_rate_rect()));
         }
         positions.extend(self.keyboard_controls().into_iter().map(|(c, r)| (c.id, r)));
         if !self.params.tempo_sync.value() {
@@ -427,7 +426,8 @@ impl ChordboardView {
             Menu::MappingChannel(false) => (r.0 + 256.0, r.1 + 48.0, 116.0, 28.0),
             Menu::YTarget => (r.0 + 12.0, r.1 + 84.0, 172.0, 28.0),
             Menu::StrumRate => strum_rate_rect(self.expand_t()),
-            Menu::ArpRate => SEQ_RATE,
+            Menu::ArpRate => seq_rate_rect(),
+            Menu::ArpPattern => arp_direction_rect(),
             Menu::KeyboardParam(id) => keyboard_control_rect(id, self.params.mpe_enabled()),
             _ => menu.trigger_rect(),
         }
@@ -528,6 +528,7 @@ impl ChordboardView {
                 .iter()
                 .position(|(_, beats)| (*beats - self.params.rate.value()).abs() < 0.0001)
                 .unwrap_or(3),
+            Menu::ArpPattern => self.params.arp_pattern.value().clamp(0, 6) as usize,
             Menu::Key => harmony::KEY_CHOICES
                 .iter()
                 .position(|(name, _, _)| *name == self.key_name())
@@ -608,6 +609,11 @@ impl ChordboardView {
                 cx,
                 self.params.rate.as_ptr(),
                 self.params.rate.preview_normalized(ARP_RATES[index].1),
+            ),
+            Menu::ArpPattern => Self::emit(
+                cx,
+                self.params.arp_pattern.as_ptr(),
+                self.params.arp_pattern.preview_normalized(index as i32),
             ),
             Menu::YTarget => Self::emit(
                 cx,

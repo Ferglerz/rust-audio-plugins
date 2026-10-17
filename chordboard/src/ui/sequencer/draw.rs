@@ -65,9 +65,7 @@ impl ChordboardView {
         } else {
             0
         };
-        if self.arp_main() {
-            items.extend(self.seq_inspector_items(state, lane, inspector_rect(), true));
-        }
+        items.extend(self.seq_inspector_items(state, lane, inspector_rect(), true));
         items
     }
 
@@ -107,8 +105,7 @@ impl ChordboardView {
                 );
             entries.push((format!("Rate: {label}"), Action::PageRate, false));
         }
-        let modifiers = MODIFIERS.len();
-        let rects = header_slots(modifiers, entries.len() - modifiers);
+        let rects = header_slots(entries.len());
         entries
             .into_iter()
             .zip(rects)
@@ -119,19 +116,6 @@ impl ChordboardView {
                 on,
             })
             .collect()
-    }
-
-    pub(in crate::ui) fn draw_step_controls(&self, d: &mut Draw) {
-        let state = self.params.sequencer.snapshot();
-        for c in self.seq_inspector_items(&state, 0, inspector_rect(), true) {
-            let color = if matches!(c.action, Action::Modifier(Some(Field::Mod(_)))) { GOLD } else { TEAL };
-            self.button(d, c.rect, &c.label, c.on, color);
-        }
-        if let Some(edit) = &self.sequencer_ui.edit {
-            if hit(ARP_PAD, edit.rect.0, edit.rect.1) {
-                d.value_edit(edit, TEAL);
-            }
-        }
     }
 
     pub(super) fn draw_sequencer_rows(&self, d: &mut Draw, state: &State) {
@@ -286,26 +270,80 @@ impl ChordboardView {
             .map_or_else(|| format!("{beats:.3} beats"), |(label, _)| label.to_string())
     }
 
+    fn draw_arp_settings(&self, d: &mut Draw) {
+        let power = seq_power_rect();
+        self.button(
+            d,
+            power,
+            "",
+            self.params.seq_enabled.value(),
+            TEAL,
+        );
+        d.power_icon(
+            power.0 + power.2 * 0.5,
+            power.1 + power.3 * 0.5,
+            if self.params.seq_enabled.value() { TEAL } else { MUTED },
+        );
+        let font = d.font;
+        d.font = self.font.get();
+        d.text(
+            power.0 + power.2 + 10.0,
+            module_title_y(SEQ_SURFACE.1, MODULE_TITLE_SIZE),
+            "ARPEGGIATOR",
+            MODULE_TITLE_SIZE,
+            TEXT,
+        );
+        d.font = font;
+        let looping = self.mode() == 3;
+        for loop_choice in [false, true] {
+            self.icon_button(
+                d,
+                repeat_rect(loop_choice),
+                if loop_choice { "Loop" } else { "Once" },
+                looping == loop_choice,
+                GOLD,
+                if loop_choice { style::Icon::Loop } else { style::Icon::Once },
+            );
+        }
+        let index = self.params.arp_pattern.value().clamp(0, 6) as usize;
+        let direction = arp_direction_rect();
+        self.button(
+            d,
+            direction,
+            &format!("{} ▾", ARP_PATTERN_NAMES[index]),
+            self.menu == Some(Menu::ArpPattern),
+            GOLD,
+        );
+        self.live_choice(d, "arp_pattern", index as f32, direction);
+        for (c, r) in self.base_controls() {
+            if matches!(c.id, "humanize" | "swing") {
+                self.draw_control(d, &c, r, GOLD);
+            }
+        }
+        self.draw_sequencer_rate(d);
+        self.draw_interlock(d);
+    }
+
     fn draw_sequencer_rate(&self, d: &mut Draw) {
         let synced = self.sweep_synced();
         self.button(
             d,
-            SEQ_RATE_SYNC,
+            seq_rate_sync_rect(),
             if synced { "Tempo sync" } else { "Free · ms" },
             synced,
             TEAL,
         );
-        self.live_choice(d, "strum_sync", 1.0, SEQ_RATE_SYNC);
+        self.live_choice(d, "strum_sync", 1.0, seq_rate_sync_rect());
         if synced {
             self.button(
                 d,
-                SEQ_RATE,
+                seq_rate_rect(),
                 &format!("Rate: {} ▾", self.arp_rate_label()),
                 self.menu == Some(Menu::ArpRate),
                 GOLD,
             );
             if self.routed_plain("rate").is_some() {
-                self.live_highlight(d, SEQ_RATE);
+                self.live_highlight(d, seq_rate_rect());
             }
         } else if let Some((c, r)) = self
             .base_controls()
@@ -324,9 +362,7 @@ impl ChordboardView {
             d.scissor(r.0, r.1, r.2, r.3);
             let offset = d.offset_x;
             d.offset_x += (1.0 - u.progress) * r.2;
-            d.rounded_rect(r.0, r.1, r.2, r.3, 8.0, PANEL);
-            d.outline(r, LINE);
-            d.text(r.0 + 16.0, r.1 + 29.0, "SEQUENCER", 15.0, TEXT);
+            self.draw_arp_settings(d);
             let state = self.params.sequencer.snapshot();
             for lane in VISIBLE_LANES {
                 let length = state.lanes[lane][u.edit_pages[lane]].length;

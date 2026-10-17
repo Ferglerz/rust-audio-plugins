@@ -24,14 +24,10 @@ pub(super) fn view(mode: i32, mpe: bool) -> ChordboardView {
     );
     view
 }
-/// The Arpeggiator lives on the Sequencer page; settle both slides there.
+/// The arpeggiator module stays open above the keyboard. Chords stay on their page.
 pub(super) fn open_arp(view: &mut ChordboardView) {
     view.sequencer_ui.open = true;
     view.sequencer_ui.progress = 1.0;
-    view.page_target = 1;
-    view.page_start = 1.0;
-    view.page_position = 1.0;
-    view.page_elapsed = pleasant_ui::page_slide::DURATION;
 }
 pub(super) fn context() -> (Context, Entity, Changes) {
     let mut cx = Context::default();

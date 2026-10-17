@@ -268,7 +268,7 @@ fn compact_layout_preserves_keyboard_velocity_heights_and_memory_gap() {
     }
     let readout = chord_readout_rect();
     assert!(readout.1 + readout.3 < HEADER_H);
-    assert!(readout.0 + readout.2 < HEADER_PLAY_TAB.0);
+    assert!(readout.0 + readout.2 < METER_NUM.0);
 }
 #[test]
 fn all_layouts_keep_the_physical_keyboard_stagger() {
