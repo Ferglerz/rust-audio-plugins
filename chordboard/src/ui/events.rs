@@ -487,7 +487,7 @@ impl ChordboardView {
                     self.route_hover = None;
                     return true;
                 }
-                if self.arp_main() && hit(ARP_PAGE_ACCENT, x, y) {
+                if hit(arp_accent_rect(), x, y) {
                     self.params.sequencer.edit(|state| {
                         let page = &mut state.lanes[0][self.sequencer_ui.edit_pages[0]];
                         page.interlock_override = match page.interlock_override {
@@ -496,7 +496,7 @@ impl ChordboardView {
                     });
                     return true;
                 }
-                if self.arp_main() && hit(INTERLOCK, x, y) {
+                if hit(interlock_rect(), x, y) {
                     let param = &self.params.interlock;
                     Self::emit(cx, param.as_ptr(), param.preview_normalized((param.value() + 1) % 3));
                     return true;
@@ -509,7 +509,7 @@ impl ChordboardView {
                     }
                     return self.press_piano(cx, x, y);
                 }
-                if self.expand_t() > 0.0 && y >= HEADER_H {
+                if self.expand_t() > 0.0 && y >= HEADER_H && y < SEQ_SURFACE.1 {
                     return self.press_expanded_strum(cx, x, y);
                 }
                 if self.can_expand_strum() && hit(self.expand_button(), x, y) {
@@ -651,9 +651,16 @@ impl ChordboardView {
                     self.toggle_strum_bypass(cx);
                     return true;
                 }
-                if hit(HEADER_PLAY_TAB, x, y) || hit(HEADER_SEQ_TAB, x, y) {
-                    self.end_drag(cx);
-                    self.set_sequencer_open(cx, hit(HEADER_SEQ_TAB, x, y));
+                if hit(seq_power_rect(), x, y) && self.sequencer_ui.progress == 1.0 {
+                    Self::emit(
+                        cx,
+                        self.params.seq_enabled.as_ptr(),
+                        if self.params.seq_enabled.value() {
+                            0.0
+                        } else {
+                            1.0
+                        },
+                    );
                     return true;
                 }
                 if !self.arp_page() && hit(LATCH, x, y) {
@@ -720,29 +727,23 @@ impl ChordboardView {
                     self.inversion(cx, 1);
                     return true;
                 }
-                if self.arp_main() {
-                    for looping in [false, true] {
-                        if hit(repeat_rect(looping), x, y) {
-                            Self::emit(
-                                cx,
-                                self.params.mode.as_ptr(),
-                                self.params
-                                    .mode
-                                    .preview_normalized(if looping { 3 } else { 1 }),
-                            );
-                            return true;
-                        }
+                for looping in [false, true] {
+                    if hit(repeat_rect(looping), x, y) {
+                        Self::emit(
+                            cx,
+                            self.params.mode.as_ptr(),
+                            self.params
+                                .mode
+                                .preview_normalized(if looping { 3 } else { 1 }),
+                        );
+                        return true;
                     }
-                    for i in 0..7 {
-                        if hit(pattern_rect(i), x, y) {
-                            Self::emit(
-                                cx,
-                                self.params.arp_pattern.as_ptr(),
-                                self.params.arp_pattern.preview_normalized(i as i32),
-                            );
-                            return true;
-                        }
+                }
+                if hit(arp_direction_rect(), x, y) {
+                    if !self.explain_modulation("arp_pattern") {
+                        self.open_menu(Menu::ArpPattern);
                     }
+                    return true;
                 }
                 self.press_control(cx, x, y);
                 return true;

@@ -15,11 +15,9 @@ fn rhythm_controls_and_pointer_targets_follow_active_mode() {
                 "mode {mode}: {id}"
             );
         }
-        let ids: Vec<_> = view.base_controls().iter().map(|(c, _)| c.id).collect();
-        assert!(!ids.contains(&"humanize") && !ids.contains(&"swing"));
         open_arp(&mut view);
         let ids: Vec<_> = view.base_controls().iter().map(|(c, _)| c.id).collect();
-        // Gate is drawn as a rail beside swing rather than as a generic slider.
+        // Direction is a dropdown in the arpeggiator row, not a slider.
         for (id, present) in [("humanize", true), ("swing", true), ("gate", false)] {
             assert_eq!(ids.contains(&id), present, "mode {mode}: {id}");
         }
@@ -27,7 +25,7 @@ fn rhythm_controls_and_pointer_targets_follow_active_mode() {
         assert!(!ids.contains(&"strum_ms"));
         assert!(!ids.contains(&"contour"));
         let (mut cx, target, changes) = context();
-        click(&mut view, &mut cx, target, SEQ_RATE);
+        click(&mut view, &mut cx, target, seq_rate_rect());
         assert_eq!(view.menu, Some(Menu::ArpRate));
         click_menu_option(&mut view, &mut cx, target, Menu::ArpRate, 2);
         assert!(changes
@@ -37,15 +35,17 @@ fn rhythm_controls_and_pointer_targets_follow_active_mode() {
     }
 }
 #[test]
-fn interlock_lives_on_arp_page_without_changing_leading() {
-    assert!(hit(CHORDS_SURFACE, INTERLOCK.0, INTERLOCK.1));
+fn interlock_lives_on_the_arpeggiator_row_without_changing_leading() {
+    let interlock = interlock_rect();
+    assert!(hit(SEQ_SURFACE, interlock.0 + 1.0, interlock.1 + 1.0));
+    assert!(!hit(CHORDS_SURFACE, interlock.0 + 1.0, interlock.1 + 1.0));
     for leading in 0..3 {
         let mut view = view(0, false);
         open_arp(&mut view);
         Arc::get_mut(&mut view.params).unwrap().voice_leading =
             IntParam::new("Voice leading", leading, IntRange::Linear { min: 0, max: 2 });
         let (mut cx, target, changes) = context();
-        click(&mut view, &mut cx, target, INTERLOCK);
+        click(&mut view, &mut cx, target, interlock);
         assert_eq!(&*changes.borrow(), &[(view.params.interlock.as_ptr(), view.params.interlock.preview_normalized(1))]);
     }
 }
@@ -280,7 +280,12 @@ fn controller_options_live_only_in_their_axis_popup() {
 fn native_repeated_clicks_reach_all_chord_and_parameter_buttons() {
     for button in 0..69 {
         // 54..=61 were the arp rate buttons; the rate is a sequencer dropdown now.
-        if (42..=44).contains(&button) || (54..=61).contains(&button) || button == 66 {
+        // 47..=53 were the direction buttons; direction is a dropdown now.
+        if (42..=44).contains(&button)
+            || (47..=53).contains(&button)
+            || (54..=61).contains(&button)
+            || button == 66
+        {
             continue;
         }
         let mut cx = Context::default();
@@ -312,9 +317,8 @@ fn native_repeated_clicks_reach_all_chord_and_parameter_buttons() {
         let (r, expected) = match button {
             0..=35 => (key_rect(button), None),
             36..=40 => (transpose_rect(button - 36), Some(params.transpose.as_ptr())),
-            41 => (SEQ_BYPASS, Some(params.seq_enabled.as_ptr())),
+            41 => (seq_power_rect(), Some(params.seq_enabled.as_ptr())),
             45..=46 => (inversion_rect(button - 45), Some(params.inversion.as_ptr())),
-            47..=53 => (pattern_rect(button - 47), Some(params.arp_pattern.as_ptr())),
             62..=65 => (octave_rect(button - 62), Some(params.octaves.as_ptr())),
             66 => (protocol_rect(1), Some(params.output_mode.as_ptr())),
             67 => (LATCH, Some(params.latch.as_ptr())),
@@ -356,7 +360,7 @@ fn slider_drags_from_title_track_and_value_without_jumping() {
         open_arp(&mut view);
         Arc::get_mut(&mut view.params).unwrap().strum_sync = BoolParam::new("Sync", false);
         let (mut cx, target, changes) = context();
-        let r = SEQ_RATE;
+        let r = seq_rate_rect();
         let (x, y) = (r.0 + origin.0, r.1 + origin.1);
         event(
             &mut view,
@@ -396,7 +400,7 @@ fn clicking_a_slider_value_edits_but_clicking_its_title_does_not() {
     open_arp(&mut view);
     Arc::get_mut(&mut view.params).unwrap().strum_sync = BoolParam::new("Sync", false);
     let (mut cx, target, changes) = context();
-    let r = SEQ_RATE;
+    let r = seq_rate_rect();
     click(&mut view, &mut cx, target, (r.0, r.1, 60.0, 20.0));
     assert!(view.edit.is_none());
     click(
@@ -409,26 +413,16 @@ fn clicking_a_slider_value_edits_but_clicking_its_title_does_not() {
     assert!(changes.borrow().is_empty());
 }
 #[test]
-fn sequencer_page_slide_retargets_from_current_position_and_blocks_moving_controls() {
+fn sequencer_module_keeps_the_chord_page_in_place() {
     let mut view = view(1, false);
     let (mut cx, target, changes) = context();
     assert_eq!(view.page_position, 2.0);
     view.sequencer_ui.open = true;
     view.last_frame = Instant::now() - Duration::from_millis(100);
     view.tick(&mut EventContext::new_with_current(&mut cx, target));
-    assert!(view.page_position > 1.0 && view.page_position < 2.0);
-    click(&mut view, &mut cx, target, LATCH);
-    assert!(changes.borrow().is_empty());
-    let interrupted = view.page_position;
-    view.sequencer_ui.open = false;
-    view.last_frame = Instant::now();
-    view.tick(&mut EventContext::new_with_current(&mut cx, target));
-    assert_eq!(view.page_start, interrupted);
-    for _ in 0..3 {
-        view.last_frame = Instant::now() - Duration::from_millis(100);
-        view.tick(&mut EventContext::new_with_current(&mut cx, target));
-    }
     assert_eq!(view.page_position, 2.0);
+    click(&mut view, &mut cx, target, LATCH);
+    assert!(!changes.borrow().is_empty());
 }
 #[test]
 fn latched_input_readout_survives_pointer_release() {
@@ -476,12 +470,12 @@ fn tempo_and_rate_sync_controls_emit_the_shared_parameters() {
             changes.borrow().last().copied(),
             Some((view.params.tempo_sync.as_ptr(), 0.0))
         );
-        click(&mut view, &mut cx, target, SEQ_RATE_SYNC);
+        click(&mut view, &mut cx, target, seq_rate_sync_rect());
         assert_eq!(
             changes.borrow().last().copied(),
             Some((view.params.strum_sync.as_ptr(), 0.0))
         );
-        click(&mut view, &mut cx, target, SEQ_RATE);
+        click(&mut view, &mut cx, target, seq_rate_rect());
         click_menu_option(&mut view, &mut cx, target, Menu::ArpRate, 0);
         assert_eq!(
             changes.borrow().last().copied(),

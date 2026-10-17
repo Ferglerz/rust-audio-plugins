@@ -66,7 +66,8 @@ fn sequencer_page_shows_arp_and_bass_has_no_grid_controls() {
     assert!(!view.arp_page());
     view.sequencer_ui.open = true;
     view.sequencer_ui.progress = 1.0;
-    assert!(view.arp_page());
+    assert!(!view.arp_page());
+    assert!(arp_direction_rect().1 < step_rect(0, 0).1);
     let items = view.seq_items(&view.params.sequencer.snapshot());
     assert!(!items.iter().any(|item| matches!(
         item.action,
@@ -82,7 +83,7 @@ fn sequencer_page_shows_arp_and_bass_has_no_grid_controls() {
         r.0 + 2.0,
         r.1 + 2.0
     ));
-    assert!(view.arp_page());
+    assert!(!view.arp_page());
     assert_eq!((view.sequencer_ui.lane, view.sequencer_ui.step), (1, 2));
 }
 #[test]
@@ -213,9 +214,15 @@ fn arp_page_clicks_pass_through_the_sequencer() {
     let target = Element::new(&mut context).entity();
     let mut cx = EventContext::new_with_current(&mut context, target);
     let press = WindowEvent::MouseDown(MouseButton::Left);
-    for r in [pattern_rect(0), octave_rect(0)] {
-        assert!(!view.sequencer_event(&mut cx, &press, r.0 + 5.0, r.1 + 5.0));
-    }
+    let direction = arp_direction_rect();
+    assert!(!view.sequencer_event(
+        &mut cx,
+        &press,
+        direction.0 + 5.0,
+        direction.1 + 5.0
+    ));
+    let octave = octave_rect(0);
+    assert!(!view.sequencer_event(&mut cx, &press, octave.0 + 5.0, octave.1 + 5.0));
 }
 #[test]
 fn swipe_and_wheel_edit_values_without_enabling_rests() {
@@ -376,7 +383,8 @@ fn selecting_sequencer_steps_preserves_the_arp_layout() {
     view.sequencer_ui.inspector = true;
     for lane in VISIBLE_LANES {
         view.sequencer_ui.lane = lane;
-        assert!(view.arp_page());
+        assert!(!view.arp_page());
+        assert_eq!(arp_direction_rect().1, seq_rate_rect().1);
         assert_eq!(
             view.base_controls()
                 .iter()
@@ -395,7 +403,7 @@ fn arp_controls_stay_inside_the_pad_without_overlap() {
     for looping in [false, true] {
         let rects = arp_controls(looping).map(|(_, r)| r).to_vec();
         for (i, a) in rects.iter().enumerate() {
-            assert!(hit(ARP_PAD, a.0, a.1) && hit(ARP_PAD, a.0 + a.2, a.1 + a.3));
+            assert!(hit(SEQ_SURFACE, a.0, a.1) && hit(SEQ_SURFACE, a.0 + a.2, a.1 + a.3));
             for b in &rects[i + 1..] {
                 assert!(
                     a.0 + a.2 <= b.0 || b.0 + b.2 <= a.0 || a.1 + a.3 <= b.1 || b.1 + b.3 <= a.1
@@ -513,8 +521,9 @@ fn step_selectors_fit_below_patterns_without_overlap() {
         let items = view.seq_inspector_items(&state, 0, inspector_rect(), true);
         let rects: Vec<_> = items.iter().map(|i| i.rect).collect();
         for (i, a) in rects.iter().enumerate() {
-            assert!(hit(ARP_PAD, a.0, a.1) && hit(ARP_PAD, a.0 + a.2, a.1 + a.3));
-            assert!(a.1 > pattern_rect(0).1 + pattern_rect(0).3);
+            assert!(hit(SEQ_SURFACE, a.0, a.1) && hit(SEQ_SURFACE, a.0 + a.2, a.1 + a.3));
+            assert!(a.1 >= SEQ_SURFACE.1 + SEQ_SETTINGS_H);
+            assert!(a.1 + a.3 <= step_rect(0, 0).1);
             for b in &rects[i + 1..] {
                 assert!(a.0 + a.2 <= b.0 || b.0 + b.2 <= a.0 || a.1 + a.3 <= b.1 || b.1 + b.3 <= a.1, "{a:?} overlaps {b:?}");
             }
@@ -567,7 +576,7 @@ fn arp_inspector_omits_duplicate_and_removed_controls() {
     assert!(items
         .iter()
         .any(|item| item.label == "Step on" || item.label == "Step off"));
-    let surface = ARP_PAD;
+    let surface = SEQ_SURFACE;
     for item in &items {
         assert!(item.rect.1 + item.rect.3 <= step_rect(0, 0).1);
         assert!(hit(surface, item.rect.0, item.rect.1));
@@ -613,7 +622,7 @@ fn inspector_controls_fit_in_both_sizes() {
     view.sequencer_ui.inspector = true;
     let state = view.params.sequencer.snapshot();
     {
-        let s = ARP_PAD;
+        let s = SEQ_SURFACE;
         for item in view.seq_inspector_items(&state, 0, inspector_rect(), true) {
             assert!(hit(s, item.rect.0, item.rect.1));
             assert!(hit(

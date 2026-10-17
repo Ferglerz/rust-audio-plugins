@@ -11,6 +11,7 @@ pub(super) enum Menu {
     YTarget,
     StrumRate,
     ArpRate,
+    ArpPattern,
     MappingKind,
     MappingChannel(bool),
     MappingCc(bool),
@@ -46,6 +47,9 @@ impl Menu {
                 "Custom CC",
             ],
             Self::MappingKind => &["Off", "CC · Auto 7/14-bit", "Pitch bend"],
+            Self::ArpPattern => {
+                return ARP_PATTERN_NAMES.iter().map(|label| (*label).to_string()).collect()
+            }
             Self::StrumRate | Self::ArpRate => {
                 return ARP_RATES
                     .iter()
@@ -83,6 +87,7 @@ impl Menu {
             Self::YTarget => "Y destination",
             Self::StrumRate => "Sweep duration",
             Self::ArpRate => "Arp rate",
+            Self::ArpPattern => "Strum direction",
             Self::MappingKind => "Controller source",
             Self::MappingChannel(_) => "MIDI channel",
             Self::MappingCc(_) => "Controller number",
@@ -96,6 +101,7 @@ impl Menu {
             Self::Scale => 146.0,
             Self::Meter(_) | Self::KeyboardParam(_) => 40.0,
             Self::YTarget | Self::StrumRate | Self::ArpRate => 112.0,
+            Self::ArpPattern => 148.0,
             Self::MappingKind => 130.0,
             Self::MappingChannel(_) => 40.0,
             Self::MappingCc(_) => 34.0,
@@ -107,6 +113,7 @@ impl Menu {
             Self::RouteSource => 2,
             Self::RouteTarget => 4,
             Self::Scale | Self::MappingKind | Self::StrumRate | Self::ArpRate | Self::YTarget => 2,
+            Self::ArpPattern => 1,
             Self::MappingChannel(_) => 6,
             Self::MappingCc(_) => 16,
             Self::Key => 3,
@@ -228,7 +235,8 @@ impl Menu {
             Self::Scale => SCALE_MENU,
             Self::KeyboardParam(id) => keyboard_control_rect(id, false),
             Self::StrumRate => STRUM_RATE,
-            Self::ArpRate => SEQ_RATE,
+            Self::ArpRate => seq_rate_rect(),
+            Self::ArpPattern => arp_direction_rect(),
             Self::YTarget => (772.0, 472.0, 224.0, 30.0),
             Self::MappingKind => (776.0, 324.0, 200.0, 30.0),
             Self::MappingChannel(_) => (984.0, 324.0, 110.0, 30.0),

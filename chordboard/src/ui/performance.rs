@@ -38,12 +38,6 @@ impl ChordboardView {
         }
     }
 
-    pub(super) fn draw_page_tabs(&self, d: &mut Draw) {
-        let open = self.sequencer_open();
-        self.button(d, HEADER_PLAY_TAB, "Play", !open, TEAL);
-        self.button(d, HEADER_SEQ_TAB, "Sequencer", open, TEAL);
-    }
-
     pub(super) fn draw_strumfield_header(&self, d: &mut Draw) {
         let surface = perf_surface_rect(self.expand_t());
         let bypass = strum_bypass_rect(self.expand_t());
@@ -107,44 +101,6 @@ impl ChordboardView {
             TEXT,
         );
         d.font = font;
-    }
-
-    pub(super) fn draw_contour_button(
-        &self,
-        d: &mut Draw,
-        r: Rect,
-        label: &str,
-        contour: &[u8],
-        selected: bool,
-        color: Color,
-        param_id: &'static str,
-        choice_val: f32,
-    ) {
-        let text_color = if selected { color } else { MUTED };
-        self.button_surface(d, r, selected, color);
-        self.live_choice(d, param_id, choice_val, r);
-        let n_points = contour.len();
-        let points: Vec<_> = contour
-            .iter()
-            .enumerate()
-            .map(|(j, n)| {
-                (
-                    r.0 + 6.0 + j as f32 * (r.2 - 12.0) / (n_points - 1).max(1) as f32,
-                    r.1 + r.3 * 0.53 - *n as f32 * (r.3 * 0.075),
-                )
-            })
-            .collect();
-        d.poly(&points, text_color, 1.2);
-        for &(x, y) in &points {
-            d.circle(x, y, 1.6, text_color, true);
-        }
-        d.text_centered(
-            r.0 + r.2 / 2.0,
-            r.1 + r.3 - 10.0,
-            label,
-            TEXT_SMALL,
-            text_color,
-        );
     }
 
     pub(super) fn string_count(&self) -> usize {
@@ -212,56 +168,6 @@ impl ChordboardView {
         }
     }
 
-    pub(super) fn draw_arp(&self, d: &mut Draw, mode: i32) {
-        let looping = mode == 3;
-        let pad = ARP_PAD;
-        d.rounded_rect(pad.0, pad.1, pad.2, pad.3, 8.0, BG);
-        d.font = self.ui_font.get();
-        for loop_choice in [false, true] {
-            self.icon_button(
-                d,
-                repeat_rect(loop_choice),
-                if loop_choice { "Loop" } else { "Once" },
-                looping == loop_choice,
-                GOLD,
-                if loop_choice { style::Icon::Loop } else { style::Icon::Once },
-            );
-        }
-        // Glyphs illustrate each ordering rule; they are not a playback position.
-        let contours = [
-            [0, 1, 2, 3, 4],
-            [4, 3, 2, 1, 0],
-            [0, 2, 4, 2, 0],
-            [0, 2, 1, 3, 2],
-            [4, 2, 3, 1, 2],
-            [0, 3, 1, 2, 4],
-            [2, 4, 0, 3, 1],
-        ];
-        let labels = [
-            "Up",
-            "Down",
-            "Up / Down",
-            "Up 3rds",
-            "Dn 3rds",
-            "As played",
-            "Random",
-        ];
-        for i in 0..7 {
-            let r = pattern_rect(i);
-            let selected = self.params.arp_pattern.value() == i as i32;
-            self.draw_contour_button(
-                d,
-                r,
-                labels[i],
-                &contours[i],
-                selected,
-                GOLD,
-                "arp_pattern",
-                i as f32,
-            );
-        }
-
-    }
     pub(super) fn draw_pad(&self, d: &mut Draw, mode: i32) {
         let pad = self.pad();
         d.rounded_rect(pad.0, pad.1, pad.2, pad.3, 8.0, BG);

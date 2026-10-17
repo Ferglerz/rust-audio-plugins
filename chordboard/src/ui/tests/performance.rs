@@ -343,21 +343,23 @@ fn defaults_use_auto_strum_zero_sweep_and_unassigned_y_controller() {
             crate::engine::Mapping::default()
         ]
     );
+    assert!(seq_power_rect().0 + seq_power_rect().2 < arp_direction_rect().0);
+    assert!(METER_NUM.0 + METER_NUM.2 < TEMPO_SYNC.0);
 }
 #[test]
-fn direct_direction_selects_exact_values() {
-    for selected in 0..5 {
+fn direction_dropdown_selects_exact_patterns() {
+    for selected in 0..7 {
         let mut view = view(1, false);
         open_arp(&mut view);
         let (mut cx, target, changes) = context();
-        click(&mut view, &mut cx, target, pattern_rect(selected));
-        assert_eq!(
-            &*changes.borrow(),
-            &[(
-                view.params.arp_pattern.as_ptr(),
-                view.params.arp_pattern.preview_normalized(selected as i32)
-            ),]
-        );
+        click_menu_trigger(&mut view, &mut cx, target, Menu::ArpPattern);
+        assert_eq!(view.menu, Some(Menu::ArpPattern));
+        click_menu_option(&mut view, &mut cx, target, Menu::ArpPattern, selected);
+        assert!(view.menu.is_none());
+        assert!(changes.borrow().iter().any(|(ptr, value)| {
+            *ptr == view.params.arp_pattern.as_ptr()
+                && *value == view.params.arp_pattern.preview_normalized(selected as i32)
+        }));
         assert!(view.drag.is_none() && view.edit.is_none());
     }
 }
@@ -515,7 +517,9 @@ fn direct_selection_pairs_parameter_gestures() {
     }
     open_arp(&mut view);
     let ptr = view.params.arp_pattern.as_ptr();
-    click(&mut view, &mut cx, target, pattern_rect(2));
+    click_menu_trigger(&mut view, &mut cx, target, Menu::ArpPattern);
+    gestures.borrow_mut().clear();
+    click_menu_option(&mut view, &mut cx, target, Menu::ArpPattern, 2);
     assert_eq!(&*gestures.borrow(), &[(ptr, 0), (ptr, 1), (ptr, 2)]);
 }
 #[test]
@@ -581,6 +585,7 @@ fn all_popover_choices_fit_inside_the_window_and_clear_the_heading() {
         Menu::YTarget,
         Menu::StrumRate,
         Menu::ArpRate,
+        Menu::ArpPattern,
         Menu::MappingKind,
         Menu::MappingChannel(true),
         Menu::MappingChannel(false),

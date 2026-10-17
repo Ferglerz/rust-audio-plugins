@@ -268,7 +268,7 @@ fn compact_layout_preserves_keyboard_velocity_heights_and_memory_gap() {
     }
     let readout = chord_readout_rect();
     assert!(readout.1 + readout.3 < HEADER_H);
-    assert!(readout.0 + readout.2 < HEADER_PLAY_TAB.0);
+    assert!(readout.0 + readout.2 < METER_NUM.0);
 }
 #[test]
 fn all_layouts_keep_the_physical_keyboard_stagger() {
@@ -504,20 +504,20 @@ fn modulator_cards_fill_the_module_and_appearance_aligns_with_its_edge() {
 }
 
 #[test]
-fn sequencer_bypass_is_local_and_header_tab_only_navigates() {
+fn sequencer_bypass_is_local_and_old_header_location_is_inactive() {
     for enabled in [false, true] {
         let mut view = view(3, false);
         Arc::get_mut(&mut view.params).unwrap().seq_enabled = BoolParam::new("Sequencer", enabled);
         let (mut cx, target, changes) = context();
-        // The old header power location now belongs to the navigation tab.
-        click(&mut view, &mut cx, target, (HEADER_SEQ_TAB.0 + 6.0, 25.0, 28.0, 28.0));
+        // Removing the navigation tabs leaves the old header power location inactive.
+        click(&mut view, &mut cx, target, (772.0, 25.0, 28.0, 28.0));
         assert!(view.sequencer_open());
         assert!(changes.borrow().is_empty());
         view.sequencer_ui.progress = 0.5;
-        click(&mut view, &mut cx, target, SEQ_BYPASS);
+        click(&mut view, &mut cx, target, seq_power_rect());
         assert!(changes.borrow().is_empty(), "moving page must not toggle playback");
         open_arp(&mut view);
-        click(&mut view, &mut cx, target, SEQ_BYPASS);
+        click(&mut view, &mut cx, target, seq_power_rect());
         assert_eq!(&*changes.borrow(), &[(view.params.seq_enabled.as_ptr(), if enabled { 0.0 } else { 1.0 })]);
     }
 }

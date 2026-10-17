@@ -34,14 +34,14 @@ impl ChordboardView {
 
     fn sequencer_rate_targets(&self) -> Vec<(&'static str, Rect)> {
         vec![
-            ("strum_sync", SEQ_RATE_SYNC),
-            (if self.sweep_synced() { "rate" } else { "strum_ms" }, SEQ_RATE),
+            ("strum_sync", seq_rate_sync_rect()),
+            (if self.sweep_synced() { "rate" } else { "strum_ms" }, seq_rate_rect()),
         ]
     }
 
     /// Arp rate controls in the sequencer header. Free mode uses the shared control drag.
     fn press_sequencer_rate(&mut self, cx: &mut EventContext, x: f32, y: f32) -> bool {
-        if hit(SEQ_RATE_SYNC, x, y) {
+        if hit(seq_rate_sync_rect(), x, y) {
             if !self.explain_modulation("strum_sync") {
                 self.set(
                     cx,
@@ -51,7 +51,7 @@ impl ChordboardView {
             }
             return true;
         }
-        if !hit(SEQ_RATE, x, y) {
+        if !hit(seq_rate_rect(), x, y) {
             return false;
         }
         if self.sweep_synced() {
@@ -68,7 +68,10 @@ impl ChordboardView {
         if !self.sequencer_open() || self.sequencer_ui.progress < 1.0 {
             return None;
         }
-        if hit(SEQ_BYPASS, x, y) {
+        if self.panel == Some(Panel::Mapping) && hit(self.panel_rect(Panel::Mapping), x, y) {
+            return None;
+        }
+        if hit(seq_power_rect(), x, y) {
             return Some("Enable or bypass sequencer playback".into());
         }
         if VISIBLE_LANES.into_iter().any(|lane| hit(length_rect(lane), x, y)) {
@@ -98,10 +101,10 @@ impl ChordboardView {
                 }
             }
         }
-        if hit(SEQ_RATE_SYNC, x, y) {
+        if hit(seq_rate_sync_rect(), x, y) {
             return Some("Arp rate: use the header tempo in beat divisions, or run free in milliseconds".into());
         }
-        if hit(SEQ_RATE, x, y) {
+        if hit(seq_rate_rect(), x, y) {
             return Some(if self.sweep_synced() {
                 "Arp step rate · Click to choose a note value".into()
             } else {
@@ -200,6 +203,7 @@ impl ChordboardView {
         redraw
     }
 
+    #[allow(dead_code)] // Tests still close the module. The window no longer has a hide control.
     pub(in crate::ui) fn set_sequencer_open(&mut self, cx: &mut EventContext, open: bool) {
         if self.sequencer_ui.open == open {
             return;
@@ -390,28 +394,34 @@ impl ChordboardView {
                 _ => {}
             }
         }
+        // Controller popovers are painted over the lanes in the taller layout.
+        if self.panel == Some(Panel::Mapping) && hit(self.panel_rect(Panel::Mapping), x, y) {
+            return false;
+        }
         let press = matches!(
             event,
             WindowEvent::MouseDown(MouseButton::Left)
                 | WindowEvent::MouseDoubleClick(MouseButton::Left)
                 | WindowEvent::MouseTripleClick(MouseButton::Left)
         );
-        if press && self.sequencer_open() && self.sequencer_ui.progress == 1.0 && hit(SEQ_BYPASS, x, y) {
-            cx.focus();
-            self.focused = true;
-            Self::emit(cx, self.params.seq_enabled.as_ptr(), if self.params.seq_enabled.value() { 0.0 } else { 1.0 });
-            cx.needs_redraw();
-            return true;
-        }
-        if press
-            && self.sequencer_open()
-            && self.sequencer_ui.progress == 1.0
-            && self.press_sequencer_rate(cx, x, y)
-        {
-            cx.focus();
-            self.focused = true;
-            cx.needs_redraw();
-            return true;
+        let in_settings = x >= SEQ_SURFACE.0
+            && x < SEQ_SURFACE.0 + SEQ_SURFACE.2
+            && y >= SEQ_SURFACE.1
+            && y < SEQ_SURFACE.1 + SEQ_SETTINGS_H;
+        if in_settings {
+            if press
+                && self.sequencer_open()
+                && self.sequencer_ui.progress == 1.0
+                && self.press_sequencer_rate(cx, x, y)
+            {
+                cx.focus();
+                self.focused = true;
+                cx.needs_redraw();
+                return true;
+            }
+            if press || matches!(event, WindowEvent::MouseDown(MouseButton::Right)) {
+                return false;
+            }
         }
         if press && self.sequencer_open() {
             if let Some(lane) = VISIBLE_LANES
@@ -540,7 +550,7 @@ impl ChordboardView {
                     if l == 0 {
                         u.arp_step = s;
                     }
-                    let reset = cx.modifiers().command() || cx.modifiers().contains(Modifiers::CTRL);
+                    let reset = cx.modifiers().intersects(Modifiers::CTRL | Modifiers::LOGO);
                     if reset {
                         let value = slider_value(field, &Step::default());
                         self.params.sequencer.edit(|state| {

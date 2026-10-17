@@ -928,25 +928,23 @@ impl ChordboardView {
     pub(super) fn draw_interlock(&self, d: &mut Draw) {
         let state = self.params.sequencer.snapshot();
         let page = &state.lanes[0][self.sequencer_ui.edit_pages[0]];
-        let label = page.interlock_override.map_or("Page: use global", |value| ["Page: independent", "Page: soften arp", "Page: accent arp"][value.min(2) as usize]);
-        self.button(d, ARP_PAGE_ACCENT, label, page.interlock_override.is_some(), COLORS[1]);
-        let value = self.params.interlock.value();
-        d.rounded_rect(INTERLOCK.0, INTERLOCK.1, INTERLOCK.2, INTERLOCK.3, 6.0, PANEL);
+        let label = page.interlock_override.map_or("Page: global", |value| {
+            ["Page: independent", "Page: soften", "Page: accent"][value.min(2) as usize]
+        });
         self.button(
             d,
-            INTERLOCK,
-            "",
-            value != 0,
+            arp_accent_rect(),
+            label,
+            page.interlock_override.is_some(),
             COLORS[1],
         );
-        let cx = INTERLOCK.0 + INTERLOCK.2 * 0.5;
-        d.text_centered(cx, INTERLOCK.1 + 11.0, "Arp–Chord Accent", 11.0, MUTED);
-        d.text_centered(
-            cx,
-            INTERLOCK.1 + 24.0,
-            crate::params::ARP_CHORD_ACCENT_NAMES[value.clamp(0, 2) as usize],
-            11.0,
-            if value == 0 { TEXT } else { COLORS[1] },
+        let value = self.params.interlock.value().clamp(0, 2) as usize;
+        self.button(
+            d,
+            interlock_rect(),
+            &format!("Accent · {}", crate::params::ARP_CHORD_ACCENT_NAMES[value]),
+            value != 0,
+            COLORS[1],
         );
     }
 

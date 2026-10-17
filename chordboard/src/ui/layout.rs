@@ -4,7 +4,7 @@ const WIDTH_REDUCTION: f32 = 128.0;
 const OLD_MOD_COLUMN: f32 = 122.0;
 pub(super) const MAIN_W: f32 = 1871.0 - WIDTH_REDUCTION - OLD_MOD_COLUMN;
 pub(super) const W: f32 = MAIN_W + 190.0;
-pub(super) const H: f32 = 740.0;
+pub(super) const H: f32 = PIANO_SURFACE.1 + PIANO_SURFACE.3 + 18.0;
 pub(super) type Rect = (f32, f32, f32, f32);
 pub(super) const HEADER_H: f32 = 76.0;
 pub(super) const MODULE_HEADER_H: f32 = 44.0;
@@ -43,7 +43,12 @@ pub(super) const AUTO_FIELD: Rect = (PAD.0 + 20.0, 286.0, PAD.2 - 40.0, 100.0);
 pub(super) const CHORDS_SURFACE: Rect = (16.0, 92.0, 924.0, 418.0);
 pub(super) const PERF_SURFACE: Rect = (1080.0 - WIDTH_REDUCTION, 92.0, 653.0, 418.0);
 // Vertical modulation module beside both performance and keyboard surfaces.
-pub(super) const MOD_SURFACE: Rect = (MAIN_W, 92.0, 174.0, 630.0);
+pub(super) const MOD_SURFACE: Rect = (
+    MAIN_W,
+    92.0,
+    174.0,
+    PIANO_SURFACE.1 + PIANO_SURFACE.3 - 92.0,
+);
 pub(super) const EXPAND: Rect = field_corner(PAD);
 pub(super) const EXPANDED_SURFACE: Rect = (16.0, 92.0, MAIN_W - 32.0, 418.0);
 pub(super) const EXPANDED_PAD: Rect = (32.0, PAD.1, MAIN_W - 64.0, PAD.3);
@@ -106,18 +111,11 @@ const ARP_ROW2: f32 = ARP_ROW1 + ARP_ROW1_H + ARP_GAP;
 const PATTERN_HEIGHT: f32 = 128.0;
 const ARP_ROW3: f32 = ARP_ROW2 + PATTERN_HEIGHT + ARP_GAP;
 const ARP_ROW3_H: f32 = ARP_ROW4 - ARP_GAP - ARP_ROW3;
-const REPEAT_W: f32 = 88.0;
 const HOLD_W: f32 = 200.0;
 pub(super) fn repeat_rect(looping: bool) -> Rect {
-    (
-        ARP_X + if looping { REPEAT_W + 8.0 } else { 0.0 },
-        ARP_ROW1 + (ARP_ROW1_H - 28.0) * 0.5,
-        REPEAT_W,
-        28.0,
-    )
+    let row = arp_setting_rects();
+    if looping { row[1] } else { row[0] }
 }
-pub(super) const HEADER_PLAY_TAB: Rect = (650.0, 20.0, 108.0, 38.0);
-pub(super) const HEADER_SEQ_TAB: Rect = (766.0, 20.0, 164.0, 38.0);
 #[cfg(test)]
 pub(super) fn inversion_rect(i: usize) -> Rect {
     inversion_control_rect(false, i)
@@ -130,8 +128,6 @@ pub(super) fn inversion_control_rect(mpe: bool, i: usize) -> Rect {
         28.0,
     )
 }
-const PATTERN_GAP: f32 = 8.0;
-const PATTERN_WIDTH: f32 = (ARP_INNER_W - 6.0 * PATTERN_GAP) / 7.0;
 pub(super) fn output_controls(mode: i32) -> Vec<(&'static str, Rect)> {
     let ids: &[&str] = match mode {
         1 => &["length_ms", "strings_played"],
@@ -162,22 +158,42 @@ pub(super) const ARP_RATES: [(&str, f32); 8] = [
     ("1/8T", 1.0 / 3.0),
     ("1/16T", 1.0 / 6.0),
 ];
-pub(super) fn pattern_rect(i: usize) -> Rect {
-    (
-        ARP_X + i as f32 * (PATTERN_WIDTH + PATTERN_GAP),
-        ARP_ROW2,
-        PATTERN_WIDTH,
-        PATTERN_HEIGHT,
-    )
-}
-// Humanize and Swing share the top row to leave the lower body for step editing.
+pub(super) const ARP_PATTERN_NAMES: [&str; 7] = [
+    "Up",
+    "Down",
+    "Up / Down",
+    "Up in 3rds",
+    "Down in 3rds",
+    "As played",
+    "Random",
+];
+// Humanize and Swing share the arpeggiator settings row above the sequencer.
 pub(super) fn arp_controls(_looping: bool) -> [(&'static str, Rect); 2] {
-    let left = ARP_X + 2.0 * REPEAT_W + 8.0 + 16.0;
-    let width = (ARP_X + ARP_INNER_W - left - 12.0) * 0.5;
-    [
-        ("humanize", (left, ARP_ROW1, width, ARP_ROW1_H)),
-        ("swing", (left + width + 12.0, ARP_ROW1, width, ARP_ROW1_H)),
-    ]
+    let row = arp_setting_rects();
+    [("humanize", row[3]), ("swing", row[4])]
+}
+pub(super) fn arp_direction_rect() -> Rect {
+    arp_setting_rects()[2]
+}
+pub(super) fn seq_rate_sync_rect() -> Rect {
+    arp_setting_rects()[5]
+}
+pub(super) fn seq_rate_rect() -> Rect {
+    arp_setting_rects()[6]
+}
+pub(super) fn arp_accent_rect() -> Rect {
+    arp_setting_rects()[7]
+}
+pub(super) fn interlock_rect() -> Rect {
+    arp_setting_rects()[8]
+}
+pub(super) fn seq_power_rect() -> Rect {
+    (
+        SEQ_SURFACE.0 + 12.0,
+        SEQ_SURFACE.1 + (SEQ_SETTINGS_H - 28.0) * 0.5,
+        28.0,
+        28.0,
+    )
 }
 pub(super) const MPE: Rect = (CHORD_CONTAINER.0 + 160.0, KEYBOARD_CONTROL_Y, 208.0, 28.0);
 pub(super) const AFFECT_CHORDS: Rect =
@@ -419,34 +435,39 @@ pub(super) fn route_control_rect(id: &str) -> Rect {
     if id == "route_smoothing_ms" { (456.0, 100.0, 208.0, 28.0) } else { ROUTE_ENABLED }
 }
 
-pub(super) const PIANO_SURFACE: Rect = (16.0, 522.0, MAIN_W - 32.0, 200.0);
-pub(super) const SEQ_BYPASS: Rect = (PIANO_SURFACE.0 + 10.0, PIANO_SURFACE.1 + 10.0, 24.0, 24.0);
-// Arp rate lives at the right end of the sequencer header; the free-rate slider shares the slot.
-pub(super) const SEQ_RATE: Rect = (
-    PIANO_SURFACE.0 + PIANO_SURFACE.2 - 16.0 - 240.0,
-    PIANO_SURFACE.1 + 8.0,
-    240.0,
-    28.0,
+// Arpeggiator module: settings row, step editors, then the sequencer, above the keyboard.
+pub(super) const SEQ_SETTINGS_H: f32 = 44.0;
+pub(super) const SEQ_LANE_TOP: f32 = 80.0;
+const SEQ_LANE_BODY: f32 = 156.0;
+pub(super) const SEQ_H: f32 = SEQ_LANE_TOP + SEQ_LANE_BODY + 8.0;
+pub(super) const SEQ_SURFACE: Rect = (16.0, 522.0, MAIN_W - 32.0, SEQ_H);
+pub(super) const PIANO_SURFACE: Rect = (
+    16.0,
+    SEQ_SURFACE.1 + SEQ_SURFACE.3 + 12.0,
+    MAIN_W - 32.0,
+    200.0,
 );
-pub(super) const SEQ_RATE_SYNC: Rect = (SEQ_RATE.0 - 8.0 - 104.0, SEQ_RATE.1, 104.0, 28.0);
 const KEYBOARD_MODULE_W: f32 = (MAIN_W - 64.0 - 24.0) / 3.0;
-const KEYBOARD_CONTROL_Y: f32 = 674.0;
-pub(super) const BASS_CONTAINER: Rect = (32.0, 666.0, KEYBOARD_MODULE_W, 44.0);
-pub(super) const CHORD_CONTAINER: Rect = (44.0 + KEYBOARD_MODULE_W, 666.0, KEYBOARD_MODULE_W, 44.0);
-pub(super) const MELODY_CONTAINER: Rect = (
-    56.0 + KEYBOARD_MODULE_W * 2.0,
-    666.0,
+const KEYBOARD_CONTROL_Y: f32 = PIANO_SURFACE.1 + 152.0;
+pub(super) const BASS_CONTAINER: Rect = (32.0, PIANO_SURFACE.1 + 144.0, KEYBOARD_MODULE_W, 44.0);
+pub(super) const CHORD_CONTAINER: Rect = (
+    44.0 + KEYBOARD_MODULE_W,
+    PIANO_SURFACE.1 + 144.0,
     KEYBOARD_MODULE_W,
     44.0,
 );
-pub(super) const BASS_BYPASS: Rect = (42.0, 676.0, 24.0, 24.0);
+pub(super) const MELODY_CONTAINER: Rect = (
+    56.0 + KEYBOARD_MODULE_W * 2.0,
+    PIANO_SURFACE.1 + 144.0,
+    KEYBOARD_MODULE_W,
+    44.0,
+);
+pub(super) const BASS_BYPASS: Rect = (42.0, PIANO_SURFACE.1 + 154.0, 24.0, 24.0);
 pub(super) const ALWAYS_BASS: Rect = (BASS_CONTAINER.0 + 116.0, KEYBOARD_CONTROL_Y, 112.0, 28.0);
 pub(super) const SPLIT_NOTE: Rect = (MELODY_CONTAINER.0 + 236.0, KEYBOARD_CONTROL_Y, 112.0, 28.0);
-pub(super) const PIANO_KEYS: Rect = (32.0, 594.0, MAIN_W - 64.0, 60.0);
-pub(super) const PIANO_SPLITS: Rect = (32.0, 566.0, MAIN_W - 64.0, 24.0);
-pub(super) const PIANO_LEADING: Rect = (32.0, 532.0, MAIN_W - 64.0, 28.0);
-pub(super) const ARP_PAGE_ACCENT: Rect = (520.0, 100.0, 204.0, 28.0);
-pub(super) const INTERLOCK: Rect = (732.0, 100.0, 192.0, 28.0);
+pub(super) const PIANO_KEYS: Rect = (32.0, PIANO_SURFACE.1 + 72.0, MAIN_W - 64.0, 60.0);
+pub(super) const PIANO_SPLITS: Rect = (32.0, PIANO_SURFACE.1 + 44.0, MAIN_W - 64.0, 24.0);
+pub(super) const PIANO_LEADING: Rect = (32.0, PIANO_SURFACE.1 + 10.0, MAIN_W - 64.0, 28.0);
 
 pub(super) fn piano_black(note: u8) -> bool {
     matches!(note % 12, 1 | 3 | 6 | 8 | 10)
@@ -546,7 +567,26 @@ pub(super) fn keyboard_menu_range(id: &str) -> Option<(i32, i32)> {
 
 // Chord names share the header and keep enough room for extensions and slash bass.
 pub(super) fn chord_readout_rect() -> Rect {
-    (202.0, 18.0, HEADER_PLAY_TAB.0 - 218.0, 40.0)
+    (202.0, 18.0, METER_NUM.0 - 16.0 - 202.0, 40.0)
+}
+
+/// Once, Loop, Direction, Humanize, Swing, Sync, Rate, Page accent, Interlock.
+fn arp_setting_rects() -> [Rect; 9] {
+    let x0 = SEQ_SURFACE.0 + 188.0;
+    let y = SEQ_SURFACE.1 + (SEQ_SETTINGS_H - 28.0) * 0.5;
+    let right = SEQ_SURFACE.0 + SEQ_SURFACE.2 - 12.0;
+    let gap = 8.0;
+    let fixed = [72.0, 72.0, 156.0, 0.0, 0.0, 100.0, 156.0, 168.0, 156.0];
+    let fixed_sum: f32 = 72.0 + 72.0 + 156.0 + 100.0 + 156.0 + 168.0 + 156.0;
+    let flex = (right - x0 - fixed_sum - gap * (fixed.len() - 1) as f32) / 2.0;
+    let mut x = x0;
+    let mut rects = [(0.0, 0.0, 0.0, 0.0); 9];
+    for (i, width) in fixed.iter().enumerate() {
+        let width = if *width == 0.0 { flex } else { *width };
+        rects[i] = (x, y, width, 28.0);
+        x += width + gap;
+    }
+    rects
 }
 
 pub(super) const METER_NUM: Rect = (1007.0, 24.0, 44.0, 30.0);

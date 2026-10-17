@@ -204,7 +204,10 @@ fn module_grid_and_keyboard_midi_controls_fit_without_overlapping() {
         CHORDS_SURFACE.1 + CHORDS_SURFACE.3,
         PERF_SURFACE.1 + PERF_SURFACE.3
     );
-    assert_eq!(PIANO_SURFACE.1 - PERF_SURFACE.1 - PERF_SURFACE.3, 12.0);
+    assert_eq!(SEQ_SURFACE.1 - PERF_SURFACE.1 - PERF_SURFACE.3, 12.0);
+    assert_eq!(PIANO_SURFACE.1 - SEQ_SURFACE.1 - SEQ_SURFACE.3, 12.0);
+    assert!(arp_direction_rect().1 + arp_direction_rect().3 <= SEQ_SURFACE.1 + SEQ_SETTINGS_H);
+    assert!(SEQ_LANE_TOP > SEQ_SETTINGS_H);
     assert_eq!(CHORDS_SURFACE.0, PIANO_SURFACE.0);
     assert_eq!(PERF_SURFACE.0 - CHORDS_SURFACE.0 - CHORDS_SURFACE.2, 12.0);
     assert_eq!(MOD_SURFACE.0 - PIANO_SURFACE.0 - PIANO_SURFACE.2, 16.0);

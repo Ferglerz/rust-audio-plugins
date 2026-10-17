@@ -194,7 +194,8 @@ fn route_drag_cancel_jitter_and_focus_loss_never_assign_or_strum() {
         let (x, y) = if cancel == 0 {
             (r.0 + 22.0, r.1 + 21.0)
         } else if cancel == 1 {
-            (730.0, 538.0)
+            // Gap between the arpeggiator module and the keyboard. Empty chrome, not a route target.
+            (730.0, SEQ_SURFACE.1 + SEQ_SURFACE.3 + 6.0)
         } else {
             (850.0, 400.0)
         };
@@ -226,7 +227,11 @@ fn route_drag_cancel_jitter_and_focus_loss_never_assign_or_strum() {
             y,
             WindowEvent::MouseUp(MouseButton::Left),
         );
-        assert!(changes.borrow().is_empty());
+        assert!(
+            changes.borrow().is_empty(),
+            "cancel {cancel} changes {:?}",
+            changes.borrow()
+        );
         assert!(view.drag.is_none() && !view.pad_hover);
         assert!(
             !std::iter::from_fn(|| view.bridge.commands.pop()).any(|c| matches!(

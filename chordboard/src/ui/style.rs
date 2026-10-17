@@ -193,10 +193,13 @@ impl ChordboardView {
         targets.extend((0..KEY_COUNT).map(|i| (self.keyboard_key_rect(i), false)));
         targets.extend((0..8).map(|i| (memory_rect(i), self.memory_ui.armed)));
         targets.push((BASS_BYPASS, !self.params.bass_enabled.value()));
-        if self.arp_main() {
-            targets.push((ARP_PAGE_ACCENT, false));
-            targets.push((INTERLOCK, self.params.interlock.value() != 0));
-        }
+        targets.push((arp_accent_rect(), false));
+        targets.push((interlock_rect(), self.params.interlock.value() != 0));
+        targets.push((seq_power_rect(), self.params.seq_enabled.value()));
+        targets.push((
+            arp_direction_rect(),
+            self.menu == Some(Menu::ArpPattern),
+        ));
         targets.push((self.voice_leading_rect(), self.params.voice_leading.value() != 2));
         targets.push((self.split_marker(), false));
         if let Some(r) = self.bass_marker() {
@@ -215,24 +218,19 @@ impl ChordboardView {
         targets
             .extend((0..5).map(|i| (transpose_control_rect(self.params.mpe_enabled(), i), false)));
         if self.sequencer_open() {
-            targets.push((SEQ_BYPASS, self.params.seq_enabled.value()));
-            targets.push((SEQ_RATE_SYNC, self.sweep_synced()));
+            targets.push((seq_rate_sync_rect(), self.sweep_synced()));
             if self.sweep_synced() {
-                targets.push((SEQ_RATE, self.menu == Some(Menu::ArpRate)));
+                targets.push((seq_rate_rect(), self.menu == Some(Menu::ArpRate)));
             }
             targets.extend(self.sequencer_button_rects());
         }
-        targets.push((HEADER_PLAY_TAB, !self.sequencer_open()));
-        targets.push((HEADER_SEQ_TAB, self.sequencer_open()));
         targets.push((
             strum_bypass_rect(self.expand_t()),
             self.params.strum_enabled.value(),
         ));
-        if self.arp_main() {
-            targets.extend(
-                [false, true].map(|looping| (repeat_rect(looping), (self.mode() == 3) == looping)),
-            );
-        }
+        targets.extend(
+            [false, true].map(|looping| (repeat_rect(looping), (self.mode() == 3) == looping)),
+        );
         targets.extend(self.base_controls().iter().map(|(c, r)| {
             (
                 *r,
@@ -251,11 +249,6 @@ impl ChordboardView {
                 self.params.octaves.value() == i as i32 + 1,
             )
         }));
-        if self.arp_main() {
-            targets.extend(
-                (0..7).map(|i| (pattern_rect(i), self.params.arp_pattern.value() == i as i32)),
-            );
-        }
         targets.push((
             strum_latch_rect(self.expand_t()),
             self.params.strum_latch.value(),
