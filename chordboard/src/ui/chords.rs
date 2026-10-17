@@ -90,6 +90,7 @@ impl ChordboardView {
         }
         let live_latch = self.routed_plain("latch");
         let latched = live_latch.map_or(self.params.latch.value(), |value| value >= 0.5);
+        let latch_color = if latched { GOLD } else { MUTED };
         d.rect(LATCH.0, LATCH.1, LATCH.2, LATCH.3, BG);
         d.rect(
             LATCH.0,
@@ -97,8 +98,8 @@ impl ChordboardView {
             LATCH.2,
             LATCH.3,
             alpha(
-                GOLD,
-                if latched { 0.22 } else { 0.06 } + self.hover_amount(LATCH) * 0.08,
+                if latched { GOLD } else { TEXT },
+                if latched { 0.22 } else { 0.0 } + self.hover_amount(LATCH) * 0.08,
             ),
         );
         d.outline_rounded(
@@ -107,12 +108,12 @@ impl ChordboardView {
             LATCH.2,
             LATCH.3,
             5.0,
-            alpha(GOLD, if latched { 1.0 } else { 0.7 }),
+            if latched { GOLD } else { LINE },
             1.5,
         );
         d.font = self.bold_font.get();
-        style::Icon::Lock.draw(d, LATCH.0 + 15.0, LATCH.1 + 24.0, GOLD);
-        d.text_centered(LATCH.0 + LATCH.2 * 0.5 + 9.0, LATCH.1 + 28.0, "Latch", 14.0, GOLD);
+        style::Icon::Lock.draw(d, LATCH.0 + 15.0, LATCH.1 + 24.0, latch_color);
+        d.text_centered(LATCH.0 + LATCH.2 * 0.5 + 9.0, LATCH.1 + 28.0, "Latch", 14.0, latch_color);
         d.text_centered(
             LATCH.0 + LATCH.2 * 0.5,
             LATCH.1 + 45.0,
@@ -121,13 +122,6 @@ impl ChordboardView {
             MUTED,
         );
         d.font = self.ui_font.get();
-        d.text_centered(
-            LATCH.0 + LATCH.2 * 0.5,
-            LATCH.1 + 56.0,
-            if latched { "ON" } else { "OFF" },
-            11.0,
-            if latched { GOLD } else { MUTED },
-        );
         if live_latch.is_some() {
             self.live_highlight(d, LATCH);
         }
@@ -135,7 +129,7 @@ impl ChordboardView {
             d,
             Menu::Key.trigger_rect(),
             &format!("Key {} ▾", music::label(&self.key_name())),
-            true,
+            self.menu == Some(Menu::Key),
             GOLD,
         );
         self.button_tinted(
@@ -145,14 +139,14 @@ impl ChordboardView {
                 "{} ▾",
                 harmony::SCALE_NAMES[self.params.scale.value() as usize]
             ),
-            true,
+            self.menu == Some(Menu::Scale),
             GOLD,
         );
         self.button_tinted(
             d,
             ORDER,
             harmony::KEYBOARD_LAYOUTS[self.keyboard_layout() as usize],
-            true,
+            false,
             GOLD,
         );
         if let Some(control) = self.control("root_on_select") {
@@ -184,7 +178,6 @@ impl ChordboardView {
             });
             let ignored = self.snapshot.ignored & (1 << i) != 0;
             let hover = self.hover_amount(r);
-            d.rounded_rect(x, y + 3.0, w, h, 7.0, alpha(LINE, 0.7));
             d.rounded_rect(x, y, w, h, 7.0, BG);
             d.rounded_rect(
                 x,
@@ -228,7 +221,11 @@ impl ChordboardView {
                     1.0,
                 );
             }
-            d.outline_rounded(x, y, w, h, 7.0, if ignored { COLORS[4] } else { LINE }, 1.0);
+            // Animated rings already define active keys; keep only the quiet
+            // resting edge (or the ignored-input warning) underneath them.
+            if ignored || (!current && amt <= 0.005) {
+                d.outline_rounded(x, y, w, h, 7.0, if ignored { COLORS[4] } else { LINE }, 1.0);
+            }
             d.outline_rounded(
                 x,
                 y,

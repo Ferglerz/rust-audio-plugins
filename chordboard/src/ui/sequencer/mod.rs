@@ -180,7 +180,7 @@ fn header_rect(x: f32, width: f32) -> Rect {
     (surface().0 + x, surface().1 + 8.0, width, 28.0)
 }
 fn lock_lengths_rect() -> Rect {
-    header_rect(114.0, 104.0)
+    header_rect(154.0, 104.0)
 }
 /// Step value selectors occupy two rows beneath the arpeggiator patterns.
 fn header_slots(modifiers: usize, rest: usize) -> Vec<Rect> {

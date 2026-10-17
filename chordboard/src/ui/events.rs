@@ -651,18 +651,6 @@ impl ChordboardView {
                     self.toggle_strum_bypass(cx);
                     return true;
                 }
-                if hit(HEADER_SEQ_BYPASS, x, y) {
-                    Self::emit(
-                        cx,
-                        self.params.seq_enabled.as_ptr(),
-                        if self.params.seq_enabled.value() {
-                            0.0
-                        } else {
-                            1.0
-                        },
-                    );
-                    return true;
-                }
                 if hit(HEADER_PLAY_TAB, x, y) || hit(HEADER_SEQ_TAB, x, y) {
                     self.end_drag(cx);
                     self.set_sequencer_open(cx, hit(HEADER_SEQ_TAB, x, y));

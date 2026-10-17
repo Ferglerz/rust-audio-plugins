@@ -68,6 +68,9 @@ impl ChordboardView {
         if !self.sequencer_open() || self.sequencer_ui.progress < 1.0 {
             return None;
         }
+        if hit(SEQ_BYPASS, x, y) {
+            return Some("Enable or bypass sequencer playback".into());
+        }
         if VISIBLE_LANES.into_iter().any(|lane| hit(length_rect(lane), x, y)) {
             return Some("Pattern length · Drag to choose 1–32 steps · Length lock applies the same length to both lanes".into());
         }
@@ -393,6 +396,13 @@ impl ChordboardView {
                 | WindowEvent::MouseDoubleClick(MouseButton::Left)
                 | WindowEvent::MouseTripleClick(MouseButton::Left)
         );
+        if press && self.sequencer_open() && self.sequencer_ui.progress == 1.0 && hit(SEQ_BYPASS, x, y) {
+            cx.focus();
+            self.focused = true;
+            Self::emit(cx, self.params.seq_enabled.as_ptr(), if self.params.seq_enabled.value() { 0.0 } else { 1.0 });
+            cx.needs_redraw();
+            return true;
+        }
         if press
             && self.sequencer_open()
             && self.sequencer_ui.progress == 1.0

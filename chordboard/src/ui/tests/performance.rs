@@ -343,7 +343,6 @@ fn defaults_use_auto_strum_zero_sweep_and_unassigned_y_controller() {
             crate::engine::Mapping::default()
         ]
     );
-    assert!(HEADER_SEQ_BYPASS.0 + HEADER_SEQ_BYPASS.2 < TEMPO_SYNC.0);
 }
 #[test]
 fn direct_direction_selects_exact_values() {

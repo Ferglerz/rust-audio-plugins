@@ -338,7 +338,7 @@ fn expanded_manual_field_preserves_all_four_insets() {
     for t in [0.0, 0.25, 0.5, 0.75, 1.0] {
         assert_eq!(
             insets(pad_rect(t), play_pad_rect(t)),
-            (92.0, 60.0, 20.0, 65.0)
+            (50.0, 50.0, 20.5, 72.0)
         );
     }
 }
@@ -465,22 +465,59 @@ fn strum_header_controls_remain_adjacent_through_expansion() {
 }
 
 #[test]
-fn expression_bound_labels_follow_handles_at_all_positions() {
-    for expand in [0.0, 1.0] {
+fn bound_labels_flip_without_colliding_with_handles_or_each_other() {
+    let overlaps = |a: Rect, b: Rect| a.0 < b.0 + b.2 && a.0 + a.2 > b.0
+        && a.1 < b.1 + b.3 && a.1 + a.3 > b.1;
+    for expand in [0.0, 0.5, 1.0] {
         let field = play_pad_rect(expand);
         let pad = pad_rect(expand);
-        for (low, high) in [(0.0,1.0),(0.0,0.01),(0.99,1.0),(0.495,0.505)] {
-            let [minimum, maximum] = expression_bound_labels(field, low, high);
-            for r in [minimum, maximum] {
-                assert!(r.0 >= pad.0 && r.0 + r.2 < field.0 - 36.0);
-                assert!(r.1 >= pad.1 && r.1 + r.3 <= pad.1 + pad.3);
+        for x in [(0.0, 1.0), (0.0, 0.25), (0.75, 1.0), (0.375, 0.625)] {
+            for y in [(0.0, 1.0), (0.0, 0.01), (0.99, 1.0), (0.495, 0.505)] {
+                let labels = strum_bound_labels(pad, field, x, y);
+                let handles = [(false, x.0), (false, x.1), (true, y.0), (true, y.1)]
+                    .map(|(axis, value)| {
+                        let (x, y, pointer) = strum_bound_anchor_in(field, axis, value);
+                        pleasant_ui::handles::tag_body_rect(x, y, pointer)
+                    });
+                for (i, r) in labels.iter().copied().enumerate() {
+                    assert!(r.0 >= pad.0 && r.0 + r.2 <= pad.0 + pad.2);
+                    assert!(r.1 >= pad.1 && r.1 + r.3 <= pad.1 + pad.3);
+                    assert!(handles.iter().all(|&h| !overlaps(r, h)), "label {i} overlaps a handle: {x:?}, {y:?}");
+                    assert!(labels[..i].iter().all(|&other| !overlaps(r, other)), "labels overlap: {x:?}, {y:?}");
+                }
             }
-            assert_eq!(minimum.1 + minimum.3 * 0.5, field.1 + (1.0 - low) * field.3);
-            assert_eq!(maximum.1 + maximum.3 * 0.5, field.1 + (1.0 - high) * field.3);
-            let (_, min_y, _) = strum_bound_anchor_in(field, true, low);
-            let (_, max_y, _) = strum_bound_anchor_in(field, true, high);
-            assert_eq!(min_y, field.1 + (1.0 - low) * field.3);
-            assert_eq!(max_y, field.1 + (1.0 - high) * field.3);
         }
+        let labels = strum_bound_labels(pad, field, (0.0, 1.0), (0.0, 1.0));
+        assert!(labels[0].1 + labels[0].3 < field.1 - 36.0, "X min flips above its tag to avoid Y max");
+        assert!(labels[1].1 > field.1, "X max stays below its tag");
+    }
+}
+
+#[test]
+fn modulator_cards_fill_the_module_and_appearance_aligns_with_its_edge() {
+    let first = meter_rect(0);
+    let last = meter_rect(crate::engine::routing::SOURCE_COUNT - 1);
+    assert_eq!(first.1, MOD_SURFACE.1 + MODULE_HEADER_H + 12.0);
+    assert!((last.1 + last.3 - (MOD_SURFACE.1 + MOD_SURFACE.3 - 12.0)).abs() < 0.001);
+    assert!(first.3 > 40.0, "cards need breathing room above their meters");
+    assert_eq!(APPEARANCE.0 + APPEARANCE.2, MOD_SURFACE.0 + MOD_SURFACE.2);
+}
+
+#[test]
+fn sequencer_bypass_is_local_and_header_tab_only_navigates() {
+    for enabled in [false, true] {
+        let mut view = view(3, false);
+        Arc::get_mut(&mut view.params).unwrap().seq_enabled = BoolParam::new("Sequencer", enabled);
+        let (mut cx, target, changes) = context();
+        // The old header power location now belongs to the navigation tab.
+        click(&mut view, &mut cx, target, (HEADER_SEQ_TAB.0 + 6.0, 25.0, 28.0, 28.0));
+        assert!(view.sequencer_open());
+        assert!(changes.borrow().is_empty());
+        view.sequencer_ui.progress = 0.5;
+        click(&mut view, &mut cx, target, SEQ_BYPASS);
+        assert!(changes.borrow().is_empty(), "moving page must not toggle playback");
+        open_arp(&mut view);
+        click(&mut view, &mut cx, target, SEQ_BYPASS);
+        assert_eq!(&*changes.borrow(), &[(view.params.seq_enabled.as_ptr(), if enabled { 0.0 } else { 1.0 })]);
     }
 }

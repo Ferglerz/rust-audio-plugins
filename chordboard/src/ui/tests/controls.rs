@@ -290,7 +290,7 @@ fn native_repeated_clicks_reach_all_chord_and_parameter_buttons() {
         });
         let bridge = Arc::new(Bridge::default());
         let mut view = ChordboardView::new(params.clone(), bridge.clone(), Arc::new(PreviewContext));
-        if (47..=65).contains(&button) {
+        if button == 41 || (47..=65).contains(&button) {
             open_arp(&mut view);
         }
         let target = view
@@ -312,7 +312,7 @@ fn native_repeated_clicks_reach_all_chord_and_parameter_buttons() {
         let (r, expected) = match button {
             0..=35 => (key_rect(button), None),
             36..=40 => (transpose_rect(button - 36), Some(params.transpose.as_ptr())),
-            41 => (HEADER_SEQ_BYPASS, Some(params.seq_enabled.as_ptr())),
+            41 => (SEQ_BYPASS, Some(params.seq_enabled.as_ptr())),
             45..=46 => (inversion_rect(button - 45), Some(params.inversion.as_ptr())),
             47..=53 => (pattern_rect(button - 47), Some(params.arp_pattern.as_ptr())),
             62..=65 => (octave_rect(button - 62), Some(params.octaves.as_ptr())),

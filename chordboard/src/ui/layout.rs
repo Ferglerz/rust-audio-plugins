@@ -28,8 +28,12 @@ const fn field_latch(pad: Rect) -> Rect {
     (corner.0 - 136.0, corner.1, 128.0, 28.0)
 }
 const fn manual_field_inset(pad: Rect) -> Rect {
-    // Left gutter fits separate labels and the 30px bound tags; top stays compact.
-    (pad.0 + 92.0, pad.1 + 60.0, pad.2 - 112.0, pad.3 - 125.0)
+    // Center the field including its tags: 14px beyond the left, top and
+    // right handle edges. Keep the bottom clear of the note-length control.
+    const GRIP: f32 = pleasant_ui::handles::TAG_LONG + pleasant_ui::handles::TAG_POINTER_LEN;
+    const LEFT: f32 = 14.0 + GRIP;
+    const RIGHT: f32 = 14.0 + pleasant_ui::handles::TAG_THICK * 0.5;
+    (pad.0 + LEFT, pad.1 + LEFT, pad.2 - LEFT - RIGHT, pad.3 - LEFT - 72.0)
 }
 pub(super) const ARP_MAIN_WIDTH: f32 = 612.0;
 pub(super) const ARP_PAD: Rect = (32.0, 136.0, 892.0, 358.0);
@@ -42,7 +46,7 @@ pub(super) const PERF_SURFACE: Rect = (1080.0 - WIDTH_REDUCTION, 92.0, 653.0, 41
 pub(super) const MOD_SURFACE: Rect = (MAIN_W, 92.0, 174.0, 630.0);
 pub(super) const EXPAND: Rect = field_corner(PAD);
 pub(super) const EXPANDED_SURFACE: Rect = (16.0, 92.0, MAIN_W - 32.0, 418.0);
-pub(super) const EXPANDED_PAD: Rect = (32.0, 108.0, MAIN_W - 64.0, 390.0);
+pub(super) const EXPANDED_PAD: Rect = (32.0, PAD.1, MAIN_W - 64.0, PAD.3);
 pub(super) const EXPANDED_PLAY_PAD: Rect = manual_field_inset(EXPANDED_PAD);
 pub(super) const EXPANDED_EXPAND: Rect = field_corner(EXPANDED_PAD);
 pub(super) const EXPANDED_STRUM_SYNC: Rect =
@@ -66,7 +70,7 @@ pub(super) const SCALE_MENU: Rect = (216.0, 100.0, 148.0, 28.0);
 pub(super) const ORDER: Rect = (372.0, 100.0, 116.0, 28.0);
 pub(super) const ROOT_ON_SELECT: Rect = (496.0, 100.0, 148.0, 28.0);
 pub(super) const TRANSPOSE: Rect = (652.0, 100.0, 272.0, 28.0);
-pub(super) const APPEARANCE: Rect = (1681.0 - WIDTH_REDUCTION - OLD_MOD_COLUMN, 24.0, 138.0, 30.0);
+pub(super) const APPEARANCE: Rect = (W - 16.0 - 72.0, 25.0, 72.0, 26.0);
 pub(super) const STRUM_BYPASS: Rect = (PERF_SURFACE.0 + 10.0, 100.0, 28.0, 28.0);
 pub(super) fn strum_bypass_rect(expand: f32) -> Rect {
     let r = perf_surface_rect(expand);
@@ -114,7 +118,6 @@ pub(super) fn repeat_rect(looping: bool) -> Rect {
 }
 pub(super) const HEADER_PLAY_TAB: Rect = (650.0, 20.0, 108.0, 38.0);
 pub(super) const HEADER_SEQ_TAB: Rect = (766.0, 20.0, 164.0, 38.0);
-pub(super) const HEADER_SEQ_BYPASS: Rect = (772.0, 25.0, 28.0, 28.0);
 #[cfg(test)]
 pub(super) fn inversion_rect(i: usize) -> Rect {
     inversion_control_rect(false, i)
@@ -252,11 +255,15 @@ pub(super) fn voicing_controls() -> [(&'static str, Rect); 0] {
     []
 }
 pub(super) fn meter_rect(i: usize) -> Rect {
+    const INSET: f32 = 12.0;
+    const GAP: f32 = 8.0;
+    let count = crate::engine::routing::SOURCE_COUNT as f32;
+    let height = (MOD_SURFACE.3 - MODULE_HEADER_H - 2.0 * INSET - (count - 1.0) * GAP) / count;
     (
-        MOD_SURFACE.0 + 12.0,
-        MOD_SURFACE.1 + 62.0 + i as f32 * 46.0,
-        MOD_SURFACE.2 - 24.0,
-        30.0,
+        MOD_SURFACE.0 + INSET,
+        MOD_SURFACE.1 + MODULE_HEADER_H + INSET + i as f32 * (height + GAP),
+        MOD_SURFACE.2 - 2.0 * INSET,
+        height,
     )
 }
 
@@ -413,6 +420,7 @@ pub(super) fn route_control_rect(id: &str) -> Rect {
 }
 
 pub(super) const PIANO_SURFACE: Rect = (16.0, 522.0, MAIN_W - 32.0, 200.0);
+pub(super) const SEQ_BYPASS: Rect = (PIANO_SURFACE.0 + 10.0, PIANO_SURFACE.1 + 10.0, 24.0, 24.0);
 // Arp rate lives at the right end of the sequencer header; the free-rate slider shares the slot.
 pub(super) const SEQ_RATE: Rect = (
     PIANO_SURFACE.0 + PIANO_SURFACE.2 - 16.0 - 240.0,
@@ -544,7 +552,40 @@ pub(super) fn chord_readout_rect() -> Rect {
 pub(super) const METER_NUM: Rect = (1007.0, 24.0, 44.0, 30.0);
 pub(super) const METER_DEN: Rect = (1067.0, 24.0, 44.0, 30.0);
 
-/// Bound labels remain centered next to their handle, including at either edge.
-pub(super) fn expression_bound_labels(field: Rect, low: f32, high: f32) -> [Rect; 2] {
-    [low, high].map(|value| (field.0 - 89.0, field.1 + (1.0 - value) * field.3 - 9.0, 44.0, 18.0))
+/// Labels sit above/below their tags. Flip sides when another label or tag
+/// occupies that space, including when the Y bounds nearly meet at the top.
+pub(super) fn strum_bound_labels(pad: Rect, field: Rect, x: (f32, f32), y: (f32, f32)) -> [Rect; 4] {
+    let anchors = [(false, x.0), (false, x.1), (true, y.0), (true, y.1)]
+        .map(|(axis, value)| strum_bound_anchor_in(field, axis, value));
+    let handles = anchors.map(|(x, y, pointer)| pleasant_ui::handles::tag_body_rect(x, y, pointer));
+    let candidates: [[Rect; 2]; 4] = std::array::from_fn(|i| {
+        let (ax, ay, _) = anchors[i];
+        let body = handles[i];
+        let center_x = if i < 2 { ax } else { body.0 + body.2 * 0.5 - 2.0 };
+        let above = (center_x - 14.0, body.1 - 14.0, 28.0, 12.0);
+        let below = (center_x - 14.0, if i < 2 { ay + 4.0 } else { body.1 + body.3 + 4.0 }, 28.0, 12.0);
+        if i == 3 { [above, below] } else { [below, above] }
+    });
+    let overlaps = |a: Rect, b: Rect| {
+        a.0 < b.0 + b.2 + 2.0 && a.0 + a.2 + 2.0 > b.0
+            && a.1 < b.1 + b.3 + 2.0 && a.1 + a.3 + 2.0 > b.1
+    };
+    let mut best = candidates.map(|sides| sides[0]);
+    let mut best_score = u32::MAX;
+    for flips in 0u32..16 {
+        let labels: [Rect; 4] = std::array::from_fn(|i| candidates[i][((flips >> i) & 1) as usize]);
+        let mut score = flips.count_ones();
+        for (i, r) in labels.iter().copied().enumerate() {
+            if r.0 < pad.0 || r.1 < pad.1 || r.0 + r.2 > pad.0 + pad.2 || r.1 + r.3 > pad.1 + pad.3 {
+                score += 1000;
+            }
+            score += 16 * handles.iter().filter(|&&handle| overlaps(r, handle)).count() as u32;
+            score += 16 * labels[..i].iter().filter(|&&label| overlaps(r, label)).count() as u32;
+        }
+        if score < best_score {
+            best = labels;
+            best_score = score;
+        }
+    }
+    best
 }

@@ -23,7 +23,7 @@ impl ChordboardView {
             d,
             TEMPO_SYNC,
             if synced { "Host tempo" } else { "Manual tempo" },
-            true,
+            false,
             if synced { TEAL } else { GOLD },
             if synced { style::Icon::Host } else { style::Icon::Manual },
         );
@@ -41,17 +41,7 @@ impl ChordboardView {
     pub(super) fn draw_page_tabs(&self, d: &mut Draw) {
         let open = self.sequencer_open();
         self.button(d, HEADER_PLAY_TAB, "Play", !open, TEAL);
-        self.button(d, HEADER_SEQ_TAB, "", open, TEAL);
-        d.text(
-            HEADER_SEQ_BYPASS.0 + HEADER_SEQ_BYPASS.2 + 10.0,
-            HEADER_SEQ_TAB.1 + HEADER_SEQ_TAB.3 * 0.5 + 13.0 * 0.35,
-            "Sequencer", 13.0, if open { TEAL } else { TEXT },
-        );
-        d.power_icon(
-            HEADER_SEQ_BYPASS.0 + HEADER_SEQ_BYPASS.2 * 0.5,
-            HEADER_SEQ_BYPASS.1 + HEADER_SEQ_BYPASS.3 * 0.5,
-            if self.params.seq_enabled.value() { TEAL } else { MUTED },
-        );
+        self.button(d, HEADER_SEQ_TAB, "Sequencer", open, TEAL);
     }
 
     pub(super) fn draw_strumfield_header(&self, d: &mut Draw) {
@@ -392,7 +382,9 @@ impl ChordboardView {
                 );
             }
         }
-        let y_labels = expression_bound_labels(field, y_min, y_max);
+        let labels = strum_bound_labels(pad, field, (min, max), (y_min, y_max));
+        let show_bounds = self.hover_pointer().is_some_and(|(x, y)| hit(pad, x, y))
+            || matches!(self.drag, Some(Drag::StrumBound(..)));
         for (y_axis, low, high) in [(false, min, max), (true, y_min, y_max)] {
             for (maximum, value) in [(false, low), (true, high)] {
                 let (ax, ay, pointer) = strum_bound_anchor_in(field, y_axis, value);
@@ -403,6 +395,9 @@ impl ChordboardView {
                 }
                 let color = if y_axis { GOLD } else { TEAL };
                 d.tag_handle(ax, ay, pointer, color);
+                if !show_bounds {
+                    continue;
+                }
                 let dragging = matches!(self.drag, Some(Drag::StrumBound(axis, end)) if axis == y_axis && end == maximum);
                 let label = if dragging {
                     format!("{value:.2}")
@@ -411,20 +406,12 @@ impl ChordboardView {
                 } else {
                     "MIN".into()
                 };
-                if y_axis {
-                    let r = y_labels[maximum as usize];
-                    let center_y = r.1 + r.3 * 0.5;
-
-                    if dragging {
-                        d.rounded_rect(r.0, r.1, r.2, r.3, 3.0, alpha(color, 0.16));
-                        d.circle(ax, ay, 4.0, color, false);
-                    }
-                    d.text_centered(r.0 + r.2 * 0.5, center_y + TEXT_SMALL * 0.35, &label, TEXT_SMALL, color);
-                } else if maximum {
-                    d.text_right(ax - 14.0, ay - 17.0, &label, TEXT_SMALL, color);
-                } else {
-                    d.text(ax + 14.0, ay - 17.0, &label, TEXT_SMALL, color);
+                let r = labels[y_axis as usize * 2 + maximum as usize];
+                if dragging {
+                    d.rounded_rect(r.0, r.1, r.2, r.3, 3.0, alpha(color, 0.16));
+                    d.circle(ax, ay, 4.0, color, false);
                 }
+                d.text_centered(r.0 + r.2 * 0.5, r.1 + r.3 * 0.5 + TEXT_SMALL * 0.35, &label, TEXT_SMALL, color);
             }
         }
         let position = if self.params.x_reverse.value() {
@@ -469,20 +456,11 @@ impl ChordboardView {
             MODULE_TITLE_SIZE,
             TEXT,
         );
-        style::Icon::Routing.draw(d, MOD_SURFACE.0 + 18.0, MOD_SURFACE.1 + 46.0, MUTED);
-        d.text(
-            MOD_SURFACE.0 + 31.0,
-            MOD_SURFACE.1 + 50.0,
-            "Drag to route",
-            11.0,
-            MUTED,
-        );
         for (i, label) in SOURCE_SHORT.iter().enumerate() {
             let r = meter_rect(i);
             let value = self.snapshot.sources[i];
             let accent = if i >= 9 { GOLD } else { TEAL };
             let hover = self.hover_amount(r);
-            let r = (r.0, r.1 - hover * 2.0, r.2, r.3);
             let dragging = matches!(self.drag, Some(Drag::Route(drag)) if drag.source == i);
             let route_count = self
                 .params
@@ -507,20 +485,8 @@ impl ChordboardView {
                 4.0,
                 alpha(accent, 0.025 + emphasis * 0.12),
             );
-            d.outline_rounded(
-                r.0,
-                r.1,
-                r.2,
-                r.3,
-                4.0,
-                alpha(
-                    if linked || emphasis > 0.0 { accent } else { LINE },
-                    0.55 + emphasis * 0.4,
-                ),
-                1.0,
-            );
             for dot in 0..route_count {
-                d.circle(r.0 + 8.0 + dot as f32 * 6.0, r.1 + 7.0, 1.5, accent, true);
+                d.circle(r.0 + 8.0 + dot as f32 * 6.0, r.1 + r.3 - 17.0, 1.5, accent, true);
             }
             if selected {
                 d.outline_rounded(
@@ -532,10 +498,22 @@ impl ChordboardView {
                     alpha(accent, emphasis),
                     2.0,
                 );
-                d.rect(r.0 + 8.0, r.1 + r.3 - 3.0, r.2 - 16.0, 2.0, accent);
+            } else {
+                d.outline_rounded(
+                    r.0,
+                    r.1,
+                    r.2,
+                    r.3,
+                    4.0,
+                    alpha(
+                        if linked || emphasis > 0.0 { accent } else { LINE },
+                        0.55 + emphasis * 0.4,
+                    ),
+                    1.0,
+                );
             }
             let x = r.0 + 8.0;
-            let y = r.1 + 20.0;
+            let y = r.1 + r.3 - 12.0;
             let width = r.2 - 16.0;
             d.rounded_rect(x, y, width, 6.0, 2.0, BG);
             let (start, end) = meter_fill(i, value);
@@ -547,10 +525,8 @@ impl ChordboardView {
                 d.line(center, y - 2.0, center, y + 8.0, MUTED, 1.0);
             }
             let color = if i >= 9 || linked || dragging || hover > 0.3 { accent } else { MUTED };
-            let label_width = d.text_width(label, TEXT_SMALL);
-            let left = x + (width - label_width - 22.0) * 0.5;
-            style::MODULATOR_ICONS[i].draw(d, left + 8.0, r.1 + 10.0, color);
-            d.text(left + 22.0, r.1 + 14.0, label, TEXT_SMALL, color);
+            style::MODULATOR_ICONS[i].draw(d, x + 8.0, r.1 + 14.0, color);
+            d.text_right(x + width, r.1 + 14.0 + TEXT_SMALL * 0.35, label, TEXT_SMALL, color);
         }
         d.font = self.ui_font.get();
     }

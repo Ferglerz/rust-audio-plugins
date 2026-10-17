@@ -278,13 +278,15 @@ impl ChordboardView {
                 d.rect(r.0, r.1, r.2, r.3, alpha(TEAL, flash * 0.22));
                 d.outline(r, TEAL);
             }
-            d.text(
-                r.0 + 7.0,
-                r.1 + 14.0,
-                &(i + 1).to_string(),
-                TEXT_SMALL,
-                MUTED,
-            );
+            if hovered == Some(i) {
+                d.text(
+                    r.0 + 7.0,
+                    r.1 + 14.0,
+                    &(i + 1).to_string(),
+                    TEXT_SMALL,
+                    MUTED,
+                );
+            }
             if let Some(chord) = chord {
                 let label = music::label(&harmony::chord_name(chord));
                 let label = self.fit_text(d, &label, r.2 - 4.0, 12.0);

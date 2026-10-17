@@ -326,7 +326,11 @@ impl ChordboardView {
             d.offset_x += (1.0 - u.progress) * r.2;
             d.rounded_rect(r.0, r.1, r.2, r.3, 8.0, PANEL);
             d.outline(r, LINE);
-            d.text(r.0 + 16.0, r.1 + 29.0, "SEQUENCER", 15.0, TEXT);
+            let bypassed = !self.params.seq_enabled.value();
+            let flash = self.action_flash.filter(|(rect, _)| *rect == SEQ_BYPASS).map_or(0.0, |(_, v)| v);
+            d.bypass_button(SEQ_BYPASS, bypassed, TEAL, self.hover_amount(SEQ_BYPASS) > 0.01, flash);
+            d.text(SEQ_BYPASS.0 + SEQ_BYPASS.2 + 6.0, module_title_y(r.1, MODULE_TITLE_SIZE),
+                "SEQUENCER", MODULE_TITLE_SIZE, if bypassed { MUTED } else { TEXT });
             let state = self.params.sequencer.snapshot();
             for lane in VISIBLE_LANES {
                 let length = state.lanes[lane][u.edit_pages[lane]].length;

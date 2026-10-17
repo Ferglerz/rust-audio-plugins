@@ -293,9 +293,6 @@ impl ChordboardView {
                 "Time signature · Click the numerator or denominator to set the meter".into()
             });
         }
-        if hit(HEADER_SEQ_BYPASS, x, y) {
-            return Some("Enable or bypass sequencer playback".into());
-        }
         if hit(HEADER_PLAY_TAB, x, y) {
             return Some("Keyboard and chords".into());
         }

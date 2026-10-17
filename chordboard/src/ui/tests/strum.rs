@@ -227,7 +227,8 @@ fn expanded_strum_field_fills_the_body_below_the_header() {
         "expanded expand button overlaps trackpad latch"
     );
     assert!(pad.2 > PAD.2);
-    assert!(pad.3 > PAD.3);
+    assert_eq!(pad.1, PAD.1);
+    assert_eq!(pad.3, PAD.3);
     assert!(pad.0 < PAD.0);
     assert_eq!(shrink_width(CHORDS_SURFACE, 1.0).2, 0.0);
 }

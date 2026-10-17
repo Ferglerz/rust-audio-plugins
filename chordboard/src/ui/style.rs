@@ -3,7 +3,7 @@ use super::*;
 /// Small vector marks shared by Chordboard controls.
 #[derive(Clone, Copy)]
 pub(super) enum Icon {
-    Lock, Once, Loop, Host, Manual, Learn, Trash, Add, Routing, Reset, Touch, TuningFork, Glyph(&'static str),
+    Lock, Once, Loop, Host, Manual, Learn, Trash, Add, Reset, Touch, TuningFork, Glyph(&'static str),
 }
 
 pub(super) const MODULATOR_ICONS: [Icon; crate::engine::routing::SOURCE_COUNT] = [
@@ -81,11 +81,6 @@ impl Icon {
                 for dx in [-1.5,1.5] { line(d,(dx,-1.0),(dx,4.0)); }
             }
             Self::Add => { line(d,(-6.0,0.0),(6.0,0.0)); line(d,(0.0,-6.0),(0.0,6.0)); }
-            Self::Routing => {
-                d.poly(&[(x-6.0,y+5.0),(x-6.0,y-4.0),(x+5.0,y-4.0)],color,1.4);
-                d.poly(&[(x+1.0,y-7.0),(x+5.0,y-4.0),(x+1.0,y-1.0)],color,1.4);
-                d.circle(x-6.0,y+5.0,2.0,color,false);
-            }
         }
     }
 }
@@ -186,11 +181,11 @@ impl ChordboardView {
             ),
             (APPEARANCE, false),
             (LATCH, self.params.latch.value()),
-            (ORDER, true),
+            (ORDER, false),
             (self.control_octave_bounds(), self.learning() == 4),
-            (TEMPO_SYNC, true),
-            (Menu::Key.trigger_rect(), true),
-            (Menu::Scale.trigger_rect(), true),
+            (TEMPO_SYNC, false),
+            (Menu::Key.trigger_rect(), self.menu == Some(Menu::Key)),
+            (Menu::Scale.trigger_rect(), self.menu == Some(Menu::Scale)),
         ]);
         if self.can_expand_strum() {
             targets.push((self.expand_button(), self.expand_target > 0.5));
@@ -220,6 +215,7 @@ impl ChordboardView {
         targets
             .extend((0..5).map(|i| (transpose_control_rect(self.params.mpe_enabled(), i), false)));
         if self.sequencer_open() {
+            targets.push((SEQ_BYPASS, self.params.seq_enabled.value()));
             targets.push((SEQ_RATE_SYNC, self.sweep_synced()));
             if self.sweep_synced() {
                 targets.push((SEQ_RATE, self.menu == Some(Menu::ArpRate)));
