@@ -283,7 +283,7 @@ fn route_drag_reuses_existing_destination_and_preserves_range_and_curve() {
         );
         open_arp(&mut view);
         let (mut cx, entity, changes) = context();
-        let rect = output_controls(2)
+        let rect = output_controls()
             .into_iter()
             .find(|(id, _)| *id == "length_ms")
             .unwrap()
@@ -326,7 +326,7 @@ fn route_drag_exposes_keyboard_output_destinations() {
         .any(|(p, _)| *p == view.params.routes[view.route_slot].source.as_ptr()));
     changes.borrow_mut().clear();
     // Starting a new drag folds the route editor away so the strumfield Length is reachable.
-    let rect = output_controls(2)
+    let rect = output_controls()
         .into_iter()
         .find(|(id, _)| *id == "length_ms")
         .unwrap()
@@ -367,7 +367,6 @@ fn route_drag_with_no_free_slots_does_not_overwrite_an_unrelated_link() {
 fn arp_repeat_choice_keeps_the_manual_field_expandable() {
     let mut view = view(1, false);
     let (mut cx, target, _) = context();
-    assert!(view.can_expand_strum());
     click(&mut view, &mut cx, target, expand_rect(0.0));
     assert_eq!(view.expand_target, 1.0);
     view.expand_progress = 1.0;

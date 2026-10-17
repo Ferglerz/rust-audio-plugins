@@ -168,16 +168,11 @@ impl ChordboardView {
         }
     }
 
-    pub(super) fn draw_pad(&self, d: &mut Draw, mode: i32) {
+    pub(super) fn draw_pad(&self, d: &mut Draw) {
         let pad = self.pad();
         d.rounded_rect(pad.0, pad.1, pad.2, pad.3, 8.0, BG);
-        let manual = mode == 2;
-        let field = self.field(manual);
-        let (min, max) = if manual {
-            strum_bounds(self.params.x_min.value(), self.params.x_max.value())
-        } else {
-            (0.0, 1.0)
-        };
+        let field = self.play_pad();
+        let (min, max) = strum_bounds(self.params.x_min.value(), self.params.x_max.value());
         let (y_min, y_max) =
             expression_bounds(self.params.y_min.value(), self.params.y_max.value());
         let expression_position = |value: f32| {
@@ -192,82 +187,8 @@ impl ChordboardView {
             d,
             field,
             (min, max),
-            manual && self.params.x_reverse.value(),
+            self.params.x_reverse.value(),
         );
-        if !manual {
-            self.button(
-                d,
-                strum_sync_rect(self.expand_t()),
-                "SWEEP SYNC",
-                self.params.strum_sync.value(),
-                TEAL,
-            );
-            self.button(
-                d,
-                strum_hold_rect(self.expand_t()),
-                if self.routed_plain("strum_hold").is_some() { "" } else { "HOLD" },
-                self.params.strum_hold.value(),
-                TEAL,
-            );
-            if let Some(live) = self.routed_plain("strum_sync") {
-                let r = strum_sync_rect(self.expand_t());
-                self.live_highlight(d, r);
-                d.text(
-                    r.0 + r.2 + 6.0,
-                    r.1 + r.3 * 0.5 + 4.0,
-                    if live >= 0.5 { "ON" } else { "OFF" },
-                    11.0,
-                    TEAL,
-                );
-            }
-            if let Some(live) = self.routed_plain("strum_hold") {
-                let r = strum_hold_rect(self.expand_t());
-                self.live_highlight(d, r);
-                d.text_centered(r.0 + r.2 * 0.5, r.1 + 14.0, "HOLD", 11.0, MUTED);
-                d.text_right(
-                    r.0 + r.2 - 4.0,
-                    r.1 + r.3 - 3.0,
-                    if live >= 0.5 { "ON" } else { "OFF" },
-                    11.0,
-                    TEAL,
-                );
-            }
-            if self
-                .routed_plain("strum_sync")
-                .map_or(self.params.strum_sync.value(), |v| v >= 0.5)
-            {
-                let beats = self
-                    .routed_plain("strum_beats")
-                    .unwrap_or(self.params.strum_beats.value());
-                let label = ARP_RATES
-                    .iter()
-                    .find(|(_, beats)| {
-                        (*beats
-                            - self
-                                .routed_plain("strum_beats")
-                                .unwrap_or(self.params.strum_beats.value()))
-                        .abs()
-                            < 0.0001
-                    })
-                    .map_or_else(
-                        || format!("{beats:.3} beats"),
-                        |(label, _)| label.to_string(),
-                    );
-                self.button(
-                    d,
-                    strum_rate_rect(self.expand_t()),
-                    &format!("Sweep: {label} ▾"),
-                    self.menu == Some(Menu::StrumRate),
-                    GOLD,
-                );
-                if self.routed_plain("strum_beats").is_some() {
-                    self.live_highlight(d, strum_rate_rect(self.expand_t()));
-                }
-            }
-        }
-        if !manual {
-            return;
-        }
         {
             for &(x, y, time) in &self.trail {
                 let age = time.elapsed().as_secs_f32();

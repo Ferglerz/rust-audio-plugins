@@ -46,16 +46,6 @@ fn strum_range_grips_clamp_without_playing_notes() {
         );
         assert!(view.drag.is_none());
     }
-    let mut view = view(2, false);
-    view.panel = Some(Panel::Mapping);
-    view.mapping_axis = 0;
-    assert_eq!(
-        view.panel_controls()
-            .iter()
-            .map(|(c, _)| c.id)
-            .collect::<Vec<_>>(),
-        ["x_reverse"]
-    );
 }
 #[test]
 fn computer_keys_ignore_legacy_disable_but_require_focus() {
@@ -249,48 +239,6 @@ fn expression_range_grips_drag_vertically_without_playing_notes() {
         );
         assert!(view.drag.is_none());
     }
-    let mut view = view(2, false);
-    view.panel = Some(Panel::Mapping);
-    view.mapping_axis = 1;
-    assert!(!view
-        .panel_controls()
-        .iter()
-        .any(|(c, _)| matches!(c.id, "y_min" | "y_max")));
-}
-#[test]
-fn manual_xy_cc_selection_clears_channel_lock_and_has_no_channel_menu() {
-    for axis in 0..2 {
-        let mut view = view(2, false);
-        view.mapping_axis = axis;
-        view.panel = Some(Panel::Mapping);
-        let (mut cx, target, _) = context();
-        view.params
-            .mapping(axis)
-            .store(crate::engine::Mapping::cc(7, 3).encode(), Ordering::Relaxed);
-        click_menu_trigger(&mut view, &mut cx, target, Menu::MappingChannel(false));
-        assert!(view.menu.is_none());
-        assert_eq!(
-            view.mapping().channel,
-            3,
-            "displaying learned mapping must preserve its channel"
-        );
-        view.select_menu(
-            &mut EventContext::new_with_current(&mut cx, target),
-            Menu::MappingCc(false),
-            11,
-        );
-        assert_eq!(view.mapping(), crate::engine::Mapping::cc(11, 16));
-        view.params
-            .mapping(axis)
-            .store(crate::engine::Mapping::cc(7, 3).encode(), Ordering::Relaxed);
-        view.select_menu(
-            &mut EventContext::new_with_current(&mut cx, target),
-            Menu::MappingKind,
-            1,
-        );
-        assert_eq!(view.mapping().kind, 1);
-        assert_eq!(view.mapping().channel, 16);
-    }
 }
 #[test]
 fn spread_keyboard_cycles_all_voicings_without_drag_or_text_entry() {
@@ -413,13 +361,11 @@ fn dropdowns_dismiss_without_close_buttons_or_parameter_changes() {
 fn panel_close_buttons_consume_without_changing_parameters() {
     let mut view = view(1, false);
     let (mut cx, target, changes) = context();
-    for panel in [Panel::Routes, Panel::Mapping] {
-        view.set_panel(Some(panel));
-        let close = view.panel_close_rect(panel);
-        click(&mut view, &mut cx, target, close);
-        assert!(view.panel.is_none());
-        assert!(view.drag.is_none());
-    }
+    view.set_panel(Some(Panel::Routes));
+    let close = view.panel_close_rect(Panel::Routes);
+    click(&mut view, &mut cx, target, close);
+    assert!(view.panel.is_none());
+    assert!(view.drag.is_none());
     assert!(changes.borrow().is_empty());
 }
 #[test]
@@ -583,15 +529,8 @@ fn all_popover_choices_fit_inside_the_window_and_clear_the_heading() {
         Menu::Key,
         Menu::Scale,
         Menu::Scale,
-        Menu::YTarget,
-        Menu::StrumRate,
         Menu::ArpRate,
         Menu::ArpPattern,
-        Menu::MappingKind,
-        Menu::MappingChannel(true),
-        Menu::MappingChannel(false),
-        Menu::MappingCc(true),
-        Menu::MappingCc(false),
     ] {
         let bounds = menu.bounds();
         assert!(

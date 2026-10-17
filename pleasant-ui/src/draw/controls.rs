@@ -336,7 +336,7 @@ impl Draw<'_> {
         color: Color,
         bypassed: bool,
     ) {
-        self.draw_knob_with_layout(layout, label, value, n, color, bypassed, false);
+        self.draw_knob_with_layout::<false>(layout, label, value, n, color, bypassed);
     }
 
     pub fn knob_with_layout_bipolar(
@@ -348,10 +348,10 @@ impl Draw<'_> {
         color: Color,
         bypassed: bool,
     ) {
-        self.draw_knob_with_layout(layout, label, value, n, color, bypassed, true);
+        self.draw_knob_with_layout::<true>(layout, label, value, n, color, bypassed);
     }
 
-    fn draw_knob_with_layout(
+    fn draw_knob_with_layout<const BIPOLAR: bool>(
         &mut self,
         layout: &KnobLayout,
         label: &str,
@@ -359,7 +359,6 @@ impl Draw<'_> {
         n: f32,
         color: Color,
         bypassed: bool,
-        bipolar: bool,
     ) {
         let KnobLayout {
             cx,
@@ -392,19 +391,19 @@ impl Draw<'_> {
         }
         self.poly(&bg_pts, LINE, 2.5 * scale);
 
-        let value_start = if bipolar {
+        let value_start = if BIPOLAR {
             start_angle + total_sweep * 0.5
         } else {
             start_angle
         };
         let value_sweep = cur_angle - value_start;
-        let draw_value = if bipolar {
+        let draw_value = if BIPOLAR {
             value_sweep.abs() > 0.001
         } else {
             n > 0.005
         };
         if !bypassed && draw_value {
-            let extent = if bipolar {
+            let extent = if BIPOLAR {
                 value_sweep.abs() / total_sweep
             } else {
                 n

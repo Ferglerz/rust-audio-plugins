@@ -119,16 +119,7 @@ impl Engine {
                     .max(1.0);
                     // RPN pitch sensitivity is needed for fine pitch on regular MIDI too.
                     if self.delay_bend_ranges[channel as usize] != range {
-                        for (cc, value) in [
-                            (101, 0),
-                            (100, 0),
-                            (6, range.floor() as u8),
-                            (38, ((range.fract() * 100.0).round() as u8).min(99)),
-                            (101, 127),
-                            (100, 127),
-                        ] {
-                            out(Out::Cc(channel, cc, value as f32 / 127.0));
-                        }
+                        midi::emit_bend_range(channel, range, out);
                         self.delay_bend_ranges[channel as usize] = range;
                     }
                     expression.bend = (expression.bend + fine / (200.0 * range)).clamp(0.0, 1.0);

@@ -35,10 +35,8 @@ const fn manual_field_inset(pad: Rect) -> Rect {
     const RIGHT: f32 = 14.0 + pleasant_ui::handles::TAG_THICK * 0.5;
     (pad.0 + LEFT, pad.1 + LEFT, pad.2 - LEFT - RIGHT, pad.3 - LEFT - 72.0)
 }
-pub(super) const ARP_MAIN_WIDTH: f32 = 612.0;
 pub(super) const ARP_PAD: Rect = (32.0, 136.0, 892.0, 358.0);
 pub(super) const PLAY_PAD: Rect = manual_field_inset(PAD);
-pub(super) const AUTO_FIELD: Rect = (PAD.0 + 20.0, 286.0, PAD.2 - 40.0, 100.0);
 pub(super) const CHORDS_SURFACE: Rect = (16.0, 92.0, 924.0, 418.0);
 pub(super) const PERF_SURFACE: Rect = (1080.0 - WIDTH_REDUCTION, 92.0, 653.0, 418.0);
 // Vertical modulation module beside both performance and keyboard surfaces.
@@ -53,15 +51,6 @@ pub(super) const EXPANDED_SURFACE: Rect = (16.0, 92.0, MAIN_W - 32.0, 418.0);
 pub(super) const EXPANDED_PAD: Rect = (32.0, PAD.1, MAIN_W - 64.0, PAD.3);
 pub(super) const EXPANDED_PLAY_PAD: Rect = manual_field_inset(EXPANDED_PAD);
 pub(super) const EXPANDED_EXPAND: Rect = field_corner(EXPANDED_PAD);
-pub(super) const EXPANDED_STRUM_SYNC: Rect =
-    (1567.0 - WIDTH_REDUCTION - OLD_MOD_COLUMN, 116.0, 92.0, 28.0);
-pub(super) const STRUM_RATE: Rect = (ARP_PAD.0 + 8.0, 344.0, ARP_MAIN_WIDTH - 16.0, 36.0);
-pub(super) const EXPANDED_STRUM_RATE: Rect = (
-    1339.0 - WIDTH_REDUCTION - OLD_MOD_COLUMN,
-    116.0,
-    220.0,
-    28.0,
-);
 pub(super) const LATCH: Rect = (
     32.0,
     KEY_TOP + 2.0 * KEY_ROW_PITCH + TILE_HEIGHT + 10.0,
@@ -98,19 +87,6 @@ pub(super) fn octave_button_rect(expand: f32, i: usize) -> Rect {
 pub(super) fn octave_rect(i: usize) -> Rect {
     octave_button_rect(0.0, i)
 }
-// Arp page grid: four rows with a shared 20px rhythm inside ARP_PAD.
-const ARP_X: f32 = ARP_PAD.0 + 8.0;
-const ARP_INNER_W: f32 = ARP_PAD.2 - 16.0;
-const ARP_GAP: f32 = 20.0;
-const ARP_ROW1: f32 = ARP_PAD.1 + 8.0;
-const ARP_ROW1_H: f32 = 38.0;
-const ARP_ROW4_H: f32 = 38.0;
-const ARP_ROW4: f32 = ARP_PAD.1 + ARP_PAD.3 - 8.0 - ARP_ROW4_H;
-const ARP_ROW2: f32 = ARP_ROW1 + ARP_ROW1_H + ARP_GAP;
-const PATTERN_HEIGHT: f32 = 128.0;
-const ARP_ROW3: f32 = ARP_ROW2 + PATTERN_HEIGHT + ARP_GAP;
-const ARP_ROW3_H: f32 = ARP_ROW4 - ARP_GAP - ARP_ROW3;
-const HOLD_W: f32 = 200.0;
 #[cfg(test)]
 pub(super) fn inversion_rect(i: usize) -> Rect {
     inversion_control_rect(false, i)
@@ -123,24 +99,8 @@ pub(super) fn inversion_control_rect(mpe: bool, i: usize) -> Rect {
         28.0,
     )
 }
-pub(super) fn output_controls(mode: i32) -> Vec<(&'static str, Rect)> {
-    let ids: &[&str] = match mode {
-        1 => &["length_ms", "strings_played"],
-        2 => &["length_ms"],
-        _ => &[],
-    };
-    if ids.is_empty() { return Vec::new(); }
-    let (x, y, row) = if mode == 2 {
-        (PAD.0 + 8.0, 450.0, PAD.2 - 16.0)
-    } else {
-        (ARP_X, ARP_ROW4, ARP_INNER_W)
-    };
-    let gap = 12.0;
-    let width = (row - (ids.len() - 1) as f32 * gap) / ids.len() as f32;
-    ids.iter()
-        .enumerate()
-        .map(|(i, &id)| (id, (x + i as f32 * (width + gap), y, width, 38.0)))
-        .collect()
+pub(super) fn output_controls() -> [(&'static str, Rect); 1] {
+    [("length_ms", (PAD.0 + 8.0, 450.0, PAD.2 - 16.0, 38.0))]
 }
 
 pub(super) const ARP_RATES: [(&str, f32); 8] = [
@@ -163,7 +123,7 @@ pub(super) const ARP_PATTERN_NAMES: [&str; 7] = [
     "Random",
 ];
 // Humanize and Swing share the arpeggiator settings row above the string editor.
-pub(super) fn arp_controls(_looping: bool) -> [(&'static str, Rect); 2] { [("humanize",arpeggiator::humanize_rect()),("swing",arpeggiator::swing_rect())] }
+pub(super) fn arp_controls() -> [(&'static str, Rect); 2] { [("humanize",arpeggiator::humanize_rect()),("swing",arpeggiator::swing_rect())] }
 pub(super) fn arp_direction_rect() -> Rect {
     arpeggiator::order_rect()
 }
@@ -188,50 +148,21 @@ pub(super) const TEMPO_CONTROL: Rect = (
     150.0,
     TEMPO_SYNC.3,
 );
-pub(super) const STRUM_SYNC: Rect = (PAD.0 + 8.0, 430.0, 130.0, 28.0);
-pub(super) const STRUM_HOLD: Rect = (ARP_X + ARP_INNER_W - HOLD_W, ARP_ROW3, HOLD_W, ARP_ROW3_H);
-pub(super) const EXPANDED_STRUM_HOLD: Rect =
-    (1667.0 - WIDTH_REDUCTION - OLD_MOD_COLUMN, 116.0, 66.0, 28.0);
 pub(super) const STRUM_LATCH: Rect = field_latch(PAD);
 pub(super) const EXPANDED_STRUM_LATCH: Rect = field_latch(EXPANDED_PAD);
 
-pub(super) fn mapping_summary_rect(i: usize) -> Rect {
-    let r = meter_rect(7 + i);
-    (r.0 + r.2 - 24.0, r.1, 24.0, 20.0)
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Panel {
-    Mapping,
     Routes,
 }
 impl Panel {
     pub(super) fn rect(self) -> Rect {
         match self {
             Self::Routes => CHORDS_SURFACE,
-            Self::Mapping => (760.0, 276.0, 488.0, 242.0),
         }
     }
 }
-pub(super) fn mapping_panel_rect(axis: usize) -> Rect {
-    let summary = mapping_summary_rect(axis);
-    let height = if axis == 0 { 104.0 } else { 180.0 };
-    (
-        (summary.0 + summary.2 - 384.0).clamp(16.0, W - 400.0),
-        summary.1 - height - 6.0,
-        384.0,
-        height,
-    )
-}
-pub(super) fn mapping_control_rect(axis: usize, id: &str) -> Rect {
-    let r = mapping_panel_rect(axis);
-    match id {
-        "x_reverse" => (r.0 + 256.0, r.1 + 48.0, 116.0, 28.0),
-        "y_reverse" => (r.0 + 200.0, r.1 + 132.0, 172.0, 28.0),
-        "y_cc" => (r.0 + 200.0, r.1 + 84.0, 172.0, 42.0),
-        _ => (r.0 + 12.0, r.1 + 132.0, 172.0, 42.0),
-    }
-}
+
 pub(super) const TRANSPOSE_STEPS: [i32; 5] = [-12, -1, 0, 1, 12];
 #[cfg(test)]
 pub(super) fn transpose_rect(i: usize) -> Rect {
@@ -331,36 +262,12 @@ pub(super) fn play_pad_rect(expand: f32) -> Rect {
     lerp_rect(PLAY_PAD, EXPANDED_PLAY_PAD, expand)
 }
 
-pub(super) fn auto_field_rect(expand: f32) -> Rect {
-    lerp_rect(AUTO_FIELD, EXPANDED_PLAY_PAD, expand)
-}
-
-pub(super) fn field_rect(expand: f32, manual: bool) -> Rect {
-    if manual {
-        play_pad_rect(expand)
-    } else {
-        auto_field_rect(expand)
-    }
-}
-
 pub(super) fn expand_rect(expand: f32) -> Rect {
     lerp_rect(EXPAND, EXPANDED_EXPAND, expand)
 }
 
-pub(super) fn strum_sync_rect(expand: f32) -> Rect {
-    lerp_rect(STRUM_SYNC, EXPANDED_STRUM_SYNC, expand)
-}
-
-pub(super) fn strum_hold_rect(expand: f32) -> Rect {
-    lerp_rect(STRUM_HOLD, EXPANDED_STRUM_HOLD, expand)
-}
-
 pub(super) fn strum_latch_rect(expand: f32) -> Rect {
     lerp_rect(STRUM_LATCH, EXPANDED_STRUM_LATCH, expand)
-}
-
-pub(super) fn strum_rate_rect(expand: f32) -> Rect {
-    lerp_rect(STRUM_RATE, EXPANDED_STRUM_RATE, expand)
 }
 
 pub(super) fn perf_surface_rect(expand: f32) -> Rect {

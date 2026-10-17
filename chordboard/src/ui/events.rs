@@ -79,7 +79,7 @@ impl ChordboardView {
         if self.press_octaves(cx, x, y) {
             return true;
         }
-        if self.can_expand_strum() && hit(self.expand_button(), x, y) {
+        if hit(self.expand_button(), x, y) {
             self.end_pad_hover(cx);
             self.toggle_expand();
             return true;
@@ -156,12 +156,6 @@ impl ChordboardView {
             } else if c.toggle {
                 Self::emit(cx, c.ptr, if c.norm >= 0.5 { 0.0 } else { 1.0 });
             } else {
-                if c.id == "length_ms"
-                    && self.playback_mode() == 1
-                    && self.params.strum_hold.value()
-                {
-                    return;
-                }
                 self.restore_shift_latch(cx);
                 let value = pleasant_ui::slider_value_rect(r);
                 self.drag = Some(Drag::Control(ControlDrag {
@@ -207,7 +201,7 @@ impl ChordboardView {
         };
         // Vizia substitutes double/triple clicks for mouse-down. Every press
         // uses the same drag threshold and opens text only on value release.
-        if matches!(
+        if self.edit.is_none() && matches!(
             event,
             WindowEvent::MouseDoubleClick(MouseButton::Left)
                 | WindowEvent::MouseTripleClick(MouseButton::Left)
@@ -316,35 +310,24 @@ impl ChordboardView {
                 _ => {}
             }
         }
-        if self.edit.is_some() {
-            match event {
-                WindowEvent::CharInput(c) => {
-                    if !cx.modifiers().command() && c.is_ascii() && !c.is_control() {
-                        if let Some(edit) = self.edit.as_mut() {
-                            edit.insert(&c.to_string());
-                        }
-                    }
+        if let Some(edit) = self.edit.as_mut() {
+            use pleasant_ui::readout::{self, EditAction};
+            match readout::handle_edit(edit, cx, event, (x, y)) {
+                EditAction::Blocked | EditAction::Handled => return true,
+                EditAction::Cancel => {
+                    self.edit = None;
                     return true;
                 }
-                WindowEvent::KeyDown(code, _) => {
-                    match code {
-                        Code::Enter | Code::NumpadEnter => self.commit_edit(cx),
-                        _ => {
-                            if let Some(edit) = self.edit.as_mut() {
-                                edit.handle_key(cx, *code);
-                            }
-                        }
-                    }
-                    return true;
-                }
-                WindowEvent::KeyUp(_, _) => return true,
-                WindowEvent::MouseDown(MouseButton::Left) => {
+                EditAction::Commit | EditAction::CommitAndContinue => {
                     self.commit_edit(cx);
-                    if self.edit.is_some() {
+                    // Invalid input stays open. A successful outside click may
+                    // continue to its control; focus loss is cancelled above.
+                    if self.edit.is_some()
+                        || !matches!(event, WindowEvent::MouseDown(MouseButton::Left))
+                    {
                         return true;
                     }
                 }
-                _ => {}
             }
         }
         if let Some(menu) = self.menu {
@@ -391,15 +374,6 @@ impl ChordboardView {
             return true;
         }
         if self.route_elapsed < pleasant_ui::page_slide::DURATION
-            && hit(CHORDS_SURFACE, x, y)
-            && matches!(
-                event,
-                WindowEvent::MouseDown(_) | WindowEvent::MouseScroll(_, _)
-            )
-        {
-            return true;
-        }
-        if self.page_elapsed < pleasant_ui::page_slide::DURATION
             && hit(CHORDS_SURFACE, x, y)
             && matches!(
                 event,
@@ -491,15 +465,12 @@ impl ChordboardView {
                 if hit(PIANO_SURFACE, x, y)
                     && self.panel.is_none_or(|p| !hit(self.panel_rect(p), x, y))
                 {
-                    if self.panel == Some(Panel::Mapping) {
-                        self.set_panel(None);
-                    }
                     return self.press_piano(cx, x, y);
                 }
                 if self.expand_t() > 0.0 && y >= HEADER_H && y < ARP_SURFACE.1 {
                     return self.press_expanded_strum(cx, x, y);
                 }
-                if self.can_expand_strum() && hit(self.expand_button(), x, y) {
+                if hit(self.expand_button(), x, y) {
                     self.toggle_expand();
                     return true;
                 }
@@ -523,48 +494,7 @@ impl ChordboardView {
                     self.press_control(cx, x, y);
                     return true;
                 }
-                if let Some(panel) = self.panel {
-                    if hit(self.panel_close_rect(panel), x, y) {
-                        self.set_panel(None);
-                        return true;
-                    }
-                    if !hit(self.panel_rect(panel), x, y) {
-                        if panel == Panel::Mapping {
-                            self.set_panel(None);
-                        }
-                    } else {
-                        if panel == Panel::Mapping {
-                            if self.mapping_axis == 1
-                                && hit(self.menu_trigger_rect(Menu::YTarget), x, y)
-                            {
-                                self.open_menu(Menu::YTarget);
-                                return true;
-                            }
-                            for menu in [
-                                Menu::MappingKind,
-                                Menu::MappingChannel(self.mapping().kind == 3),
-                                Menu::MappingCc(false),
-                            ] {
-                                if matches!(menu, Menu::MappingChannel(_))
-                                    && self.mapping_axis < 2
-                                    && self.mapping().kind != 3
-                                {
-                                    continue;
-                                }
-                                if hit(self.menu_trigger_rect(menu), x, y) {
-                                    if !matches!(menu, Menu::MappingCc(_))
-                                        || matches!(self.mapping().kind, 1 | 2)
-                                    {
-                                        self.open_menu(menu);
-                                    }
-                                    return true;
-                                }
-                            }
-                        }
-                        self.press_control(cx, x, y);
-                        return true;
-                    }
-                }
+
                 if let Some(id) = self
                     .route_targets()
                     .into_iter()
@@ -575,8 +505,7 @@ impl ChordboardView {
                         return true;
                     }
                 }
-                if !self.arp_page()
-                    && (0..TRANSPOSE_STEPS.len())
+                if (0..TRANSPOSE_STEPS.len())
                         .any(|i| hit(transpose_control_rect(self.params.mpe_enabled(), i), x, y))
                 {
                     return self.press_piano(cx, x, y);
@@ -613,23 +542,6 @@ impl ChordboardView {
                 if self.press_octaves(cx, x, y) {
                     return true;
                 }
-                for (i, step) in TRANSPOSE_STEPS.iter().enumerate() {
-                    if !self.arp_page()
-                        && hit(transpose_control_rect(self.params.mpe_enabled(), i), x, y)
-                    {
-                        let value = if *step == 0 {
-                            0
-                        } else {
-                            (self.params.transpose.value() + step).clamp(-24, 24)
-                        };
-                        Self::emit(
-                            cx,
-                            self.params.transpose.as_ptr(),
-                            self.params.transpose.preview_normalized(value),
-                        );
-                        return true;
-                    }
-                }
                 if hit(APPEARANCE, x, y) {
                     prefs().toggle();
                     return true;
@@ -638,7 +550,7 @@ impl ChordboardView {
                     self.toggle_strum_bypass(cx);
                     return true;
                 }
-                if !self.arp_page() && hit(LATCH, x, y) {
+                if hit(LATCH, x, y) {
                     self.set(
                         cx,
                         "latch",
@@ -646,13 +558,12 @@ impl ChordboardView {
                     );
                     return true;
                 }
-                if !self.arp_page() && hit(ORDER, x, y) {
+                if hit(ORDER, x, y) {
                     self.set_keyboard_layout(cx, (self.keyboard_layout() + 1) % 4);
                     return true;
                 }
                 for i in 0..KEY_COUNT {
-                    if !self.arp_page()
-                        && self.keyboard_chord(i).is_some()
+                    if self.keyboard_chord(i).is_some()
                         && hit(self.keyboard_key_rect(i), x, y)
                     {
                         if let Some(chord) = self.keyboard_chord(i) {
@@ -667,15 +578,15 @@ impl ChordboardView {
                         return true;
                     }
                 }
-                if !self.arp_page() && hit(Menu::Key.trigger_rect(), x, y) {
+                if hit(Menu::Key.trigger_rect(), x, y) {
                     self.open_menu(Menu::Key);
                     return true;
                 }
-                if !self.arp_page() && hit(Menu::Scale.trigger_rect(), x, y) {
+                if hit(Menu::Scale.trigger_rect(), x, y) {
                     self.open_menu(Menu::Scale);
                     return true;
                 }
-                if !self.arp_page() && self.memory_press(cx, x, y) {
+                if self.memory_press(cx, x, y) {
                     return true;
                 }
                 if self.manual_playing() {

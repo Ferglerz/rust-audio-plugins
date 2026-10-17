@@ -203,7 +203,10 @@ fn once_and_loop_share_a_page_with_mode_specific_timing_controls() {
     let mut looped = view(3, false);
     open_arp(&mut once);
     open_arp(&mut looped);
-    assert_eq!(once.page_position, looped.page_position);
+    assert_eq!(
+        once.base_controls().iter().map(|(c, r)| (c.id, *r)).collect::<Vec<_>>(),
+        looped.base_controls().iter().map(|(c, r)| (c.id, *r)).collect::<Vec<_>>()
+    );
     for v in [&once, &looped] {
         let ids = v
             .base_controls()
@@ -359,7 +362,6 @@ fn arp_strings_cover_octaves_and_flash_short_notes_after_they_end() {
 fn arpeggiator_module_sits_above_the_keyboard() {
     let mut view = view(1, false);
     assert!(view.arp_editor_open());
-    assert!(!view.arp_page());
     assert!(ARP_SURFACE.1 + ARP_SURFACE.3 <= PIANO_SURFACE.1);
     assert!(arp_direction_rect().1 < ARP_SURFACE.1 + ARP_SETTINGS_H);
     assert!(arp_power_rect().1 < arp_direction_rect().1 + arp_direction_rect().3);
@@ -600,7 +602,7 @@ fn arpeggiator_settings_work_while_strumfield_is_expanded() {
     click(&mut view, &mut cx, target, arp_direction_rect());
     assert!(view.arp_chooser_open());
     view.menu = None;
-    let humanize = arp_controls(true)[0].1;
+    let humanize = arp_controls()[0].1;
     event(&mut view, &mut cx, target, humanize.0 + 5.0, humanize.1 + 5.0,
         WindowEvent::MouseDown(MouseButton::Left));
     assert!(matches!(view.drag, Some(Drag::Control(_))));

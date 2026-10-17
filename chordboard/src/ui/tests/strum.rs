@@ -186,18 +186,11 @@ fn trackpad_latch_hover_follows_an_expanded_strum_field() {
 fn collapsed_strum_geometry_is_unchanged() {
     assert_eq!(pad_rect(0.0), PAD);
     assert_eq!(play_pad_rect(0.0), PLAY_PAD);
-    assert_eq!(auto_field_rect(0.0), AUTO_FIELD);
     assert_eq!(expand_rect(0.0), EXPAND);
     assert_eq!(perf_surface_rect(0.0), PERF_SURFACE);
-    assert_eq!(strum_sync_rect(0.0), STRUM_SYNC);
     assert_eq!(strum_latch_rect(0.0), STRUM_LATCH);
     let expand = expand_rect(0.0);
-    let sync = strum_sync_rect(0.0);
     let latch = strum_latch_rect(0.0);
-    assert!(
-        expand.0 + expand.2 <= sync.0 || sync.0 + sync.2 <= expand.0,
-        "expand button overlaps sweep sync"
-    );
     assert!(
         expand.0 + expand.2 <= latch.0 || latch.0 + latch.2 <= expand.0,
         "expand button overlaps trackpad latch"

@@ -358,6 +358,15 @@ impl StringLayout {
         (self.x[index] - w * 0.5, ARP_SURFACE.1 + ARP_SURFACE.3 - 27.0, w, 18.0)
     }
 }
+fn repeat_icon(mode: usize) -> style::Icon {
+    match mode {
+        0 => style::Icon::Once,
+        1 => style::Icon::Loop,
+        2 => style::Icon::SyncLoop,
+        _ => style::Icon::AlignedLoop,
+    }
+}
+
 fn dropdown_rect(which: Dropdown, index: usize) -> Rect {
     let r = match which {
         Dropdown::Mode => mode_rect(),
@@ -1459,12 +1468,13 @@ impl ChordboardView {
                 MUTED
             },
         );
-        self.button(
+        self.icon_button(
             d,
             mode_rect(),
             &format!("{} ▾", MODE_NAMES[p.arp_mode.value().clamp(0, 3) as usize]),
             self.arp_ui.dropdown == Some(Dropdown::Mode),
             GOLD,
+            repeat_icon(p.arp_mode.value().clamp(0, 3) as usize),
         );
         self.button(
             d,
@@ -1877,7 +1887,11 @@ impl ChordboardView {
                 ),
                 Dropdown::TapLane => (TAP_LANES[i].label(), self.arp_ui.tap_lane == TAP_LANES[i]),
             };
-            self.button(d, r, label, on, GOLD)
+            if which == Dropdown::Mode {
+                self.icon_button(d, r, label, on, GOLD, repeat_icon(i));
+            } else {
+                self.button(d, r, label, on, GOLD);
+            }
         }
     }
     fn draw_arp_chooser(&self, d: &mut Draw) {

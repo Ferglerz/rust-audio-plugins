@@ -135,6 +135,93 @@ fn arp_orderings_build_the_expected_occurrence_indices() {
 }
 
 #[test]
+fn shared_ordering_preserves_cycles_and_rng_draws() {
+    let random_states = [
+        0x1ee76a63, 0x86c50576, 0xeb111e23, 0xd2765369,
+        0x1b7493e4, 0xa802bb60, 0x12b65e37, 0xf76a836f,
+        0x47e12d6c, 0x2bdf150a, 0xe6b80715, 0x2d005338,
+    ];
+    for total in 1usize..=12 {
+        let chord = notes(&(60..60 + total as u8).collect::<Vec<_>>());
+        for pattern in [0, 1, 2, 3, 4, 6] {
+            let mut engine = Engine { notes: chord, ..Engine::default() };
+            let initial_seed = engine.rng;
+            let (cycle, len) = arpeggiator::cycle_notes(
+                chord, settings(ArpMode::Once, pattern), initial_seed,
+            );
+            let expected_len = match pattern {
+                2 => (total * 2).saturating_sub(2).max(1),
+                3 | 4 => total * 2,
+                _ => total,
+            };
+            assert_eq!(len, expected_len);
+            for (step, &note) in cycle[..len].iter().enumerate() {
+                let index = engine.arp_index(pattern, step, total);
+                assert_eq!(note, chord.values[index], "pattern {pattern}, total {total}, step {step}");
+                let expected_seed = if pattern == 6 { random_states[step] } else { initial_seed };
+                assert_eq!(engine.rng, expected_seed, "pattern {pattern}, step {step}");
+            }
+            if total == 1 {
+                assert!(cycle[..len].iter().all(|&note| note == 60));
+            }
+        }
+    }
+}
+
+#[test]
+fn played_order_preserves_partial_octaves_and_cycle_clipping() {
+    let mut engine = make_engine(ArpMode::Once, 5);
+    engine.second = Some(Slot { id: 1, note: 67, channel: 0, held: true, velocity: 0.5 });
+    let legacy = (0..5).map(|step| {
+        let index = engine.arp_index(5, step, 5);
+        engine.notes.string(index).unwrap()
+    }).collect::<Vec<_>>();
+    assert_eq!(legacy, [60, 67, 64, 72, 76]);
+    let mut config = settings(ArpMode::Once, 5);
+    config.octaves = 2;
+    let (cycle, len) = arpeggiator::cycle_notes(engine.arp_cycle_chord(), config, engine.rng);
+    assert_eq!(&cycle[..len], [60, 67, 64, 72, 79, 76]);
+
+    engine.notes = notes(&[116, 120, 124]);
+    engine.second.as_mut().unwrap().note = 124;
+    config.octaves = 4;
+    let (cycle, len) = arpeggiator::cycle_notes(engine.arp_cycle_chord(), config, engine.rng);
+    assert_eq!(&cycle[..len], [116, 124, 120]);
+}
+
+#[test]
+fn fractional_bend_ranges_match_dry_and_delay_rpn() {
+    let rpn = |channel, semitones, cents| {
+        [(101, 0), (100, 0), (6, semitones), (38, cents), (101, 127), (100, 127)]
+            .map(|(cc, value)| Out::Cc(channel, cc, value as f32 / 127.0))
+    };
+    for mpe in [false, true] {
+        let mut engine = delay_engine(source::STRUM);
+        let mut config = engine.host_config;
+        config.mpe = mpe;
+        config.members = 2;
+        config.master_range = 2.5;
+        config.bend_range = 12.75;
+        let mut dry = Vec::new();
+        engine.configure(config, &mut |event| dry.push(event));
+        engine.allocate_owned_voice(60, 0.8, 100, false, 0, None, &mut |event| dry.push(event));
+        if mpe {
+            assert!(dry.windows(6).any(|events| events == rpn(0, 2, 50)));
+            for channel in [1, 2] {
+                assert!(dry.windows(6).any(|events| events == rpn(channel, 12, 75)));
+            }
+        }
+        let delayed = advance(&mut engine, 11);
+        let delayed_events = delayed.iter().map(|&(_, event)| event).collect::<Vec<_>>();
+        let played = attacks(&delayed);
+        assert_eq!(played.len(), 1);
+        let channel = played[0].1;
+        let expected = if mpe { rpn(channel, 12, 75) } else { rpn(channel, 2, 50) };
+        assert!(delayed_events.windows(6).any(|events| events == expected));
+    }
+}
+
+#[test]
 fn arp_full_ninety_six_occurrence_cycle_is_displayed_and_played() {
     let mut engine = make_engine(ArpMode::Once, 3);
     engine.notes = notes(&(24..36).collect::<Vec<_>>());

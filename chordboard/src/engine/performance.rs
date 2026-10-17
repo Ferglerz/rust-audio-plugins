@@ -33,16 +33,7 @@ impl Engine {
             } else {
                 self.config.bend_range
             };
-            for (cc, value) in [
-                (101, 0),
-                (100, 0),
-                (6, range as u8),
-                (38, 0),
-                (101, 127),
-                (100, 127),
-            ] {
-                out(Out::Cc(channel, cc, value as f32 / 127.0));
-            }
+            midi::emit_bend_range(channel, range, out);
         }
     }
     pub(super) fn end_voice(&mut self, i: usize, release: f32, out: &mut impl FnMut(Out)) {
@@ -464,39 +455,6 @@ impl Engine {
     }
     pub(super) fn arp_index(&mut self, pattern: u8, step: usize, total: usize) -> usize {
         match pattern {
-            1 => total - 1 - step % total,
-            2 => {
-                let span = (total * 2).saturating_sub(2).max(1);
-                let p = step % span;
-                if p < total {
-                    p
-                } else {
-                    span - p
-                }
-            }
-            3 => {
-                let s = step % (total * 2).max(1);
-                let k = s / 2;
-                if s.is_multiple_of(2) {
-                    k % total
-                } else {
-                    (k + 2) % total
-                }
-            }
-            4 => {
-                if total <= 1 {
-                    0
-                } else {
-                    let s = step % (total * 2);
-                    let k = s / 2;
-                    let start = total - 1 - (k % total);
-                    if s.is_multiple_of(2) {
-                        start
-                    } else {
-                        (start + total - 2) % total
-                    }
-                }
-            }
             5 => {
                 // Put the explicitly played alteration immediately after the root when available.
                 let p = step % total;
@@ -522,8 +480,7 @@ impl Engine {
                 };
                 p / self.notes.len * self.notes.len + local
             }
-            6 => self.random() as usize % total,
-            _ => step % total,
+            _ => ordering::index(pattern, step, total, &mut self.rng),
         }
     }
     pub(super) fn pattern_length(pattern: u8, notes: usize) -> usize {
@@ -534,9 +491,6 @@ impl Engine {
         }
     }
     pub(super) fn random(&mut self) -> u32 {
-        self.rng ^= self.rng << 13;
-        self.rng ^= self.rng >> 17;
-        self.rng ^= self.rng << 5;
-        self.rng
+        ordering::random(&mut self.rng)
     }
 }

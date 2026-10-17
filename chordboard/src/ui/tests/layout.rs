@@ -41,9 +41,7 @@ fn clicking_x_opens_the_default_connection_without_changing_parameters() {
 #[test]
 fn self_modulation_is_rejected_by_drag_and_both_route_menus() {
     let mut view = view(2, false);
-    view.panel = Some(Panel::Mapping);
-    view.mapping_axis = 0;
-    let r = mapping_control_rect(0, "x_reverse");
+    let r = meter_rect(7);
     let (mut cx, target, changes) = context();
     view.finish_route_drag(
         &mut EventContext::new_with_current(&mut cx, target),

@@ -1,6 +1,7 @@
 mod layers;
 mod midi;
 mod performance;
+mod ordering;
 pub mod routing;
 pub mod arpeggiator;
 mod delay;
@@ -942,6 +943,9 @@ impl Engine {
                 sounding_notes[note] |= sounding;
             }
         }
+        let (arp_notes, arp_len) = arpeggiator::cycle_notes(
+            self.arp_cycle_chord(), self.arp_live_settings(), self.arp.seed,
+        );
         Snapshot {
             held_notes,
             sounding_notes,
@@ -976,8 +980,8 @@ impl Engine {
             learning: self.learn,
             output_mpe: self.config.mpe,
             tempo: self.tempo as f32,
-            arp_notes: arpeggiator::cycle_notes(self.arp_cycle_chord(), self.arp_live_settings(), self.arp.seed).0,
-            arp_len: arpeggiator::cycle_notes(self.arp_cycle_chord(), self.arp_live_settings(), self.arp.seed).1 as u8,
+            arp_notes,
+            arp_len: arp_len as u8,
             arp_page: self.arp.active,
             arp_pending: if self.config.arp_page != self.arp.active { self.config.arp_page } else { 255 },
             arp_step: self.arp.step,

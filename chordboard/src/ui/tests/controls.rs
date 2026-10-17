@@ -4,6 +4,41 @@ use nih_plug_vizia::vizia::backend::BackendContext;
 use std::{cell::RefCell, rc::Rc};
 
 #[test]
+fn value_edit_clicks_place_the_caret_and_double_click_selects_text() {
+    let mut view = view(0, false);
+    let (mut cx, target, changes) = context();
+    let rect = pleasant_ui::slider_value_rect(output_controls()[0].1);
+    view.edit = Some(ValueEdit::new("length_ms", rect, "350".into()));
+    let (x, y) = (rect.0 + 4.0, rect.1 + rect.3 * 0.5);
+    event(&mut view, &mut cx, target, x, y, WindowEvent::MouseDown(MouseButton::Left));
+    let edit = view.edit.as_ref().expect("click inside the editor must not commit");
+    assert_eq!((edit.cursor, edit.anchor), (0, 0));
+    assert!(changes.borrow().is_empty());
+    event(&mut view, &mut cx, target, x, y, WindowEvent::MouseDoubleClick(MouseButton::Left));
+    assert_eq!(view.edit.as_ref().unwrap().selection(), 0..3);
+    // Some host key paths supply a physical key without a character event.
+    event(&mut view, &mut cx, target, x, y, WindowEvent::KeyDown(Code::Digit4, None));
+    assert_eq!(view.edit.as_ref().unwrap().text, "4");
+    event(&mut view, &mut cx, target, x, y, WindowEvent::KeyDown(Code::Enter, None));
+    assert!(view.edit.is_none());
+    assert_eq!(&*changes.borrow(), &[(view.params.length_ms.as_ptr(), view.params.length_ms.preview_normalized(4.0))]);
+}
+
+#[test]
+fn invalid_value_edit_blocks_outside_click_and_focus_loss_cancels() {
+    let mut view = view(0, false);
+    let (mut cx, target, changes) = context();
+    let rect = pleasant_ui::slider_value_rect(output_controls()[0].1);
+    view.edit = Some(ValueEdit::new("length_ms", rect, "invalid".into()));
+    event(&mut view, &mut cx, target, LATCH.0 + 5.0, LATCH.1 + 5.0, WindowEvent::MouseDown(MouseButton::Left));
+    assert!(view.edit.as_ref().unwrap().invalid);
+    assert!(changes.borrow().is_empty());
+    event(&mut view, &mut cx, target, rect.0, rect.1, WindowEvent::FocusOut);
+    assert!(view.edit.is_none());
+    assert!(changes.borrow().is_empty());
+}
+
+#[test]
 fn rhythm_controls_and_pointer_targets_follow_active_mode() {
     for mode in 1..4 {
         let mut view = view(mode, false);
@@ -109,36 +144,7 @@ fn mpe_button_toggles_explicit_on_and_off() {
         );
     }
 }
-#[test]
-fn mapping_anchor_edits_the_selected_axis_without_touching_playback() {
-    let mut view = view(3, false);
-    let (mut cx, target, changes) = context();
-    let original_x = view.params.map_x.load(Ordering::Relaxed);
-    view.mapping_axis = 1;
-    view.set_panel(Some(Panel::Mapping));
-    assert_eq!(view.panel, Some(Panel::Mapping));
-    assert_eq!(view.mapping_axis, 1);
-    click_menu_trigger(&mut view, &mut cx, target, Menu::MappingKind);
-    click_menu_option(&mut view, &mut cx, target, Menu::MappingKind, 1);
-    click_menu_trigger(&mut view, &mut cx, target, Menu::MappingCc(false));
-    click_menu_option(&mut view, &mut cx, target, Menu::MappingCc(false), 74);
-    assert_eq!(view.mapping().kind, 1);
-    assert_eq!(view.mapping().number, 74);
-    assert_eq!(view.params.map_x.load(Ordering::Relaxed), original_x);
-    assert!(
-        changes.borrow().is_empty(),
-        "popup clicks changed covered performance parameters"
-    );
-    assert_eq!(Menu::MappingKind.items().len(), 3);
-    assert!(!std::iter::from_fn(|| view.bridge.commands.pop())
-        .any(|c| matches!(c, Command::Learn(1 | 2))));
-    view.mapping_axis = 0;
-    view.set_panel(Some(Panel::Mapping));
-    assert_eq!(view.mapping_axis, 0);
-    assert!(
-        std::iter::from_fn(|| view.bridge.commands.pop()).any(|c| matches!(c, Command::Learn(0)))
-    );
-}
+
 #[test]
 fn keyboard_channel_dropdown_edits_the_correct_parameter() {
     let mut view = view(3, false);
@@ -169,14 +175,13 @@ fn output_options_match_the_active_midi_protocol() {
     }
 }
 #[test]
-fn mapping_menu_blocks_scroll_and_text_edit_on_covered_controls() {
+fn route_menu_blocks_scroll_and_text_edit_on_covered_controls() {
     let mut view = view(2, false);
     let (mut cx, target, changes) = context();
-    view.mapping_axis = 0;
-    view.set_panel(Some(Panel::Mapping));
-    click_menu_trigger(&mut view, &mut cx, target, Menu::MappingCc(false));
+    view.set_panel(Some(Panel::Routes));
+    click_menu_trigger(&mut view, &mut cx, target, Menu::RouteTarget);
     assert!(view.menu.is_some());
-    let r = mapping_control_rect(0, "x_reverse");
+    let r = route_control_rect("route_smoothing_ms");
     event(
         &mut view,
         &mut cx,
@@ -198,43 +203,40 @@ fn mapping_menu_blocks_scroll_and_text_edit_on_covered_controls() {
     assert!(view.edit.is_none());
 }
 #[test]
-fn chord_clicks_work_with_popovers_and_hold_until_release() {
-    for panel in [None, Some(Panel::Mapping)] {
-        let mut view = view(0, false);
-        view.set_panel(panel);
-        let (mut cx, target, _) = context();
-        let r = key_rect(0);
-        let x = r.0 + r.2 / 2.0;
-        let y = r.1 + r.3 / 2.0;
-        while view.bridge.commands.pop().is_some() {}
-        event(
-            &mut view,
-            &mut cx,
-            target,
-            x,
-            y,
-            WindowEvent::MouseDown(MouseButton::Left),
-        );
-        assert!(view.panel.is_none());
-        assert!(std::iter::from_fn(|| view.bridge.commands.pop())
-            .any(|c| matches!(c, Command::KeyDown(POINTER_KEY_OFFSET, _, 0))));
-        assert!(matches!(view.drag, Some(Drag::Key(POINTER_KEY_OFFSET))));
-        event(
-            &mut view,
-            &mut cx,
-            target,
-            x,
-            y,
-            WindowEvent::MouseUp(MouseButton::Left),
-        );
-        assert!(matches!(
-            view.bridge.commands.pop(),
-            Some(Command::KeyUp(POINTER_KEY_OFFSET))
-        ));
-    }
+fn chord_clicks_hold_until_release() {
+    let mut view = view(0, false);
+    let (mut cx, target, _) = context();
+    let r = key_rect(0);
+    let x = r.0 + r.2 / 2.0;
+    let y = r.1 + r.3 / 2.0;
+    while view.bridge.commands.pop().is_some() {}
+    event(
+        &mut view,
+        &mut cx,
+        target,
+        x,
+        y,
+        WindowEvent::MouseDown(MouseButton::Left),
+    );
+    assert!(view.panel.is_none());
+    assert!(std::iter::from_fn(|| view.bridge.commands.pop())
+        .any(|c| matches!(c, Command::KeyDown(POINTER_KEY_OFFSET, _, 0))));
+    assert!(matches!(view.drag, Some(Drag::Key(POINTER_KEY_OFFSET))));
+    event(
+        &mut view,
+        &mut cx,
+        target,
+        x,
+        y,
+        WindowEvent::MouseUp(MouseButton::Left),
+    );
+    assert!(matches!(
+        view.bridge.commands.pop(),
+        Some(Command::KeyUp(POINTER_KEY_OFFSET))
+    ));
 }
 #[test]
-fn direct_learn_y_dropdown_and_transpose_buttons() {
+fn direct_learn_and_transpose_buttons() {
     let mut view = view(0, false);
     let (mut cx, target, changes) = context();
     {
@@ -246,14 +248,6 @@ fn direct_learn_y_dropdown_and_transpose_buttons() {
         view.bridge.commands.pop(),
         Some(Command::Learn(4))
     ));
-    view.mapping_axis = 1;
-    view.set_panel(Some(Panel::Mapping));
-    click_menu_trigger(&mut view, &mut cx, target, Menu::YTarget);
-    click_menu_option(&mut view, &mut cx, target, Menu::YTarget, 5);
-    assert!(changes
-        .borrow()
-        .contains(&(view.params.y_target.as_ptr(), 1.0)));
-    changes.borrow_mut().clear();
     for (i, step) in TRANSPOSE_STEPS.iter().enumerate() {
         click(&mut view, &mut cx, target, transpose_rect(i));
         assert_eq!(
@@ -265,25 +259,7 @@ fn direct_learn_y_dropdown_and_transpose_buttons() {
         );
     }
 }
-#[test]
-fn controller_options_live_only_in_their_axis_popup() {
-    let mut view = view(0, false);
-    assert!(!view
-        .base_controls()
-        .iter()
-        .any(|(c, _)| matches!(c.id, "keyboard_octave" | "x_reverse" | "y_reverse" | "y_cc")));
-    view.set_panel(Some(Panel::Mapping));
-    for axis in 0..2 {
-        view.mapping_axis = axis;
-        let controls = view.panel_controls();
-        assert_eq!(controls.iter().any(|(c, _)| c.id == "x_reverse"), axis == 0);
-        assert_eq!(controls.iter().any(|(c, _)| c.id == "y_reverse"), axis == 1);
-        for (_, r) in controls {
-            let p = view.panel_rect(Panel::Mapping);
-            assert!(r.0 >= p.0 && r.1 >= p.1 && r.0 + r.2 <= p.0 + p.2 && r.1 + r.3 <= p.1 + p.3);
-        }
-    }
-}
+
 #[test]
 fn native_repeated_clicks_reach_all_chord_and_parameter_buttons() {
     for button in 0..69 {
@@ -423,11 +399,11 @@ fn clicking_a_slider_value_edits_but_clicking_its_title_does_not() {
 fn arp_editor_module_keeps_the_chord_page_in_place() {
     let mut view = view(1, false);
     let (mut cx, target, changes) = context();
-    assert_eq!(view.page_position, 2.0);
+    assert!(view.base_controls().iter().any(|(c, _)| c.id == "root_on_select"));
     assert!(view.arp_editor_open());
     view.last_frame = Instant::now() - Duration::from_millis(100);
     view.tick(&mut EventContext::new_with_current(&mut cx, target));
-    assert_eq!(view.page_position, 2.0);
+    assert!(view.base_controls().iter().any(|(c, _)| c.id == "root_on_select"));
     click(&mut view, &mut cx, target, LATCH);
     assert!(!changes.borrow().is_empty());
 }
@@ -573,48 +549,6 @@ fn learn_feedback_returns_to_audio_state_after_acknowledgement_or_completion() {
     view.bridge.publish(Snapshot::default());
     view.tick(&mut EventContext::new_with_current(&mut cx, target));
     assert_eq!(view.learning(), 0);
-}
-#[test]
-fn compact_mapping_controls_fit_each_axis_and_close_without_parameter_changes() {
-    let mut view = view(2, false);
-    let (mut cx, target, changes) = context();
-    for axis in 0..2 {
-        view.mapping_axis = axis;
-        view.set_panel(Some(Panel::Mapping));
-        let panel = view.panel_rect(Panel::Mapping);
-        assert_eq!(panel.2, 384.0);
-        assert_eq!(panel.3, if axis == 0 { 104.0 } else { 180.0 });
-        assert_eq!(panel.1 + panel.3 + 6.0, mapping_summary_rect(axis).1);
-        let mut rects: Vec<_> = view.panel_controls().iter().map(|(_, r)| *r).collect();
-        rects.extend([
-            view.menu_trigger_rect(Menu::MappingKind),
-            view.menu_trigger_rect(Menu::MappingCc(false)),
-            view.panel_close_rect(Panel::Mapping),
-        ]);
-        if axis == 1 {
-            rects.push(view.menu_trigger_rect(Menu::YTarget));
-        }
-        for r in &rects {
-            assert!(
-                r.0 >= panel.0
-                    && r.1 >= panel.1
-                    && r.0 + r.2 <= panel.0 + panel.2
-                    && r.1 + r.3 <= panel.1 + panel.3
-            );
-        }
-        for (i, a) in rects.iter().enumerate() {
-            for b in rects.iter().skip(i + 1) {
-                assert!(
-                    a.0 + a.2 <= b.0 || b.0 + b.2 <= a.0 || a.1 + a.3 <= b.1 || b.1 + b.3 <= a.1,
-                    "overlapping compact mapping controls: {a:?}, {b:?}"
-                );
-            }
-        }
-        let close = view.panel_close_rect(Panel::Mapping);
-        click(&mut view, &mut cx, target, close);
-        assert!(view.panel.is_none());
-        assert!(changes.borrow().is_empty());
-    }
 }
 
 fn string_editor_view() -> ChordboardView {

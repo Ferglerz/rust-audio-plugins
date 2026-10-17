@@ -2,7 +2,6 @@ mod chords;
 mod music;
 mod events;
 mod layout;
-mod mapping;
 mod menu;
 mod routing;
 mod arpeggiator;
@@ -172,10 +171,6 @@ struct ChordboardView {
     trail: Vec<(f32, f32, Instant)>,
     last_frame: Instant,
     meters: [f32; 3],
-    page_position: f32,
-    page_start: f32,
-    page_target: i32,
-    page_elapsed: f32,
     expand_progress: f32,
     expand_start: f32,
     expand_target: f32,
@@ -190,7 +185,6 @@ struct ChordboardView {
     route_start: f32,
     route_elapsed: f32,
     route_hover: Option<usize>,
-    mapping_axis: usize,
     mapping_signature: [u32; 2],
     pub(super) show_bass_split: bool,
     pub(super) voicing_pulse: f32,
@@ -245,10 +239,6 @@ impl ChordboardView {
             trail: Vec::with_capacity(24),
             last_frame: Instant::now(),
             meters: [0.0, 0.5, 0.5],
-            page_position: 2.0,
-            page_start: 2.0,
-            page_target: 2,
-            page_elapsed: pleasant_ui::page_slide::DURATION,
             expand_progress: 0.0,
             expand_start: 0.0,
             expand_target: 0.0,
@@ -263,14 +253,13 @@ impl ChordboardView {
             route_start: 0.0,
             route_elapsed: pleasant_ui::page_slide::DURATION,
             route_hover: None,
-            mapping_axis: 0,
             mapping_signature: [0; 2],
             show_bass_split: true,
             voicing_pulse: 0.0,
         }
     }
     fn control(&self, id: &str) -> Option<Control> {
-        if let Some(control) = self.arp_params().controls().into_iter().find(|c| c.id == id) { return Some(control); }
+        if let Some(control) = self.arp_params().control(id) { return Some(control); }
         self.params.routes[self.route_slot]
             .control(id)
             .or_else(|| self.params.control(id))
@@ -280,15 +269,8 @@ impl ChordboardView {
         self.routed_plain("strum_sync")
             .map_or(self.params.strum_sync.value(), |v| v >= 0.5)
     }
-    fn arp_page(&self) -> bool {
-        // The arpeggiator is its own module. It no longer replaces the chord grid.
-        false
-    }
     fn manual_playing(&self) -> bool {
-        self.params.strum_enabled.value() && matches!(self.playback_mode(), 2 | 4)
-    }
-    fn can_expand_strum(&self) -> bool {
-        matches!(self.playback_mode(), 2 | 4)
+        self.params.strum_enabled.value()
     }
     fn expand_t(&self) -> f32 {
         self.expand_progress
@@ -298,9 +280,6 @@ impl ChordboardView {
     }
     fn play_pad(&self) -> Rect {
         play_pad_rect(self.expand_t())
-    }
-    fn field(&self, manual: bool) -> Rect {
-        field_rect(self.expand_t(), manual)
     }
     fn expand_button(&self) -> Rect {
         expand_rect(self.expand_t())
@@ -326,9 +305,6 @@ impl ChordboardView {
         ))
     }
     fn toggle_expand(&mut self) {
-        if !self.can_expand_strum() && self.expand_target == 0.0 {
-            return;
-        }
         self.expand_start = self.expand_progress;
         self.expand_target = if self.expand_target > 0.5 { 0.0 } else { 1.0 };
         self.expand_elapsed = 0.0;
@@ -378,23 +354,15 @@ impl ChordboardView {
             || self.snapshot.accepted & (1 << key) != 0
     }
     fn base_controls(&self) -> Vec<(Control, Rect)> {
-        self.controls_for_mode(self.mode())
-    }
-    fn controls_for_mode(&self, _mode: i32) -> Vec<(Control, Rect)> {
         let mut positions = Vec::new();
-        if !self.arp_page() {
-            positions.extend(voicing_controls());
-            positions.push(("root_on_select", ROOT_ON_SELECT));
-        }
-        positions.extend(output_controls(2));
-        positions.extend(arp_controls(true));
+        positions.extend(voicing_controls());
+        positions.push(("root_on_select", ROOT_ON_SELECT));
+        positions.extend(output_controls());
+        positions.extend(arp_controls());
         if !self.arp_params().arp_sync.value() { positions.push(("arp_free_ms", arp_rate_rect())); }
         positions.extend(self.keyboard_controls().into_iter().map(|(c, r)| (c.id, r)));
         if !self.params.tempo_sync.value() {
             positions.push(("tempo", TEMPO_CONTROL));
-        }
-        if self.sweep_synced() {
-            positions.retain(|(id, _)| *id != "strum_ms");
         }
         positions
             .into_iter()
@@ -402,27 +370,15 @@ impl ChordboardView {
             .collect()
     }
     fn panel_rect(&self, panel: Panel) -> Rect {
-        if panel == Panel::Mapping {
-            mapping_panel_rect(self.mapping_axis)
-        } else {
-            panel.rect()
-        }
+        panel.rect()
     }
     fn panel_close_rect(&self, panel: Panel) -> Rect {
         let r = self.panel_rect(panel);
         (r.0 + r.2 - 48.0, r.1 + 6.0, 36.0, 32.0)
     }
     fn menu_trigger_rect(&self, menu: Menu) -> Rect {
-        let r = mapping_panel_rect(self.mapping_axis);
         match menu {
             Menu::Meter(den) => if den { METER_DEN } else { METER_NUM },
-            Menu::MappingKind => (r.0 + 12.0, r.1 + 48.0, 132.0, 28.0),
-            Menu::MappingCc(_) | Menu::MappingChannel(true) => {
-                (r.0 + 152.0, r.1 + 48.0, 96.0, 28.0)
-            }
-            Menu::MappingChannel(false) => (r.0 + 256.0, r.1 + 48.0, 116.0, 28.0),
-            Menu::YTarget => (r.0 + 12.0, r.1 + 84.0, 172.0, 28.0),
-            Menu::StrumRate => strum_rate_rect(self.expand_t()),
             Menu::ArpRate => arp_rate_rect(),
             Menu::ArpPattern => arp_direction_rect(),
             Menu::KeyboardParam(id) => keyboard_control_rect(id, self.params.mpe_enabled()),
@@ -454,29 +410,12 @@ impl ChordboardView {
             .collect()
     }
     fn panel_controls(&self) -> Vec<(Control, Rect)> {
-        let Some(panel) = self.panel else {
+        if self.panel != Some(Panel::Routes) || !self.has_selected_route() {
             return Vec::new();
-        };
-        if panel == Panel::Routes {
-            if !self.has_selected_route() {
-                return Vec::new();
-            }
-            return ["route_enabled", "route_smoothing_ms"]
-                .into_iter()
-                .filter_map(|id| self.control(id).map(|c| (c, route_control_rect(id))))
-                .collect();
         }
-        let ids: &[&str] = match self.mapping_axis {
-            0 => &["x_reverse"],
-            1 if self.params.y_target.value() == 5 => &["y", "y_reverse", "y_cc"],
-            1 => &["y", "y_reverse"],
-            _ => &[],
-        };
-        ids.iter()
-            .filter_map(|id| {
-                self.control(id)
-                    .map(|c| (c, mapping_control_rect(self.mapping_axis, id)))
-            })
+        ["route_enabled", "route_smoothing_ms"]
+            .into_iter()
+            .filter_map(|id| self.control(id).map(|c| (c, route_control_rect(id))))
             .collect()
     }
     // Popovers own their pointer targets; covered controls cannot react underneath.
@@ -489,13 +428,7 @@ impl ChordboardView {
         }
         controls
     }
-    fn mapping(&self) -> crate::engine::Mapping {
-        crate::engine::Mapping::decode(
-            self.params
-                .mapping(self.mapping_axis)
-                .load(Ordering::Relaxed),
-        )
-    }
+
     fn emit(cx: &mut EventContext, ptr: ParamPtr, norm: f32) {
         pleasant_ui::param::set_normalized_once(cx, ptr, norm);
     }
@@ -516,11 +449,6 @@ impl ChordboardView {
                 // The view owns this parameter pointer.
                 (unsafe { c.ptr.unmodulated_plain_value() } as i32 - min) as usize
             }),
-            Menu::YTarget => self.params.y_target.value() as usize,
-            Menu::StrumRate => ARP_RATES
-                .iter()
-                .position(|(_, beats)| (*beats - self.params.strum_beats.value()).abs() < 0.0001)
-                .unwrap_or(3),
             Menu::ArpRate => ARP_RATES
                 .iter()
                 .position(|(_, beats)| (*beats - self.arp_params().rate.value()).abs() < 0.0001)
@@ -531,13 +459,6 @@ impl ChordboardView {
                 .position(|(name, _, _)| *name == self.key_name())
                 .unwrap_or(0),
             Menu::Scale => self.params.scale.value() as usize,
-            Menu::MappingKind => match self.mapping().kind {
-                3 => 2,
-                1 | 2 => 1,
-                _ => 0,
-            },
-            Menu::MappingChannel(_) => self.mapping().channel as usize,
-            Menu::MappingCc(_) => self.mapping().number as usize,
         }
     }
     fn open_menu(&mut self, menu: Menu) {
@@ -595,13 +516,6 @@ impl ChordboardView {
                     route.target.preview_normalized(index as i32),
                 );
             }
-            Menu::StrumRate => Self::emit(
-                cx,
-                self.params.strum_beats.as_ptr(),
-                self.params
-                    .strum_beats
-                    .preview_normalized(ARP_RATES[index].1),
-            ),
             Menu::ArpRate => Self::emit(
                 cx,
                 self.arp_params().rate.as_ptr(),
@@ -611,11 +525,6 @@ impl ChordboardView {
                 cx,
                 self.arp_params().arp_pattern.as_ptr(),
                 self.arp_params().arp_pattern.preview_normalized(index as i32),
-            ),
-            Menu::YTarget => Self::emit(
-                cx,
-                self.params.y_target.as_ptr(),
-                self.params.y_target.preview_normalized(index as i32),
             ),
             Menu::Key => {
                 let (_, key, spelling) = harmony::KEY_CHOICES[index];
@@ -635,33 +544,6 @@ impl ChordboardView {
                 self.params.scale.as_ptr(),
                 self.params.scale.preview_normalized(index as i32),
             ),
-            _ => {
-                let mut m = self.mapping();
-                match menu {
-                    Menu::MappingKind => {
-                        m.kind = [0, 1, 3][index];
-                        if m.kind == 2 {
-                            m.number %= 32;
-                        }
-                        if m.kind == 3 && m.channel == 16 {
-                            m.channel = 0;
-                        }
-                    }
-                    Menu::MappingChannel(_) => m.channel = index as u8,
-                    Menu::MappingCc(_) => m.number = index as u8,
-                    _ => {}
-                }
-                // New CC choices accept any channel; saved channel locks remain compatible.
-                if self.mapping_axis < 2
-                    && matches!(m.kind, 1 | 2)
-                    && matches!(menu, Menu::MappingKind | Menu::MappingCc(_))
-                {
-                    m.channel = 16;
-                }
-                self.params
-                    .mapping(self.mapping_axis)
-                    .store(m.encode(), Ordering::Relaxed);
-            }
         }
     }
     fn inversion(&self, cx: &mut EventContext, step: i8) {
@@ -831,11 +713,9 @@ impl ChordboardView {
         self.manual_playing()
             && !self.arp_editor_editing()
             && self.params.strum_latch.value()
-            && self.panel != Some(Panel::Mapping)
             && self.menu.is_none()
             && self.edit.is_none()
             && self.drag.is_none()
-            && self.page_elapsed >= pleasant_ui::page_slide::DURATION
     }
     fn set_pad_xy(&self, cx: &mut EventContext, x: f32, y: f32) {
         let (px, py) = self.pad_norm(x, y);
@@ -968,30 +848,7 @@ impl ChordboardView {
         if was_routing {
             cx.needs_redraw();
         }
-        let was_sliding = self.page_elapsed < pleasant_ui::page_slide::DURATION;
-        let mode = if self.arp_page() { 1 } else { 2 };
-        if mode != self.page_target {
-            self.page_start = self.page_position;
-            self.page_target = mode;
-            self.page_elapsed = 0.0;
-            self.end_drag(cx);
-            self.edit = None;
-        }
-        self.page_elapsed = (self.page_elapsed + dt).min(pleasant_ui::page_slide::DURATION);
-        self.page_position = pleasant_ui::page_slide::position(
-            self.page_start,
-            self.page_target as f32,
-            self.page_elapsed,
-        );
-        if was_sliding || self.page_elapsed < pleasant_ui::page_slide::DURATION {
-            cx.needs_redraw();
-        }
         let was_expanding = self.expand_elapsed < pleasant_ui::page_slide::DURATION;
-        if !self.can_expand_strum() && self.expand_target != 0.0 {
-            self.expand_start = self.expand_progress;
-            self.expand_target = 0.0;
-            self.expand_elapsed = 0.0;
-        }
         self.expand_elapsed = (self.expand_elapsed + dt).min(pleasant_ui::page_slide::DURATION);
         self.expand_progress = pleasant_ui::page_slide::position(
             self.expand_start,

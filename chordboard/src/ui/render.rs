@@ -74,7 +74,7 @@ impl ChordboardView {
         d.scissor(pad.0, pad.1, pad.2, pad.3);
         d.font = self.font.get();
         d.disabled = !self.params.strum_enabled.value();
-        self.draw_pad(&mut d, 2);
+        self.draw_pad(&mut d);
         d.font = self.ui_font.get();
         if expand == 0.0 {
             for (c, r) in self.base_controls() {
@@ -117,12 +117,7 @@ impl ChordboardView {
         );
         self.draw_piano(&mut d);
         d.reset_scissor();
-        if self.panel == Some(Panel::Mapping) {
-            self.draw_panel(&mut d);
-            for (c, r) in &panel_controls {
-                self.draw_control(&mut d, c, *r, TEAL);
-            }
-        }
+
         self.draw_memory_drag(&mut d);
         self.draw_route_drag(&mut d);
         self.draw_route_chips(&mut d);
@@ -269,7 +264,7 @@ impl ChordboardView {
             );
         }
         if self.expand_t() > 0.0 && y >= HEADER_H && y < ARP_SURFACE.1 {
-            if self.can_expand_strum() && hit(self.expand_button(), x, y) {
+            if hit(self.expand_button(), x, y) {
                 return Some("Collapse the strum field".into());
             }
             if hit(strum_latch_rect(self.expand_t()), x, y) && self.manual_playing() {
@@ -312,7 +307,7 @@ impl ChordboardView {
         {
             return Some("Extra key pending · The last held key becomes the next root".into());
         }
-        if hit(self.expand_button(), x, y) && self.can_expand_strum() {
+        if hit(self.expand_button(), x, y) {
             return Some("Expand the strum field over the plugin body".into());
         }
         if let Some(slot) = (0..MEMORY_COUNT).find(|&i| hit(memory_rect(i), x, y)) {
@@ -425,7 +420,7 @@ impl ChordboardView {
                 "Drag anywhere to adjust · Click value to type · Shift for fine adjustment".into(),
             );
         }
-        if hit(ROOT_ON_SELECT, x, y) && !self.arp_page() {
+        if hit(ROOT_ON_SELECT, x, y) {
             return Some(
                 "Click to cycle Strum Only / Root on Select / Chord on Select · Selecting a chord can sound its root or the whole chord, including Manual Strum".into(),
             );
@@ -454,9 +449,7 @@ impl ChordboardView {
         if hit(transpose_control_rect(self.params.mpe_enabled(), 2), x, y) {
             return Some("Transpose in semitones · Click to reset to zero".into());
         }
-        if (0..2).any(|i| hit(mapping_summary_rect(i), x, y)) {
-            return Some("Edit this controller’s source and range here".into());
-        }
+
         None
     }
     pub(super) fn draw_modulation_badge(&self, d: &mut Draw, id: &str, r: Rect) {
@@ -488,11 +481,7 @@ impl ChordboardView {
         let base = c;
         let routed = self.routed_control(c);
         let c = routed.as_ref().unwrap_or(c);
-        let is_length_held =
-            c.id == "length_ms" && self.playback_mode() == 1 && self.params.strum_hold.value();
-        let color = if is_length_held {
-            MUTED
-        } else if routed.is_some() {
+        let color = if routed.is_some() {
             TEAL
         } else {
             color
@@ -569,11 +558,7 @@ impl ChordboardView {
                 color,
             );
         } else {
-            let hover = if is_length_held {
-                0.0
-            } else {
-                self.hover_amount(rect)
-            };
+            let hover = self.hover_amount(rect);
             d.rounded_rect(
                 rect.0,
                 rect.1,
@@ -587,11 +572,7 @@ impl ChordboardView {
                 d.text(rect.0 + 12.0, rect.1 + 15.0, name, 11.0, MUTED);
             }
             d.font = self.font.get();
-            let value = if is_length_held {
-                "Held".to_string()
-            } else {
-                self.display_value(c)
-            };
+            let value = self.display_value(c);
             d.text_right(
                 rect.0 + rect.2 - 12.0,
                 rect.1 + if c.id == "tempo" { 16.0 } else { 15.0 },
@@ -608,19 +589,13 @@ impl ChordboardView {
             let x = rect.0 + 12.0;
             let width = rect.2 - if c.id == "tempo" { 92.0 } else { 24.0 };
             d.rounded_rect(x, y, width, 3.0, 1.5, LINE);
-            if is_length_held {
-                d.rounded_rect(x, y, width, 3.0, 1.5, alpha(LINE, 0.4));
-            } else {
-                d.rounded_rect(x, y, width * c.norm, 3.0, 1.5, color);
-            }
+            d.rounded_rect(x, y, width * c.norm, 3.0, 1.5, color);
             if routed.is_some() {
                 // The saved position remains visible while the teal marker moves.
                 let base_x = x + width * base.norm;
                 d.line(base_x, y - 4.0, base_x, y + 7.0, GOLD, 2.0);
             }
-            if !is_length_held {
-                d.circle(x + width * c.norm, y + 1.5, 3.0 + hover, color, true);
-            }
+            d.circle(x + width * c.norm, y + 1.5, 3.0 + hover, color, true);
             d.font = self.ui_font.get();
         }
         if rect.3 >= 42.0 {
@@ -678,7 +653,7 @@ mod tests {
         view.pointer = Some((power.0 + power.2 * 0.5, power.1 + power.3 * 0.5));
         assert!(view.hover_hint(&[]).unwrap().contains("bypass arpeggiator"));
         view.expand_progress = 1.0;
-        let humanize = arp_controls(true)[0].1;
+        let humanize = arp_controls()[0].1;
         view.pointer = Some((humanize.0 + 5.0, humanize.1 + 5.0));
         assert!(view.hover_hint(&view.base_controls()).is_some());
     }
@@ -700,8 +675,8 @@ mod tests {
             arpeggiator::mode_rect(),
             arpeggiator::octaves_rect(),
             arp_direction_rect(),
-            arp_controls(false)[0].1,
-            arp_controls(false)[1].1,
+            arp_controls()[0].1,
+            arp_controls()[1].1,
             arp_rate_sync_rect(),
             arp_rate_rect(),
             arpeggiator::delay_rect(),
@@ -716,7 +691,7 @@ mod tests {
             );
         }
         assert_disjoint(&row);
-        let [(_, humanize), (_, swing)] = arp_controls(true);
+        let [(_, humanize), (_, swing)] = arp_controls();
         assert_eq!(humanize.1, swing.1);
         assert!(humanize.0 + humanize.2 < swing.0);
         assert!(arp_direction_rect().2 > 0.0);
@@ -728,11 +703,10 @@ mod tests {
         let right = ARP_SURFACE.0 + ARP_SURFACE.2 - 12.0;
         let delay = arpeggiator::delay_rect();
         assert!((delay.0 + delay.2 - right).abs() < 0.001);
-        let [(_, humanize), (_, swing)] = arp_controls(false);
+        let [(_, humanize), (_, swing)] = arp_controls();
         assert_eq!((swing.1, swing.3), (humanize.1, humanize.3));
         assert!(swing.0 > humanize.0 + humanize.2);
-        assert!(output_controls(3).is_empty());
-        assert!(output_controls(1).iter().all(|(id, _)| *id != "strings"));
+        assert_eq!(output_controls().map(|(id, _)| id), ["length_ms"]);
     }
     #[test]
     fn strumfield_header_octaves_clear_latch_expand_and_bypass() {
@@ -748,7 +722,7 @@ mod tests {
             rects.extend([latch, expand_rect(expand), strum_bypass_rect(expand)]);
             assert_disjoint(&rects);
         }
-        assert!(output_controls(2).iter().all(|(id, _)| *id != "strings"));
+        assert!(output_controls().iter().all(|(id, _)| *id != "strings"));
     }
     #[test]
     fn chords_header_selection_button_sits_between_order_and_transpose() {

@@ -1,4 +1,19 @@
 use super::*;
+
+/// MIDI RPN 0 uses semitones plus cents for both dry and delayed voices.
+pub(super) fn emit_bend_range(channel: u8, range: f32, out: &mut impl FnMut(Out)) {
+    for (cc, value) in [
+        (101, 0),
+        (100, 0),
+        (6, range.floor() as u8),
+        (38, ((range.fract() * 100.0).round() as u8).min(99)),
+        (101, 127),
+        (100, 127),
+    ] {
+        out(Out::Cc(channel, cc, value as f32 / 127.0));
+    }
+}
+
 impl Engine {
     fn is_control_note(&self, note: u8) -> bool {
         self.config.control_base >= 0

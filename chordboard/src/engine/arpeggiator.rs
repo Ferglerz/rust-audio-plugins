@@ -81,41 +81,7 @@ pub fn cycle_notes(notes: Notes, settings: Settings, mut seed: u32) -> ([u8; STE
     }
     let len = Engine::pattern_length(settings.pattern, count).min(STEPS);
     for (step, slot) in result.iter_mut().enumerate().take(len) {
-        let index = match settings.pattern {
-            1 => count - 1 - step % count,
-            2 => {
-                let span = (count * 2).saturating_sub(2).max(1);
-                let p = step % span;
-                if p < count {
-                    p
-                } else {
-                    span - p
-                }
-            }
-            3 => {
-                let k = step / 2;
-                if step % 2 == 0 {
-                    k % count
-                } else {
-                    (k + 2) % count
-                }
-            }
-            4 => {
-                let start = count - 1 - (step / 2) % count;
-                if step % 2 == 0 {
-                    start
-                } else {
-                    (start + count - 2 % count) % count
-                }
-            }
-            6 => {
-                seed ^= seed << 13;
-                seed ^= seed >> 17;
-                seed ^= seed << 5;
-                seed as usize % count
-            }
-            _ => step % count,
-        };
+        let index = ordering::index(settings.pattern, step, count, &mut seed);
         *slot = strings[index];
     }
     (result, len)

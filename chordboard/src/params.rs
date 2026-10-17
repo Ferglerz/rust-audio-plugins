@@ -636,6 +636,28 @@ impl ChordboardParams {
     }
 }
 
+// Nested catalogs keep UI IDs, ordering, lookup, and polling values together.
+macro_rules! nested_control_catalog {
+    ($params:ty, $count:literal, $($builder:ident($id:literal, $field:ident, $group:literal)),* $(,)?) => {
+        impl $params {
+            fn values(&self) -> [f32; $count] {
+                [$(self.$field.unmodulated_normalized_value()),*]
+            }
+
+            pub fn controls(&self) -> Vec<Control> {
+                vec![$($builder($id, $group, &self.$field)),*]
+            }
+
+            pub fn control(&self, id: &str) -> Option<Control> {
+                match id {
+                    $($id => Some($builder($id, $group, &self.$field)),)*
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+
 // One catalog supports both full UI snapshots and allocation-light single lookups.
 macro_rules! control_catalog {
     ($($builder:ident($field:ident, $group:literal)),* $(,)?) => {
@@ -658,13 +680,7 @@ macro_rules! control_catalog {
                 };
                 $(visit(self.$field.unmodulated_normalized_value());)*
                 for route in &self.routes {
-                    visit(route.enabled.unmodulated_normalized_value());
-                    visit(route.source.unmodulated_normalized_value());
-                    visit(route.target.unmodulated_normalized_value());
-                    visit(route.min.unmodulated_normalized_value());
-                    visit(route.max.unmodulated_normalized_value());
-                    visit(route.curve.unmodulated_normalized_value());
-                    visit(route.smoothing_ms.unmodulated_normalized_value());
+                    for value in route.values() { visit(value); }
                 }
                 for value in self.arp_pages[self.arp_page.value() as usize].values() { visit(value); }
                 changed |= signature.len() != index;
@@ -682,7 +698,7 @@ macro_rules! control_catalog {
             pub fn control(&self, id: &str) -> Option<Control> {
                 match id {
                     $(stringify!($field) => Some($builder(stringify!($field), $group, &self.$field)),)*
-                    _ => self.arp_pages[self.arp_page.value() as usize].controls().into_iter().find(|c| c.id == id),
+                    _ => self.arp_pages[self.arp_page.value() as usize].control(id),
                 }
             }
         }
@@ -897,10 +913,15 @@ pub struct RouteParams {
 }
 impl Default for RouteParams {
     fn default() -> Self {
+        Self::from_route(Route::default())
+    }
+}
+impl RouteParams {
+    fn from_route(route: Route) -> Self {
         Self {
             smoothing_ms: FloatParam::new(
                 "Smoothing",
-                0.0,
+                route.smoothing_ms,
                 FloatRange::Linear {
                     min: 0.0,
                     max: 2000.0,
@@ -911,10 +932,10 @@ impl Default for RouteParams {
             .with_string_to_value(Arc::new(|s| {
                 s.trim().trim_end_matches("ms").trim().parse().ok()
             })),
-            enabled: BoolParam::new("Enabled", true),
+            enabled: BoolParam::new("Enabled", route.enabled),
             source: IntParam::new(
                 "Source",
-                0,
+                route.source as i32,
                 IntRange::Linear {
                     min: 0,
                     max: (SOURCES.len() - 1) as i32,
@@ -923,14 +944,14 @@ impl Default for RouteParams {
             .with_value_to_string(Arc::new(|v| SOURCES[v as usize].into())),
             target: IntParam::new(
                 "Destination",
-                0,
+                route.target as i32,
                 IntRange::Linear {
                     min: 0,
                     max: (TARGETS.len() - 1) as i32,
                 },
             )
             .with_value_to_string(Arc::new(|v| TARGETS[v as usize].name.into())),
-            min: FloatParam::new("Minimum", 0.0, FloatRange::Linear { min: 0.0, max: 1.0 })
+            min: FloatParam::new("Minimum", route.min, FloatRange::Linear { min: 0.0, max: 1.0 })
                 .with_value_to_string(Arc::new(|v| format!("{:.0}%", v * 100.0)))
                 .with_string_to_value(Arc::new(|s| {
                     s.trim()
@@ -940,7 +961,7 @@ impl Default for RouteParams {
                         .ok()
                         .map(|v| v / 100.0)
                 })),
-            max: FloatParam::new("Maximum", 1.0, FloatRange::Linear { min: 0.0, max: 1.0 })
+            max: FloatParam::new("Maximum", route.max, FloatRange::Linear { min: 0.0, max: 1.0 })
                 .with_value_to_string(Arc::new(|v| format!("{:.0}%", v * 100.0)))
                 .with_string_to_value(Arc::new(|s| {
                     s.trim()
@@ -952,7 +973,7 @@ impl Default for RouteParams {
                 })),
             curve: FloatParam::new(
                 "Curve",
-                0.0,
+                route.curve,
                 FloatRange::Linear {
                     min: -1.0,
                     max: 1.0,
@@ -974,31 +995,6 @@ impl Default for RouteParams {
             })),
         }
     }
-}
-impl RouteParams {
-    fn from_route(route: Route) -> Self {
-        Self {
-            source: IntParam::new(
-                "Source",
-                route.source as i32,
-                IntRange::Linear {
-                    min: 0,
-                    max: (SOURCES.len() - 1) as i32,
-                },
-            )
-            .with_value_to_string(Arc::new(|v| SOURCES[v as usize].into())),
-            target: IntParam::new(
-                "Destination",
-                route.target as i32,
-                IntRange::Linear {
-                    min: 0,
-                    max: (TARGETS.len() - 1) as i32,
-                },
-            )
-            .with_value_to_string(Arc::new(|v| TARGETS[v as usize].name.into())),
-            ..Self::default()
-        }
-    }
 
     pub fn route(&self) -> Route {
         Route {
@@ -1011,25 +1007,37 @@ impl RouteParams {
             smoothing_ms: self.smoothing_ms.value(),
         }
     }
-    pub fn controls(&self) -> Vec<Control> {
-        vec![
-            toggle("route_enabled", 6, &self.enabled),
-            control("route_source", 6, &self.source),
-            control("route_target", 6, &self.target),
-            control("route_min", 6, &self.min),
-            control("route_max", 6, &self.max),
-            control("route_curve", 6, &self.curve),
-            control("route_smoothing_ms", 6, &self.smoothing_ms),
-        ]
-    }
-    pub fn control(&self, id: &str) -> Option<Control> {
-        self.controls().into_iter().find(|c| c.id == id)
-    }
+}
+
+nested_control_catalog! {
+    RouteParams, 7,
+    toggle("route_enabled", enabled, 6),
+    control("route_source", source, 6),
+    control("route_target", target, 6),
+    control("route_min", min, 6),
+    control("route_max", max, 6),
+    control("route_curve", curve, 6),
+    control("route_smoothing_ms", smoothing_ms, 6),
 }
 
 #[cfg(test)]
 mod routing_state_tests {
     use super::*;
+    #[test]
+    fn route_constructor_preserves_every_nondefault_field() {
+        let route = Route {
+            enabled: false,
+            source: 5,
+            target: 3,
+            min: 0.23,
+            max: 0.81,
+            curve: -0.4,
+            smoothing_ms: 327.0,
+        };
+        assert_eq!(RouteParams::from_route(route).route(), route);
+        assert_eq!(RouteParams::default().route(), Route::default());
+    }
+
     #[test]
     fn arp_pages_are_independent_of_manual_play() {
         let p = ChordboardParams::default();
@@ -1161,35 +1169,106 @@ impl ArpPageParams {
             humanize: self.humanize.value(),
         }
     }
-    fn values(&self) -> [f32; 8] {
-        [
-            self.arp_mode.unmodulated_normalized_value(),
-            self.arp_pattern.unmodulated_normalized_value(),
-            self.arp_octaves.unmodulated_normalized_value(),
-            self.arp_sync.unmodulated_normalized_value(),
-            self.arp_free_ms.unmodulated_normalized_value(),
-            self.rate.unmodulated_normalized_value(),
-            self.swing.unmodulated_normalized_value(),
-            self.humanize.unmodulated_normalized_value(),
-        ]
-    }
-    pub fn controls(&self) -> Vec<Control> {
-        vec![
-            control("arp_mode", 1, &self.arp_mode),
-            control("arp_pattern", 1, &self.arp_pattern),
-            control("arp_octaves", 1, &self.arp_octaves),
-            toggle("arp_sync", 1, &self.arp_sync),
-            control("arp_free_ms", 1, &self.arp_free_ms),
-            control("rate", 1, &self.rate),
-            control("swing", 1, &self.swing),
-            control("humanize", 1, &self.humanize),
-        ]
-    }
+}
+
+nested_control_catalog! {
+    ArpPageParams, 8,
+    control("arp_mode", arp_mode, 1),
+    control("arp_pattern", arp_pattern, 1),
+    control("arp_octaves", arp_octaves, 1),
+    toggle("arp_sync", arp_sync, 1),
+    control("arp_free_ms", arp_free_ms, 1),
+    control("rate", rate, 1),
+    control("swing", swing, 1),
+    control("humanize", humanize, 1),
 }
 
 #[cfg(test)]
 mod signature_tests {
     use super::*;
+
+    fn assert_control_matches(actual: Control, expected: &Control) {
+        assert_eq!(
+            (
+                actual.id,
+                actual.group,
+                &actual.name,
+                actual.ptr,
+                actual.norm,
+                actual.prev,
+                actual.next,
+                &actual.value,
+                actual.toggle,
+            ),
+            (
+                expected.id,
+                expected.group,
+                &expected.name,
+                expected.ptr,
+                expected.norm,
+                expected.prev,
+                expected.next,
+                &expected.value,
+                expected.toggle,
+            ),
+            "{}",
+            expected.id,
+        );
+    }
+
+    #[test]
+    fn nested_control_lookups_match_catalog_values_and_parameter_pointers() {
+        let mut params = ChordboardParams::default();
+        params.arp_page = IntParam::new("Arp page", 5, IntRange::Linear { min: 0, max: 7 });
+        let page = &params.arp_pages[5];
+        let route = &params.routes[0];
+        let route_controls = route.controls();
+        assert_eq!(
+            route_controls.iter().map(|c| c.id).collect::<Vec<_>>(),
+            [
+                "route_enabled",
+                "route_source",
+                "route_target",
+                "route_min",
+                "route_max",
+                "route_curve",
+                "route_smoothing_ms",
+            ],
+        );
+        for expected in &route_controls {
+            assert_control_matches(route.control(expected.id).unwrap(), expected);
+        }
+        assert_eq!(
+            route.values().as_slice(),
+            route_controls.iter().map(|c| c.norm).collect::<Vec<_>>(),
+        );
+        assert!(route.control("missing").is_none());
+
+        let page_controls = page.controls();
+        assert_eq!(
+            page_controls.iter().map(|c| c.id).collect::<Vec<_>>(),
+            [
+                "arp_mode",
+                "arp_pattern",
+                "arp_octaves",
+                "arp_sync",
+                "arp_free_ms",
+                "rate",
+                "swing",
+                "humanize",
+            ],
+        );
+        for expected in &page_controls {
+            assert_control_matches(page.control(expected.id).unwrap(), expected);
+            assert_control_matches(params.control(expected.id).unwrap(), expected);
+        }
+        assert_eq!(
+            page.values().as_slice(),
+            page_controls.iter().map(|c| c.norm).collect::<Vec<_>>(),
+        );
+        assert!(page.control("missing").is_none());
+        assert!(params.control("missing").is_none());
+    }
 
     #[test]
     fn polling_matches_catalog_and_reuses_storage_when_values_change() {

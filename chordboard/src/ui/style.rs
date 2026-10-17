@@ -3,7 +3,7 @@ use super::*;
 /// Small vector marks shared by Chordboard controls.
 #[derive(Clone, Copy)]
 pub(super) enum Icon {
-    Lock, Loop, Host, Manual, Learn, Trash, Add, Reset, Touch, TuningFork, Glyph(&'static str),
+    Lock, Once, Loop, SyncLoop, AlignedLoop, Host, Manual, Learn, Trash, Add, Reset, Touch, TuningFork, Glyph(&'static str),
 }
 
 pub(super) const MODULATOR_ICONS: [Icon; crate::engine::routing::SOURCE_COUNT] = [
@@ -39,11 +39,27 @@ impl Icon {
                 d.c.fill_path(&path, &paint);
                 d.c.restore();
             }
-            Self::Loop | Self::Lock | Self::Reset | Self::Host | Self::Glyph(_) => {
+            Self::SyncLoop | Self::AlignedLoop => {
+                Self::Loop.draw(d, x, y, color);
+                if matches!(self, Self::SyncLoop) {
+                    // A clock inside the repeat arrows: retain rhythmic phase.
+                    d.circle(x, y, 2.8, color, false);
+                    line(d, (0.0, -1.8), (0.0, 0.0));
+                    line(d, (0.0, 0.0), (1.5, 0.8));
+                } else {
+                    // Beat-grid ticks inside the same repeat arrows.
+                    for dx in [-3.0, 0.0, 3.0] {
+                        line(d, (dx, -2.5), (dx, 2.5));
+                    }
+                    line(d, (-3.0, 0.0), (3.0, 0.0));
+                }
+            }
+            Self::Once | Self::Loop | Self::Lock | Self::Reset | Self::Host | Self::Glyph(_) => {
                 use nih_plug_vizia::vizia::vg::{Align, Baseline, Paint};
                 // Verified against the cmap and glyph names in Vizia's bundled
                 // Tabler font; this Vizia version exports only some codepoints.
                 let glyph = match self {
+                    Self::Once => nih_plug_vizia::vizia::icons::ICON_PLAYER_SKIP_FORWARD,
                     Self::Loop => nih_plug_vizia::vizia::icons::ICON_REPEAT,
                     Self::Lock => "\u{eae2}", // lock
                     Self::Reset => "\u{eb16}", // rotate
@@ -153,21 +169,6 @@ impl ChordboardView {
                     (ROUTE_CLEAR, false),
                 ]);
             }
-            if panel == Panel::Mapping {
-                targets.push((self.menu_trigger_rect(Menu::MappingKind), false));
-                if self.mapping().kind == 3 {
-                    targets.push((self.menu_trigger_rect(Menu::MappingChannel(true)), false));
-                }
-                if matches!(self.mapping().kind, 1 | 2) {
-                    targets.push((self.menu_trigger_rect(Menu::MappingCc(false)), false));
-                }
-                if self.mapping_axis == 1 {
-                    targets.push((self.menu_trigger_rect(Menu::YTarget), false));
-                }
-            }
-            if panel == Panel::Mapping {
-                return targets;
-            }
         }
         targets.extend([
             (ALWAYS_BASS, self.params.always_bass.value()),
@@ -187,9 +188,7 @@ impl ChordboardView {
             (Menu::Key.trigger_rect(), self.menu == Some(Menu::Key)),
             (Menu::Scale.trigger_rect(), self.menu == Some(Menu::Scale)),
         ]);
-        if self.can_expand_strum() {
-            targets.push((self.expand_button(), self.expand_target > 0.5));
-        }
+        targets.push((self.expand_button(), self.expand_target > 0.5));
         targets.extend((0..KEY_COUNT).map(|i| (self.keyboard_key_rect(i), false)));
         targets.extend((0..8).map(|i| (memory_rect(i), self.memory_ui.armed)));
         targets.push((BASS_BYPASS, !self.params.bass_enabled.value()));

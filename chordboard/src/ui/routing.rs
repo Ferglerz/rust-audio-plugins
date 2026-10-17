@@ -277,9 +277,6 @@ impl ChordboardView {
         if self.manual_playing() {
             targets.push(("x", self.play_pad()));
         }
-        if self.page_elapsed < pleasant_ui::page_slide::DURATION {
-            targets.retain(|(_, r)| !hit(CHORDS_SURFACE, r.0, r.1));
-        }
         if self.route_progress > 0.0 && self.panel != Some(Panel::Routes) {
             targets.retain(|(_, r)| !hit(CHORDS_SURFACE, r.0 + r.2 / 2.0, r.1 + r.3 / 2.0));
         }
@@ -289,9 +286,6 @@ impl ChordboardView {
                 r.0 + r.2 <= p.0 || r.0 >= p.0 + p.2 || r.1 + r.3 <= p.1 || r.1 >= p.1 + p.3
             });
             targets.extend(self.panel_controls().into_iter().map(|(c, r)| (c.id, r)));
-            if panel == Panel::Mapping && self.mapping_axis == 1 {
-                targets.push(("y_target", self.menu_trigger_rect(Menu::YTarget)));
-            }
         }
         if self.arp_editor_overlay_visible() {targets.retain(|(_,r)|!hit(ARP_SURFACE,r.0+r.2/2.0,r.1+r.3/2.0));}
         let mut mapped: Vec<_> = targets
@@ -848,10 +842,6 @@ impl ChordboardView {
     pub(super) fn routed_plain(&self, id: &str) -> Option<f32> {
         let (i, target) = TARGETS.iter().enumerate().find(|(_, t)| t.id == id)?;
         self.snapshot.routed[i].map(|v| target.plain(v))
-    }
-    pub(super) fn mode(&self) -> i32 { if self.arp_params().arp_mode.value()==0 {1} else {3} }
-    pub(super) fn playback_mode(&self) -> i32 {
-        crate::engine::MANUAL as i32
     }
     pub(super) fn routed_control(&self, c: &Control) -> Option<Control> {
         if self.modulation_route(c.id).is_some() && self.replacing_modulation_route(c.id).is_none() { return None; }
