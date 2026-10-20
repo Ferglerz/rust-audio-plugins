@@ -488,6 +488,58 @@ fn delay_engine(selected: u8) -> Engine {
 }
 
 #[test]
+fn delay_synced_repeats_advance_while_host_position_is_stopped() {
+    for block in [1, 7, 64] {
+        let mut e = delay_engine(source::STRUM);
+        e.playing = false;
+        e.arp.data.pages[0].delay.sync = true;
+        e.arp.data.pages[0].delay.taps[0].time = 0.5;
+        e.set_host_position(Some(8.0), true);
+        e.strike(60, 0.8, 20, &mut |_| {});
+        let mut events = Vec::new();
+        while e.now < 600 {
+            e.set_host_position(Some(8.0), true);
+            let count = block.min((600 - e.now) as usize);
+            events.extend(advance(&mut e, count));
+        }
+        let played = attacks(&events);
+        assert_eq!(played.len(), 1, "block size {block}");
+        assert_eq!((played[0].0, played[0].2), (250, 60));
+        assert!(events.contains(&(270, Out::Off(played[0].1, 60, 0.0))));
+    }
+}
+
+#[test]
+fn delay_captures_strums_over_held_chords_with_the_strum_duration() {
+    for selected in [source::STRUM, source::CHORDS] {
+        let mut e = delay_engine(selected);
+        let mut config = e.host_config;
+        config.always_chord = true;
+        config.key_split = false;
+        e.configure(config, &mut |_| {});
+        e.allocate_owned_voice(60, 0.8, 0, true, 0, None, &mut |_| {});
+        advance(&mut e, 1);
+        let mut events = Vec::new();
+        e.strike(60, 0.6, 20, &mut |event| events.push(event));
+        assert_eq!(events.iter().filter(|e| matches!(e, Out::On(_, 60, _))).count(), 1);
+        let events = advance(&mut e, 40);
+        let played = attacks(&events);
+        assert_eq!(played.len(), 1);
+        let echo = played[0];
+        if selected == source::STRUM {
+            assert_eq!((echo.0, echo.3), (11, 0.3));
+            assert!(events.contains(&(31, Out::Off(echo.1, 60, 0.0))));
+        } else {
+            assert_eq!((echo.0, echo.3), (10, 0.4));
+            assert!(!events.iter().any(|(_, event)| *event == Out::Off(echo.1, 60, 0.0)));
+        }
+        assert!(e.voices.iter().flatten().any(|v| v.layer && v.note == 60));
+        e.panic(&mut |_| {});
+        assert!(e.voices.iter().all(Option::is_none));
+    }
+}
+
+#[test]
 fn delay_integration_captures_only_selected_dry_owners() {
     for selected in [source::ARP, source::STRUM, source::CHORDS] {
         let mut engine = delay_engine(selected);

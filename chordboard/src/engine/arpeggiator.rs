@@ -103,7 +103,9 @@ impl Engine {
     pub fn set_host_position(&mut self, beats: Option<f64>, tempo_available: bool) {
         self.host_beat_available = beats.is_some_and(f64::is_finite);
         self.host_tempo_available = tempo_available;
-        if let Some(beat) = beats.filter(|b| b.is_finite()) {
+        // A stopped host repeats its cursor position every callback. Keep the
+        // continuous performance clock running for synced echoes during live play.
+        if let Some(beat) = beats.filter(|b| self.playing && b.is_finite()) {
             self.beat = beat;
         }
     }

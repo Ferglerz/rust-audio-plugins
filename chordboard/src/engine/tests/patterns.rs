@@ -61,6 +61,34 @@ fn input_velocity_drives_length_independently_of_contoured_output() {
     }
 }
 #[test]
+fn strumfield_rearticulates_every_string_in_all_selection_modes() {
+    for mpe in [false, true] {
+        for selection in 0..3 {
+            let mut e = Engine { sample_rate: 1000.0, ..Engine::default() };
+            configure(&mut e, Config {
+                mode: MANUAL,
+                mpe,
+                key_split: false,
+                root_on_select: selection == 1,
+                always_chord: selection == 2,
+                length_ms: 100.0,
+                ..Config::default()
+            });
+            on(&mut e, 60, 0);
+            for _ in 0..2 {
+                let mut events = send(&mut e, Command::BeginGesture(0.0, 0.8));
+                events.extend(send(&mut e, Command::X(1.0)));
+                assert_eq!(notes(&events), [60, 64, 67], "selection {selection}, MPE {mpe}");
+                assert_eq!(e.voices.iter().flatten().filter(|v| v.layer).count(), if selection == 2 { 3 } else { 0 });
+            }
+            off(&mut e, 60, 0);
+            tick(&mut e, 101);
+            assert!(e.voices.iter().all(Option::is_none), "selection {selection}, MPE {mpe}");
+        }
+    }
+}
+
+#[test]
 fn strumfield_plays_without_a_self_route_and_still_drives_modulation() {
     let mut e = Engine::default();
     let mut c = Config {

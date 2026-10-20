@@ -151,8 +151,18 @@ impl Engine {
             .flatten()
             .find(|v| v.note == note && v.layer && v.owner == owner)
         {
-            // A shared sustained note must never receive a premature Note Off.
+            // Rearticulate the sustained string without discarding its layer
+            // ownership. Its strum tail still survives release of the layer gate.
             voice.off = off;
+            let channel = voice.channel;
+            self.emit_expression(channel, out);
+            out(Out::Off(channel, note, 0.0));
+            out(Out::On(channel, note, velocity));
+            let token = self.new_note_token();
+            self.capture_delay_source(
+                crate::arpeggiator::source::STRUM, token, note, velocity,
+                self.attack_expression(), (off != u64::MAX).then_some(off),
+            );
             self.mark_strike(note);
             return;
         }
@@ -225,7 +235,16 @@ impl Engine {
         if !self.melody_channel(channel) {
             self.emit_expression(channel, out);
         }
-        if !self.output_owned(channel, note) {
+        let owned = self.output_owned(channel, note);
+        // A selection root may share this channel and pitch with a live strum.
+        // Keep both owners, but give the gesture an audible attack.
+        let restrike = owner == 0 && !layer && self.voices.iter().flatten().any(|voice| {
+            voice.channel == channel && voice.note == note && voice.owner == SELECT_ROOT_OWNER
+        });
+        if restrike {
+            out(Out::Off(channel, note, 0.0));
+        }
+        if !owned || restrike {
             out(Out::On(channel, note, velocity.clamp(0.01, 1.0)));
         }
         let token = self.new_note_token();

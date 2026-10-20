@@ -15,6 +15,11 @@ class Version(C.Structure):
     _fields_ = [(n, U) for n in ('major', 'minor', 'revision')]
 class Header(C.Structure):
     _fields_ = [('size',U),('time',U),('space',C.c_uint16),('type',C.c_uint16),('flags',U)]
+class Transport(C.Structure):
+    _fields_ = [('header',Header),('flags',U),('beats',C.c_int64),('seconds',C.c_int64),
+                ('tempo',D),('tempo_inc',D),('loop_start_beats',C.c_int64),('loop_end_beats',C.c_int64),
+                ('loop_start_seconds',C.c_int64),('loop_end_seconds',C.c_int64),('bar_start',C.c_int64),
+                ('bar_number',I),('tsig_num',C.c_uint16),('tsig_denom',C.c_uint16)]
 class Midi(C.Structure):
     _fields_ = [('header',Header),('port',C.c_uint16),('data',C.c_uint8*3)]
 class Note(C.Structure):
@@ -79,6 +84,7 @@ class Harness:
             info=ParamInfo();assert self.params.info(self.ptr,index,C.byref(info));self.ids[info.name.decode()]=info.id
         assert self.plugin.activate(self.ptr,48000.,1,512);assert self.plugin.start(self.ptr)
         self.time=0
+        self.transport=None
         self.baseline_state=self.save_state()
     def close(self):
         self.plugin.stop(self.ptr);self.plugin.deactivate(self.ptr);self.plugin.destroy(self.ptr);self.entry.deinit()
@@ -116,7 +122,7 @@ class Harness:
         rendered=[(C.c_float*frames)() for _ in range(2)]
         in_ptrs=(C.POINTER(C.c_float)*2)(*samples);out_ptrs=(C.POINTER(C.c_float)*2)(*rendered)
         audio_in=Audio(in_ptrs,None,2,0,0);audio_out=Audio(out_ptrs,None,2,0,0)
-        process=Process(self.time,frames,None,C.pointer(audio_in),C.pointer(audio_out),1,1,C.pointer(inputs),C.pointer(outputs))
+        process=Process(self.time,frames,C.addressof(self.transport) if self.transport is not None else None,C.pointer(audio_in),C.pointer(audio_out),1,1,C.pointer(inputs),C.pointer(outputs))
         assert self.plugin.process(self.ptr,C.byref(process))!=0
         self.time+=frames
         assert list(rendered[0])==list(samples[0]) and list(rendered[1])==list(samples[1]),'audio passthrough changed'
@@ -513,7 +519,16 @@ def run_midi_delay_tests(path):
             panic=h.run([midi(0,0xb0,123,0)])
             assert_released(events+panic)
             assert not attacks(timeline(h,2000)),('source panic',source)
-        print('CLAP MIDI Delay passed: exact 10 ms repeats, feedback threshold/cap, independent taps, duration, isolated pitch/pan/expression, ping pong, all five sources, and panic.')
+        # A real stopped host supplies the same beat cursor on every callback.
+        state,program,delay=single_note_delay(h,feedback=0.0)
+        delay.update(sync=True)
+        delay['taps'][0]['time']=0.5
+        load_program(h,state,program)
+        h.transport=Transport(header=Header(C.sizeof(Transport),0,0,9,0),flags=3,beats=8*(1<<31),tempo=120.0)
+        events=timeline(h,14000,[midi(16,0x90,60,100)])
+        assert [(e[1],e[3]) for e in attacks(events)]==[(16,60),(12016,60)],('stopped host synced delay',attacks(events))
+        assert_released(events)
+        print('CLAP MIDI Delay passed: exact repeats including stopped-host sync, feedback threshold/cap, independent taps, duration, isolated pitch/pan/expression, ping pong, all five sources, and panic.')
     finally:
         h.close()
 
@@ -540,7 +555,26 @@ def run_play_contract_tests(path):
                     assert not attacks(timeline(h,12000)),'panic restored held selection'
                 finally:
                     h.close()
-    print('CLAP Play contract passed: eight arp/Strumfield/Chord-on-Select power combinations, arp bypass ownership and panic.')
+    for protocol in (1,2):
+        for selection in range(3):
+            h=Harness(path)
+            try:
+                state,program=arp_state(h,enabled=False)
+                state_value(state,'output_mode',protocol)
+                state_value(state,'root_on_select',selection==1)
+                state_value(state,'always_chord',selection==2)
+                load_program(h,state,program)
+                h.run([midi(0,0x90,60,100),midi(8,0xb0,1,0)])
+                for _ in range(2):
+                    up=h.run([midi(64,0xb0,1,127)])
+                    down=h.run([midi(64,0xb0,1,0)])
+                    assert [e[3] for e in attacks(up)]==[64,67],('selection mode strum up',protocol,selection,attacks(up))
+                    assert [e[3] for e in attacks(down)]==[64,60],('selection mode strum down',protocol,selection,attacks(down))
+                h.run([midi(0,0xb0,123,0)])
+                assert not attacks(timeline(h,12000)),'panic restored selection-mode strum'
+            finally:
+                h.close()
+    print('CLAP Play contract passed: independent power, all three selection modes strum in regular MIDI and MPE, arp bypass ownership and panic.')
 
 if __name__=='__main__':
     assert len(sys.argv)>1,__doc__
