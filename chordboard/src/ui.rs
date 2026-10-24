@@ -1,21 +1,22 @@
+mod arpeggiator;
 mod chords;
-mod theory;
-mod music;
 mod events;
 mod layout;
 mod menu;
+mod music;
 mod routing;
-mod arpeggiator;
 mod style;
+mod theory;
+mod tracker;
 mod tuning_fork;
 use menu::Menu;
 mod memories;
 use memories::{MemoryDrag, MemoryUi};
 use routing::RouteDrag;
+mod midi_learn;
 mod performance;
 mod piano;
 mod render;
-mod midi_learn;
 use crate::{
     bridge::Bridge,
     engine::{Command, Snapshot, POINTER_KEY_OFFSET},
@@ -177,6 +178,21 @@ struct ChordboardView {
     expand_start: f32,
     expand_target: f32,
     expand_elapsed: f32,
+    tracker_open: bool,
+    tracker_selection: bool,
+    tracker_restore_expand: bool,
+    arp_editor_params: Box<crate::params::ArpPageParams>,
+    tracker_proxy_row: usize,
+    tracker_proxy_settings: crate::arpeggiator::Settings,
+    tracker_symbol: String,
+    tracker_symbol_edit: bool,
+    tracker_scroll: f32,
+    tracker_scroll_target: f32,
+    tracker_skip_line_scroll: bool,
+    tracker_drag: Option<(usize, usize)>,
+    tracker_progress: f32,
+    tracker_start: f32,
+    tracker_elapsed: f32,
     controls_signature: Vec<f32>,
     slot_signature: [u64; MEMORY_COUNT],
     route_slot: usize,
@@ -247,6 +263,23 @@ impl ChordboardView {
             expand_start: 0.0,
             expand_target: 0.0,
             expand_elapsed: pleasant_ui::page_slide::DURATION,
+            tracker_open: false,
+            tracker_selection: false,
+            tracker_restore_expand: false,
+            arp_editor_params: Box::new(crate::params::ArpPageParams::from_settings(
+                params.arpeggiator.snapshot().rows[0].settings,
+            )),
+            tracker_proxy_row: usize::MAX,
+            tracker_proxy_settings: crate::arpeggiator::Settings::default(),
+            tracker_symbol: String::new(),
+            tracker_symbol_edit: false,
+            tracker_scroll: 0.0,
+            tracker_scroll_target: 0.0,
+            tracker_skip_line_scroll: false,
+            tracker_drag: None,
+            tracker_progress: 0.0,
+            tracker_start: 0.0,
+            tracker_elapsed: pleasant_ui::page_slide::DURATION,
             controls_signature: Vec::new(),
             slot_signature: [0; MEMORY_COUNT],
             route_slot: 0,
@@ -264,12 +297,16 @@ impl ChordboardView {
         }
     }
     fn control(&self, id: &str) -> Option<Control> {
-        if let Some(control) = self.arp_params().control(id) { return Some(control); }
+        if let Some(control) = self.arp_params().control(id) {
+            return Some(control);
+        }
         self.params.routes[self.route_slot]
             .control(id)
             .or_else(|| self.params.control(id))
     }
-    fn arp_params(&self) -> &crate::params::ArpPageParams { &self.params.arp_pages[self.arp_ui.edit_page] }
+    fn arp_params(&self) -> &crate::params::ArpPageParams {
+        &self.arp_editor_params
+    }
     fn sweep_synced(&self) -> bool {
         self.routed_plain("strum_sync")
             .map_or(self.params.strum_sync.value(), |v| v >= 0.5)
@@ -339,7 +376,9 @@ impl ChordboardView {
             .map_or(self.snapshot.learning, |pending| pending.0)
     }
     fn request_learn(&mut self, target: u8) {
-        if target != 0 { self.bridge.quick_learn.store(0, Ordering::Release); }
+        if target != 0 {
+            self.bridge.quick_learn.store(0, Ordering::Release);
+        }
         let mapping = if (1..=2).contains(&target) {
             self.params
                 .mapping(target as usize - 1)
@@ -365,7 +404,9 @@ impl ChordboardView {
         positions.push(("root_on_select", ROOT_ON_SELECT));
         positions.extend(output_controls());
         positions.extend(arp_controls());
-        if !self.arp_params().arp_sync.value() { positions.push(("arp_free_ms", arp_rate_rect())); }
+        if !self.arp_params().arp_sync.value() {
+            positions.push(("arp_free_ms", arp_rate_rect()));
+        }
         positions.extend(self.keyboard_controls().into_iter().map(|(c, r)| (c.id, r)));
         if !self.params.tempo_sync.value() {
             positions.push(("tempo", TEMPO_CONTROL));
@@ -384,7 +425,13 @@ impl ChordboardView {
     }
     fn menu_trigger_rect(&self, menu: Menu) -> Rect {
         match menu {
-            Menu::Meter(den) => if den { METER_DEN } else { METER_NUM },
+            Menu::Meter(den) => {
+                if den {
+                    METER_DEN
+                } else {
+                    METER_NUM
+                }
+            }
             Menu::ArpRate => arp_rate_rect(),
             Menu::ArpPattern => arp_direction_rect(),
             Menu::KeyboardParam(id) => keyboard_control_rect(id, self.params.mpe_enabled()),
@@ -445,7 +492,13 @@ impl ChordboardView {
     }
     fn menu_selection(&self, menu: Menu) -> usize {
         match menu {
-            Menu::Meter(den) => if den { self.params.meter_den.value() as usize } else { self.params.meter_num.value() as usize - 1 },
+            Menu::Meter(den) => {
+                if den {
+                    self.params.meter_den.value() as usize
+                } else {
+                    self.params.meter_num.value() as usize - 1
+                }
+            }
             Menu::RouteSource => self.params.routes[self.route_slot].source.value() as usize,
             Menu::RouteTarget => crate::engine::routing::available_targets()
                 .position(|(i, _)| i == self.params.routes[self.route_slot].target.value() as usize)
@@ -480,8 +533,16 @@ impl ChordboardView {
         self.menu = None;
         match menu {
             Menu::Meter(den) => {
-                let param = if den { &self.params.meter_den } else { &self.params.meter_num };
-                Self::emit(cx, param.as_ptr(), param.preview_normalized(index as i32 + if den { 0 } else { 1 }));
+                let param = if den {
+                    &self.params.meter_den
+                } else {
+                    &self.params.meter_num
+                };
+                Self::emit(
+                    cx,
+                    param.as_ptr(),
+                    param.preview_normalized(index as i32 + if den { 0 } else { 1 }),
+                );
             }
 
             Menu::KeyboardParam(id) => {
@@ -525,12 +586,16 @@ impl ChordboardView {
             Menu::ArpRate => Self::emit(
                 cx,
                 self.arp_params().rate.as_ptr(),
-                self.arp_params().rate.preview_normalized(ARP_RATES[index].1),
+                self.arp_params()
+                    .rate
+                    .preview_normalized(ARP_RATES[index].1),
             ),
             Menu::ArpPattern => Self::emit(
                 cx,
                 self.arp_params().arp_pattern.as_ptr(),
-                self.arp_params().arp_pattern.preview_normalized(index as i32),
+                self.arp_params()
+                    .arp_pattern
+                    .preview_normalized(index as i32),
             ),
             Menu::Key => {
                 self.menu = Some(Menu::Key);
@@ -827,13 +892,38 @@ impl ChordboardView {
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
-        if self.tick_quick_midi(cx, dt) { cx.needs_redraw(); }
+        self.refresh_arp_editor_params();
+        if !self.params.arp_enabled.value() {
+            self.close_tracker(cx);
+        }
+        if self.tick_tracker_scroll(dt) {
+            cx.needs_redraw();
+        }
+        if self.tick_quick_midi(cx, dt) {
+            cx.needs_redraw();
+        }
         if !self.params.mpe_enabled() && self.params.detected_mpe.load(Ordering::Relaxed) {
             self.mpe_pulse = (self.mpe_pulse + dt * 3.0) % std::f32::consts::TAU;
             cx.needs_redraw();
         }
         if self.tick_arp_editor(dt) {
             cx.needs_redraw();
+        }
+        let was_tracker_moving = self.tracker_elapsed < pleasant_ui::page_slide::DURATION;
+        self.tracker_elapsed = (self.tracker_elapsed + dt).min(pleasant_ui::page_slide::DURATION);
+        self.tracker_progress = pleasant_ui::page_slide::position(
+            self.tracker_start,
+            if self.tracker_open { 1.0 } else { 0.0 },
+            self.tracker_elapsed,
+        );
+        if was_tracker_moving || self.tracker_elapsed < pleasant_ui::page_slide::DURATION {
+            cx.needs_redraw();
+        }
+        if !self.tracker_open && self.tracker_progress <= 0.0 && self.tracker_restore_expand {
+            self.tracker_restore_expand = false;
+            if self.expand_target < 0.5 {
+                self.toggle_expand();
+            }
         }
         if self.selected_modulator.is_some() {
             self.modulator_pulse = (self.modulator_pulse + dt * 3.0) % std::f32::consts::TAU;
@@ -937,7 +1027,9 @@ impl ChordboardView {
             self.meters[i] = prev + (target - prev) * (1.0 - (-dt / 0.055).exp());
             changed |= (prev - self.meters[i]).abs() > 0.001;
         }
-        changed |= self.params.update_control_signature(&mut self.controls_signature);
+        changed |= self
+            .params
+            .update_control_signature(&mut self.controls_signature);
         for i in 0..2 {
             let value = self.params.mapping(i).load(Ordering::Relaxed);
             if value != self.mapping_signature[i] {
@@ -977,7 +1069,30 @@ impl View for ChordboardView {
     fn event(&mut self, cx: &mut EventContext, event: &mut Event) {
         let was_editing = self.edit.is_some() || self.arp_editor_editing();
         event.map(|_: &Tick, _| self.tick(cx));
-        event.map(|param: &RawParamEvent, _| {
+        event.map(|scroll: &nih_plug_vizia::PixelScroll, meta| {
+            let bounds = cx.bounds();
+            if let Some((x, y)) = pleasant_ui::local_xy(
+                bounds.x,
+                bounds.y,
+                bounds.w,
+                W,
+                cx.mouse().cursorx,
+                cx.mouse().cursory,
+            ) {
+                self.tracker_skip_line_scroll =
+                    self.scroll_tracker(x, y, scroll.y * W / bounds.w, true);
+                if self.tracker_skip_line_scroll {
+                    meta.consume();
+                    cx.needs_redraw();
+                }
+            }
+        });
+        event.map(|param: &RawParamEvent, meta| {
+            if self.arp_row_param_event(param) {
+                meta.consume();
+                cx.needs_redraw();
+                return;
+            }
             if let RawParamEvent::SetParameterNormalized(ptr, value) = param {
                 if *ptr == self.params.quality.as_ptr() {
                     self.bridge.send(Command::SetQuality(

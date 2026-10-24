@@ -1,10 +1,10 @@
 //! Chordboard: realtime MIDI harmony, strumming, and expression routing.
+pub mod arpeggiator;
 mod bridge;
-mod midi_learn;
 pub mod engine;
 pub mod harmony;
+mod midi_learn;
 pub mod params;
-pub mod arpeggiator;
 mod ui;
 use bridge::Bridge;
 use engine::{Engine, Out};
@@ -135,7 +135,9 @@ impl Chordboard {
         // that page’s host settings until its complete prepared transaction arrives.
         for page in 0..arpeggiator::PAGES {
             let pending = self.params.arpeggiator.replacement_serials[page].load(Ordering::Acquire);
-            let applied = self.engine.arp.data.pages[page].replacement.map_or(0, |r| r.serial);
+            let applied = self.engine.arp.data.pages[page]
+                .replacement
+                .map_or(0, |r| r.serial);
             if pending != 0 && pending != applied {
                 config.arp_settings[page] = self.engine.host_config.arp_settings[page];
             }
@@ -202,10 +204,20 @@ impl Chordboard {
         if matches!(event, NoteEvent::Choke { .. }) {
             self.quick_midi = midi_learn::Input::default();
         }
-        if self.quick_midi.consume(event, &self.params, &self.bridge.quick_learn, [self.engine.quality, self.engine.inversion]) {
+        if self.quick_midi.consume(
+            event,
+            &self.params,
+            &self.bridge.quick_learn,
+            [self.engine.quality, self.engine.inversion],
+        ) {
             // A note newly assigned while already sounding still needs its release.
-            if let NoteEvent::NoteOn { channel, note, .. } | NoteEvent::NoteOff { channel, note, .. } = event {
-                if channel < 16 && note < 128 && self.engine.down[channel as usize * 128 + note as usize] {
+            if let NoteEvent::NoteOn { channel, note, .. }
+            | NoteEvent::NoteOff { channel, note, .. } = event
+            {
+                if channel < 16
+                    && note < 128
+                    && self.engine.down[channel as usize * 128 + note as usize]
+                {
                     self.engine.midi_note(false, channel, note, 0.0, out);
                 }
             }
@@ -438,11 +450,6 @@ impl Plugin for Chordboard {
                 }
             }
         }
-        let required = self.params.required_arp_loops();
-        if required.iter().zip(&self.engine.arp.data.pages).any(|(&count, page)| count > page.initialized)
-            && !self.params.arpeggiator.initialization_pending.swap(true, Ordering::AcqRel) {
-            context.execute_background(required);
-        }
         let mut arp_updated = false;
         for _ in 0..2 {
             if !self
@@ -462,14 +469,23 @@ impl Plugin for Chordboard {
             .configure(self.current_config(), &mut |e| emitted.push(0, e));
         self.engine
             .transport(playing, tempo, jump, &mut |e| emitted.push(0, e));
-        self.engine.set_host_position(transport.pos_beats(), transport.tempo.is_some());
+        self.engine
+            .set_host_position(transport.pos_beats(), transport.tempo.is_some());
         let host_meter = self.params.tempo_sync.value()
             && transport.time_sig_numerator.is_some_and(|n| n > 0)
             && transport.time_sig_denominator.is_some_and(|d| d > 0);
         self.engine.time_sig_host = host_meter;
         self.engine.set_time_signature(
-            if host_meter { transport.time_sig_numerator } else { Some(self.params.meter_num.value()) },
-            if host_meter { transport.time_sig_denominator } else { Some(1 << self.params.meter_den.value()) },
+            if host_meter {
+                transport.time_sig_numerator
+            } else {
+                Some(self.params.meter_num.value())
+            },
+            if host_meter {
+                transport.time_sig_denominator
+            } else {
+                Some(1 << self.params.meter_den.value())
+            },
         );
         let axes = [self.params.x.value(), self.params.y.value()];
         for (axis, &value) in axes.iter().enumerate() {
@@ -877,17 +893,36 @@ mod protocol_tests {
     fn arp_paste_parameter_notifications_wait_for_the_complete_data_transaction() {
         let mut plugin = Chordboard::default();
         let before = plugin.current_config().arp_settings[0];
-        plugin.engine.configure(plugin.current_config(), &mut |_| {});
-        let settings = arpeggiator::Settings { free_ms: 150.0, ..before };
-        plugin.params.arpeggiator.replace_page(0, arpeggiator::Page::default(), settings);
-        Arc::get_mut(&mut plugin.params).unwrap().arp_pages[0].arp_free_ms = FloatParam::new("Free", 200.0, FloatRange::Linear { min: 1.0, max: 1500.0 });
+        plugin
+            .engine
+            .configure(plugin.current_config(), &mut |_| {});
+        let settings = arpeggiator::Settings {
+            free_ms: 150.0,
+            ..before
+        };
+        plugin
+            .params
+            .arpeggiator
+            .replace_page(0, arpeggiator::Page::default(), settings);
+        Arc::get_mut(&mut plugin.params).unwrap().arp_pages[0].arp_free_ms = FloatParam::new(
+            "Free",
+            200.0,
+            FloatRange::Linear {
+                min: 1.0,
+                max: 1500.0,
+            },
+        );
         assert_eq!(plugin.current_config().arp_settings[0], before);
-        assert!(plugin.params.arpeggiator.apply_pending(&mut plugin.engine.arp.data));
+        assert!(plugin
+            .params
+            .arpeggiator
+            .apply_pending(&mut plugin.engine.arp.data));
         plugin.engine.accept_arp_generation(&mut |_| {});
         assert_eq!(plugin.current_config().arp_settings[0].free_ms, 200.0);
-        plugin.engine.configure(plugin.current_config(), &mut |_| {});
+        plugin
+            .engine
+            .configure(plugin.current_config(), &mut |_| {});
         // The page data and staged complete settings agree, despite partial host updates.
         assert_eq!(plugin.engine.config.arp_settings[0], settings);
     }
-
 }

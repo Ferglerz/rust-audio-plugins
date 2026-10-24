@@ -1,6 +1,6 @@
 use super::super::*;
-use nih_plug_vizia::vizia::backend::BackendContext;
 use super::support::*;
+use nih_plug_vizia::vizia::backend::BackendContext;
 
 #[test]
 fn voice_leading_display_cycles_mode_and_modulation_is_one_column() {
@@ -396,14 +396,8 @@ fn split_drag_repairs_extreme_loaded_boundaries() {
 }
 #[test]
 fn module_header_controls_fit_inline_without_overlap() {
-    let chords = vec![
-        Menu::Key.trigger_rect(),
-        ORDER,
-        TRANSPOSE,
-    ];
-    for (module, title_width, controls) in [
-        (CHORDS_SURFACE, 78.0, chords),
-    ] {
+    let chords = vec![Menu::Key.trigger_rect(), ORDER, TRANSPOSE];
+    for (module, title_width, controls) in [(CHORDS_SURFACE, 78.0, chords)] {
         let mut right = module.0 + title_width;
         for r in controls {
             assert!(r.0 >= right + 2.0, "header overlap: {r:?}");
@@ -462,30 +456,44 @@ fn strum_header_controls_remain_adjacent_through_expansion() {
 
 #[test]
 fn bound_labels_flip_without_colliding_with_handles_or_each_other() {
-    let overlaps = |a: Rect, b: Rect| a.0 < b.0 + b.2 && a.0 + a.2 > b.0
-        && a.1 < b.1 + b.3 && a.1 + a.3 > b.1;
+    let overlaps =
+        |a: Rect, b: Rect| a.0 < b.0 + b.2 && a.0 + a.2 > b.0 && a.1 < b.1 + b.3 && a.1 + a.3 > b.1;
     for expand in [0.0, 0.5, 1.0] {
         let field = play_pad_rect(expand);
         let pad = pad_rect(expand);
         for x in [(0.0, 1.0), (0.0, 0.25), (0.75, 1.0), (0.375, 0.625)] {
             for y in [(0.0, 1.0), (0.0, 0.01), (0.99, 1.0), (0.495, 0.505)] {
                 let labels = strum_bound_labels(pad, field, x, y);
-                let handles = [(false, x.0), (false, x.1), (true, y.0), (true, y.1)]
-                    .map(|(axis, value)| {
+                let handles =
+                    [(false, x.0), (false, x.1), (true, y.0), (true, y.1)].map(|(axis, value)| {
                         let (x, y, pointer) = strum_bound_anchor_in(field, axis, value);
                         pleasant_ui::handles::tag_body_rect(x, y, pointer)
                     });
                 for (i, r) in labels.iter().copied().enumerate() {
                     assert!(r.0 >= pad.0 && r.0 + r.2 <= pad.0 + pad.2);
                     assert!(r.1 >= pad.1 && r.1 + r.3 <= pad.1 + pad.3);
-                    assert!(handles.iter().all(|&h| !overlaps(r, h)), "label {i} overlaps a handle: {x:?}, {y:?}");
-                    assert!(labels[..i].iter().all(|&other| !overlaps(r, other)), "labels overlap: {x:?}, {y:?}");
+                    assert!(
+                        handles.iter().all(|&h| !overlaps(r, h)),
+                        "label {i} overlaps a handle: {x:?}, {y:?}"
+                    );
+                    assert!(
+                        labels[..i].iter().all(|&other| !overlaps(r, other)),
+                        "labels overlap: {x:?}, {y:?}"
+                    );
                 }
             }
         }
         let labels = strum_bound_labels(pad, field, (0.0, 1.0), (0.0, 1.0));
-        assert!(labels[0].1 + labels[0].3 < field.1 - 36.0, "X min flips above its tag to avoid Y max");
-        assert!(labels[1].1 > field.1, "X max stays below its tag");
+        for (i, value) in [0.0, 1.0].into_iter().enumerate() {
+            let (x, y, pointer) = strum_bound_anchor_in(field, false, value);
+            let body = pleasant_ui::handles::tag_body_rect(x, y, pointer);
+            assert_eq!(labels[i].1 + labels[i].3 * 0.5, body.1 + body.3 * 0.5);
+            if i == 0 {
+                assert!(labels[i].0 > body.0 + body.2, "X min sits to the right");
+            } else {
+                assert!(labels[i].0 + labels[i].2 < body.0, "X max sits to the left");
+            }
+        }
     }
 }
 
@@ -495,7 +503,10 @@ fn modulator_cards_fill_the_module_and_appearance_aligns_with_its_edge() {
     let last = meter_rect(crate::engine::routing::SOURCE_COUNT - 1);
     assert_eq!(first.1, MOD_SURFACE.1 + MODULE_HEADER_H + 12.0);
     assert!((last.1 + last.3 - (MOD_SURFACE.1 + MOD_SURFACE.3 - 12.0)).abs() < 0.001);
-    assert!(first.3 > 40.0, "cards need breathing room above their meters");
+    assert!(
+        first.3 > 40.0,
+        "cards need breathing room above their meters"
+    );
     assert_eq!(APPEARANCE.0 + APPEARANCE.2, MOD_SURFACE.0 + MOD_SURFACE.2);
 }
 
@@ -503,7 +514,8 @@ fn modulator_cards_fill_the_module_and_appearance_aligns_with_its_edge() {
 fn arp_editor_bypass_is_local_and_old_header_location_is_inactive() {
     for enabled in [false, true] {
         let mut view = view(3, false);
-        Arc::get_mut(&mut view.params).unwrap().arp_enabled = BoolParam::new("Arpeggiator", enabled);
+        Arc::get_mut(&mut view.params).unwrap().arp_enabled =
+            BoolParam::new("Arpeggiator", enabled);
         let (mut cx, target, changes) = context();
         // Removing the navigation tabs leaves the old header power location inactive.
         click(&mut view, &mut cx, target, (772.0, 25.0, 28.0, 28.0));
@@ -511,6 +523,12 @@ fn arp_editor_bypass_is_local_and_old_header_location_is_inactive() {
         assert!(changes.borrow().is_empty());
         open_arp(&mut view);
         click(&mut view, &mut cx, target, arp_power_rect());
-        assert_eq!(&*changes.borrow(), &[(view.params.arp_enabled.as_ptr(), if enabled { 0.0 } else { 1.0 })]);
+        assert_eq!(
+            &*changes.borrow(),
+            &[(
+                view.params.arp_enabled.as_ptr(),
+                if enabled { 0.0 } else { 1.0 }
+            )]
+        );
     }
 }

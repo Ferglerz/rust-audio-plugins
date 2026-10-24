@@ -10,7 +10,15 @@ fn engine(mode: u8, pattern: u8) -> Engine {
         Config {
             mode,
             arp_enabled: true,
-            arp_settings: [crate::arpeggiator::Settings { pattern, sync:false,free_ms:13.25,swing:0.43,humanize:0.8,octaves:3,..Default::default() };8],
+            arp_settings: [crate::arpeggiator::Settings {
+                pattern,
+                sync: false,
+                free_ms: 13.25,
+                swing: 0.43,
+                humanize: 0.8,
+                octaves: 3,
+                ..Default::default()
+            }; 8],
             arp_pattern: pattern,
             strum_sync: false,
             strum_ms: 13.25,
@@ -190,7 +198,9 @@ fn full_manual_scheduler_keeps_slot_order_alongside_independent_arp() {
         .collect();
     assert_eq!(
         first,
-        std::iter::once(64).chain((0..128).filter(|&i|i!=28).map(|i|36+(i%48) as u8)).collect::<Vec<_>>()
+        std::iter::once(64)
+            .chain((0..128).filter(|&i| i != 28).map(|i| 36 + (i % 48) as u8))
+            .collect::<Vec<_>>()
     );
 }
 
@@ -245,7 +255,7 @@ fn clock_wrap_and_saturated_note_deadlines_match_reference_tick() {
             off: u64::MAX,
             owner: 0,
             attack_expression: None,
-                token: 0,
+            token: 0,
             layer: false,
         });
         engine.voices[1] = Some(Voice {
@@ -255,7 +265,7 @@ fn clock_wrap_and_saturated_note_deadlines_match_reference_tick() {
             off: 0,
             owner: 0,
             attack_expression: None,
-                token: 0,
+            token: 0,
             layer: true,
         });
         engine.scheduled[90] = Some(Scheduled {

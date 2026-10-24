@@ -1,4 +1,4 @@
-//! Eight independent arp variations; allocation and serialization stay on the control thread.
+//! Tracker rows and legacy arp editing state; allocation and serialization stay on the control thread.
 use crossbeam_queue::ArrayQueue;
 use nih_plug::params::persist::PersistentField;
 use serde::{Deserialize, Serialize};
@@ -26,7 +26,8 @@ impl ArpMode {
         [Self::Once, Self::Loop, Self::SyncLoop, Self::AlignedLoop][index.min(3) as usize]
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Settings {
     pub mode: ArpMode,
     pub pattern: u8,
@@ -188,7 +189,12 @@ pub struct Loop {
     pub steps: [Step; LOOP_STEPS],
 }
 impl Default for Loop {
-    fn default() -> Self { Self { octave: 0, steps: [Step::default(); LOOP_STEPS] } }
+    fn default() -> Self {
+        Self {
+            octave: 0,
+            steps: [Step::default(); LOOP_STEPS],
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Replacement {
@@ -206,10 +212,32 @@ pub struct Page {
 }
 impl Default for Page {
     fn default() -> Self {
-        Self { loops: [Loop::default(); LOOPS], initialized: 1, delay: DelaySettings::default(), replacement: None }
+        Self {
+            loops: [Loop::default(); LOOPS],
+            initialized: 1,
+            delay: DelaySettings::default(),
+            replacement: None,
+        }
     }
 }
 impl Page {
+    pub fn sanitize(&mut self) {
+        self.initialized = self.initialized.clamp(1, LOOPS as u8);
+        for variation in &mut self.loops {
+            variation.octave = variation.octave.clamp(-4, 4);
+            for step in &mut variation.steps {
+                step.velocity = step.velocity.min(200);
+                step.gate = step.gate.clamp(1, 100);
+                step.probability = step.probability.min(100);
+                step.octave = step.octave.clamp(-4, 4);
+                step.micro = step.micro.clamp(-49, 49);
+                for v in &mut step.mods {
+                    *v = (*v).clamp(-100, 100);
+                }
+            }
+        }
+        self.delay.sanitize();
+    }
     pub fn ensure_loops(&mut self, count: usize) -> bool {
         let count = count.clamp(1, LOOPS);
         let before = self.initialized;
@@ -228,32 +256,131 @@ impl Page {
     }
     pub fn flattened_steps(&self, pass_len: usize) -> [Step; STEPS] {
         let pass_len = pass_len.clamp(1, LOOP_STEPS);
-        std::array::from_fn(|i| if i < pass_len * LOOPS { *self.step(i, pass_len) } else { Step::default() })
+        std::array::from_fn(|i| {
+            if i < pass_len * LOOPS {
+                *self.step(i, pass_len)
+            } else {
+                Step::default()
+            }
+        })
     }
-    pub fn octaves(&self) -> [i8; LOOPS] { self.loops.map(|l| l.octave) }
+    pub fn octaves(&self) -> [i8; LOOPS] {
+        self.loops.map(|l| l.octave)
+    }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
-pub struct State { pub pages: [Page; PAGES] }
+pub struct TrackerRow {
+    pub id: u64,
+    pub chord: Option<crate::harmony::SavedChord>,
+    pub duration: u32,
+    pub settings: Settings,
+    pub page: Page,
+}
+impl Default for TrackerRow {
+    fn default() -> Self {
+        Self {
+            id: 1,
+            chord: None,
+            duration: 1,
+            settings: Settings::default(),
+            page: Page::default(),
+        }
+    }
+}
+impl TrackerRow {
+    fn sanitize(&mut self) {
+        self.duration = self.duration.max(1);
+        self.settings.pattern = self.settings.pattern.min(6);
+        self.settings.octaves = self.settings.octaves.clamp(1, LOOPS as u8);
+        self.settings.rate = finite(self.settings.rate, 0.25).clamp(1.0 / 64.0, 2.0);
+        self.settings.free_ms = finite(self.settings.free_ms, 125.0).clamp(1.0, 1500.0);
+        self.settings.swing = finite(self.settings.swing, 0.0).clamp(-0.75, 0.75);
+        self.settings.humanize = finite(self.settings.humanize, 0.0).clamp(0.0, 1.0);
+        self.page.sanitize();
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct State {
+    /// Dynamic composition rows. Audio processing only reads the prepared copy.
+    pub rows: Vec<TrackerRow>,
+    /// Retained for the old editor's unit fixtures; deliberately omitted from persistence.
+    #[serde(skip)]
+    pub pages: [Page; PAGES],
+}
 impl Default for State {
-    fn default() -> Self { Self { pages: [Page::default(); PAGES] } }
+    fn default() -> Self {
+        Self {
+            rows: vec![TrackerRow::default()],
+            pages: [Page::default(); PAGES],
+        }
+    }
 }
 impl State {
     fn sanitize(&mut self) {
-        for page in &mut self.pages {
-            page.initialized = page.initialized.clamp(1, LOOPS as u8);
-            for variation in &mut page.loops {
-                variation.octave = variation.octave.clamp(-4, 4);
-                for step in &mut variation.steps {
-                    step.velocity = step.velocity.min(200);
-                    step.gate = step.gate.clamp(1, 100);
-                    step.probability = step.probability.min(100);
-                    step.octave = step.octave.clamp(-4, 4);
-                    step.micro = step.micro.clamp(-49, 49);
-                    for v in &mut step.mods { *v = (*v).clamp(-100, 100); }
+        if self.rows.is_empty() {
+            self.rows.push(TrackerRow::default());
+        }
+        let mut used_ids = Vec::with_capacity(self.rows.len());
+        let mut next_id = 1u64;
+        for row in &mut self.rows {
+            if row.id == 0 || used_ids.contains(&row.id) {
+                while used_ids.contains(&next_id) {
+                    next_id = next_id.saturating_add(1);
                 }
+                row.id = next_id;
             }
-            page.delay.sanitize();
+            used_ids.push(row.id);
+            next_id = next_id.max(row.id.saturating_add(1));
+            row.sanitize();
+        }
+        for page in &mut self.pages {
+            page.sanitize();
+        }
+    }
+
+    pub fn add_row_after(&mut self, selected: usize) -> usize {
+        let selected = selected.min(self.rows.len().saturating_sub(1));
+        let mut row = self.rows[selected].clone();
+        row.id = self
+            .rows
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1)
+            .max(1);
+        row.duration = 1;
+        let index = selected + 1;
+        self.rows.insert(index, row);
+        index
+    }
+    pub fn delete_row(&mut self, selected: usize) -> usize {
+        if self.rows.len() <= 1 {
+            self.rows[0] = TrackerRow::default();
+            return 0;
+        }
+        let selected = selected.min(self.rows.len() - 1);
+        self.rows.remove(selected);
+        selected.min(self.rows.len() - 1)
+    }
+    pub fn move_row(&mut self, selected: usize, offset: isize) -> usize {
+        if selected >= self.rows.len() {
+            return self.rows.len().saturating_sub(1);
+        }
+        let destination =
+            (selected as isize + offset).clamp(0, self.rows.len() as isize - 1) as usize;
+        let row = self.rows.remove(selected);
+        self.rows.insert(destination, row);
+        destination
+    }
+    pub fn paste_row(&mut self, selected: usize, copied: &TrackerRow) {
+        if let Some(row) = self.rows.get_mut(selected) {
+            let id = row.id;
+            *row = copied.clone();
+            row.id = id;
         }
     }
 }
@@ -262,6 +389,7 @@ pub type PreparedPage = Page;
 pub struct Prepared {
     pub generation: u64,
     pub restore_epoch: u64,
+    pub rows: Vec<TrackerRow>,
     pub pages: [PreparedPage; PAGES],
 }
 impl Prepared {
@@ -269,6 +397,7 @@ impl Prepared {
         Self {
             generation,
             restore_epoch,
+            rows: state.rows.clone(),
             pages: std::array::from_fn(|p| state.pages[p]),
         }
     }
@@ -331,13 +460,27 @@ impl Store {
             self.publish(&control);
         }
     }
+    pub fn ensure_row_loops(&self, index: usize, count: usize) {
+        let mut control = self.control.write().unwrap();
+        let Some(row) = control.state.rows.get_mut(index) else {
+            return;
+        };
+        if row.page.ensure_loops(count) {
+            while self.retired.pop().is_some() {}
+            control.generation = control.generation.wrapping_add(1);
+            self.publish(&control);
+        }
+    }
     pub fn replace_page(&self, index: usize, mut page: Page, settings: Settings) {
         let mut control = self.control.write().unwrap();
         while self.retired.pop().is_some() {}
         control.generation = control.generation.wrapping_add(1);
         // Advertise the pending transaction before sending any host parameter changes.
         self.replacement_serials[index].store(control.generation, Ordering::Release);
-        page.replacement = Some(Replacement { serial: control.generation, settings });
+        page.replacement = Some(Replacement {
+            serial: control.generation,
+            settings,
+        });
         control.state.pages[index] = page;
         control.state.sanitize();
         self.publish(&control);
@@ -349,7 +492,9 @@ impl Store {
         control.state.sanitize();
         control.generation = control.generation.wrapping_add(1);
         if restore {
-            for serial in &self.replacement_serials { serial.store(0, Ordering::Release); }
+            for serial in &self.replacement_serials {
+                serial.store(0, Ordering::Release);
+            }
             control.restore_epoch = control.restore_epoch.wrapping_add(1);
         }
         self.publish(&control);

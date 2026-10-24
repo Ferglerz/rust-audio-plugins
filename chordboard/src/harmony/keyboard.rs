@@ -28,8 +28,14 @@ fn degree_quality(scale: u8, column: usize) -> u8 {
 /// Diatonic triad for an actual pitch class relative to the selected tonic.
 /// Pentatonic notes use the triads of their parent scale.
 pub fn scale_quality(scale: u8, relative: u8) -> Option<u8> {
-    if !scale_tones(scale).contains(&relative) { return None; }
-    let parent = match scale { 6 => 0, 7 => 1, _ => scale };
+    if !scale_tones(scale).contains(&relative) {
+        return None;
+    }
+    let parent = match scale {
+        6 => 0,
+        7 => 1,
+        _ => scale,
+    };
     let tones = scale_tones(parent);
     let degree = tones.iter().position(|&n| n == relative)?;
     let third = (tones[(degree + 2) % tones.len()] + 12 - relative) % 12;
@@ -121,7 +127,7 @@ mod tests {
     }
     #[test]
     fn passing_row_contains_only_missing_semitones_in_order() {
-        for scale in 0..8 {
+        for scale in 0..super::super::SCALE_NAMES.len() as u8 {
             let roots: Vec<_> = (0..KEY_COLUMNS)
                 .filter_map(|i| keyboard_chord(3, 0, scale, i))
                 .collect();

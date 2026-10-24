@@ -75,7 +75,12 @@ impl ChordboardView {
                 d.line(r.0, r.1 + 6.0, r.0, r.1 + r.3 - 6.0, alpha(MUTED, 0.3), 1.0);
             }
             if i == 2 {
-                style::Icon::Reset.draw(d, r.0 + 13.0, r.1 + r.3 * 0.5, if transpose != 0 { GOLD } else { TEXT });
+                style::Icon::Reset.draw(
+                    d,
+                    r.0 + 13.0,
+                    r.1 + r.3 * 0.5,
+                    if transpose != 0 { GOLD } else { TEXT },
+                );
             }
             d.text_centered(
                 r.0 + r.2 * 0.5 + if i == 2 { 8.0 } else { 0.0 },
@@ -113,7 +118,13 @@ impl ChordboardView {
         );
         d.font = self.bold_font.get();
         style::Icon::Lock.draw(d, LATCH.0 + 15.0, LATCH.1 + 24.0, latch_color);
-        d.text_centered(LATCH.0 + LATCH.2 * 0.5 + 9.0, LATCH.1 + 28.0, "Latch", 14.0, latch_color);
+        d.text_centered(
+            LATCH.0 + LATCH.2 * 0.5 + 9.0,
+            LATCH.1 + 28.0,
+            "Latch",
+            14.0,
+            latch_color,
+        );
         d.text_centered(
             LATCH.0 + LATCH.2 * 0.5,
             LATCH.1 + 45.0,
@@ -128,7 +139,11 @@ impl ChordboardView {
         self.button_tinted(
             d,
             Menu::Key.trigger_rect(),
-            &format!("{} · {} ▾", music::label(&self.key_name()), harmony::SCALE_NAMES[self.params.scale.value() as usize]),
+            &format!(
+                "{} · {} ▾",
+                music::label(&self.key_name()),
+                harmony::SCALE_NAMES[self.params.scale.value() as usize]
+            ),
             matches!(self.menu, Some(Menu::Key | Menu::Scale)),
             GOLD,
         );
@@ -158,6 +173,36 @@ impl ChordboardView {
             y += 2.0 * amt;
             let color = [TEAL, COLORS[1], GOLD][i / KEY_COLUMNS];
             let chord = self.keyboard_chord(i);
+            let consonance = if self.tracker_selection {
+                chord
+                    .map(|c| {
+                        let recipe = SavedChord {
+                            root: c.root,
+                            quality: c.quality,
+                            second: None,
+                            additions: 0,
+                            inversion: 0,
+                            spread: 0,
+                            transpose: 0,
+                        };
+                        let tones = harmony::recipe_intervals(recipe);
+                        let scale = harmony::scale_tones(self.params.scale.value() as u8);
+                        let shared = tones
+                            .as_slice()
+                            .iter()
+                            .filter(|tone| {
+                                scale.contains(
+                                    &((c.root % 12 + **tone + 12 - self.params.key.value() as u8)
+                                        % 12),
+                                )
+                            })
+                            .count();
+                        shared as f32 / tones.len.max(1) as f32
+                    })
+                    .unwrap_or(0.0)
+            } else {
+                0.0
+            };
             let compatible = chord.is_some_and(|chord| {
                 harmony::in_key(
                     chord.root,
@@ -177,6 +222,14 @@ impl ChordboardView {
                 7.0,
                 alpha(color, (if compatible { 0.08 } else { 0.0 }) + hover * 0.07),
             );
+            if self.tracker_selection {
+                let tint = Color::rgb(
+                    (220.0 * (1.0 - consonance)) as u8,
+                    (55.0 + 165.0 * consonance) as u8,
+                    65,
+                );
+                d.rounded_rect(x, y, w, h, 7.0, alpha(tint, 0.23));
+            }
             let current = current_key == Some(i);
             if current {
                 let pulse = 0.5 + 0.5 * self.voicing_pulse.sin();

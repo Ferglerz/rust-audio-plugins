@@ -1,8 +1,10 @@
 //! Automatic arp clock, independent of the live Strumfield.
 use super::*;
-use crate::arpeggiator::{ArpMode, Prepared, Settings, Step, StepState, Store, STEPS, LOOPS};
+use crate::arpeggiator::{ArpMode, Prepared, Settings, Step, StepState, Store, LOOPS, STEPS};
 pub const ARP_OWNER: u8 = 1;
-pub fn pass_length(notes: usize, pattern: u8) -> usize { Engine::pattern_length(pattern, notes) }
+pub fn pass_length(notes: usize, pattern: u8) -> usize {
+    Engine::pattern_length(pattern, notes)
+}
 #[derive(Clone, Copy)]
 struct Event {
     at: u64,
@@ -19,6 +21,9 @@ struct Event {
 pub struct Runtime {
     pub data: Box<Prepared>,
     pub active: u8,
+    pub row_index: usize,
+    pub row_id: u64,
+    pub loops_in_row: u32,
     pub step: u8,
     pub display_phase: i64,
     pub running: bool,
@@ -47,6 +52,9 @@ impl Default for Runtime {
         Self {
             data: Store::new().initial_prepared(),
             active: 0,
+            row_index: 0,
+            row_id: 1,
+            loops_in_row: 0,
             step: 0,
             display_phase: 0,
             running: false,
@@ -94,9 +102,16 @@ pub fn cycle_notes(notes: Notes, settings: Settings, mut seed: u32) -> ([u8; STE
     (result, len)
 }
 /// Each loop traverses the selected ordering at its own octave, with stable step slots.
-pub fn loop_cycle_notes(notes: Notes, settings: Settings, octaves: [i8; LOOPS], mut seed: u32) -> ([i16; STEPS], usize) {
+pub fn loop_cycle_notes(
+    notes: Notes,
+    settings: Settings,
+    octaves: [i8; LOOPS],
+    mut seed: u32,
+) -> ([i16; STEPS], usize) {
     let mut result = [0; STEPS];
-    if notes.len == 0 { return (result, 0); }
+    if notes.len == 0 {
+        return (result, 0);
+    }
     let pass_len = Engine::pattern_length(settings.pattern, notes.len);
     let len = (pass_len * settings.octaves.clamp(1, LOOPS as u8) as usize).min(STEPS);
     for (step, slot) in result.iter_mut().enumerate().take(len) {
@@ -107,6 +122,34 @@ pub fn loop_cycle_notes(notes: Notes, settings: Settings, octaves: [i8; LOOPS], 
 }
 
 impl Engine {
+    pub(super) fn active_arp_page(&self) -> &crate::arpeggiator::Page {
+        if self.config.tracker_enabled {
+            self.arp
+                .data
+                .rows
+                .get(self.arp.row_index)
+                .map(|row| &row.page)
+                .unwrap_or(&self.arp.data.pages[0])
+        } else {
+            &self.arp.data.pages[self.arp.active as usize]
+        }
+    }
+    fn advance_tracker_row(&mut self, out: &mut impl FnMut(Out)) {
+        if self.arp.data.rows.is_empty() {
+            return;
+        }
+        self.arp.row_index = (self.arp.row_index + 1) % self.arp.data.rows.len();
+        self.arp.row_id = self.arp.data.rows[self.arp.row_index].id;
+        self.arp.active = self.arp.row_index.min(u8::MAX as usize) as u8;
+        self.arp.loops_in_row = 0;
+        self.arp.events.fill(None);
+        self.arp.early = None;
+        self.arp.phase = 0;
+        self.arp.done = false;
+        self.arp.finished = false;
+        self.configure(self.host_config, out);
+        self.arp.next = self.now as f64 + self.arp_interval(0);
+    }
     pub(super) fn retime_arp(&mut self, old_tempo: f64, new_tempo: f64) {
         if !self.config.arp_sync || old_tempo == new_tempo {
             return;
@@ -140,6 +183,26 @@ impl Engine {
             self.arp.active = self.host_config.arp_page.min(7);
             self.configure(self.host_config, out);
         }
+        if self.host_config.tracker_enabled && !self.arp.data.rows.is_empty() {
+            if let Some(index) = self
+                .arp
+                .data
+                .rows
+                .iter()
+                .position(|row| row.id == self.arp.row_id)
+            {
+                self.arp.row_index = index;
+            } else {
+                if self.arp.row_index >= self.arp.data.rows.len() {
+                    self.arp.row_index = 0;
+                }
+                self.arp.row_id = self.arp.data.rows[self.arp.row_index].id;
+                self.arp.loops_in_row = 0;
+                self.arp.events.fill(None);
+            }
+            self.arp.active = self.arp.row_index.min(u8::MAX as usize) as u8;
+            self.configure(self.host_config, out);
+        }
         for page in 0..8 {
             if let Some(replacement) = self.arp.data.pages[page].replacement {
                 if replacement.serial != self.arp.paste_seen[page] {
@@ -147,7 +210,9 @@ impl Engine {
                     self.arp.paste_settings[page] = Some(replacement.settings);
                     if page == self.arp.active as usize {
                         self.arp.preserve_paste_clock = true;
-                        if !self.arp.finished { self.arp.done = false; }
+                        if !self.arp.finished {
+                            self.arp.done = false;
+                        }
                         self.delay_power = self.arp.data.pages[page].delay.enabled;
                         self.delay_page = self.arp.active;
                     }
@@ -157,6 +222,14 @@ impl Engine {
         self.update_delay_power(out);
     }
     pub(super) fn arp_live_settings(&self) -> Settings {
+        if self.config.tracker_enabled {
+            return self
+                .arp
+                .data
+                .rows
+                .get(self.arp.row_index)
+                .map_or(Settings::default(), |row| row.settings);
+        }
         Settings {
             mode: self.config.arp_mode,
             pattern: self.config.arp_pattern,
@@ -176,14 +249,24 @@ impl Engine {
             && self.host_beat_available
             && self.host_tempo_available
     }
-    fn arp_gated(&self) -> bool {
-        self.config.arp_enabled
-            && self.notes.len > 0
-            && (self.playing
-                || (self.config.latch && self.memory.is_some())
-                || self.root.is_some_and(|s| s.held)
-                || self.held_inputs.iter().any(Option::is_some)
-                || self.melody.iter().any(|n| n.iter().any(|&v| v)))
+    pub(super) fn arp_gated(&self) -> bool {
+        if self.config.tracker_enabled {
+            self.config.arp_enabled
+                && self
+                    .arp
+                    .data
+                    .rows
+                    .get(self.arp.row_index)
+                    .is_some_and(|row| row.chord.is_some())
+        } else {
+            self.config.arp_enabled
+                && self.notes.len > 0
+                && (self.playing
+                    || (self.config.latch && self.memory.is_some())
+                    || self.root.is_some_and(|s| s.held)
+                    || self.held_inputs.iter().any(Option::is_some)
+                    || self.melody.iter().any(|n| n.iter().any(|&v| v)))
+        }
     }
     pub(super) fn restart_automatic_arp(&mut self) {
         self.arp.phase = 0;
@@ -204,7 +287,17 @@ impl Engine {
         }
     }
     pub(super) fn arp_cycle_chord(&self) -> Notes {
-        let mut notes = self.notes;
+        let mut notes = if self.config.tracker_enabled {
+            self.arp
+                .data
+                .rows
+                .get(self.arp.row_index)
+                .and_then(|row| row.chord)
+                .map(|chord| crate::harmony::voice_recipe(chord, chord.spread))
+                .unwrap_or_default()
+        } else {
+            self.notes
+        };
         if self.config.arp_pattern == 5 && notes.len > 1 {
             if let Some(index) = self
                 .second
@@ -216,7 +309,7 @@ impl Engine {
         notes
     }
     pub(super) fn arp_pass_len(&self) -> usize {
-        Self::pattern_length(self.config.arp_pattern, self.notes.len).max(1)
+        Self::pattern_length(self.config.arp_pattern, self.arp_cycle_chord().len).max(1)
     }
     pub(super) fn effective_arp_gate(&self, gate: u8) -> f32 {
         let mut config = self.config;
@@ -224,7 +317,7 @@ impl Engine {
         self.apply_routes(&mut config);
         config.gate
     }
-    fn arp_slots(&self) -> ([usize; STEPS], usize, [i16; STEPS]) {
+    pub(super) fn arp_slots(&self) -> ([usize; STEPS], usize, [i16; STEPS]) {
         let (notes, len) = loop_cycle_notes(
             self.arp_cycle_chord(),
             self.arp_live_settings(),
@@ -234,8 +327,13 @@ impl Engine {
         let mut slots = [0; STEPS];
         let mut count = 0;
         let pass_len = self.arp_pass_len();
+        let row_page = if self.config.tracker_enabled {
+            &self.arp.data.rows[self.arp.row_index].page
+        } else {
+            &self.arp.data.pages[self.arp.active as usize]
+        };
         for i in 0..len {
-            if self.arp.data.pages[self.arp.active as usize].step(i, pass_len).state != StepState::Skip {
+            if row_page.step(i, pass_len).state != StepState::Skip {
                 slots[count] = i;
                 count += 1;
             }
@@ -250,12 +348,14 @@ impl Engine {
             return Some(self.now);
         }
         let count = self.arp_slots().1;
-        let requested = self.config.arp_page.min(7) != self.arp.active;
+        let requested =
+            !self.config.tracker_enabled && self.config.arp_page.min(7) != self.arp.active;
         if !self.arp.running {
             return (count > 0 || requested).then_some(self.now);
         }
         let boundary =
-            (!self.arp.finished || requested).then_some(self.arp.next.round().max(0.0) as u64);
+            (!self.arp.finished || requested || self.config.tracker_enabled && self.arp.done)
+                .then_some(self.arp.next.round().max(0.0) as u64);
         boundary
             .into_iter()
             .chain(self.arp.events.iter().flatten().map(|e| e.at))
@@ -311,7 +411,13 @@ impl Engine {
         }
         let ordinal = phase.rem_euclid(count as i64) as usize;
         let index = slots[ordinal];
-        let step = *self.arp.data.pages[self.arp.active as usize].step(index, self.arp_pass_len());
+        let step = if self.config.tracker_enabled {
+            *self.arp.data.rows[self.arp.row_index]
+                .page
+                .step(index, self.arp_pass_len())
+        } else {
+            *self.arp.data.pages[self.arp.active as usize].step(index, self.arp_pass_len())
+        };
         let interval = self.arp_interval(phase);
         let jitter = self.humanize_timing(interval);
         let at = (boundary + interval * step.micro as f64 / 100.0 + jitter)
@@ -339,23 +445,30 @@ impl Engine {
     }
     pub(super) fn refresh_arp_events(&mut self) {
         let settings = self.arp_live_settings();
-        if self.arp.cached_notes == self.notes
+        let notes = self.arp_cycle_chord();
+        let request = if self.config.tracker_enabled {
+            self.arp.row_index.min(u8::MAX as usize) as u8
+        } else {
+            self.config.arp_page
+        };
+        if self.arp.cached_notes == notes
             && self.arp.cached_settings == settings
             && self.arp.cached_generation == self.arp.data.generation
-            && self.arp.cached_request == self.config.arp_page
+            && self.arp.cached_request == request
         {
             return;
         }
-        if !self.arp.preserve_paste_clock && self.arp_alignment_available()
+        if !self.arp.preserve_paste_clock
+            && self.arp_alignment_available()
             && (settings.rate != self.arp.cached_settings.rate
                 || settings.swing != self.arp.cached_settings.swing)
         {
             self.arp.running = false;
         }
-        self.arp.cached_notes = self.notes;
+        self.arp.cached_notes = notes;
         self.arp.cached_settings = settings;
         self.arp.cached_generation = self.arp.data.generation;
-        self.arp.cached_request = self.config.arp_page;
+        self.arp.cached_request = request;
         for i in 0..self.arp.events.len() {
             if let Some(event) = self.arp.events[i].take() {
                 if self.config.arp_page != self.arp.active && event.phase == self.arp.phase {
@@ -407,7 +520,28 @@ impl Engine {
             }
         }
         if self.now >= self.arp.next.round().max(0.0) as u64 {
-            let requested = self.config.arp_page.min(7);
+            if self.config.tracker_enabled && self.arp.done && self.arp.finished {
+                self.arp.loops_in_row = self.arp.loops_in_row.saturating_add(1);
+                let duration = self
+                    .arp
+                    .data
+                    .rows
+                    .get(self.arp.row_index)
+                    .map_or(1, |row| row.duration);
+                if self.arp.loops_in_row >= duration {
+                    self.advance_tracker_row(out);
+                } else {
+                    let count = self.arp_slots().1.max(1);
+                    self.arp.next += (0..count)
+                        .map(|i| self.arp_interval(self.arp.phase + i as i64))
+                        .sum::<f64>();
+                }
+            }
+            let requested = if self.config.tracker_enabled {
+                self.arp.active
+            } else {
+                self.config.arp_page.min(7)
+            };
             if requested != self.arp.active {
                 let consumed = self.arp.early == Some(self.arp.phase)
                     && !self
@@ -420,7 +554,10 @@ impl Engine {
                 self.arp.events.fill(None);
                 self.arp.early = if consumed { Some(self.arp.phase) } else { None };
                 if self.arp.done
-                    || self.arp.paste_settings[requested as usize].unwrap_or(self.host_config.arp_settings[requested as usize]).mode == ArpMode::Once
+                    || self.arp.paste_settings[requested as usize]
+                        .unwrap_or(self.host_config.arp_settings[requested as usize])
+                        .mode
+                        == ArpMode::Once
                 {
                     self.arp.phase = 0;
                     self.arp.next = self.now as f64;
@@ -442,6 +579,12 @@ impl Engine {
             if self.arp.done && !self.arp.finished {
                 self.arp.finished = true;
                 self.sources[9..].fill(0.0);
+                if self.config.tracker_enabled {
+                    let count = self.arp_slots().1.max(1);
+                    self.arp.next += (0..count)
+                        .map(|i| self.arp_interval(self.arp.phase + i as i64))
+                        .sum::<f64>();
+                }
                 self.configure(self.host_config, out);
             }
             if !self.arp.done {
@@ -454,8 +597,8 @@ impl Engine {
                 self.arp.early = None;
                 self.arp.next += self.arp_interval(phase);
                 self.arp.phase = self.arp.phase.wrapping_add(1);
-                self.arp.done =
-                    self.config.arp_mode == ArpMode::Once && self.arp.phase.rem_euclid(count as i64) == 0;
+                self.arp.done = self.config.arp_mode == ArpMode::Once
+                    && self.arp.phase.rem_euclid(count as i64) == 0;
                 if self.config.arp_pattern == 6 && self.arp.phase.rem_euclid(count as i64) == 0 {
                     self.arp.plan_seed = self.random();
                 }
@@ -494,8 +637,12 @@ impl Engine {
             self.sources[11] = event.position;
             self.configure(self.host_config, out);
             if event.audible {
-                let (notes, len) =
-                    loop_cycle_notes(self.arp_cycle_chord(), self.arp_live_settings(), self.config.arp_loop_octaves, event.seed);
+                let (notes, len) = loop_cycle_notes(
+                    self.arp_cycle_chord(),
+                    self.arp_live_settings(),
+                    self.config.arp_loop_octaves,
+                    event.seed,
+                );
                 let note = if len > 0 {
                     notes[event.step % len]
                 } else {
@@ -508,9 +655,27 @@ impl Engine {
                         * self.humanize_velocity_factor();
                     // Gate is the cell's absolute percentage, with routed Gate replacing or
                     // offsetting that base through the existing modulation matrix.
-                    let duration = (event.interval * self.effective_arp_gate(event.adjustment.gate) as f64).round().max(1.0) as u64;
+                    let duration = (event.interval
+                        * self.effective_arp_gate(event.adjustment.gate) as f64)
+                        .round()
+                        .max(1.0) as u64;
                     if velocity > 0.0 {
                         self.strike_prepared(pitch as u8, velocity, duration, ARP_OWNER, out);
+                    }
+                }
+            }
+            if self.config.tracker_enabled {
+                let count = self.arp_slots().1.max(1);
+                if event.phase.rem_euclid(count as i64) == count as i64 - 1 {
+                    self.arp.loops_in_row = self.arp.loops_in_row.saturating_add(1);
+                    let duration = self
+                        .arp
+                        .data
+                        .rows
+                        .get(self.arp.row_index)
+                        .map_or(1, |row| row.duration);
+                    if self.arp.loops_in_row >= duration {
+                        self.advance_tracker_row(out);
                     }
                 }
             }

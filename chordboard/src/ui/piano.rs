@@ -637,13 +637,29 @@ impl ChordboardView {
                 let output = self.snapshot.sounding_notes[note as usize];
                 let pulse = self.note_anim[note as usize];
                 if input || output || pulse > 0.01 {
-                    d.rounded_rect(r.0 + 1.0, r.1 + 1.0, (r.2 - 2.0).max(1.0), r.3 - 2.0, 1.0,
-                        alpha(if output || pulse > 0.01 { GOLD } else { TEAL }, if input || output { 0.75 } else { pulse * 0.6 }));
+                    d.rounded_rect(
+                        r.0 + 1.0,
+                        r.1 + 1.0,
+                        (r.2 - 2.0).max(1.0),
+                        r.3 - 2.0,
+                        1.0,
+                        alpha(
+                            if output || pulse > 0.01 { GOLD } else { TEAL },
+                            if input || output { 0.75 } else { pulse * 0.6 },
+                        ),
+                    );
                 }
                 if theory_pitch == Some(note % 12) && voicing.as_slice().contains(&note) {
                     // A separate purple marker identifies the altered tone without
                     // obscuring held-input and sounding-output indicators.
-                    d.rounded_rect(r.0 + 1.5, r.1 + r.3 - 31.0, (r.2 - 3.0).max(1.0), 4.0, 1.0, COLORS[1]);
+                    d.rounded_rect(
+                        r.0 + 1.5,
+                        r.1 + r.3 - 31.0,
+                        (r.2 - 3.0).max(1.0),
+                        4.0,
+                        1.0,
+                        COLORS[1],
+                    );
                 }
                 let center = r.0 + r.2 / 2.0;
                 if self.snapshot.sounding_notes[note as usize] {
@@ -718,15 +734,17 @@ impl ChordboardView {
             d.text_centered(
                 cx + 10.0,
                 y + 11.5,
-                if self.learning() == 4 { "Cancel" } else { "Learn octave" },
+                if self.learning() == 4 {
+                    "Cancel"
+                } else {
+                    "Learn octave"
+                },
                 11.0,
                 COLORS[4],
             );
             if control_hover && self.learning() != 4 {
                 let close = self.control_octave_delete_rect();
-                let hot = self
-                    .hover_pointer()
-                    .is_some_and(|(x, y)| hit(close, x, y));
+                let hot = self.hover_pointer().is_some_and(|(x, y)| hit(close, x, y));
                 d.rect(close.0, close.1, close.2, close.3, PANEL);
                 d.text_centered(
                     close.0 + close.2 / 2.0,
@@ -749,7 +767,12 @@ impl ChordboardView {
                 alpha(COLORS[4], if hot { 0.75 } else { 0.35 }),
                 1.0,
             );
-            style::Icon::Learn.draw(d, add.0 + 15.0, add.1 + add.3 / 2.0, if hot { TEXT } else { MUTED });
+            style::Icon::Learn.draw(
+                d,
+                add.0 + 15.0,
+                add.1 + add.3 / 2.0,
+                if hot { TEXT } else { MUTED },
+            );
             d.text_centered(
                 add.0 + add.2 / 2.0 + 9.0,
                 add.1 + 17.5,
@@ -943,13 +966,38 @@ impl ChordboardView {
     pub(super) fn voice_leading_rect(&self) -> Rect {
         let fallback = [48, 55, 60, 64, 67];
         let notes = self.snapshot.full_notes.as_slice();
-        let visible = if notes.is_empty() { &fallback[..] } else { notes };
-        let low = self.snapshot.leading_from.as_slice().iter()
-            .chain(self.snapshot.leading_to.as_slice()).chain(visible).copied().min().unwrap_or(48);
-        let high = self.snapshot.leading_from.as_slice().iter()
-            .chain(self.snapshot.leading_to.as_slice()).chain(visible).copied().max().unwrap_or(67);
+        let visible = if notes.is_empty() {
+            &fallback[..]
+        } else {
+            notes
+        };
+        let low = self
+            .snapshot
+            .leading_from
+            .as_slice()
+            .iter()
+            .chain(self.snapshot.leading_to.as_slice())
+            .chain(visible)
+            .copied()
+            .min()
+            .unwrap_or(48);
+        let high = self
+            .snapshot
+            .leading_from
+            .as_slice()
+            .iter()
+            .chain(self.snapshot.leading_to.as_slice())
+            .chain(visible)
+            .copied()
+            .max()
+            .unwrap_or(67);
         let x = piano_note_x(low) - 10.0;
-        (x, PIANO_LEADING.1, (piano_note_x(high) - x + 10.0).max(40.0), PIANO_LEADING.3)
+        (
+            x,
+            PIANO_LEADING.1,
+            (piano_note_x(high) - x + 10.0).max(40.0),
+            PIANO_LEADING.3,
+        )
     }
 
     fn draw_piano_leading(&self, d: &mut Draw) {
@@ -1007,10 +1055,22 @@ impl ChordboardView {
                 (x - 64.0).max(PIANO_LEADING.0 + 54.0)
             };
             d.rounded_rect(cx - 54.0, PIANO_LEADING.1 + 6.0, 108.0, 16.0, 3.0, BG);
-            d.outline_rounded(cx - 54.0, PIANO_LEADING.1 + 6.0, 108.0, 16.0,
-                3.0, alpha(COLORS[1], if active { 0.8 } else { hover * 0.8 }), 1.0);
-            d.text_centered(cx, PIANO_LEADING.1 + 17.5, label, TEXT_SMALL,
-                if active { COLORS[1] } else { MUTED });
+            d.outline_rounded(
+                cx - 54.0,
+                PIANO_LEADING.1 + 6.0,
+                108.0,
+                16.0,
+                3.0,
+                alpha(COLORS[1], if active { 0.8 } else { hover * 0.8 }),
+                1.0,
+            );
+            d.text_centered(
+                cx,
+                PIANO_LEADING.1 + 17.5,
+                label,
+                TEXT_SMALL,
+                if active { COLORS[1] } else { MUTED },
+            );
         }
         if mode == 2 || from.len == 0 || to.len == 0 {
             let notes = self.snapshot.full_notes.as_slice();

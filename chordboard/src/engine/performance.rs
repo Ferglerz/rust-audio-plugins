@@ -1,11 +1,32 @@
 use super::*;
 impl Engine {
-    pub(super) fn manual_active(&self) -> bool { self.config.strum_enabled && self.config.mode == MANUAL }
-    pub(super) fn controller_baseline(&self, cc:u8)->u8 {
-        let index=match cc {1=>Some(1),11=>Some(2),2=>Some(3),74=>Some(5),_=>None};
-        if let Some(value)=index.and_then(|i|self.source_overrides[i]) {return (value*127.0).round() as u8;}
-        let source=self.root.filter(|s|s.channel<16).map_or(if self.input_upper {15} else {0},|s|s.channel) as usize;
-        if self.cc_known[source][cc as usize] {self.cc[source][cc as usize]} else {match cc {7|11=>127,10=>64,_=>0}}
+    pub(super) fn manual_active(&self) -> bool {
+        self.config.strum_enabled && self.config.mode == MANUAL
+    }
+    pub(super) fn controller_baseline(&self, cc: u8) -> u8 {
+        let index = match cc {
+            1 => Some(1),
+            11 => Some(2),
+            2 => Some(3),
+            74 => Some(5),
+            _ => None,
+        };
+        if let Some(value) = index.and_then(|i| self.source_overrides[i]) {
+            return (value * 127.0).round() as u8;
+        }
+        let source =
+            self.root
+                .filter(|s| s.channel < 16)
+                .map_or(if self.input_upper { 15 } else { 0 }, |s| s.channel) as usize;
+        if self.cc_known[source][cc as usize] {
+            self.cc[source][cc as usize]
+        } else {
+            match cc {
+                7 | 11 => 127,
+                10 => 64,
+                _ => 0,
+            }
+        }
     }
     pub(super) fn setup(&mut self, out: &mut impl FnMut(Out)) {
         if !self.needs_setup {
@@ -42,13 +63,24 @@ impl Engine {
                 out(Out::Off(v.channel, v.note, release));
             }
             if v.owner == delay_output::DELAY_OWNER {
-                if !self.channel_owned(v.channel) {out(Out::Cc(v.channel,10,0.5));out(Out::Bend(v.channel,0.5));}
-            } else { self.release_delay_source(v.token); }
+                if !self.channel_owned(v.channel) {
+                    out(Out::Cc(v.channel, 10, 0.5));
+                    out(Out::Bend(v.channel, 0.5));
+                }
+            } else {
+                self.release_delay_source(v.token);
+            }
         }
     }
     pub(super) fn stop_voices(&mut self, release: f32, out: &mut impl FnMut(Out)) {
         for i in 0..self.voices.len() {
-            if self.resetting || self.voices[i].is_some_and(|v| v.owner!=delay_output::DELAY_OWNER && v.owner!=arpeggiator::ARP_OWNER) {self.end_voice(i, release, out);}
+            if self.resetting
+                || self.voices[i].is_some_and(|v| {
+                    v.owner != delay_output::DELAY_OWNER && v.owner != arpeggiator::ARP_OWNER
+                })
+            {
+                self.end_voice(i, release, out);
+            }
         }
     }
     pub(super) fn newest_voice(&self, channel: u8) -> Option<Voice> {
@@ -65,13 +97,22 @@ impl Engine {
                 continue;
             }
             if let Some(v) = self.newest_voice(channel) {
-                if v.owner != delay_output::DELAY_OWNER { self.emit_expression(channel, out); }
+                if v.owner != delay_output::DELAY_OWNER {
+                    self.emit_expression(channel, out);
+                }
             }
         }
     }
-    pub(super) fn attack_expression(&self)->Expression {
-        let mut e=self.routed_expression();
-        if self.y_active { match self.config.y_target {2=>e.pressure=self.y,3=>e.timbre=self.y,4=>e.bend=self.y,_=>{}} }
+    pub(super) fn attack_expression(&self) -> Expression {
+        let mut e = self.routed_expression();
+        if self.y_active {
+            match self.config.y_target {
+                2 => e.pressure = self.y,
+                3 => e.timbre = self.y,
+                4 => e.bend = self.y,
+                _ => {}
+            }
+        }
         e
     }
     fn emit_expression(&self, channel: u8, out: &mut impl FnMut(Out)) {
@@ -120,7 +161,12 @@ impl Engine {
     }
     pub(super) fn strike_selection_root(&mut self, note: u8, out: &mut impl FnMut(Out)) {
         self.strike_owned_with_gate(
-            note, self.strike_velocity(), self.duration(), None, SELECT_ROOT_OWNER, out,
+            note,
+            self.strike_velocity(),
+            self.duration(),
+            None,
+            SELECT_ROOT_OWNER,
+            out,
         );
     }
     #[allow(clippy::too_many_arguments)]
@@ -160,8 +206,12 @@ impl Engine {
             out(Out::On(channel, note, velocity));
             let token = self.new_note_token();
             self.capture_delay_source(
-                crate::arpeggiator::source::STRUM, token, note, velocity,
-                self.attack_expression(), (off != u64::MAX).then_some(off),
+                crate::arpeggiator::source::STRUM,
+                token,
+                note,
+                velocity,
+                self.attack_expression(),
+                (off != u64::MAX).then_some(off),
             );
             self.mark_strike(note);
             return;
@@ -219,7 +269,11 @@ impl Engine {
                 (0..capacity)
                     .filter(available)
                     .filter(|&i| self.voices[i].is_some_and(|v| !v.layer))
-                    .min_by_key(|&i| self.voices[i].map_or((false,0), |v| (v.owner!=delay_output::DELAY_OWNER,v.started)))
+                    .min_by_key(|&i| {
+                        self.voices[i].map_or((false, 0), |v| {
+                            (v.owner != delay_output::DELAY_OWNER, v.started)
+                        })
+                    })
             });
         let Some(index) = index else {
             // Melody and sustained accompaniment have priority over new tails.
@@ -231,16 +285,18 @@ impl Engine {
         } else {
             self.member(index)
         };
-        self.reclaim_delay_channel(channel,out);
+        self.reclaim_delay_channel(channel, out);
         if !self.melody_channel(channel) {
             self.emit_expression(channel, out);
         }
         let owned = self.output_owned(channel, note);
         // A selection root may share this channel and pitch with a live strum.
         // Keep both owners, but give the gesture an audible attack.
-        let restrike = owner == 0 && !layer && self.voices.iter().flatten().any(|voice| {
-            voice.channel == channel && voice.note == note && voice.owner == SELECT_ROOT_OWNER
-        });
+        let restrike = owner == 0
+            && !layer
+            && self.voices.iter().flatten().any(|voice| {
+                voice.channel == channel && voice.note == note && voice.owner == SELECT_ROOT_OWNER
+            });
         if restrike {
             out(Out::Off(channel, note, 0.0));
         }
@@ -258,14 +314,33 @@ impl Engine {
             attack_expression,
             token,
         });
-        let source = if owner == arpeggiator::ARP_OWNER { crate::arpeggiator::source::ARP }
-            else if layer {
-                let bass=self.config.always_bass && self.selected_root()==Some(note);
-                let chord=self.config.always_chord || self.config.mode==CHORD;
-                (if bass {crate::arpeggiator::source::BASS} else {0}) | (if chord || !bass {crate::arpeggiator::source::CHORDS} else {0})
-            } else if owner == SELECT_ROOT_OWNER || self.config.mode == CHORD { crate::arpeggiator::source::CHORDS }
-            else { crate::arpeggiator::source::STRUM };
-        self.capture_delay_source(source, token, note, velocity, attack_expression.unwrap_or_else(||self.attack_expression()), (!layer && off!=u64::MAX).then_some(off));
+        let source = if owner == arpeggiator::ARP_OWNER {
+            crate::arpeggiator::source::ARP
+        } else if layer {
+            let bass = self.config.always_bass && self.selected_root() == Some(note);
+            let chord = self.config.always_chord || self.config.mode == CHORD;
+            (if bass {
+                crate::arpeggiator::source::BASS
+            } else {
+                0
+            }) | (if chord || !bass {
+                crate::arpeggiator::source::CHORDS
+            } else {
+                0
+            })
+        } else if owner == SELECT_ROOT_OWNER || self.config.mode == CHORD {
+            crate::arpeggiator::source::CHORDS
+        } else {
+            crate::arpeggiator::source::STRUM
+        };
+        self.capture_delay_source(
+            source,
+            token,
+            note,
+            velocity,
+            attack_expression.unwrap_or_else(|| self.attack_expression()),
+            (!layer && off != u64::MAX).then_some(off),
+        );
     }
     fn mark_strike(&mut self, note: u8) {
         self.note_strikes[note as usize] = self.note_strikes[note as usize].wrapping_add(1);
@@ -283,8 +358,14 @@ impl Engine {
     }
     pub(super) fn strike_velocity(&self) -> f32 {
         let base = self.base_strike_velocity();
-        if self.y_active && self.config.y_target == 0
-            && !self.host_config.routes.iter().any(|r| r.active() && routing::TARGETS[r.target as usize].id == "velocity") {
+        if self.y_active
+            && self.config.y_target == 0
+            && !self
+                .host_config
+                .routes
+                .iter()
+                .any(|r| r.active() && routing::TARGETS[r.target as usize].id == "velocity")
+        {
             (base * self.y / 0.8).clamp(0.01, 1.0)
         } else {
             base
@@ -394,27 +475,38 @@ impl Engine {
         discontinuity: bool,
         out: &mut impl FnMut(Out),
     ) {
-        let previous_tempo=self.tempo;
+        let previous_tempo = self.tempo;
         self.tempo = if tempo.is_finite() {
             tempo.clamp(20.0, 400.0)
         } else {
             120.0
         };
-        self.retime_arp(previous_tempo,self.tempo);
+        self.retime_arp(previous_tempo, self.tempo);
         if discontinuity || (self.playing && !playing) {
-            let selected=(self.memory,self.notes,self.full_notes,self.expression);
-            let retain=discontinuity && playing && self.config.arp_mode==crate::arpeggiator::ArpMode::AlignedLoop;
+            let selected = (self.memory, self.notes, self.full_notes, self.expression);
+            let retain = discontinuity
+                && playing
+                && self.config.arp_mode == crate::arpeggiator::ArpMode::AlignedLoop;
             self.panic(out);
-            if retain {self.memory=selected.0;self.notes=selected.1;self.full_notes=selected.2;self.expression=selected.3;}
+            if retain {
+                self.memory = selected.0;
+                self.notes = selected.1;
+                self.full_notes = selected.2;
+                self.expression = selected.3;
+            }
         }
         self.playing = playing;
     }
     // Only a newly played/recalled chord establishes a new rhythmic origin.
     pub(super) fn restart_arp(&mut self) {
-        if !self.promoting && matches!(self.config.arp_mode, crate::arpeggiator::ArpMode::Once | crate::arpeggiator::ArpMode::Loop) {
+        if !self.promoting
+            && matches!(
+                self.config.arp_mode,
+                crate::arpeggiator::ArpMode::Once | crate::arpeggiator::ArpMode::Loop
+            )
+        {
             self.restart_automatic_arp();
         }
-
     }
 
     /// Advance a span without scanning every voice and pending strike per sample.
@@ -434,7 +526,11 @@ impl Engine {
                 .chain(self.scheduled.iter().flatten().map(|event| event.at))
                 // The arp clock and RNG also advance in the other modes.
                 .chain(self.arp_deadline())
-                .chain(self.delay.deadline(self.now, self.beat, self.sample_rate as f64 * 60.0 / self.tempo))
+                .chain(self.delay.deadline(
+                    self.now,
+                    self.beat,
+                    self.sample_rate as f64 * 60.0 / self.tempo,
+                ))
                 .chain(self.smoothing_active().then_some(self.now))
                 .min()
                 .unwrap_or(u64::MAX);

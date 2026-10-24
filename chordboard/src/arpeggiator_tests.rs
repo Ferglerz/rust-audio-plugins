@@ -1,6 +1,31 @@
 use super::*;
 
 #[test]
+fn tracker_row_actions_preserve_selection_payload_and_minimum_row() {
+    let mut state = State::default();
+    state.rows[0].chord = Some(crate::harmony::parse_chord_symbol("Am7").unwrap());
+    state.rows[0].duration = 4;
+    state.rows[0].page.loops[0].steps[2].velocity = 73;
+    let second = state.add_row_after(0);
+    assert_eq!(second, 1);
+    assert_eq!(state.rows[1].duration, 1);
+    assert_eq!(state.rows[1].chord, state.rows[0].chord);
+    assert_eq!(state.rows[1].page.loops[0].steps[2].velocity, 73);
+    let copied = state.rows[0].clone();
+    state.rows[1].chord = None;
+    state.paste_row(1, &copied);
+    assert_eq!(state.rows[1].chord, copied.chord);
+    let logical_id = state.rows[1].id;
+    assert_eq!(state.move_row(1, -1), 0);
+    assert_eq!(state.rows[0].id, logical_id);
+    assert_eq!(state.delete_row(0), 0);
+    assert_eq!(state.rows.len(), 1);
+    state.delete_row(0);
+    assert_eq!(state.rows.len(), 1);
+    assert!(state.rows[0].chord.is_none());
+}
+
+#[test]
 fn delay_harmony_options_default_off_for_existing_presets() {
     let old = r#"{"enabled":true,"sync":false,"ping_pong":true,"sources":31}"#;
     let delay: DelaySettings = serde_json::from_str(old).unwrap();
@@ -9,9 +34,18 @@ fn delay_harmony_options_default_off_for_existing_presets() {
 }
 
 #[test]
-fn arp_state_round_trip_preserves_eight_pages_and_every_tap_field() {
+fn tracker_state_round_trip_preserves_dynamic_rows_and_every_tap_field() {
     let mut state = State::default();
-    for (page_index, page) in state.pages.iter_mut().enumerate() {
+    for page_index in 1..PAGES {
+        state.rows.push(TrackerRow {
+            id: page_index as u64 + 1,
+            ..TrackerRow::default()
+        });
+    }
+    for (page_index, row) in state.rows.iter_mut().enumerate() {
+        row.duration = page_index as u32 + 1;
+        row.settings.pattern = (page_index % 7) as u8;
+        let page = &mut row.page;
         for (index, step) in page.loops.iter_mut().flat_map(|l| &mut l.steps).enumerate() {
             *step = Step {
                 state: [StepState::Play, StepState::Mute, StepState::Skip][index % 3],
@@ -45,8 +79,10 @@ fn arp_state_round_trip_preserves_eight_pages_and_every_tap_field() {
     }
     let json = serde_json::to_string(&state).unwrap();
     let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert_eq!(value["pages"].as_array().unwrap().len(), PAGES);
-    for page in value["pages"].as_array().unwrap() {
+    assert!(value.get("pages").is_none());
+    assert_eq!(value["rows"].as_array().unwrap().len(), PAGES);
+    for row in value["rows"].as_array().unwrap() {
+        let page = &row["page"];
         assert_eq!(page["loops"].as_array().unwrap().len(), LOOPS);
         assert_eq!(page["delay"]["taps"].as_array().unwrap().len(), TAPS);
     }
@@ -62,7 +98,10 @@ fn arp_state_uses_fresh_defaults_and_rejects_incomplete_occurrence_arrays() {
     assert_eq!(serde_json::from_str::<Page>("{}").unwrap(), Page::default());
     assert_eq!(serde_json::from_str::<Step>("{}").unwrap(), Step::default());
     let mut json = serde_json::to_value(State::default()).unwrap();
-    json["pages"][0]["loops"][0]["steps"].as_array_mut().unwrap().pop();
+    json["rows"][0]["page"]["loops"][0]["steps"]
+        .as_array_mut()
+        .unwrap()
+        .pop();
     let error = serde_json::from_value::<State>(json).unwrap_err();
     assert!(error.to_string().contains("24"));
 }
@@ -227,7 +266,10 @@ fn arp_full_retirement_queue_preserves_current_and_pending_generations() {
     drop(store.retired.pop());
     assert!(store.apply_pending(&mut current));
     assert_eq!(
-        (current.generation, current.pages[0].loops[0].steps[0].velocity),
+        (
+            current.generation,
+            current.pages[0].loops[0].steps[0].velocity
+        ),
         (1, 42)
     );
     assert_eq!(store.retired.len(), 4);
@@ -272,10 +314,17 @@ fn arp_step_states_and_playback_modes_have_explicit_stable_cycles() {
 fn arp_loop_octaves_round_trip_and_publish_sanitized_values() {
     let store = Store::new();
     let mut prepared = store.initial_prepared();
-    store.edit(|state| { for (l, octave) in state.pages[2].loops.iter_mut().zip([-100, -3, 2, 100]) { l.octave = octave; } });
+    store.edit(|state| {
+        for (l, octave) in state.pages[2].loops.iter_mut().zip([-100, -3, 2, 100]) {
+            l.octave = octave;
+        }
+    });
     let state = store.snapshot();
     assert_eq!(state.pages[2].octaves(), [-4, -3, 2, 4]);
-    assert_eq!(serde_json::from_str::<State>(&serde_json::to_string(&state).unwrap()).unwrap(), state);
+    assert_eq!(
+        serde_json::from_str::<State>(&serde_json::to_string(&state).unwrap()).unwrap(),
+        state
+    );
     assert!(store.apply_pending(&mut prepared));
     assert_eq!(prepared.pages[2].loops, state.pages[2].loops);
 }
@@ -284,7 +333,15 @@ fn arp_loop_octaves_round_trip_and_publish_sanitized_values() {
 fn arp_new_loops_inherit_all_fields_once_and_preserve_hidden_variations() {
     let mut page = Page::default();
     page.loops[0].octave = -2;
-    page.loops[0].steps[23] = Step { state: StepState::Skip, velocity: 140, gate: 20, probability: 71, octave: 2, micro: -19, mods: [37, -42] };
+    page.loops[0].steps[23] = Step {
+        state: StepState::Skip,
+        velocity: 140,
+        gate: 20,
+        probability: 71,
+        octave: 2,
+        micro: -19,
+        mods: [37, -42],
+    };
     assert!(page.ensure_loops(4));
     assert!(page.loops.iter().all(|l| *l == page.loops[0]));
     page.loops[1].steps[23].velocity = 22;

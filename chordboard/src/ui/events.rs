@@ -30,7 +30,9 @@ impl ChordboardView {
                 || self.arp_editor_editing()
                 || self.arp_chooser_open()
                 || self.fine_adjustment_active()
-                || self.pointer.is_some_and(|(x, y)| self.fine_adjustment_at(x, y))
+                || self
+                    .pointer
+                    .is_some_and(|(x, y)| self.fine_adjustment_at(x, y))
                 || self.menu.is_some()
                 || cx.modifiers().command()
             {
@@ -60,13 +62,22 @@ impl ChordboardView {
         }
     }
     pub(super) fn fine_adjustment_active(&self) -> bool {
-        matches!(self.drag, Some(Drag::Control(_) | Drag::StrumBound(..)
-            | Drag::RouteContour { .. } | Drag::RouteNode(..)
-            | Drag::Split | Drag::BassSplit))
-            || self.arp_editor_dragging()
+        matches!(
+            self.drag,
+            Some(
+                Drag::Control(_)
+                    | Drag::StrumBound(..)
+                    | Drag::RouteContour { .. }
+                    | Drag::RouteNode(..)
+                    | Drag::Split
+                    | Drag::BassSplit
+            )
+        ) || self.arp_editor_dragging()
     }
     fn fine_adjustment_at(&self, x: f32, y: f32) -> bool {
-        self.placed_controls().iter().any(|(c, r)| !c.toggle && hit(*r, x, y))
+        self.placed_controls()
+            .iter()
+            .any(|(c, r)| !c.toggle && hit(*r, x, y))
             || self.strum_bound_at(x, y).is_some()
             || (self.panel == Some(Panel::Routes) && hit(ROUTE_GRAPH, x, y))
             || self.arp_editor_value_at(x, y)
@@ -135,7 +146,11 @@ impl ChordboardView {
             if self.explain_modulation(c.id) {
                 return;
             }
-            if c.id == "root_on_select" {
+            if Self::is_slider_control(&c)
+                && cx.modifiers().intersects(Modifiers::CTRL | Modifiers::LOGO)
+            {
+                self.reset_slider_control(cx, &c);
+            } else if c.id == "root_on_select" {
                 self.cycle_selection_mode(cx);
             } else if c.id == "voice_leading" {
                 Self::emit(
@@ -170,11 +185,44 @@ impl ChordboardView {
             return;
         }
     }
+
+    fn is_slider_control(control: &Control) -> bool {
+        !control.toggle
+            && keyboard_menu_range(control.id).is_none()
+            && !matches!(
+                control.id,
+                "bass_split" | "spread" | "voice_leading" | "quality"
+            )
+    }
+
+    fn reset_slider_control(&mut self, cx: &mut EventContext, control: &Control) {
+        self.end_drag(cx);
+        self.restore_shift_latch(cx);
+        self.edit = None;
+        let defaults = crate::arpeggiator::Settings::default();
+        let value = match control.id {
+            "swing" => self.arp_params().swing.preview_normalized(defaults.swing),
+            "humanize" => self
+                .arp_params()
+                .humanize
+                .preview_normalized(defaults.humanize),
+            "arp_free_ms" => self
+                .arp_params()
+                .arp_free_ms
+                .preview_normalized(defaults.free_ms),
+            // The parameter is kept alive by this view's owned parameter storage.
+            _ => unsafe { control.ptr.default_normalized_value() },
+        };
+        Self::emit(cx, control.ptr, value);
+        cx.needs_redraw();
+    }
     pub(super) fn window_event(&mut self, cx: &mut EventContext, event: &WindowEvent) -> bool {
         if matches!(event, WindowEvent::FocusOut) {
             self.bridge.quick_learn.store(0, Ordering::Release);
             self.restore_shift_latch(cx);
             self.cancel_arp_editor();
+            self.tracker_drag = None;
+            self.tracker_symbol_edit = false;
             cx.release();
             self.pending_route_remove = None;
             self.focused = false;
@@ -189,6 +237,7 @@ impl ChordboardView {
             self.set_panel(None);
             return false;
         }
+        self.refresh_arp_editor_params();
         let bounds = cx.bounds();
         let Some((x, y)) = pleasant_ui::local_xy(
             bounds.x,
@@ -200,13 +249,38 @@ impl ChordboardView {
         ) else {
             return false;
         };
+        let reset_press = matches!(event, WindowEvent::MouseDoubleClick(MouseButton::Left))
+            || matches!(event, WindowEvent::MouseDown(MouseButton::Left))
+                && cx.modifiers().intersects(Modifiers::CTRL | Modifiers::LOGO);
+        if reset_press
+            && self.menu.is_none()
+            && !self.arp_chooser_open()
+            && !self.arp_controls_covered(x, y)
+            && !(self.expand_t() > 0.0 && y >= HEADER_H && y < ARP_SURFACE.1)
+        {
+            if let Some((control, _)) = self
+                .placed_controls()
+                .into_iter()
+                .find(|(c, r)| Self::is_slider_control(c) && hit(*r, x, y))
+            {
+                if !self.explain_modulation(control.id) {
+                    self.reset_slider_control(cx, &control);
+                }
+                return true;
+            }
+        }
         // Vizia substitutes double/triple clicks for mouse-down. Every press
         // uses the same drag threshold and opens text only on value release.
-        if self.edit.is_none() && matches!(
-            event,
-            WindowEvent::MouseDoubleClick(MouseButton::Left)
-                | WindowEvent::MouseTripleClick(MouseButton::Left)
-        ) {
+        if self.edit.is_none()
+            && matches!(
+                event,
+                WindowEvent::MouseDoubleClick(MouseButton::Left)
+                    | WindowEvent::MouseTripleClick(MouseButton::Left)
+            )
+        {
+            if self.tracker_event(cx, event, x, y) {
+                return true;
+            }
             if self.menu.is_none()
                 && self.edit.is_none()
                 && self.drag.is_none()
@@ -241,6 +315,9 @@ impl ChordboardView {
                 self.flash_press(x, y);
             }
             cx.needs_redraw();
+        }
+        if self.tracker_event(cx, event, x, y) {
+            return true;
         }
         if self.menu.is_none()
             && self.edit.is_none()
@@ -341,6 +418,14 @@ impl ChordboardView {
             match event {
                 WindowEvent::KeyDown(code, _) => {
                     match code {
+                        Code::Tab if matches!(menu, Menu::Key | Menu::Scale) => {
+                            self.open_menu(if menu == Menu::Key {
+                                Menu::Scale
+                            } else {
+                                Menu::Key
+                            });
+                            cx.needs_redraw();
+                        }
                         Code::Enter | Code::NumpadEnter => {
                             self.select_menu(cx, menu, self.menu_cursor);
                         }
@@ -359,9 +444,11 @@ impl ChordboardView {
                             self.select_menu(cx, Menu::Key, index);
                             return true;
                         }
-                        if hit(menu::root_scale_rect(self.menu_bounds(menu)), x, y) {
-                            self.open_menu(if menu == Menu::Scale { Menu::Key } else { Menu::Scale });
-                            return true;
+                        for index in 0..Menu::Scale.items().len() {
+                            if hit(self.menu_option_rect(Menu::Scale, index), x, y) {
+                                self.select_menu(cx, Menu::Scale, index);
+                                return true;
+                            }
                         }
                     }
                     for index in 0..menu.items().len() {
@@ -375,7 +462,8 @@ impl ChordboardView {
                     }
                     self.menu = None;
                     if hit(self.menu_trigger_rect(menu), x, y)
-                        || (matches!(menu, Menu::Key | Menu::Scale) && hit(KEY_MENU, x, y)) {
+                        || (matches!(menu, Menu::Key | Menu::Scale) && hit(KEY_MENU, x, y))
+                    {
                         return true;
                     }
                 }
@@ -461,7 +549,20 @@ impl ChordboardView {
             WindowEvent::MouseDown(MouseButton::Left) => {
                 cx.focus();
                 self.focused = true;
-                if self.press_quick_midi(cx, x, y, false) { return true; }
+                if self.press_quick_midi(cx, x, y, false) {
+                    return true;
+                }
+                if self.tracker_selection && hit(CHORDS_SURFACE, x, y) {
+                    if let Some(chord) = (0..KEY_COUNT)
+                        .find(|&i| {
+                            hit(self.keyboard_key_rect(i), x, y) && self.keyboard_chord(i).is_some()
+                        })
+                        .and_then(|i| self.keyboard_chord(i))
+                    {
+                        self.assign_tracker_chord(chord);
+                    }
+                    return true;
+                }
                 if self.strum_bound_at(x, y).is_some()
                     || !(self.manual_playing() && hit(self.play_pad(), x, y))
                 {
@@ -530,16 +631,23 @@ impl ChordboardView {
                     }
                 }
                 if (0..TRANSPOSE_STEPS.len())
-                        .any(|i| hit(transpose_control_rect(self.params.mpe_enabled(), i), x, y))
+                    .any(|i| hit(transpose_control_rect(self.params.mpe_enabled(), i), x, y))
                 {
                     return self.press_piano(cx, x, y);
                 }
                 if !(self.params.tempo_sync.value() && self.snapshot.time_sig_host)
-                    && (hit(METER_NUM, x, y) || hit(METER_DEN, x, y)) {
+                    && (hit(METER_NUM, x, y) || hit(METER_DEN, x, y))
+                {
                     self.open_menu(Menu::Meter(hit(METER_DEN, x, y)));
                     return true;
                 }
-                if (pleasant_ui::tempo::Header { source: TEMPO_SYNC, bpm: TEMPO_CONTROL }).hit(x, y) == Some(pleasant_ui::tempo::Hit::Source) {
+                if (pleasant_ui::tempo::Header {
+                    source: TEMPO_SYNC,
+                    bpm: TEMPO_CONTROL,
+                })
+                .hit(x, y)
+                    == Some(pleasant_ui::tempo::Hit::Source)
+                {
                     self.set(
                         cx,
                         "tempo_sync",
@@ -587,9 +695,7 @@ impl ChordboardView {
                     return true;
                 }
                 for i in 0..KEY_COUNT {
-                    if self.keyboard_chord(i).is_some()
-                        && hit(self.keyboard_key_rect(i), x, y)
-                    {
+                    if self.keyboard_chord(i).is_some() && hit(self.keyboard_key_rect(i), x, y) {
                         if let Some(chord) = self.keyboard_chord(i) {
                             self.bridge.send(Command::KeyDown(
                                 i as u8 + POINTER_KEY_OFFSET,
@@ -643,7 +749,9 @@ impl ChordboardView {
                 return true;
             }
             WindowEvent::MouseDown(MouseButton::Right) => {
-                if self.press_quick_midi(cx, x, y, true) { return true; }
+                if self.press_quick_midi(cx, x, y, true) {
+                    return true;
+                }
                 if hit(PIANO_SURFACE, x, y)
                     && self.panel.is_none_or(|p| !hit(self.panel_rect(p), x, y))
                 {

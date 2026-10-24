@@ -3,7 +3,20 @@ use super::*;
 /// Small vector marks shared by Chordboard controls.
 #[derive(Clone, Copy)]
 pub(super) enum Icon {
-    Lock, Once, Loop, SyncLoop, AlignedLoop, Host, Learn, MidiDin, Trash, Add, Reset, Touch, TuningFork, Glyph(&'static str),
+    Lock,
+    Once,
+    Loop,
+    SyncLoop,
+    AlignedLoop,
+    Host,
+    Learn,
+    MidiDin,
+    Trash,
+    Add,
+    Reset,
+    Touch,
+    TuningFork,
+    Glyph(&'static str),
 }
 
 pub(super) const MODULATOR_ICONS: [Icon; crate::engine::routing::SOURCE_COUNT] = [
@@ -18,7 +31,7 @@ pub(super) const MODULATOR_ICONS: [Icon; crate::engine::routing::SOURCE_COUNT] =
     Icon::Glyph("\u{eb5b}"), // arrows-vertical: Y
     Icon::Glyph("\u{ecd4}"), // Mod 1
     Icon::Glyph("\u{ecd4}"), // Mod 2
-    Icon::Loop, // Arp position
+    Icon::Loop,              // Arp position
 ];
 
 impl Icon {
@@ -61,9 +74,9 @@ impl Icon {
                 let glyph = match self {
                     Self::Once => nih_plug_vizia::vizia::icons::ICON_PLAYER_SKIP_FORWARD,
                     Self::Loop => nih_plug_vizia::vizia::icons::ICON_REPEAT,
-                    Self::Lock => "\u{eae2}", // lock
+                    Self::Lock => "\u{eae2}",  // lock
                     Self::Reset => "\u{eb16}", // rotate
-                    Self::Host => "\u{eade}", // link
+                    Self::Host => "\u{eade}",  // link
                     Self::Glyph(glyph) => glyph,
                     _ => unreachable!(),
                 };
@@ -73,17 +86,15 @@ impl Icon {
                     paint.set_font_size(18.0 * d.s);
                     paint.set_text_align(Align::Center);
                     paint.set_text_baseline(Baseline::Middle);
-                    let _ = d.c.fill_text(
-                        d.ox + (x + d.offset_x) * d.s,
-                        d.oy + y * d.s,
-                        glyph,
-                        &paint,
-                    );
+                    let _ =
+                        d.c.fill_text(d.ox + (x + d.offset_x) * d.s, d.oy + y * d.s, glyph, &paint);
                 }
             }
             Self::Learn => {
-                d.outline((x-7.0,y-5.0,14.0,10.0),color);
-                for key in [-3.0,1.0,4.0] { line(d,(key,-5.0),(key,1.0)); }
+                d.outline((x - 7.0, y - 5.0, 14.0, 10.0), color);
+                for key in [-3.0, 1.0, 4.0] {
+                    line(d, (key, -5.0), (key, 1.0));
+                }
             }
             Self::MidiDin => {
                 // Reaper UI Overlay/assets/preferences/icons/midi-din.svg,
@@ -95,7 +106,13 @@ impl Icon {
                 path.line_to(10.0, 5.0);
                 path.line_to(14.0, 5.0);
                 path.line_to(14.0, 2.0);
-                for (sx, sy) in [(5.65, 11.0), (7.65, 15.5), (12.0, 17.4), (16.35, 15.5), (18.35, 11.0)] {
+                for (sx, sy) in [
+                    (5.65, 11.0),
+                    (7.65, 15.5),
+                    (12.0, 17.4),
+                    (16.35, 15.5),
+                    (18.35, 11.0),
+                ] {
                     path.circle(sx, sy, 0.65);
                 }
                 let mut paint = Paint::color(d.color(color));
@@ -108,12 +125,26 @@ impl Icon {
                 d.c.restore();
             }
             Self::Trash => {
-                line(d,(-7.0,-4.0),(7.0,-4.0));
-                line(d,(-3.0,-7.0),(3.0,-7.0));
-                d.poly(&[(x-5.0,y-4.0),(x-4.0,y+7.0),(x+4.0,y+7.0),(x+5.0,y-4.0)],color,1.4);
-                for dx in [-1.5,1.5] { line(d,(dx,-1.0),(dx,4.0)); }
+                line(d, (-7.0, -4.0), (7.0, -4.0));
+                line(d, (-3.0, -7.0), (3.0, -7.0));
+                d.poly(
+                    &[
+                        (x - 5.0, y - 4.0),
+                        (x - 4.0, y + 7.0),
+                        (x + 4.0, y + 7.0),
+                        (x + 5.0, y - 4.0),
+                    ],
+                    color,
+                    1.4,
+                );
+                for dx in [-1.5, 1.5] {
+                    line(d, (dx, -1.0), (dx, 4.0));
+                }
             }
-            Self::Add => { line(d,(-6.0,0.0),(6.0,0.0)); line(d,(0.0,-6.0),(0.0,6.0)); }
+            Self::Add => {
+                line(d, (-6.0, 0.0), (6.0, 0.0));
+                line(d, (0.0, -6.0), (0.0, 6.0));
+            }
         }
     }
 }
@@ -163,13 +194,21 @@ impl ChordboardView {
         targets.push((midi_learn::switch_rect(), self.quick_midi.show));
         if self.quick_midi.show {
             for i in 0..crate::midi_learn::COUNT {
-                targets.push((midi_learn::chip_rect(i), self.bridge.quick_learn.load(Ordering::Acquire) == i as u32 + 1));
+                targets.push((
+                    midi_learn::chip_rect(i),
+                    self.bridge.quick_learn.load(Ordering::Acquire) == i as u32 + 1,
+                ));
             }
         }
         if self.expand_t() == 0.0 {
             for i in 0..crate::engine::routing::SOURCE_COUNT {
-                if self.quick_midi.show { break; }
-                targets.push((modulator_bypass_rect(i), self.params.modulators[i].bypass.value()));
+                if self.quick_midi.show {
+                    break;
+                }
+                targets.push((
+                    modulator_bypass_rect(i),
+                    self.params.modulators[i].bypass.value(),
+                ));
                 targets.push((meter_rect(i), false));
             }
         }
@@ -218,7 +257,10 @@ impl ChordboardView {
         targets.extend((0..8).map(|i| (memory_rect(i), self.memory_ui.armed)));
         targets.push((BASS_BYPASS, !self.params.bass_enabled.value()));
         targets.push((arp_power_rect(), self.params.arp_enabled.value()));
-        targets.push((self.voice_leading_rect(), self.params.voice_leading.value() != 2));
+        targets.push((
+            self.voice_leading_rect(),
+            self.params.voice_leading.value() != 2,
+        ));
         targets.push((self.split_marker(), false));
         if let Some(r) = self.bass_marker() {
             targets.push((r, false));
@@ -348,7 +390,15 @@ impl ChordboardView {
         self.paint_button(d, r, "Hover strum", on, color, Some(Icon::Touch));
     }
 
-    pub(super) fn icon_button(&self, d: &mut Draw, r: Rect, label: &str, on: bool, color: Color, icon: Icon) {
+    pub(super) fn icon_button(
+        &self,
+        d: &mut Draw,
+        r: Rect,
+        label: &str,
+        on: bool,
+        color: Color,
+        icon: Icon,
+    ) {
         self.paint_button(d, r, label, on, color, Some(icon));
     }
 
@@ -471,10 +521,7 @@ impl ChordboardView {
                 .ok()?;
             let v = if target.id == "swing" {
                 v * 0.75 / 100.0
-            } else if matches!(
-                target.id,
-                "velocity" | "humanize" | "gate" | "contour"
-            ) {
+            } else if matches!(target.id, "velocity" | "humanize" | "gate" | "contour") {
                 v / 100.0
             } else if matches!(
                 target.id,

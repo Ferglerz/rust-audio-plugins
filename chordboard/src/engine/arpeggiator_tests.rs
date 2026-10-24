@@ -24,7 +24,9 @@ fn make_engine(mode: ArpMode, pattern: u8) -> Engine {
         sample_rate: 1000.0,
         ..Engine::default()
     };
-    for page in &mut engine.arp.data.pages { page.ensure_loops(4); }
+    for page in &mut engine.arp.data.pages {
+        page.ensure_loops(4);
+    }
     engine.configure(
         Config {
             mode: MANUAL,
@@ -47,6 +49,212 @@ fn make_engine(mode: ArpMode, pattern: u8) -> Engine {
     });
     engine.playing = true;
     engine
+}
+
+#[test]
+fn tracker_plays_assigned_chords_without_live_keyboard_input_and_advances_by_loop() {
+    let mut engine = Engine {
+        sample_rate: 1000.0,
+        ..Engine::default()
+    };
+    let settings = settings(ArpMode::Loop, 0);
+    engine.arp.data.rows[0].chord = Some(harmony::SavedChord {
+        root: 60,
+        quality: 0,
+        second: None,
+        additions: 0,
+        inversion: 0,
+        spread: 0,
+        transpose: 0,
+    });
+    engine.arp.data.rows[0].settings = settings;
+    engine.arp.data.rows[0].duration = 1;
+    let mut second = crate::arpeggiator::TrackerRow::default();
+    second.id = 2;
+    second.chord = Some(harmony::SavedChord {
+        root: 67,
+        quality: 0,
+        second: None,
+        additions: 0,
+        inversion: 0,
+        spread: 0,
+        transpose: 0,
+    });
+    second.settings = settings;
+    engine.arp.data.rows.push(second);
+    engine.configure(
+        Config {
+            mode: MANUAL,
+            arp_enabled: true,
+            tracker_enabled: true,
+            velocity: 0.5,
+            bass_enabled: false,
+            ..Config::default()
+        },
+        &mut |_| {},
+    );
+    assert!(engine.arp_gated());
+    assert_eq!(engine.arp_slots().1, 3);
+    let played = attacks(&advance(&mut engine, 350));
+    assert!(played.iter().any(|(_, _, note, _)| *note == 60));
+    assert!(played.iter().any(|(_, _, note, _)| *note == 67));
+    assert_eq!(engine.arp.row_index, 1);
+    assert_eq!(engine.arp.data.rows[engine.arp.row_index].id, 2);
+    assert_eq!(engine.arp.loops_in_row, 0);
+}
+
+#[test]
+fn tracker_plays_past_eight_rows_and_wraps_with_each_rows_settings() {
+    let mut engine = Engine {
+        sample_rate: 1000.0,
+        ..Engine::default()
+    };
+    engine.arp.data.rows = (0..10)
+        .map(|index| crate::arpeggiator::TrackerRow {
+            id: index + 1,
+            chord: Some(harmony::SavedChord {
+                root: 48 + index as u8,
+                quality: 0,
+                second: None,
+                additions: 0,
+                inversion: 0,
+                spread: 0,
+                transpose: 0,
+            }),
+            settings: settings(ArpMode::Loop, 0),
+            ..Default::default()
+        })
+        .collect();
+    engine.arp.data.rows[8].settings.pattern = 1;
+    engine.arp.data.rows[8].page.loops[0].octave = 1;
+    engine.configure(
+        Config {
+            mode: MANUAL,
+            arp_enabled: true,
+            tracker_enabled: true,
+            bass_enabled: false,
+            ..Config::default()
+        },
+        &mut |_| {},
+    );
+    let played: Vec<_> = attacks(&advance(&mut engine, 3001))
+        .into_iter()
+        .map(|(_, _, note, _)| note)
+        .collect();
+    let mut expected = Vec::new();
+    for index in 0..10u8 {
+        let root = 48 + index;
+        if index == 8 {
+            expected.extend([root + 19, root + 16, root + 12]);
+        } else {
+            expected.extend([root, root + 4, root + 7]);
+        }
+    }
+    expected.push(48);
+    assert_eq!(played, expected);
+    assert_eq!(engine.arp.row_index, 0);
+}
+
+#[test]
+fn tracker_reorder_past_eight_rows_preserves_the_active_rows_settings() {
+    let mut engine = Engine::default();
+    engine.arp.data.rows = (1..=10)
+        .map(|id| crate::arpeggiator::TrackerRow {
+            id,
+            ..Default::default()
+        })
+        .collect();
+    engine.arp.data.rows[0].page.loops[0].octave = 2;
+    engine.configure(
+        Config {
+            tracker_enabled: true,
+            ..Config::default()
+        },
+        &mut |_| {},
+    );
+    engine.arp.data.rows.swap(0, 8);
+    engine.accept_arp_generation(&mut |_| {});
+    assert_eq!((engine.arp.row_index, engine.arp.row_id), (8, 1));
+    assert_eq!(engine.config.arp_loop_octaves[0], 2);
+    engine.configure(engine.host_config, &mut |_| {});
+    assert_eq!(engine.config.arp_loop_octaves[0], 2);
+}
+
+#[test]
+fn tracker_duration_waits_for_complete_loops_and_once_stays_silent() {
+    let mut engine = Engine {
+        sample_rate: 1000.0,
+        ..Engine::default()
+    };
+    let mut first = crate::arpeggiator::TrackerRow::default();
+    first.chord = Some(harmony::SavedChord {
+        root: 60,
+        quality: 0,
+        second: None,
+        additions: 0,
+        inversion: 0,
+        spread: 0,
+        transpose: 0,
+    });
+    first.duration = 2;
+    first.settings = settings(ArpMode::Once, 0);
+    let mut second = first.clone();
+    second.id = 2;
+    second.chord = Some(harmony::SavedChord {
+        root: 67,
+        ..first.chord.unwrap()
+    });
+    second.duration = 1;
+    second.settings.mode = ArpMode::Loop;
+    engine.arp.data.rows = vec![first, second];
+    engine.configure(
+        Config {
+            mode: MANUAL,
+            arp_enabled: true,
+            tracker_enabled: true,
+            velocity: 0.5,
+            bass_enabled: false,
+            ..Config::default()
+        },
+        &mut |_| {},
+    );
+    let first_loop = attacks(&advance(&mut engine, 250));
+    assert_eq!(first_loop.len(), 3);
+    assert_eq!(engine.arp.row_index, 0);
+    let waiting = advance(&mut engine, 350);
+    assert!(attacks(&waiting).is_empty());
+    assert_eq!(engine.arp.row_index, 0);
+    let next = advance(&mut engine, 1);
+    assert_eq!(engine.arp.row_index, 1);
+    assert!(attacks(&next).is_empty());
+}
+
+#[test]
+fn tracker_playhead_follows_row_identity_on_reorder_and_advances_after_delete() {
+    let mut engine = Engine::default();
+    let mut rows = Vec::new();
+    for id in 1..=3 {
+        rows.push(crate::arpeggiator::TrackerRow {
+            id,
+            ..Default::default()
+        });
+    }
+    engine.arp.data.rows = rows;
+    engine.configure(
+        Config {
+            tracker_enabled: true,
+            ..Config::default()
+        },
+        &mut |_| {},
+    );
+    engine.arp.row_index = 1;
+    engine.arp.row_id = 2;
+    engine.arp.data.rows.swap(1, 2);
+    engine.accept_arp_generation(&mut |_| {});
+    assert_eq!((engine.arp.row_index, engine.arp.row_id), (2, 2));
+    engine.arp.data.rows.remove(2);
+    engine.accept_arp_generation(&mut |_| {});
+    assert_eq!((engine.arp.row_index, engine.arp.row_id), (0, 1));
 }
 
 fn advance(engine: &mut Engine, samples: usize) -> Vec<(u64, Out)> {
@@ -138,18 +346,19 @@ fn arp_orderings_build_the_expected_occurrence_indices() {
 #[test]
 fn shared_ordering_preserves_cycles_and_rng_draws() {
     let random_states = [
-        0x1ee76a63, 0x86c50576, 0xeb111e23, 0xd2765369,
-        0x1b7493e4, 0xa802bb60, 0x12b65e37, 0xf76a836f,
-        0x47e12d6c, 0x2bdf150a, 0xe6b80715, 0x2d005338,
+        0x1ee76a63, 0x86c50576, 0xeb111e23, 0xd2765369, 0x1b7493e4, 0xa802bb60, 0x12b65e37,
+        0xf76a836f, 0x47e12d6c, 0x2bdf150a, 0xe6b80715, 0x2d005338,
     ];
     for total in 1usize..=12 {
         let chord = notes(&(60..60 + total as u8).collect::<Vec<_>>());
         for pattern in [0, 1, 2, 3, 4, 6] {
-            let mut engine = Engine { notes: chord, ..Engine::default() };
+            let mut engine = Engine {
+                notes: chord,
+                ..Engine::default()
+            };
             let initial_seed = engine.rng;
-            let (cycle, len) = arpeggiator::cycle_notes(
-                chord, settings(ArpMode::Once, pattern), initial_seed,
-            );
+            let (cycle, len) =
+                arpeggiator::cycle_notes(chord, settings(ArpMode::Once, pattern), initial_seed);
             let expected_len = match pattern {
                 2 => (total * 2).saturating_sub(2).max(1),
                 3 | 4 => total * 2,
@@ -158,8 +367,15 @@ fn shared_ordering_preserves_cycles_and_rng_draws() {
             assert_eq!(len, expected_len);
             for (step, &note) in cycle[..len].iter().enumerate() {
                 let index = engine.arp_index(pattern, step, total);
-                assert_eq!(note, chord.values[index], "pattern {pattern}, total {total}, step {step}");
-                let expected_seed = if pattern == 6 { random_states[step] } else { initial_seed };
+                assert_eq!(
+                    note, chord.values[index],
+                    "pattern {pattern}, total {total}, step {step}"
+                );
+                let expected_seed = if pattern == 6 {
+                    random_states[step]
+                } else {
+                    initial_seed
+                };
                 assert_eq!(engine.rng, expected_seed, "pattern {pattern}, step {step}");
             }
             if total == 1 {
@@ -172,11 +388,19 @@ fn shared_ordering_preserves_cycles_and_rng_draws() {
 #[test]
 fn played_order_preserves_partial_octaves_and_cycle_clipping() {
     let mut engine = make_engine(ArpMode::Once, 5);
-    engine.second = Some(Slot { id: 1, note: 67, channel: 0, held: true, velocity: 0.5 });
-    let legacy = (0..5).map(|step| {
-        let index = engine.arp_index(5, step, 5);
-        engine.notes.string(index).unwrap()
-    }).collect::<Vec<_>>();
+    engine.second = Some(Slot {
+        id: 1,
+        note: 67,
+        channel: 0,
+        held: true,
+        velocity: 0.5,
+    });
+    let legacy = (0..5)
+        .map(|step| {
+            let index = engine.arp_index(5, step, 5);
+            engine.notes.string(index).unwrap()
+        })
+        .collect::<Vec<_>>();
     assert_eq!(legacy, [60, 67, 64, 72, 76]);
     let mut config = settings(ArpMode::Once, 5);
     config.octaves = 2;
@@ -193,8 +417,15 @@ fn played_order_preserves_partial_octaves_and_cycle_clipping() {
 #[test]
 fn fractional_bend_ranges_match_dry_and_delay_rpn() {
     let rpn = |channel, semitones, cents| {
-        [(101, 0), (100, 0), (6, semitones), (38, cents), (101, 127), (100, 127)]
-            .map(|(cc, value)| Out::Cc(channel, cc, value as f32 / 127.0))
+        [
+            (101, 0),
+            (100, 0),
+            (6, semitones),
+            (38, cents),
+            (101, 127),
+            (100, 127),
+        ]
+        .map(|(cc, value)| Out::Cc(channel, cc, value as f32 / 127.0))
     };
     for mpe in [false, true] {
         let mut engine = delay_engine(source::STRUM);
@@ -217,7 +448,11 @@ fn fractional_bend_ranges_match_dry_and_delay_rpn() {
         let played = attacks(&delayed);
         assert_eq!(played.len(), 1);
         let channel = played[0].1;
-        let expected = if mpe { rpn(channel, 12, 75) } else { rpn(channel, 2, 50) };
+        let expected = if mpe {
+            rpn(channel, 12, 75)
+        } else {
+            rpn(channel, 2, 50)
+        };
         assert!(delayed_events.windows(6).any(|events| events == expected));
     }
 }
@@ -344,7 +579,11 @@ fn arp_chance_failure_updates_bipolar_modulators() {
 #[test]
 fn arp_all_skipped_is_idle_and_single_step_and_disabled_position_are_zero() {
     let mut skipped = make_engine(ArpMode::SyncLoop, 0);
-    for step in skipped.arp.data.pages[0].loops.iter_mut().flat_map(|l| &mut l.steps) {
+    for step in skipped.arp.data.pages[0]
+        .loops
+        .iter_mut()
+        .flat_map(|l| &mut l.steps)
+    {
         step.state = StepState::Skip;
     }
     assert_eq!(skipped.arp_deadline(), None);
@@ -528,8 +767,15 @@ fn delay_voice_leading_applies_chord_octaves_without_accumulating_tap_pitch() {
         let played = attacks(&advance(&mut e, 21));
         // C major -> F major is a dominant resolution: Furthest selects the
         // upper register while Nearest takes the common C down an octave.
-        let expected = match mode { 0 => 72, 1 => 96, _ => 84 };
-        assert_eq!(played.iter().map(|on| (on.0, on.2)).collect::<Vec<_>>(), [(10, expected), (20, expected)]);
+        let expected = match mode {
+            0 => 72,
+            1 => 96,
+            _ => 84,
+        };
+        assert_eq!(
+            played.iter().map(|on| (on.0, on.2)).collect::<Vec<_>>(),
+            [(10, expected), (20, expected)]
+        );
     }
 }
 
@@ -543,7 +789,14 @@ fn delay_sounding_echoes_participate_in_the_next_chord_voicing() {
         e.configure(config, &mut |_| {});
         recall(&mut e, 60, 0);
         for (token, note) in [(123, 84), (124, 88), (125, 91)] {
-            e.capture_delay_source(source::STRUM, token, note, 0.8, Expression::default(), Some(100));
+            e.capture_delay_source(
+                source::STRUM,
+                token,
+                note,
+                0.8,
+                Expression::default(),
+                Some(100),
+            );
         }
         assert_eq!(attacks(&advance(&mut e, 11)).len(), 3);
         e.arp.data.pages[0].delay.voice_leading = enabled;
@@ -551,14 +804,27 @@ fn delay_sounding_echoes_participate_in_the_next_chord_voicing() {
         voicings.push(e.full_notes);
     }
     assert_ne!(voicings[0], voicings[1]);
-    assert!(voicings[1].as_slice().iter().map(|&n| u32::from(n)).sum::<u32>() > voicings[0].as_slice().iter().map(|&n| u32::from(n)).sum::<u32>());
+    assert!(
+        voicings[1]
+            .as_slice()
+            .iter()
+            .map(|&n| u32::from(n))
+            .sum::<u32>()
+            > voicings[0]
+                .as_slice()
+                .iter()
+                .map(|&n| u32::from(n))
+                .sum::<u32>()
+    );
 }
 
 #[test]
 fn delay_harmony_switches_preserve_non_chord_notes_and_no_chord_tails() {
     for (follow, leading, active, expected) in [
-        (false, false, true, 61), (false, true, true, 61),
-        (true, false, true, 60), (true, true, true, 60),
+        (false, false, true, 61),
+        (false, true, true, 61),
+        (true, false, true, 60),
+        (true, true, true, 60),
         (true, true, false, 61),
     ] {
         let mut e = delay_engine(source::STRUM);
@@ -569,14 +835,18 @@ fn delay_harmony_switches_preserve_non_chord_notes_and_no_chord_tails() {
         e.arp.data.pages[0].delay.follow_chords = follow;
         e.arp.data.pages[0].delay.voice_leading = leading;
         e.capture_delay_source(source::STRUM, 123, 61, 0.8, Expression::default(), Some(5));
-        if !active { e.notes = Notes::default(); }
+        if !active {
+            e.notes = Notes::default();
+        }
         assert_eq!(attacks(&advance(&mut e, 11))[0].2, expected);
     }
 }
 
 #[test]
 fn delay_follow_chords_combines_with_voice_leading_and_stays_in_midi_range() {
-    for (root, source_note, leading, expected) in [(65, 73, true, 60), (1, 0, false, 1), (1, 127, false, 125)] {
+    for (root, source_note, leading, expected) in
+        [(65, 73, true, 60), (1, 0, false, 1), (1, 127, false, 125)]
+    {
         let mut e = delay_engine(source::STRUM);
         let mut config = e.host_config;
         config.voice_leading = if leading { 0 } else { 2 };
@@ -585,7 +855,14 @@ fn delay_follow_chords_combines_with_voice_leading_and_stays_in_midi_range() {
         recall(&mut e, root, 0);
         e.arp.data.pages[0].delay.follow_chords = true;
         e.arp.data.pages[0].delay.voice_leading = leading;
-        e.capture_delay_source(source::STRUM, 123, source_note, 0.8, Expression::default(), Some(5));
+        e.capture_delay_source(
+            source::STRUM,
+            123,
+            source_note,
+            0.8,
+            Expression::default(),
+            Some(5),
+        );
         assert_eq!(attacks(&advance(&mut e, 11))[0].2, expected);
     }
 }
@@ -624,17 +901,32 @@ fn delay_captures_strums_over_held_chords_with_the_strum_duration() {
         advance(&mut e, 1);
         let mut events = Vec::new();
         e.strike(60, 0.6, 20, &mut |event| events.push(event));
-        assert_eq!(events.iter().filter(|e| matches!(e, Out::On(_, 60, _))).count(), 1);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, Out::On(_, 60, _)))
+                .count(),
+            1
+        );
         let events = advance(&mut e, 40);
         let played = attacks(&events);
-        assert_eq!(played.len(), 1);
-        let echo = played[0];
         if selected == source::STRUM {
+            assert_eq!(played.len(), 1);
+            let echo = played[0];
             assert_eq!((echo.0, echo.3), (11, 0.3));
             assert!(events.contains(&(31, Out::Off(echo.1, 60, 0.0))));
         } else {
-            assert_eq!((echo.0, echo.3), (10, 0.4));
-            assert!(!events.iter().any(|(_, event)| *event == Out::Off(echo.1, 60, 0.0)));
+            assert_eq!(played.len(), 4);
+            assert!(played.iter().all(|(at, _, _, _)| *at == 10));
+            assert!(played
+                .iter()
+                .any(|(_, _, note, velocity)| *note == 60 && (*velocity - 0.4).abs() < 0.001));
+            assert!(played
+                .iter()
+                .any(|(_, _, note, velocity)| *note == 64 && (*velocity - 0.25).abs() < 0.001));
+            assert!(played
+                .iter()
+                .any(|(_, _, note, velocity)| *note == 67 && (*velocity - 0.25).abs() < 0.001));
         }
         assert!(e.voices.iter().flatten().any(|v| v.layer && v.note == 60));
         e.panic(&mut |_| {});
@@ -877,13 +1169,21 @@ fn arp_loop_octaves_follow_each_complete_ordering_and_step_adjustments() {
     let mut config = engine.host_config;
     config.arp_settings[0].octaves = 3;
     engine.configure(config, &mut |_| {});
-    for (l, octave) in engine.arp.data.pages[0].loops.iter_mut().zip([0, -1, 2, 0]) { l.octave = octave; }
+    for (l, octave) in engine.arp.data.pages[0].loops.iter_mut().zip([0, -1, 2, 0]) {
+        l.octave = octave;
+    }
     engine.configure(engine.host_config, &mut |_| {});
     engine.arp.data.pages[0].loops[1].steps[1].octave = 1;
     let snapshot = engine.snapshot();
-    assert_eq!(&snapshot.arp_notes[..snapshot.arp_len as usize], &[60, 64, 67, 64, 48, 52, 55, 52, 84, 88, 91, 88]);
+    assert_eq!(
+        &snapshot.arp_notes[..snapshot.arp_len as usize],
+        &[60, 64, 67, 64, 48, 52, 55, 52, 84, 88, 91, 88]
+    );
     let played = attacks(&advance(&mut engine, 1201));
-    assert_eq!(played.iter().map(|e| e.2).collect::<Vec<_>>(), [60, 64, 67, 64, 48, 64, 55, 52, 84, 88, 91, 88]);
+    assert_eq!(
+        played.iter().map(|e| e.2).collect::<Vec<_>>(),
+        [60, 64, 67, 64, 48, 64, 55, 52, 84, 88, 91, 88]
+    );
     assert!(engine.arp.done);
 }
 
@@ -895,12 +1195,17 @@ fn arp_four_loops_display_and_play_all_96_occurrences() {
     let mut config = engine.host_config;
     config.arp_settings[0].octaves = 4;
     engine.configure(config, &mut |_| {});
-    for (l, octave) in engine.arp.data.pages[0].loops.iter_mut().zip([0, 1, 2, 3]) { l.octave = octave; }
+    for (l, octave) in engine.arp.data.pages[0].loops.iter_mut().zip([0, 1, 2, 3]) {
+        l.octave = octave;
+    }
     engine.configure(engine.host_config, &mut |_| {});
     let snapshot = engine.snapshot();
     assert_eq!(snapshot.arp_len as usize, STEPS);
     let played = attacks(&advance(&mut engine, 9601));
-    assert_eq!(played.iter().map(|e| i16::from(e.2)).collect::<Vec<_>>(), snapshot.arp_notes);
+    assert_eq!(
+        played.iter().map(|e| i16::from(e.2)).collect::<Vec<_>>(),
+        snapshot.arp_notes
+    );
     assert_eq!(played.last().map(|e| e.0), Some(9500));
     assert!(engine.arp.done);
 }
@@ -910,36 +1215,55 @@ fn arp_loop_and_step_octaves_combine_before_midi_range_validation() {
     for (root, loop_octave, step_octave) in [(120, 1, -1), (4, -1, 1)] {
         let mut engine = make_engine(ArpMode::Once, 0);
         engine.notes = notes(&[root]);
-        for l in &mut engine.arp.data.pages[0].loops { l.octave = loop_octave; }
+        for l in &mut engine.arp.data.pages[0].loops {
+            l.octave = loop_octave;
+        }
         engine.configure(engine.host_config, &mut |_| {});
         engine.arp.data.pages[0].loops[0].steps[0].octave = step_octave;
-        assert_eq!(attacks(&advance(&mut engine, 101)).iter().map(|e| e.2).collect::<Vec<_>>(), [root]);
+        assert_eq!(
+            attacks(&advance(&mut engine, 101))
+                .iter()
+                .map(|e| e.2)
+                .collect::<Vec<_>>(),
+            [root]
+        );
     }
     let mut engine = make_engine(ArpMode::Once, 0);
     engine.notes = notes(&[120]);
-    for l in &mut engine.arp.data.pages[0].loops { l.octave = 1; }
+    for l in &mut engine.arp.data.pages[0].loops {
+        l.octave = 1;
+    }
     engine.configure(engine.host_config, &mut |_| {});
     assert!(attacks(&advance(&mut engine, 101)).is_empty());
 }
 
 #[test]
-fn arp_loop_octave_routes_are_independent_and_use_the_current_step_sources() {
-    for loop_index in 0..4 {
-        let mut e = make_engine(ArpMode::Once, 0);
-        e.notes = notes(&[24]);
-        let mut c = e.host_config;
-        c.arp_settings[0].octaves = 4;
-        c.routes[1] = routing::Route {
-            source: 10,
-            target: routing::TARGETS.iter().position(|t| t.id == routing::LOOP_OCTAVE_IDS[loop_index]).unwrap() as u8,
-            ..routing::Route::default()
-        };
-        for variation in &mut e.arp.data.pages[0].loops { variation.steps[0].mods[0] = 50; }
-        e.configure(c, &mut |_| {});
-        let played = attacks(&advance(&mut e, 401));
-        let expected: Vec<_> = (0..4).map(|i| if i == loop_index { 72 } else { 24 }).collect();
-        assert_eq!(played.iter().map(|e| e.2).collect::<Vec<_>>(), expected);
+fn tracker_variation_fields_are_not_modulation_destinations() {
+    for id in [
+        "arp_page",
+        "arp_pattern",
+        "rate",
+        "gate",
+        "swing",
+        "humanize",
+        "arp_octaves",
+        "arp_sync",
+        "arp_free_ms",
+        "arp_loop_1_octave",
+        "arp_loop_2_octave",
+        "arp_loop_3_octave",
+        "arp_loop_4_octave",
+    ] {
+        assert!(
+            routing::TARGETS
+                .iter()
+                .find(|target| target.id == id)
+                .is_some_and(|target| !target.available()),
+            "{id}"
+        );
     }
+    assert!(routing::SOURCES.iter().any(|source| *source == "Mod 1"));
+    assert!(routing::SOURCES.iter().any(|source| *source == "Mod 2"));
 }
 
 #[test]
@@ -953,7 +1277,12 @@ fn arp_paste_is_atomic_at_the_next_note_and_preserves_clock_and_sounding_notes()
     page.loops[0].octave = 1;
     page.loops[0].steps[1].velocity = 40;
     page.loops[0].steps[1].gate = 10;
-    let replacement = Settings { mode: ArpMode::Once, pattern: 1, free_ms: 80.0, ..settings(ArpMode::Once, 1) };
+    let replacement = Settings {
+        mode: ArpMode::Once,
+        pattern: 1,
+        free_ms: 80.0,
+        ..settings(ArpMode::Once, 1)
+    };
     let store = crate::arpeggiator::Store::new();
     store.replace_page(0, page, replacement);
     assert!(store.apply_pending(&mut e.arp.data));
@@ -979,18 +1308,13 @@ fn arp_paste_is_atomic_at_the_next_note_and_preserves_clock_and_sounding_notes()
 }
 
 #[test]
-fn arp_gate_telemetry_matches_the_routed_duration_and_preserves_saved_values() {
+fn arp_gate_telemetry_uses_the_saved_step_without_modulation() {
     let mut e = make_engine(ArpMode::Once, 0);
     e.arp.data.pages[0].loops[0].steps[0].gate = 20;
-    let mut c = e.host_config;
-    c.routes[1] = routing::Route {
-        source: 2,
-        target: routing::TARGETS.iter().position(|t| t.id == "gate").unwrap() as u8,
-        min: 0.5, max: 0.5,
-        ..routing::Route::default()
-    };
+    let c = e.host_config;
     e.configure(c, &mut |_| {});
     let effective = e.effective_arp_gate(20);
+    assert!((effective - 0.2).abs() < 0.0001);
     assert!((e.snapshot().arp_gates[0] - effective).abs() < 0.0001);
     let events = advance(&mut e, 100);
     let off = (100.0 * effective).round() as u64;
@@ -1013,6 +1337,9 @@ fn arp_pasted_once_mode_finishes_at_the_wrapped_boundary_without_restarting() {
     e.configure(e.host_config, &mut |_| {});
     assert_eq!((e.arp.phase, e.arp.next), (phase, boundary));
     let played = attacks(&advance(&mut e, 400));
-    assert_eq!(played.iter().map(|on| (on.0, on.2)).collect::<Vec<_>>(), [(800, 72)]);
+    assert_eq!(
+        played.iter().map(|on| (on.0, on.2)).collect::<Vec<_>>(),
+        [(800, 72)]
+    );
     assert!(e.arp.done);
 }

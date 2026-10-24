@@ -156,24 +156,45 @@ pub fn voice(
     inversion: u8,
     spread: u8,
 ) -> Notes {
-    voice_recipe(SavedChord { root, quality, second, additions: 0, transpose, inversion, spread }, spread)
+    voice_recipe(
+        SavedChord {
+            root,
+            quality,
+            second,
+            additions: 0,
+            transpose,
+            inversion,
+            spread,
+        },
+        spread,
+    )
 }
 
 /// Resolve every consumer from the same root-relative recipe, deduplicating pitch classes.
 pub fn recipe_intervals(chord: SavedChord) -> Notes {
-    let mut tones = intervals(chord.quality, chord.second.map(|n| (n as i16 - chord.root as i16).rem_euclid(12) as u8));
+    let mut tones = intervals(
+        chord.quality,
+        chord
+            .second
+            .map(|n| (n as i16 - chord.root as i16).rem_euclid(12) as u8),
+    );
     // A flat ninth alters a suspended second rather than forming a flat-second
     // suspension. Keep the recipe intact so releasing the addition restores sus2.
     if chord.additions & (1 << 1) != 0 && tones.as_slice().contains(&2) {
         let mut altered = Notes::default();
         for &tone in tones.as_slice() {
-            if tone != 2 { altered.push(tone as i16); }
+            if tone != 2 {
+                altered.push(tone as i16);
+            }
         }
         tones = altered;
     }
     for pc in 0..12u8 {
         if chord.additions & (1 << pc) != 0 && !tones.as_slice().iter().any(|n| n % 12 == pc) {
-            let interval = match pc { 1..=3 | 5..=6 | 8..=9 => pc + 12, _ => pc };
+            let interval = match pc {
+                1..=3 | 5..=6 | 8..=9 => pc + 12,
+                _ => pc,
+            };
             tones.push(interval as i16);
         }
     }
@@ -182,7 +203,12 @@ pub fn recipe_intervals(chord: SavedChord) -> Notes {
 }
 
 pub fn voice_recipe(chord: SavedChord, spread: u8) -> Notes {
-    let SavedChord { root, transpose, inversion, .. } = chord;
+    let SavedChord {
+        root,
+        transpose,
+        inversion,
+        ..
+    } = chord;
     let tones = recipe_intervals(chord);
     let inv = inversion as usize % tones.len;
     let mut out = Notes::default();
@@ -192,7 +218,9 @@ pub fn voice_recipe(chord: SavedChord, spread: u8) -> Notes {
         // Compound extensions span two octaves: rotate above the preceding tone,
         // before spreading, so the selected inversion remains the Close bass.
         let mut interval = tones.values[source] as i16;
-        while interval <= previous { interval += 12; }
+        while interval <= previous {
+            interval += 12;
+        }
         previous = interval;
         let open = match spread.min((VOICING_NAMES.len() - 1) as u8) {
             1 if i % 2 == 1 => 12,
@@ -250,9 +278,12 @@ pub fn lead(
         let echo_movement: i32 = echoes
             .iter()
             .map(|&echo| {
-                notes.as_slice().iter()
+                notes
+                    .as_slice()
+                    .iter()
                     .map(|&note| i32::from(echo.abs_diff(note)))
-                    .min().unwrap_or(0)
+                    .min()
+                    .unwrap_or(0)
             })
             .sum();
         let distance = movement(previous_notes, notes) + echo_movement;
@@ -266,7 +297,14 @@ pub fn lead(
     for inversion in 0..tones.len {
         for octave in [-24i16, -12, 0, 12] {
             let transpose = chord.transpose as i16 + octave;
-            let candidate = voice_recipe(SavedChord { transpose: transpose as i8, inversion: inversion as u8, ..chord }, spread);
+            let candidate = voice_recipe(
+                SavedChord {
+                    transpose: transpose as i8,
+                    inversion: inversion as u8,
+                    ..chord
+                },
+                spread,
+            );
             if candidate.len != tones.len
                 || candidate.len != base.len
                 || candidate
@@ -290,6 +328,21 @@ pub fn lead(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tracker_chord_symbols_parse_supported_harmony_and_slash_basses() {
+        let c = parse_chord_symbol("Cmaj7/E").unwrap();
+        assert_eq!((c.root, c.quality, c.inversion), (0, 3, 1));
+        assert_eq!(parse_chord_symbol("Dbm9").unwrap().root, 1);
+        let sus = parse_chord_symbol("Gsus4").unwrap();
+        assert_eq!(sus.second, Some(0));
+        assert_eq!(
+            recipe_intervals(parse_chord_symbol("C(add#11,no5)").unwrap()).as_slice(),
+            &[0, 4, 6]
+        );
+        assert!(parse_chord_symbol("C nonsense").is_none());
+        assert!(parse_chord_symbol("Cmaj7/H").is_none());
+    }
     #[test]
     fn smart_voice_leading_preserves_tones_and_midi_bounds() {
         let previous = SavedChord {
@@ -376,7 +429,8 @@ mod tests {
     }
 }
 
-pub const SCALE_NAMES: [&str; 8] = [
+// Keep the original eight IDs stable for saved presets.
+pub const SCALE_NAMES: [&str; 23] = [
     "Major",
     "Natural minor",
     "Harmonic minor",
@@ -385,6 +439,26 @@ pub const SCALE_NAMES: [&str; 8] = [
     "Lydian",
     "Major pentatonic",
     "Minor pentatonic",
+    "Phrygian",
+    "Locrian",
+    "Locrian #6",
+    "Ionian augmented",
+    "Dorian #4",
+    "Phrygian dominant",
+    "Lydian #2",
+    "Super Locrian bb7",
+    "Melodic minor",
+    "Dorian b2",
+    "Lydian augmented",
+    "Lydian dominant",
+    "Mixolydian b6",
+    "Locrian natural 2",
+    "Altered",
+];
+pub const SCALE_FAMILIES: [(&str, [usize; 7]); 3] = [
+    ("Major modes", [0, 3, 8, 5, 4, 1, 9]),
+    ("Harmonic minor modes", [2, 10, 11, 12, 13, 14, 15]),
+    ("Melodic minor modes", [16, 17, 18, 19, 20, 21, 22]),
 ];
 pub fn scale_tones(scale: u8) -> &'static [u8] {
     match scale {
@@ -395,9 +469,64 @@ pub fn scale_tones(scale: u8) -> &'static [u8] {
         5 => &[0, 2, 4, 6, 7, 9, 11],
         6 => &[0, 2, 4, 7, 9],
         7 => &[0, 3, 5, 7, 10],
+        8 => &[0, 1, 3, 5, 7, 8, 10],
+        9 => &[0, 1, 3, 5, 6, 8, 10],
+        10 => &[0, 1, 3, 5, 6, 9, 10],
+        11 => &[0, 2, 4, 5, 8, 9, 11],
+        12 => &[0, 2, 3, 6, 7, 9, 10],
+        13 => &[0, 1, 4, 5, 7, 8, 10],
+        14 => &[0, 3, 4, 6, 7, 9, 11],
+        15 => &[0, 1, 3, 4, 6, 8, 9],
+        16 => &[0, 2, 3, 5, 7, 9, 11],
+        17 => &[0, 1, 3, 5, 7, 9, 10],
+        18 => &[0, 2, 4, 6, 8, 9, 11],
+        19 => &[0, 2, 4, 6, 7, 9, 10],
+        20 => &[0, 2, 4, 5, 7, 8, 10],
+        21 => &[0, 2, 3, 5, 6, 8, 10],
+        22 => &[0, 1, 3, 4, 6, 8, 10],
         _ => &[0, 2, 4, 5, 7, 9, 11],
     }
 }
+
+#[cfg(test)]
+mod scale_tests {
+    use super::*;
+
+    #[test]
+    fn scale_families_are_all_seven_rotations_of_their_parent() {
+        let mut seen = vec![false; SCALE_NAMES.len()];
+        for (_, modes) in SCALE_FAMILIES {
+            let parent = scale_tones(modes[0] as u8);
+            for (degree, mode) in modes.into_iter().enumerate() {
+                assert!(!seen[mode]);
+                seen[mode] = true;
+                let expected: Vec<_> = (0..7)
+                    .map(|i| (parent[(degree + i) % 7] + 12 - parent[degree]) % 12)
+                    .collect();
+                assert_eq!(scale_tones(mode as u8), expected, "{}", SCALE_NAMES[mode]);
+            }
+        }
+        seen[6] = true;
+        seen[7] = true;
+        assert!(seen.into_iter().all(|s| s));
+    }
+
+    #[test]
+    fn new_modes_drive_key_filtering_and_note_spelling() {
+        for mode in 8..SCALE_NAMES.len() as u8 {
+            for root in 0..12 {
+                // A power chord is in key exactly when both root and fifth are.
+                assert_eq!(in_key(root, 11, 0, mode),
+                    scale_tones(mode).contains(&root)
+                        && scale_tones(mode).contains(&((root + 7) % 12)));
+            }
+        }
+        assert_eq!(note_name_in_key(3, 0, 14, 0), "D#");
+        assert_eq!(note_name_in_key(9, 0, 15, 0), "Bbb");
+        assert_eq!(note_name_in_key(4, 0, 22, 0), "Fb");
+    }
+}
+
 pub fn in_key(root: u8, quality: u8, key: u8, scale: u8) -> bool {
     intervals(quality, None).as_slice().iter().all(|&n| {
         scale_tones(scale).contains(&((root as i16 + n as i16 - key as i16).rem_euclid(12) as u8))
@@ -455,7 +584,7 @@ pub fn filter_notes(notes: Notes, filter: u8) -> Notes {
     }
     out
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SavedChord {
     pub root: u8,
     pub second: Option<u8>,
@@ -464,6 +593,178 @@ pub struct SavedChord {
     pub inversion: u8,
     pub spread: u8,
     pub transpose: i8,
+}
+/// Parse chord symbols accepted by the chordboard's display, including its extension
+/// labels and slash bass notation. Invalid or unsupported symbols return `None`.
+pub fn parse_chord_symbol(input: &str) -> Option<SavedChord> {
+    let text = input.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let (symbol, bass) = match text.split_once('/') {
+        Some((chord, bass)) if !bass.contains('/') => {
+            (chord.trim(), Some(parse_note_name(bass.trim())?))
+        }
+        Some(_) => return None,
+        None => (text, None),
+    };
+    let first = symbol.chars().next()?;
+    if !matches!(first.to_ascii_uppercase(), 'A'..='G') {
+        return None;
+    }
+    let root_len = symbol
+        .char_indices()
+        .nth(1)
+        .and_then(|(at, ch)| matches!(ch, '#' | 'b' | '♯' | '♭').then_some(at + ch.len_utf8()))
+        .unwrap_or_else(|| first.len_utf8());
+    let root = parse_note_name(&symbol[..root_len])?;
+    let mut suffix = symbol[root_len..].trim().to_ascii_lowercase();
+    let mut additions = 0u16;
+    let mut omit_third = false;
+    let mut omit_fifth = false;
+    if let Some(open) = suffix.find('(') {
+        if !suffix.ends_with(')') {
+            return None;
+        }
+        let extras = suffix[open + 1..suffix.len() - 1].split(',');
+        for extra in extras {
+            let extra = extra.trim();
+            if extra == "no3" {
+                omit_third = true;
+                continue;
+            }
+            if extra == "no5" {
+                omit_fifth = true;
+                continue;
+            }
+            let name = extra.strip_prefix("add")?;
+            let pc = match name {
+                "1" => 0,
+                "b2" | "b9" => 1,
+                "2" | "9" => 2,
+                "b3" => 3,
+                "3" => 4,
+                "4" | "11" => 5,
+                "b5" => 6,
+                "5" => 7,
+                "#5" | "b6" => 8,
+                "6" => 9,
+                "b7" => 10,
+                "7" | "maj7" => 11,
+                "#9" => 3,
+                "#11" => 6,
+                "b13" => 8,
+                "13" => 9,
+                _ => return None,
+            };
+            additions |= 1 << pc;
+        }
+        suffix.truncate(open);
+    }
+    let extension = [
+        "maj13", "maj11", "maj9", "m13", "m11", "m9", "13", "11", "9",
+    ]
+    .iter()
+    .find(|ext| suffix.starts_with(**ext))
+    .copied();
+    let (mut quality, rest) = if let Some(ext) = extension {
+        let (quality, pc) = match ext {
+            "maj9" => (3, 2),
+            "maj11" => (3, 5),
+            "maj13" => (3, 9),
+            "m9" => (4, 2),
+            "m11" => (4, 5),
+            "m13" => (4, 9),
+            "9" => (2, 2),
+            "11" => (2, 5),
+            "13" => (2, 9),
+            _ => unreachable!(),
+        };
+        additions |= 1 << pc;
+        (quality, &suffix[ext.len()..])
+    } else {
+        let (quality, rest) = [
+            "m7b5", "maj7", "dim7", "dim", "aug", "m7", "m6", "m", "7", "6", "5", "",
+        ]
+        .iter()
+        .find_map(|q| suffix.strip_prefix(q).map(|rest| (*q, rest)))?;
+        (
+            match quality {
+                "" => 0,
+                "m" => 1,
+                "7" => 2,
+                "maj7" => 3,
+                "m7" => 4,
+                "dim" => 5,
+                "aug" => 6,
+                "6" => 7,
+                "m6" => 8,
+                "dim7" => 9,
+                "m7b5" => 10,
+                "5" => 11,
+                _ => return None,
+            },
+            rest,
+        )
+    };
+    let (rest, mut second) = if let Some(rest) = rest.strip_prefix("sus2") {
+        (rest, Some((root + 2) % 12))
+    } else if let Some(rest) = rest.strip_prefix("sus4") {
+        (rest, Some((root + 5) % 12))
+    } else {
+        (rest, None)
+    };
+    if !rest.is_empty() {
+        return None;
+    }
+    if omit_third && quality == 0 {
+        quality = 11;
+    }
+    if omit_fifth && additions & (1 << 6) != 0 {
+        additions &= !(1 << 6);
+        second = Some((root + 6) % 12);
+    }
+    let mut chord = SavedChord {
+        root,
+        second,
+        additions,
+        quality,
+        inversion: 0,
+        spread: 0,
+        transpose: 0,
+    };
+    if let Some(bass) = bass {
+        let tones = recipe_intervals(chord);
+        chord.inversion = tones
+            .as_slice()
+            .iter()
+            .position(|tone| (root as i16 + *tone as i16).rem_euclid(12) as u8 == bass)?
+            as u8;
+    }
+    Some(chord)
+}
+fn parse_note_name(name: &str) -> Option<u8> {
+    let mut chars = name.chars();
+    let letter = chars.next()?.to_ascii_uppercase();
+    let pitch: i16 = match letter {
+        'C' => 0,
+        'D' => 2,
+        'E' => 4,
+        'F' => 5,
+        'G' => 7,
+        'A' => 9,
+        'B' => 11,
+        _ => return None,
+    };
+    let accidental = match chars.as_str() {
+        "" => 0,
+        "#" | "♯" => 1,
+        "b" | "♭" => -1,
+        "##" | "x" => 2,
+        "bb" => -2,
+        _ => return None,
+    };
+    Some((pitch + accidental).rem_euclid(12) as u8)
 }
 impl SavedChord {
     pub fn encode(self) -> u64 {
@@ -508,7 +809,12 @@ pub fn chord_name_in_key(chord: SavedChord, key: u8, scale: u8, preference: i32)
     chord_name_with_root(chord, &note_name_in_key(pitch, key, scale, preference))
 }
 fn chord_name_with_root(chord: SavedChord, root: &str) -> String {
-    let base = intervals(chord.quality, chord.second.map(|n| (n as i16 - chord.root as i16).rem_euclid(12) as u8));
+    let base = intervals(
+        chord.quality,
+        chord
+            .second
+            .map(|n| (n as i16 - chord.root as i16).rem_euclid(12) as u8),
+    );
     let tones = recipe_intervals(chord);
     let has = |n| base.as_slice().contains(&n) && tones.as_slice().contains(&n);
     let resolved_has = |n| tones.as_slice().contains(&n);
@@ -545,7 +851,12 @@ fn chord_name_with_root(chord: SavedChord, root: &str) -> String {
     if has(6) && has(4) && !resolved_has(7) {
         suffix.push_str("(add#11,no5)");
     }
-    if resolved_has(14) && (has(10) || has(11)) && has(7) && (has(3) || has(4)) && suffix.ends_with('7') {
+    if resolved_has(14)
+        && (has(10) || has(11))
+        && has(7)
+        && (has(3) || has(4))
+        && suffix.ends_with('7')
+    {
         suffix.pop();
         suffix.push('9');
     }
@@ -553,16 +864,45 @@ fn chord_name_with_root(chord: SavedChord, root: &str) -> String {
     if no_third && !suffix.starts_with('5') {
         additions.push("no3".to_string());
     }
-    if no_third && has(6) { additions.push("addb5".to_string()); }
-    if no_third && has(8) { additions.push("add#5".to_string()); }
+    if no_third && has(6) {
+        additions.push("addb5".to_string());
+    }
+    if no_third && has(8) {
+        additions.push("add#5".to_string());
+    }
     for &interval in tones.as_slice() {
         // The base b9 is an addition too; all other base tones are named above.
-        if interval != 13 && base.as_slice().contains(&interval) { continue; }
-        if interval == 14 && suffix.ends_with('9') { continue; }
-        let label = match interval { 0 => "1", 4 => "3", 6 => "b5", 7 => "5", 8 => "#5", 9 => "6", 10 => "b7", 11 => "maj7", 13 => "b9", 14 => "9", 15 => "#9", 17 => "11", 18 => "#11", 20 => "b13", 21 => "13", _ => "?" };
+        if interval != 13 && base.as_slice().contains(&interval) {
+            continue;
+        }
+        if interval == 14 && suffix.ends_with('9') {
+            continue;
+        }
+        let label = match interval {
+            0 => "1",
+            4 => "3",
+            6 => "b5",
+            7 => "5",
+            8 => "#5",
+            9 => "6",
+            10 => "b7",
+            11 => "maj7",
+            13 => "b9",
+            14 => "9",
+            15 => "#9",
+            17 => "11",
+            18 => "#11",
+            20 => "b13",
+            21 => "13",
+            _ => "?",
+        };
         additions.push(format!("add{label}"));
     }
-    if !additions.is_empty() { suffix.push('('); suffix.push_str(&additions.join(",")); suffix.push(')'); }
+    if !additions.is_empty() {
+        suffix.push('(');
+        suffix.push_str(&additions.join(","));
+        suffix.push(')');
+    }
     format!("{}{}", root, suffix)
 }
 
@@ -672,7 +1012,15 @@ mod voicing_variation_tests {
 mod recipe_tests {
     use super::*;
     fn chord(quality: u8, additions: u16) -> SavedChord {
-        SavedChord { root: 36, second: None, quality, additions, inversion: 0, spread: 0, transpose: 0 }
+        SavedChord {
+            root: 36,
+            second: None,
+            quality,
+            additions,
+            inversion: 0,
+            spread: 0,
+            transpose: 0,
+        }
     }
     #[test]
     fn flat_ninth_alters_suspended_second_across_roots_and_qualities() {
@@ -691,9 +1039,16 @@ mod recipe_tests {
                 (10, vec![0, 6, 10, 13], "7(no3,addb5,addb9)"),
                 (11, vec![0, 7, 13], "5(addb9)"),
             ] {
-                let c = SavedChord { root, second: Some(root + 2), ..chord(quality, 1 << 1) };
+                let c = SavedChord {
+                    root,
+                    second: Some(root + 2),
+                    ..chord(quality, 1 << 1)
+                };
                 assert_eq!(recipe_intervals(c).as_slice(), expected.as_slice());
-                assert_eq!(chord_name(c), format!("{}{suffix}", NOTE_NAMES[(root % 12) as usize]));
+                assert_eq!(
+                    chord_name(c),
+                    format!("{}{suffix}", NOTE_NAMES[(root % 12) as usize])
+                );
                 assert_eq!(SavedChord::decode(c.encode()), Some(c));
                 let restored = SavedChord { additions: 0, ..c };
                 assert!(recipe_intervals(restored).as_slice().contains(&2));
@@ -708,18 +1063,38 @@ mod recipe_tests {
             (Some(41), vec![0, 5, 7, 13], "Csus4(addb9)"),
             (Some(43), vec![0, 7, 13], "C5(addb9)"),
         ] {
-            let c = SavedChord { second, ..chord(0, 1 << 1) };
+            let c = SavedChord {
+                second,
+                ..chord(0, 1 << 1)
+            };
             assert_eq!(recipe_intervals(c).as_slice(), expected.as_slice());
             assert_eq!(chord_name(c), label);
         }
-        assert_eq!(recipe_intervals(SavedChord { second: Some(38), ..chord(0, 1 << 3) }).as_slice(), &[0, 2, 7, 15]);
+        assert_eq!(
+            recipe_intervals(SavedChord {
+                second: Some(38),
+                ..chord(0, 1 << 3)
+            })
+            .as_slice(),
+            &[0, 2, 7, 15]
+        );
     }
     #[test]
     fn extension_variants_coexist_with_every_base_tone() {
-        let c = chord(2, (1 << 1) | (1 << 2) | (1 << 3) | (1 << 5) | (1 << 6) | (1 << 8) | (1 << 9) | (1 << 11));
-        assert_eq!(recipe_intervals(c).as_slice(), &[0, 4, 7, 10, 11, 13, 14, 15, 17, 18, 20, 21]);
+        let c = chord(
+            2,
+            (1 << 1) | (1 << 2) | (1 << 3) | (1 << 5) | (1 << 6) | (1 << 8) | (1 << 9) | (1 << 11),
+        );
+        assert_eq!(
+            recipe_intervals(c).as_slice(),
+            &[0, 4, 7, 10, 11, 13, 14, 15, 17, 18, 20, 21]
+        );
         let label = chord_name(c);
-        for name in ["C9", "addb9", "add#9", "add11", "add#11", "addb13", "add13", "addmaj7"] { assert!(label.contains(name), "{label} lacks {name}"); }
+        for name in [
+            "C9", "addb9", "add#9", "add11", "add#11", "addb13", "add13", "addmaj7",
+        ] {
+            assert!(label.contains(name), "{label} lacks {name}");
+        }
         assert_eq!(chord_name(chord(10, 0)), "Cm7b5");
         assert_eq!(chord_name(chord(3, 1 << 2)), "Cmaj9");
         assert_eq!(chord_name(chord(4, 1 << 2)), "Cm9");
@@ -728,15 +1103,31 @@ mod recipe_tests {
     }
     #[test]
     fn dense_recipes_keep_all_pitch_classes_in_every_inversion_and_spread() {
-        for spread in 0..5 { for inversion in 0..12 {
-            let c = SavedChord { root: 12, spread, inversion, ..chord(0, 0xfff) };
-            let notes = voice_recipe(c, spread);
-            assert_eq!(notes.len, 12, "spread={spread} inversion={inversion}");
-            if spread == 0 { assert_eq!(notes.values[0] % 12, (c.root + recipe_intervals(c).values[inversion as usize]) % 12); }
-            let mut pcs: Vec<_> = notes.as_slice().iter().map(|n| n % 12).collect();
-            pcs.sort_unstable(); assert_eq!(pcs, (0..12).collect::<Vec<_>>());
-            assert_eq!(SavedChord::decode(c.encode()), Some(c));
-        }}
-        assert_eq!(recipe_intervals(chord(0, (1 << 0) | (1 << 4) | (1 << 7))).as_slice(), &[0,4,7]);
+        for spread in 0..5 {
+            for inversion in 0..12 {
+                let c = SavedChord {
+                    root: 12,
+                    spread,
+                    inversion,
+                    ..chord(0, 0xfff)
+                };
+                let notes = voice_recipe(c, spread);
+                assert_eq!(notes.len, 12, "spread={spread} inversion={inversion}");
+                if spread == 0 {
+                    assert_eq!(
+                        notes.values[0] % 12,
+                        (c.root + recipe_intervals(c).values[inversion as usize]) % 12
+                    );
+                }
+                let mut pcs: Vec<_> = notes.as_slice().iter().map(|n| n % 12).collect();
+                pcs.sort_unstable();
+                assert_eq!(pcs, (0..12).collect::<Vec<_>>());
+                assert_eq!(SavedChord::decode(c.encode()), Some(c));
+            }
+        }
+        assert_eq!(
+            recipe_intervals(chord(0, (1 << 0) | (1 << 4) | (1 << 7))).as_slice(),
+            &[0, 4, 7]
+        );
     }
 }

@@ -7,11 +7,11 @@ const THEME_BUTTON_W: f32 = 72.0;
 pub(super) const THEME_BUTTON: (f32, f32, f32, f32) =
     (UI_W - 20.0 - THEME_BUTTON_W, 22.0, THEME_BUTTON_W, 26.0);
 
-pub(super) const DROP_SLIDER_GAP: f32 = 10.0;
+pub(super) const SECTION_GAP: f32 = 10.0;
 pub(super) const DROP_SLIDER_W: f32 = 40.0;
 const DROP_SLIDER_EXTRA: f32 = 10.0;
 pub(super) const DROP_TIME_SLIDER: (f32, f32, f32, f32) = (
-    GRAPH_X + GRAPH_W + DROP_SLIDER_GAP + 16.0,
+    GRAPH_X + GRAPH_W + SECTION_GAP + (DROP_READOUT_W - DROP_SLIDER_W) * 0.5,
     GRAPH_Y,
     DROP_SLIDER_W,
     GRAPH_H + DROP_SLIDER_EXTRA,
@@ -29,19 +29,23 @@ pub(super) const DROP_TIME_READOUT: (f32, f32, f32, f32) = (
 );
 
 pub(super) const RETURN_TIME_SLIDER: (f32, f32, f32, f32) = (
-    DROP_TIME_SLIDER.0 + 80.0,
+    DROP_TIME_SLIDER.0 + DROP_READOUT_W + SECTION_GAP,
     GRAPH_Y,
     DROP_SLIDER_W,
     GRAPH_H + DROP_SLIDER_EXTRA,
 );
 pub(super) const RETURN_TIME_READOUT: (f32, f32, f32, f32) = (
-    DROP_TIME_READOUT.0 + 80.0,
+    DROP_TIME_READOUT.0 + DROP_READOUT_W + SECTION_GAP,
     DROP_TIME_READOUT.1,
     DROP_READOUT_W,
     DROP_READOUT_H,
 );
-pub(super) const XY_PAD: (f32, f32, f32, f32) =
-    (RETURN_TIME_SLIDER.0 + 80.0, GRAPH_Y, GRAPH_H, GRAPH_H);
+pub(super) const XY_PAD: (f32, f32, f32, f32) = (
+    RETURN_TIME_READOUT.0 + RETURN_TIME_READOUT.2 + SECTION_GAP,
+    GRAPH_Y,
+    GRAPH_H,
+    GRAPH_H,
+);
 pub(super) const XY_AXIS: (f32, f32, f32, f32) = (XY_PAD.0, 376.0, 124.0, 28.0);
 pub(super) const XY_MODE: (f32, f32, f32, f32) = (XY_PAD.0 + 132.0, 376.0, 120.0, 28.0);
 pub(super) const TIME_SYNC: (f32, f32, f32, f32) = (490.0, 22.0, 96.0, 30.0);
@@ -168,13 +172,13 @@ impl TapeStopView {
         if Self::inside(x, y, DROP_TIME_READOUT) {
             return Some(KnobId::DropTime);
         }
-        if self.show_axis_controls
+        if self.axis_controls_interactive()
             && self.knob_enabled(KnobId::RestartThresh)
             && Self::inside(x, y, trigger_value_rect())
         {
             return Some(KnobId::RestartThresh);
         }
-        if self.show_axis_controls {
+        if self.axis_controls_interactive() {
             if Self::inside(x, y, midi_value_rect()) {
                 return Some(self.midi_number_id());
             }

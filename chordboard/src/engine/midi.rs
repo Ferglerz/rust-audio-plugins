@@ -128,7 +128,12 @@ impl Engine {
         let id = channel as u16 * 128 + note as u16;
         if pressed {
             let quality = (self.config.scale_layout > 0)
-                .then(|| harmony::scale_quality(self.config.scale, (note % 12 + 12 - self.config.key.min(11)) % 12))
+                .then(|| {
+                    harmony::scale_quality(
+                        self.config.scale,
+                        (note % 12 + 12 - self.config.key.min(11)) % 12,
+                    )
+                })
                 .flatten();
             self.note_on(id, note, channel, velocity, quality, out);
         } else {
@@ -345,8 +350,15 @@ impl Engine {
                 out(Out::Cc(self.master(), 74, value));
             }
         } else if !self.is_member(channel) {
-            let index = match cc { 1 => Some(1), 11 => Some(2), 2 => Some(3), _ => None };
-            let value = index.and_then(|index| self.source_overrides[index]).unwrap_or(value);
+            let index = match cc {
+                1 => Some(1),
+                11 => Some(2),
+                2 => Some(3),
+                _ => None,
+            };
+            let value = index
+                .and_then(|index| self.source_overrides[index])
+                .unwrap_or(value);
             out(Out::Cc(self.master(), cc, value));
         }
     }

@@ -7,15 +7,27 @@ pub(super) fn index(pattern: u8, step: usize, total: usize, seed: &mut u32) -> u
         2 => {
             let span = (total * 2).saturating_sub(2).max(1);
             let p = step % span;
-            if p < total { p } else { span - p }
+            if p < total {
+                p
+            } else {
+                span - p
+            }
         }
         3 => {
             let k = step / 2;
-            if step.is_multiple_of(2) { k % total } else { (k + 2) % total }
+            if step.is_multiple_of(2) {
+                k % total
+            } else {
+                (k + 2) % total
+            }
         }
         4 => {
             let start = total - 1 - (step / 2) % total;
-            if step.is_multiple_of(2) { start } else { (start + total - 2 % total) % total }
+            if step.is_multiple_of(2) {
+                start
+            } else {
+                (start + total - 2 % total) % total
+            }
         }
         6 => random(seed) as usize % total,
         // Played order is prepared by the caller, before ordinary ascending traversal.

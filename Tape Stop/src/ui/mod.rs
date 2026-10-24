@@ -39,8 +39,8 @@ fn prefs() -> &'static AppearanceStore {
 }
 
 // Outer margin matches y-axis % label left edge (GRAPH_X - 40 = 20).
-// Keep the graph size and add two time controls plus a square performance pad.
-const UI_W: f32 = 1200.0;
+// Fit the graph, equally spaced time controls, and square performance pad.
+const UI_W: f32 = controls::XY_PAD.0 + controls::XY_PAD.2 + 20.0;
 // The expanded cog controls share the graph's readout row.
 const UI_H: f32 = 430.0;
 const HEADER_HEIGHT: f32 = 70.0;
@@ -103,6 +103,7 @@ pub struct TapeStopView {
     curve_hover_anim: Cell<f32>,
     auto_restart_anim: ButtonAnim,
     show_axis_controls: bool,
+    axis_controls_progress: f32,
     gesture_params: [Option<ParamPtr>; 2],
     pad_binding: Option<(XAxis, PadMode, bool)>,
 }
@@ -149,6 +150,7 @@ pub fn create(
                 curve_hover_anim: Cell::new(0.0),
                 auto_restart_anim: ButtonAnim::new(),
                 show_axis_controls: false,
+                axis_controls_progress: 0.0,
                 gesture_params: [None; 2],
                 pad_binding: None,
             }
@@ -193,8 +195,15 @@ mod tests {
     }
 
     #[test]
-    fn performance_layout_preserves_graph_and_matching_time_sliders() {
-        assert!((GRAPH_W - 852.0 * 0.8).abs() < 1e-3);
+    fn performance_layout_has_narrower_graph_and_equal_section_gaps() {
+        assert!((GRAPH_W - 852.0 * 0.8 * 0.75).abs() < 1e-3);
+        for gap in [
+            DROP_TIME_READOUT.0 - (GRAPH_X + GRAPH_W),
+            RETURN_TIME_READOUT.0 - (DROP_TIME_READOUT.0 + DROP_TIME_READOUT.2),
+            XY_PAD.0 - (RETURN_TIME_READOUT.0 + RETURN_TIME_READOUT.2),
+        ] {
+            assert!((gap - SECTION_GAP).abs() < 1e-3);
+        }
         assert!(DROP_TIME_SLIDER.0 > GRAPH_X + GRAPH_W);
         assert!(RETURN_TIME_SLIDER.0 > DROP_TIME_READOUT.0 + DROP_TIME_READOUT.2);
         assert_eq!(DROP_TIME_SLIDER.1, RETURN_TIME_SLIDER.1);

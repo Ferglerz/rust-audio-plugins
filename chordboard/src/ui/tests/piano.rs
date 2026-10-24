@@ -212,7 +212,10 @@ fn module_grid_and_keyboard_midi_controls_fit_without_overlapping() {
     assert_eq!(CHORDS_SURFACE.0, PIANO_SURFACE.0);
     assert_eq!(PERF_SURFACE.0 - CHORDS_SURFACE.0 - CHORDS_SURFACE.2, 12.0);
     assert_eq!(MOD_SURFACE.0 - PIANO_SURFACE.0 - PIANO_SURFACE.2, 16.0);
-    assert_eq!(MOD_SURFACE.1 + MOD_SURFACE.3, PIANO_SURFACE.1 + PIANO_SURFACE.3);
+    assert_eq!(
+        MOD_SURFACE.1 + MOD_SURFACE.3,
+        PIANO_SURFACE.1 + PIANO_SURFACE.3
+    );
     assert_eq!(H, PIANO_SURFACE.1 + PIANO_SURFACE.3 + 18.0);
     for mpe in [false, true] {
         let view = view(1, mpe);

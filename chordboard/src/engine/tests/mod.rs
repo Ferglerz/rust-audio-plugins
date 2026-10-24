@@ -1,9 +1,9 @@
-mod support;
-mod input;
-mod playback;
-mod chords;
-mod split;
-mod bass;
 mod arp;
+mod bass;
+mod chords;
 mod clock;
+mod input;
 mod patterns;
+mod playback;
+mod split;
+mod support;

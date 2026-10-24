@@ -86,13 +86,20 @@ impl ChordboardView {
     fn replacing_modulation_route(&self, id: &str) -> Option<usize> {
         self.params.routes.iter().rposition(|p| {
             let route = p.route();
-            self.params.effective_route(route).active() && !route.additive() && TARGETS[route.target as usize].id == id
+            self.params.effective_route(route).active()
+                && !route.additive()
+                && TARGETS[route.target as usize].id == id
         })
     }
     pub(super) fn modulation_hint(&self, id: &str) -> Option<String> {
         let slot = self.modulation_route(id)?;
         let r = self.params.routes[slot].route();
-        if r.additive() { return Some(format!("{} is offset by {} · Adjust the base value or edit its route", TARGETS[r.target as usize].name, SOURCES[r.source as usize])); }
+        if r.additive() {
+            return Some(format!(
+                "{} is offset by {} · Adjust the base value or edit its route",
+                TARGETS[r.target as usize].name, SOURCES[r.source as usize]
+            ));
+        }
         Some(format!(
             "{} is controlled by {} · Edit or remove its route to change it manually",
             TARGETS[r.target as usize].name, SOURCES[r.source as usize]
@@ -194,7 +201,12 @@ impl ChordboardView {
                 .map(|(_, r)| r.0 + r.2)
                 .fold(meter.0 + meter.2, f32::max);
             if hit(
-                (left, chips[0].1.1.min(meter.1), right - left, (last.1 + last.3).max(meter.1 + meter.3) - chips[0].1.1.min(meter.1)),
+                (
+                    left,
+                    chips[0].1 .1.min(meter.1),
+                    right - left,
+                    (last.1 + last.3).max(meter.1 + meter.3) - chips[0].1 .1.min(meter.1),
+                ),
                 x,
                 y,
             ) {
@@ -215,7 +227,11 @@ impl ChordboardView {
     pub(super) fn draw_route_chips(&self, d: &mut Draw) {
         for (slot, r) in self.route_chips() {
             let route = self.params.routes[slot].route();
-            let color = if self.params.effective_route(route).enabled { TEAL } else { MUTED };
+            let color = if self.params.effective_route(route).enabled {
+                TEAL
+            } else {
+                MUTED
+            };
             d.rounded_rect(r.0, r.1, r.2, r.3, 5.0, BG);
             d.outline_rounded(r.0, r.1, r.2, r.3, 5.0, alpha(color, 0.65), 1.0);
             let label = self.fit_text(
@@ -237,7 +253,12 @@ impl ChordboardView {
                 self.close_icon(d, remove, color, true);
             } else {
                 self.button_surface(d, remove, false, color);
-                style::Icon::Trash.draw(d, remove.0 + remove.2 * 0.5, remove.1 + remove.3 * 0.5, color);
+                style::Icon::Trash.draw(
+                    d,
+                    remove.0 + remove.2 * 0.5,
+                    remove.1 + remove.3 * 0.5,
+                    color,
+                );
             }
         }
     }
@@ -291,7 +312,9 @@ impl ChordboardView {
             });
             targets.extend(self.panel_controls().into_iter().map(|(c, r)| (c.id, r)));
         }
-        if self.arp_editor_overlay_visible() {targets.retain(|(_,r)|!hit(PIANO_SURFACE,r.0+r.2/2.0,r.1+r.3/2.0));}
+        if self.arp_editor_overlay_visible() {
+            targets.retain(|(_, r)| !hit(PIANO_SURFACE, r.0 + r.2 / 2.0, r.1 + r.3 / 2.0));
+        }
         let mut mapped: Vec<_> = targets
             .into_iter()
             .filter_map(|(id, r)| {
@@ -302,8 +325,14 @@ impl ChordboardView {
             })
             .collect();
         mapped.extend(self.arp_editor_route_targets());
-        mapped.extend(crate::engine::routing::TARGETS.iter().enumerate()
-            .filter_map(|(target, t)| t.source_index().map(|source| (target, meter_rect(source)))));
+        mapped.extend(
+            crate::engine::routing::TARGETS
+                .iter()
+                .enumerate()
+                .filter_map(|(target, t)| {
+                    t.source_index().map(|source| (target, meter_rect(source)))
+                }),
+        );
         mapped
     }
 
@@ -320,7 +349,10 @@ impl ChordboardView {
         self.params
             .routes
             .iter()
-            .rposition(|p| self.params.effective_route(p.route()).active() && p.target.value() as usize == target)
+            .rposition(|p| {
+                self.params.effective_route(p.route()).active()
+                    && p.target.value() as usize == target
+            })
             .or_else(|| {
                 self.params
                     .routes
@@ -344,8 +376,12 @@ impl ChordboardView {
             return;
         }
         let existing = if matches!(source, 9 | 10) {
-            self.params.routes.iter().position(|p| p.source.value() as usize == source + 1 && p.target.value() as usize == target)
-        } else { self.route_for_target(target) };
+            self.params.routes.iter().position(|p| {
+                p.source.value() as usize == source + 1 && p.target.value() as usize == target
+            })
+        } else {
+            self.route_for_target(target)
+        };
         let slot = existing.or_else(|| {
             self.params
                 .routes
@@ -461,8 +497,13 @@ impl ChordboardView {
             if linked && !active {
                 let origin = meter_rect(source);
                 let mod_target = TARGETS[target].source_index().is_some();
-                let (start, end) = if mod_target { mod_route_anchors(origin, r) } else {
-                    (route_anchor(origin, r.1 + r.3 * 0.5), route_anchor(r, origin.1 + origin.3 * 0.5))
+                let (start, end) = if mod_target {
+                    mod_route_anchors(origin, r)
+                } else {
+                    (
+                        route_anchor(origin, r.1 + r.3 * 0.5),
+                        route_anchor(r, origin.1 + origin.3 * 0.5),
+                    )
                 };
                 self.draw_route_connection(d, start, end, source, mod_target);
             }
@@ -474,8 +515,13 @@ impl ChordboardView {
             return;
         }
         let r = meter_rect(source);
-        let mod_target = self.route_target_at(x, y).and_then(|t| TARGETS[t].source_index());
-        let (start, end) = mod_target.map_or_else(|| (route_anchor(r, y), (x, y)), |i| mod_route_anchors(r, meter_rect(i)));
+        let mod_target = self
+            .route_target_at(x, y)
+            .and_then(|t| TARGETS[t].source_index());
+        let (start, end) = mod_target.map_or_else(
+            || (route_anchor(r, y), (x, y)),
+            |i| mod_route_anchors(r, meter_rect(i)),
+        );
         self.draw_route_connection(d, start, end, source, mod_target.is_some());
         if let Some(label) = self.route_drag_hint() {
             let label = if self.route_target_at(x, y).is_some() {
@@ -492,26 +538,37 @@ impl ChordboardView {
         }
     }
 
-    fn draw_route_connection(&self, d: &mut Draw, start: (f32, f32), end: (f32, f32), source: usize, mod_target: bool) {
+    fn draw_route_connection(
+        &self,
+        d: &mut Draw,
+        start: (f32, f32),
+        end: (f32, f32),
+        source: usize,
+        mod_target: bool,
+    ) {
         let color = if matches!(source, 9 | 10) { GOLD } else { TEAL };
         let bend = ((end.1 - start.1).abs() * 0.4).clamp(24.0, 180.0)
             * if end.1 >= start.1 { 1.0 } else { -1.0 };
-        let points: Vec<_> = if mod_target { rounded_mod_connection(start, end) } else { (0..=32)
-            .map(|i| {
-                let t = i as f32 / 32.0;
-                let u = 1.0 - t;
-                (
-                    u.powi(3) * start.0
-                        + 3.0 * u * u * t * start.0
-                        + 3.0 * u * t * t * end.0
-                        + t.powi(3) * end.0,
-                    u.powi(3) * start.1
-                        + 3.0 * u * u * t * (start.1 + bend)
-                        + 3.0 * u * t * t * (end.1 - bend)
-                        + t.powi(3) * end.1,
-                )
-            })
-            .collect() };
+        let points: Vec<_> = if mod_target {
+            rounded_mod_connection(start, end)
+        } else {
+            (0..=32)
+                .map(|i| {
+                    let t = i as f32 / 32.0;
+                    let u = 1.0 - t;
+                    (
+                        u.powi(3) * start.0
+                            + 3.0 * u * u * t * start.0
+                            + 3.0 * u * t * t * end.0
+                            + t.powi(3) * end.0,
+                        u.powi(3) * start.1
+                            + 3.0 * u * u * t * (start.1 + bend)
+                            + 3.0 * u * t * t * (end.1 - bend)
+                            + t.powi(3) * end.1,
+                    )
+                })
+                .collect()
+        };
         let pulse = if self.selected_modulator.is_some() {
             0.6 + 0.4 * self.modulator_pulse.sin().abs()
         } else {
@@ -704,7 +761,11 @@ impl ChordboardView {
                 r,
                 TARGETS[assigned.target as usize].name,
                 slot == self.route_slot,
-                if self.params.effective_route(assigned).enabled { TEAL } else { MUTED },
+                if self.params.effective_route(assigned).enabled {
+                    TEAL
+                } else {
+                    MUTED
+                },
             );
         }
         if let Some(r) = self.add_route_rect() {
@@ -765,21 +826,40 @@ impl ChordboardView {
         d.text(
             x,
             y - 10.0,
-            &if route.additive() { format!("Depth start {:.0}%", route.min * 100.0) } else { format!("Min {}", target.label(route.min)) },
+            &if route.additive() {
+                format!("Depth start {:.0}%", route.min * 100.0)
+            } else {
+                format!("Min {}", target.label(route.min))
+            },
             11.0,
             TEAL,
         );
         d.text_right(
             x + w,
             y - 10.0,
-            &if route.additive() { format!("Depth end {:.0}%", route.max * 100.0) } else { format!("Max {}", target.label(route.max)) },
+            &if route.additive() {
+                format!("Depth end {:.0}%", route.max * 100.0)
+            } else {
+                format!("Max {}", target.label(route.max))
+            },
             11.0,
             TEAL,
         );
-        self.icon_button(d, ROUTE_LINEAR, "Linear", route.curve.abs() < 0.001, GOLD, style::Icon::Reset);
+        self.icon_button(
+            d,
+            ROUTE_LINEAR,
+            "Linear",
+            route.curve.abs() < 0.001,
+            GOLD,
+            style::Icon::Reset,
+        );
         if self.params.effective_route(route).active() {
             let source_value = self.snapshot.sources[route.source as usize - 1];
-            let input = if route.additive() { source_value.abs() } else { source_value };
+            let input = if route.additive() {
+                source_value.abs()
+            } else {
+                source_value
+            };
             d.circle(
                 x + w * input,
                 y + h * (1.0 - route.value(input)),
@@ -791,8 +871,18 @@ impl ChordboardView {
                 44.0,
                 484.0,
                 &if route.additive() {
-                    format!("In {:+.0}% → offset {:+.0}% · Base stays editable", source_value * 100.0, route.output(source_value) * 100.0)
-                } else { format!("In {:.0}% → {}", input * 100.0, target.label(route.value(input))) },
+                    format!(
+                        "In {:+.0}% → offset {:+.0}% · Base stays editable",
+                        source_value * 100.0,
+                        route.output(source_value) * 100.0
+                    )
+                } else {
+                    format!(
+                        "In {:.0}% → {}",
+                        input * 100.0,
+                        target.label(route.value(input))
+                    )
+                },
                 11.0,
                 MUTED,
             );
@@ -813,14 +903,22 @@ impl ChordboardView {
             .skip(self.route_slot + 1)
             .find(|(_, p)| {
                 let other = p.route();
-                self.params.effective_route(other).active() && !other.additive() && !route.additive() && other.target == route.target
+                self.params.effective_route(other).active()
+                    && !other.additive()
+                    && !route.additive()
+                    && other.target == route.target
             });
         let help = if route.enabled && !self.params.effective_route(route).enabled {
             "Modulator bypassed · Click its power icon to resume outgoing routes".into()
-        } else if let Some((i, _)) = overridden.filter(|_| self.params.effective_route(route).active()) {
+        } else if let Some((i, _)) =
+            overridden.filter(|_| self.params.effective_route(route).active())
+        {
             format!("Route {} has priority for this destination", i + 1)
         } else if route.additive() {
-            format!("Zero keeps the base value · Offset depth {:.0}% · Drag contour to adjust", (route.max - route.min) * 100.0)
+            format!(
+                "Zero keeps the base value · Offset depth {:.0}% · Drag contour to adjust",
+                (route.max - route.min) * 100.0
+            )
         } else if route.min > route.max {
             "Reversed range".into()
         } else {
@@ -847,7 +945,9 @@ impl ChordboardView {
 
     /// Reserve the entire modulation range so editable controls never chase live MIDI.
     pub(super) fn maximum_routed_plain(&self, id: &str, base: f32) -> f32 {
-        let routes = std::array::from_fn::<_, { crate::engine::routing::ROUTE_COUNT }, _>(|i| self.params.effective_route(self.params.routes[i].route()));
+        let routes = std::array::from_fn::<_, { crate::engine::routing::ROUTE_COUNT }, _>(|i| {
+            self.params.effective_route(self.params.routes[i].route())
+        });
         crate::engine::routing::maximum_for_routes(id, base, &routes)
     }
 
@@ -856,7 +956,10 @@ impl ChordboardView {
         self.snapshot.routed[i].map(|v| target.plain(v))
     }
     pub(super) fn routed_control(&self, c: &Control) -> Option<Control> {
-        if self.modulation_route(c.id).is_some() && self.replacing_modulation_route(c.id).is_none() { return None; }
+        if self.modulation_route(c.id).is_some() && self.replacing_modulation_route(c.id).is_none()
+        {
+            return None;
+        }
         let (i, target) = TARGETS.iter().enumerate().find(|(_, t)| t.id == c.id)?;
         let norm = self.snapshot.routed[i]?;
         let mut routed = c.clone();
@@ -889,15 +992,23 @@ pub(super) fn route_anchor(r: Rect, toward_y: f32) -> (f32, f32) {
 
 fn mod_route_anchors(start: Rect, end: Rect) -> ((f32, f32), (f32, f32)) {
     if (end.1 - start.1).abs() > (end.0 - start.0).abs() {
-        ((start.0 + start.2, start.1 + start.3 * 0.5), (end.0 + end.2, end.1 + end.3 * 0.5))
-    } else { (route_anchor(start, f32::MAX), route_anchor(end, f32::MAX)) }
+        (
+            (start.0 + start.2, start.1 + start.3 * 0.5),
+            (end.0 + end.2, end.1 + end.3 * 0.5),
+        )
+    } else {
+        (route_anchor(start, f32::MAX), route_anchor(end, f32::MAX))
+    }
 }
 
 /// Two rounded right-angle bends joined by a straight segment outside the meters.
 pub(super) fn rounded_mod_connection(start: (f32, f32), end: (f32, f32)) -> Vec<(f32, f32)> {
     if (end.1 - start.1).abs() > (end.0 - start.0).abs() {
         // Rotate the same geometry for a vertical modulator column.
-        return elbow_points((start.1, start.0), (end.1, end.0), 8.0).into_iter().map(|(y, x)| (x, y)).collect();
+        return elbow_points((start.1, start.0), (end.1, end.0), 8.0)
+            .into_iter()
+            .map(|(y, x)| (x, y))
+            .collect();
     }
     elbow_points(start, end, 14.0)
 }
@@ -909,12 +1020,18 @@ fn elbow_points(start: (f32, f32), end: (f32, f32), margin: f32) -> Vec<(f32, f3
     let mut points = vec![start, (start.0, bottom - radius)];
     for i in 1..=8 {
         let angle = i as f32 / 8.0 * std::f32::consts::FRAC_PI_2;
-        points.push((start.0 + direction * radius * (1.0 - angle.cos()), bottom - radius + radius * angle.sin()));
+        points.push((
+            start.0 + direction * radius * (1.0 - angle.cos()),
+            bottom - radius + radius * angle.sin(),
+        ));
     }
     points.push((end.0 - direction * radius, bottom));
     for i in 1..=8 {
         let angle = i as f32 / 8.0 * std::f32::consts::FRAC_PI_2;
-        points.push((end.0 - direction * radius + direction * radius * angle.sin(), bottom - radius + radius * angle.cos()));
+        points.push((
+            end.0 - direction * radius + direction * radius * angle.sin(),
+            bottom - radius + radius * angle.cos(),
+        ));
     }
     points.push(end);
     points

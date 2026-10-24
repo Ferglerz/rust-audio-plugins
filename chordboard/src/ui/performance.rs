@@ -5,7 +5,10 @@ impl ChordboardView {
         if self.params.tempo_sync.value() && self.snapshot.time_sig_host {
             (self.snapshot.time_sig_num, self.snapshot.time_sig_den)
         } else {
-            (self.params.meter_num.value() as u8, 1 << self.params.meter_den.value())
+            (
+                self.params.meter_num.value() as u8,
+                1 << self.params.meter_den.value(),
+            )
         }
     }
     pub(super) fn draw_tempo_header(&self, d: &mut Draw) {
@@ -19,10 +22,20 @@ impl ChordboardView {
             d.text(METER_NUM.0 + 49.0, 43.5, "/", 13.0, MUTED);
             self.button(d, METER_DEN, &den.to_string(), false, GOLD);
         }
-        pleasant_ui::tempo::Header { source: TEMPO_SYNC, bpm: TEMPO_CONTROL }.draw(
-            d, synced,
-            if synced { self.snapshot.tempo as f64 } else { self.params.tempo.value() as f64 },
-            self.params.tempo.unmodulated_normalized_value(), self.hover_amount(TEMPO_SYNC),
+        pleasant_ui::tempo::Header {
+            source: TEMPO_SYNC,
+            bpm: TEMPO_CONTROL,
+        }
+        .draw(
+            d,
+            synced,
+            if synced {
+                self.snapshot.tempo as f64
+            } else {
+                self.params.tempo.value() as f64
+            },
+            self.params.tempo.unmodulated_normalized_value(),
+            self.hover_amount(TEMPO_SYNC),
         );
     }
 
@@ -169,12 +182,7 @@ impl ChordboardView {
                     value
                 } * (y_max - y_min)
         };
-        self.draw_strings(
-            d,
-            field,
-            (min, max),
-            self.params.x_reverse.value(),
-        );
+        self.draw_strings(d, field, (min, max), self.params.x_reverse.value());
         {
             for &(x, y, time) in &self.trail {
                 let age = time.elapsed().as_secs_f32();
@@ -224,7 +232,13 @@ impl ChordboardView {
                     d.rounded_rect(r.0, r.1, r.2, r.3, 3.0, alpha(color, 0.16));
                     d.circle(ax, ay, 4.0, color, false);
                 }
-                d.text_centered(r.0 + r.2 * 0.5, r.1 + r.3 * 0.5 + TEXT_SMALL * 0.35, &label, TEXT_SMALL, color);
+                d.text_centered(
+                    r.0 + r.2 * 0.5,
+                    r.1 + r.3 * 0.5 + TEXT_SMALL * 0.35,
+                    &label,
+                    TEXT_SMALL,
+                    color,
+                );
             }
         }
         let position = if self.params.x_reverse.value() {
@@ -247,7 +261,8 @@ impl ChordboardView {
             self.snapshot.full_notes
         } else {
             let chord = SavedChord::decode(self.snapshot.captured).unwrap_or(SavedChord {
-                root: (self.params.keyboard_octave.value() + self.params.key.value()).clamp(0, 127) as u8,
+                root: (self.params.keyboard_octave.value() + self.params.key.value()).clamp(0, 127)
+                    as u8,
                 quality: self.params.quality.value() as u8,
                 second: None,
                 additions: 0,
@@ -273,7 +288,13 @@ impl ChordboardView {
             let r = meter_rect(i);
             let value = self.snapshot.sources[i];
             let bypassed = self.params.modulators[i].bypass.value();
-            let accent = if bypassed { MUTED } else if matches!(i,9|10) { GOLD } else { TEAL };
+            let accent = if bypassed {
+                MUTED
+            } else if matches!(i, 9 | 10) {
+                GOLD
+            } else {
+                TEAL
+            };
             let hover = self.hover_amount(r);
             let dragging = matches!(self.drag, Some(Drag::Route(drag)) if drag.source == i);
             let route_count = self
@@ -300,7 +321,13 @@ impl ChordboardView {
                 alpha(accent, 0.025 + emphasis * 0.12),
             );
             for dot in 0..route_count {
-                d.circle(r.0 + 8.0 + dot as f32 * 6.0, r.1 + r.3 - 17.0, 1.5, accent, true);
+                d.circle(
+                    r.0 + 8.0 + dot as f32 * 6.0,
+                    r.1 + r.3 - 17.0,
+                    1.5,
+                    accent,
+                    true,
+                );
             }
             if selected {
                 d.outline_rounded(
@@ -320,7 +347,11 @@ impl ChordboardView {
                     r.3,
                     4.0,
                     alpha(
-                        if linked || emphasis > 0.0 { accent } else { LINE },
+                        if linked || emphasis > 0.0 {
+                            accent
+                        } else {
+                            LINE
+                        },
                         0.55 + emphasis * 0.4,
                     ),
                     1.0,
@@ -332,18 +363,36 @@ impl ChordboardView {
             d.rounded_rect(x, y, width, 6.0, 2.0, BG);
             let (start, end) = meter_fill(i, value);
             if end > start {
-                d.rounded_rect(x + width * start, y, width * (end - start), 6.0, 2.0, accent);
+                d.rounded_rect(
+                    x + width * start,
+                    y,
+                    width * (end - start),
+                    6.0,
+                    2.0,
+                    accent,
+                );
             }
-            if i == 0 || matches!(i,9|10) {
+            if i == 0 || matches!(i, 9 | 10) {
                 let center = x + width * 0.5;
                 d.line(center, y - 2.0, center, y + 8.0, MUTED, 1.0);
             }
-            let color = if matches!(i,9|10) || linked || dragging || hover > 0.3 { accent } else { MUTED };
+            let color = if matches!(i, 9 | 10) || linked || dragging || hover > 0.3 {
+                accent
+            } else {
+                MUTED
+            };
             style::MODULATOR_ICONS[i].draw(d, x + 8.0, r.1 + 14.0, color);
-            d.text_right(modulator_bypass_rect(i).0 - 5.0, r.1 + 14.0 + TEXT_SMALL * 0.35, label, TEXT_SMALL, color);
+            d.text_right(
+                modulator_bypass_rect(i).0 - 5.0,
+                r.1 + 14.0 + TEXT_SMALL * 0.35,
+                label,
+                TEXT_SMALL,
+                color,
+            );
             let power = modulator_bypass_rect(i);
             let power_hover = self.hover_amount(power);
-            let flash = self.action_flash
+            let flash = self
+                .action_flash
                 .filter(|(rect, _)| *rect == power)
                 .map_or(0.0, |(_, amount)| amount);
             let center = (power.0 + power.2 * 0.5, power.1 + power.3 * 0.5);
@@ -351,17 +400,37 @@ impl ChordboardView {
                 let seconds = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
-                    .as_millis() % 100_000;
+                    .as_millis()
+                    % 100_000;
                 let seconds = seconds as f32 * 0.001;
                 (seconds * 4.5).sin() * 0.5 + 0.5
-            } else { 0.0 };
-            let power_color = if bypassed && power_hover > 0.01 { TEXT } else { accent };
+            } else {
+                0.0
+            };
+            let power_color = if bypassed && power_hover > 0.01 {
+                TEXT
+            } else {
+                accent
+            };
             if power_hover > 0.0 || flash > 0.0 {
-                d.circle(center.0, center.1, 8.0 + pulse + flash * 2.0,
-                    alpha(power_color, power_hover * (0.04 + 0.06 * pulse) + flash * 0.2), true);
+                d.circle(
+                    center.0,
+                    center.1,
+                    8.0 + pulse + flash * 2.0,
+                    alpha(
+                        power_color,
+                        power_hover * (0.04 + 0.06 * pulse) + flash * 0.2,
+                    ),
+                    true,
+                );
             }
-            d.power_icon_scaled(center.0, center.1, power_color,
-                0.7 * (1.0 + flash * 0.15), 1.1 + flash * 0.3);
+            d.power_icon_scaled(
+                center.0,
+                center.1,
+                power_color,
+                0.7 * (1.0 + flash * 0.15),
+                1.1 + flash * 0.3,
+            );
         }
         d.font = self.ui_font.get();
     }
@@ -369,8 +438,12 @@ impl ChordboardView {
 
 // Pitch uses a normalized center; dedicated step modulators use signed offsets.
 pub(super) fn meter_fill(source: usize, value: f32) -> (f32, f32) {
-    let value = if matches!(source,9|10) { (value.clamp(-1.0, 1.0) + 1.0) * 0.5 } else { value.clamp(0.0, 1.0) };
-    if source == 0 || matches!(source,9|10) {
+    let value = if matches!(source, 9 | 10) {
+        (value.clamp(-1.0, 1.0) + 1.0) * 0.5
+    } else {
+        value.clamp(0.0, 1.0)
+    };
+    if source == 0 || matches!(source, 9 | 10) {
         (value.min(0.5), value.max(0.5))
     } else {
         (0.0, value)

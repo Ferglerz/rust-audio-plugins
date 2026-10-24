@@ -9,7 +9,11 @@ impl ChordboardView {
             self.font.set(canvas.add_font_mem(FONT_JETBRAINS_MONO).ok());
             self.ui_font.set(self.font.get());
             self.music_font.set(canvas.add_font_mem(music::FONT).ok());
-            self.icon_font.set(canvas.add_font_mem(nih_plug_vizia::vizia::fonts::TABLER_ICONS).ok());
+            self.icon_font.set(
+                canvas
+                    .add_font_mem(nih_plug_vizia::vizia::fonts::TABLER_ICONS)
+                    .ok(),
+            );
             self.bold_font.set(
                 canvas
                     .add_font_mem(nih_plug_vizia::assets::fonts::NOTO_SANS_BOLD)
@@ -83,6 +87,7 @@ impl ChordboardView {
         d.scissor(pad.0, pad.1, pad.2, pad.3);
         d.font = self.font.get();
         d.disabled = !self.params.strum_enabled.value();
+        d.offset_x = -self.tracker_progress * PERF_SURFACE.2;
         self.draw_pad(&mut d);
         d.font = self.ui_font.get();
         if expand == 0.0 {
@@ -115,11 +120,16 @@ impl ChordboardView {
             }
             self.draw_control(&mut d, c, *r, GOLD);
         }
+        d.scissor(performance.0, performance.1, performance.2, performance.3);
+        d.offset_x = -self.tracker_progress * PERF_SURFACE.2;
         self.draw_strumfield_header(&mut d);
+        d.offset_x = 0.0;
+        d.reset_scissor();
         d.disabled = !self.params.arp_enabled.value();
         self.surface(&mut d, ARP_SURFACE);
         d.disabled = false;
         self.draw_arp_editor(&mut d);
+        self.draw_tracker(&mut d);
         self.draw_keyboard_pages(&mut d);
 
         self.draw_memory_drag(&mut d);
@@ -214,8 +224,14 @@ impl ChordboardView {
         if self.menu.is_some() {
             return None;
         }
-        if let Some(hint) = self.quick_midi_hint(x, y) { return Some(hint); }
-        if let Some((slot, rect)) = self.route_chips().into_iter().find(|(_, rect)| hit(*rect, x, y)) {
+        if let Some(hint) = self.quick_midi_hint(x, y) {
+            return Some(hint);
+        }
+        if let Some((slot, rect)) = self
+            .route_chips()
+            .into_iter()
+            .find(|(_, rect)| hit(*rect, x, y))
+        {
             if self.pending_route_remove == Some(slot) {
                 return Some("Click the check mark to remove this route · Escape cancels".into());
             }
@@ -259,19 +275,20 @@ impl ChordboardView {
             return Some("Enable or bypass the Strumfield".into());
         }
         if hit(METER_NUM, x, y) || hit(METER_DEN, x, y) {
-            return Some(if self.params.tempo_sync.value() && self.snapshot.time_sig_host {
-                "Host time signature".into()
-            } else {
-                "Time signature · Click the numerator or denominator to set the meter".into()
-            });
+            return Some(
+                if self.params.tempo_sync.value() && self.snapshot.time_sig_host {
+                    "Host time signature".into()
+                } else {
+                    "Time signature · Click the numerator or denominator to set the meter".into()
+                },
+            );
         }
         if hit(arp_power_rect(), x, y) {
             return Some("Enable or bypass arpeggiator playback".into());
         }
         if hit(arp_direction_rect(), x, y) {
             return Some(
-                "Strum direction · The arpeggiator walks the chord’s strings in this order"
-                    .into(),
+                "Strum direction · The arpeggiator walks the chord’s strings in this order".into(),
             );
         }
         if self.expand_t() > 0.0 && y >= HEADER_H && y < ARP_SURFACE.1 {
@@ -307,7 +324,8 @@ impl ChordboardView {
                     return Some(if self.params.strum_latch.value() {
                         "Hover strum on · move across the strings to strum without clicking".into()
                     } else {
-                        "Click and drag to strum · Hover strum plays the field without clicking".into()
+                        "Click and drag to strum · Hover strum plays the field without clicking"
+                            .into()
                     });
                 }
             }
@@ -348,7 +366,11 @@ impl ChordboardView {
                     )
                 }
             } else {
-                format!("Empty memory {} · Click + or Shift+{} to save the current chord", slot + 1, MEMORY_HINTS[slot])
+                format!(
+                    "Empty memory {} · Click + or Shift+{} to save the current chord",
+                    slot + 1,
+                    MEMORY_HINTS[slot]
+                )
             });
         }
         if (0..5).any(|i| hit(transpose_control_rect(self.params.mpe_enabled(), i), x, y)) {
@@ -458,11 +480,19 @@ impl ChordboardView {
             );
         }
         for i in 0..crate::engine::routing::SOURCE_COUNT {
-            if self.quick_midi.show || self.quick_midi.progress > 0.0 { break; }
+            if self.quick_midi.show || self.quick_midi.progress > 0.0 {
+                break;
+            }
             if hit(modulator_bypass_rect(i), x, y) {
-                return Some(format!("{} · Click to {} all outgoing routes · Route settings are preserved",
+                return Some(format!(
+                    "{} · Click to {} all outgoing routes · Route settings are preserved",
                     crate::engine::routing::SOURCES[i + 1],
-                    if self.params.modulators[i].bypass.value() { "resume" } else { "bypass" }));
+                    if self.params.modulators[i].bypass.value() {
+                        "resume"
+                    } else {
+                        "bypass"
+                    }
+                ));
             }
             if hit(meter_rect(i), x, y) {
                 return Some(format!(
@@ -493,13 +523,25 @@ impl ChordboardView {
             let label = format!(
                 "↗ {} {}",
                 crate::engine::routing::SOURCE_SHORT[route.source as usize - 1],
-                if route.additive() { "offset" } else { "controls" }
+                if route.additive() {
+                    "offset"
+                } else {
+                    "controls"
+                }
             );
-            d.text(r.0, r.1 + 12.0, &label, 9.0, if route.additive() { GOLD } else { TEAL });
+            d.text(
+                r.0,
+                r.1 + 12.0,
+                &label,
+                9.0,
+                if route.additive() { GOLD } else { TEAL },
+            );
         }
     }
     pub(super) fn draw_control(&self, d: &mut Draw, c: &Control, rect: Rect, color: Color) {
-        if c.id == "tempo" { return; } // Shared header owns BPM drawing; local controls retain editing.
+        if c.id == "tempo" {
+            return;
+        } // Shared header owns BPM drawing; local controls retain editing.
         if c.id == "root_on_select" {
             let mode = self.selection_mode();
             self.button(
@@ -517,11 +559,7 @@ impl ChordboardView {
         let base = c;
         let routed = self.routed_control(c);
         let c = routed.as_ref().unwrap_or(c);
-        let color = if routed.is_some() {
-            TEAL
-        } else {
-            color
-        };
+        let color = if routed.is_some() { TEAL } else { color };
         if c.id == "strum_ms" {
             // Free rate uses the same rail in Once and Loop.
             let x = rect.0 + 70.0;
@@ -636,7 +674,13 @@ impl ChordboardView {
                 let base_x = x + width * base.norm;
                 d.line(base_x, y - 4.0, base_x, y + 7.0, GOLD, 2.0);
             }
-            d.circle(x + width * c.norm, y + thickness * 0.5, if in_arp { 5.0 + hover } else { 3.0 + hover }, color, true);
+            d.circle(
+                x + width * c.norm,
+                y + thickness * 0.5,
+                if in_arp { 5.0 + hover } else { 3.0 + hover },
+                color,
+                true,
+            );
             d.font = self.ui_font.get();
         }
         if rect.3 >= 42.0 {
@@ -665,17 +709,32 @@ mod tests {
         for slot in 0..MEMORY_COUNT {
             let rect = memory_rect(slot);
             view.pointer = Some((rect.0 + rect.2 * 0.5, rect.1 + rect.3 * 0.5));
-            assert!(view.hover_hint(&[]).unwrap().contains("to save the current chord"));
-            view.params.slot(slot).store(SavedChord {
-                root: 60, second: Some(70), additions: (1 << 1) | (1 << 6),
-                quality: 0, inversion: 0, spread: 0, transpose: 0,
-            }.encode(), Ordering::Relaxed);
+            assert!(view
+                .hover_hint(&[])
+                .unwrap()
+                .contains("to save the current chord"));
+            view.params.slot(slot).store(
+                SavedChord {
+                    root: 60,
+                    second: Some(70),
+                    additions: (1 << 1) | (1 << 6),
+                    quality: 0,
+                    inversion: 0,
+                    spread: 0,
+                    transpose: 0,
+                }
+                .encode(),
+                Ordering::Relaxed,
+            );
             let hint = view.hover_hint(&[]).unwrap();
             assert!(hint.contains("to recall") && hint.contains("to replace"));
             assert!(hint.contains("b9") && hint.contains("#11"));
             let delete = memory_delete_rect(slot);
             view.pointer = Some((delete.0 + delete.2 * 0.5, delete.1 + delete.3 * 0.5));
-            assert!(view.hover_hint(&[]).unwrap().starts_with(&format!("Delete memory {}", slot + 1)));
+            assert!(view
+                .hover_hint(&[])
+                .unwrap()
+                .starts_with(&format!("Delete memory {}", slot + 1)));
         }
     }
 
@@ -710,7 +769,7 @@ mod tests {
         }
     }
     #[test]
-    fn arp_settings_fit_two_rows_above_the_strings() {
+    fn arp_settings_fit_one_row_above_the_strings() {
         let row = [
             arp_power_rect(),
             arpeggiator::mode_rect(),
@@ -724,7 +783,10 @@ mod tests {
         let top = ARP_SURFACE.1;
         let bottom = ARP_SURFACE.1 + ARP_LANE_TOP;
         for r in row {
-            assert!(r.1 >= top && r.1 + r.3 <= bottom, "{r:?} leaves the settings rows");
+            assert!(
+                r.1 >= top && r.1 + r.3 <= bottom,
+                "{r:?} leaves the settings rows"
+            );
             assert!(
                 r.0 >= ARP_SURFACE.0 && r.0 + r.2 <= ARP_SURFACE.0 + ARP_SURFACE.2,
                 "{r:?} leaves the arpeggiator module"
@@ -740,9 +802,16 @@ mod tests {
     }
     #[test]
     fn performance_rows_fill_width_and_share_direction_sizes() {
-        let right = ARP_SURFACE.0 + ARP_SURFACE.2 - 12.0;
-        let last_adjustment = arpeggiator::lane_rect(2);
-        assert!((last_adjustment.0 + last_adjustment.2 - right).abs() < 0.001);
+        let lanes: Vec<_> = (0..6).map(arpeggiator::lane_rect).collect();
+        assert_disjoint(&lanes);
+        let first = lanes[0];
+        for (i, r) in lanes.iter().enumerate() {
+            assert_eq!((r.2, r.3), (first.2, first.3));
+            assert_eq!(r.0, lanes[i % 2].0);
+            assert_eq!(r.1, lanes[i / 2 * 2].1);
+            assert!(r.0 + r.2 < arpeggiator::graph_rect().0);
+            assert!(r.1 + r.3 <= ARP_SURFACE.1 + ARP_SURFACE.3 - 12.0);
+        }
         let [(_, humanize), (_, swing)] = arp_controls();
         assert_eq!((swing.1, swing.3), (humanize.1, humanize.3));
         assert!(swing.0 > humanize.0 + humanize.2);
@@ -766,12 +835,7 @@ mod tests {
     }
     #[test]
     fn chords_header_selection_button_sits_between_order_and_transpose() {
-        let row = [
-            Menu::Key.trigger_rect(),
-            ORDER,
-            ROOT_ON_SELECT,
-            TRANSPOSE,
-        ];
+        let row = [Menu::Key.trigger_rect(), ORDER, ROOT_ON_SELECT, TRANSPOSE];
         for pair in row.windows(2) {
             assert_eq!(pair[0].1, pair[1].1);
             assert_eq!(pair[0].0 + pair[0].2 + 8.0, pair[1].0, "{pair:?}");

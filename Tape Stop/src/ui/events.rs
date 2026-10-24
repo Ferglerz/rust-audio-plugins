@@ -1,7 +1,20 @@
 use super::{controls::*, *};
 
 impl TapeStopView {
+    pub(super) fn axis_controls_interactive(&self) -> bool {
+        self.show_axis_controls && self.axis_controls_progress >= 1.0
+    }
+
     pub(super) fn handle_event(&mut self, cx: &mut EventContext, event: &mut Event) {
+        event.map(|_: &PerformanceTick, _| {
+            // The editor timer runs every 16 ms: traverse the row in about 200 ms.
+            let step = 16.0 / 200.0;
+            self.axis_controls_progress = if self.show_axis_controls {
+                (self.axis_controls_progress + step).min(1.0)
+            } else {
+                (self.axis_controls_progress - step).max(0.0)
+            };
+        });
         let binding = (
             self.params.xy_x_axis.value(),
             self.params.xy_mode.value(),
@@ -181,12 +194,13 @@ impl TapeStopView {
                     }
 
                     if Self::inside(mouse_x, mouse_y, cog_rect()) {
+                        self.end_drag(cx);
                         self.show_axis_controls = !self.show_axis_controls;
                         cx.needs_redraw();
                         return;
                     }
 
-                    if self.show_axis_controls
+                    if self.axis_controls_interactive()
                         && Self::inside(mouse_x, mouse_y, trigger_bypass_rect())
                     {
                         let next = if self.params.auto_restart.value() {
@@ -226,7 +240,7 @@ impl TapeStopView {
                         }
                     }
 
-                    if self.show_axis_controls {
+                    if self.axis_controls_interactive() {
                         if Self::inside(mouse_x, mouse_y, midi_label_rect()) {
                             let next = match self.midi_assign() {
                                 MidiAssign::Cc => 1.0,
@@ -268,7 +282,8 @@ impl TapeStopView {
                         }
                     }
 
-                    if self.show_axis_controls && self.knob_enabled(KnobId::RestartThresh) {
+                    if self.axis_controls_interactive() && self.knob_enabled(KnobId::RestartThresh)
+                    {
                         let val_r = trigger_value_rect();
                         if Self::inside(mouse_x, mouse_y, val_r) {
                             self.press_value(cx, KnobId::RestartThresh, val_r, (mouse_x, mouse_y));
@@ -323,7 +338,7 @@ impl TapeStopView {
                         self.reset_knob(cx, KnobId::Return);
                         return;
                     }
-                    if self.show_axis_controls {
+                    if self.axis_controls_interactive() {
                         for &id in &[KnobId::Xfade, KnobId::StereoDiv] {
                             let r = Self::slider_rect(id);
                             let val_r = axis_value_rect(r);
@@ -338,7 +353,7 @@ impl TapeStopView {
                             }
                         }
                     }
-                    if self.show_axis_controls
+                    if self.axis_controls_interactive()
                         && self.knob_enabled(KnobId::RestartThresh)
                         && Self::inside(mouse_x, mouse_y, trigger_column())
                         && !Self::inside(mouse_x, mouse_y, trigger_value_rect())

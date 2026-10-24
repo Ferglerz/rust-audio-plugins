@@ -16,6 +16,7 @@ fn view() -> TapeStopView {
         curve_hover_anim: Cell::new(0.0),
         auto_restart_anim: ButtonAnim::new(),
         show_axis_controls: false,
+        axis_controls_progress: 0.0,
         gesture_params: [None; 2],
         pad_binding: None,
     }

@@ -1,4 +1,4 @@
-use super::{controls::*, *};
+use super::{controls::*, graph::*, *};
 
 impl TapeStopView {
     pub(super) fn render(&self, cx: &mut DrawContext, canvas: &mut Canvas) {
@@ -80,13 +80,26 @@ impl TapeStopView {
             if stop_active { GOLD } else { TEXT },
         );
 
-        self.draw_axis_cog(&mut d);
-        if self.show_axis_controls {
+        if self.axis_controls_progress > 0.0 {
+            // Slide an opaque settings tray over the X-axis values, keeping both
+            // the plot and cog fixed. Clip the tray so it cannot cover Drop.
+            let left = GRAPH_X - 20.0;
+            let top = GRAPH_Y + GRAPH_H + 4.0;
+            let width = cog_rect().0 - 4.0 - left;
+            let height = UI_H - 8.0 - top;
+            let progress = self.axis_controls_progress;
+            let eased = progress * progress * (3.0 - 2.0 * progress);
+            d.scissor(left, top, width, height);
+            d.offset_x = width * (1.0 - eased);
+            d.rounded_rect(left, top, width, height, 0.0, pleasant_ui::theme::BG);
             self.draw_midi_slot(&mut d);
             self.draw_audio_trigger(&mut d);
             for &id in &[KnobId::Xfade, KnobId::StereoDiv] {
                 self.draw_axis_slider(&mut d, id);
             }
+            d.offset_x = 0.0;
+            d.reset_scissor();
         }
+        self.draw_axis_cog(&mut d);
     }
 }

@@ -14,6 +14,7 @@ use vizia::prelude::*;
 
 // Re-export for convenience
 pub use vizia;
+pub use vizia_baseview::PixelScroll;
 
 /// Consume a custom view event and report handled keys to the native backend.
 pub fn consume_window_event(

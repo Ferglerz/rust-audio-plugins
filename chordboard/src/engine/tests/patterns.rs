@@ -45,7 +45,10 @@ fn input_velocity_drives_length_independently_of_contoured_output() {
                 }
             })
             .unwrap();
-        assert!((velocity - if mode==ARP {0.4} else {0.2}).abs() < 0.0001, "mode {mode}");
+        assert!(
+            (velocity - if mode == ARP { 0.4 } else { 0.2 }).abs() < 0.0001,
+            "mode {mode}"
+        );
         assert_eq!(e.snapshot().sources[6], 0.8);
         let voice = e.voices.iter().flatten().find(|v| !v.layer).unwrap();
         let expected = if mode == ARP {
@@ -64,26 +67,42 @@ fn input_velocity_drives_length_independently_of_contoured_output() {
 fn strumfield_rearticulates_every_string_in_all_selection_modes() {
     for mpe in [false, true] {
         for selection in 0..3 {
-            let mut e = Engine { sample_rate: 1000.0, ..Engine::default() };
-            configure(&mut e, Config {
-                mode: MANUAL,
-                mpe,
-                key_split: false,
-                root_on_select: selection == 1,
-                always_chord: selection == 2,
-                length_ms: 100.0,
-                ..Config::default()
-            });
+            let mut e = Engine {
+                sample_rate: 1000.0,
+                ..Engine::default()
+            };
+            configure(
+                &mut e,
+                Config {
+                    mode: MANUAL,
+                    mpe,
+                    key_split: false,
+                    root_on_select: selection == 1,
+                    always_chord: selection == 2,
+                    length_ms: 100.0,
+                    ..Config::default()
+                },
+            );
             on(&mut e, 60, 0);
             for _ in 0..2 {
                 let mut events = send(&mut e, Command::BeginGesture(0.0, 0.8));
                 events.extend(send(&mut e, Command::X(1.0)));
-                assert_eq!(notes(&events), [60, 64, 67], "selection {selection}, MPE {mpe}");
-                assert_eq!(e.voices.iter().flatten().filter(|v| v.layer).count(), if selection == 2 { 3 } else { 0 });
+                assert_eq!(
+                    notes(&events),
+                    [60, 64, 67],
+                    "selection {selection}, MPE {mpe}"
+                );
+                assert_eq!(
+                    e.voices.iter().flatten().filter(|v| v.layer).count(),
+                    if selection == 2 { 3 } else { 0 }
+                );
             }
             off(&mut e, 60, 0);
             tick(&mut e, 101);
-            assert!(e.voices.iter().all(Option::is_none), "selection {selection}, MPE {mpe}");
+            assert!(
+                e.voices.iter().all(Option::is_none),
+                "selection {selection}, MPE {mpe}"
+            );
         }
     }
 }
@@ -156,10 +175,9 @@ fn once_sweep_octaves_feel_and_duration_preserve_scheduled_cycle() {
         .iter()
         .zip(&plain)
         .any(|(f, p)| (f.velocity - p.velocity).abs() > 0.02));
-    assert!(felt
-        .iter()
-        .zip(&plain)
-        .all(|(f, p)| f.velocity >= p.velocity * 0.69 && f.velocity <= (p.velocity * 1.31).min(1.0)));
+    assert!(felt.iter().zip(&plain).all(
+        |(f, p)| f.velocity >= p.velocity * 0.69 && f.velocity <= (p.velocity * 1.31).min(1.0)
+    ));
     assert!(felt.iter().all(|s| s.gate_step.is_none()));
     let previous = felt.iter().map(|s| (s.note, s.at)).collect::<Vec<_>>();
     let mut c = e.host_config;
@@ -211,7 +229,9 @@ fn note_feedback_records_octave_strikes_even_after_short_notes_end() {
     e.arp.data.pages[0].ensure_loops(4);
     for (i, variation) in e.arp.data.pages[0].loops.iter_mut().enumerate() {
         variation.octave = i as i8;
-        for step in &mut variation.steps { step.gate = 5; }
+        for step in &mut variation.steps {
+            step.gate = 5;
+        }
     }
     configure(
         &mut e,
@@ -233,12 +253,15 @@ fn note_feedback_records_octave_strikes_even_after_short_notes_end() {
 #[test]
 fn input_velocity_survives_strums_and_tracks_new_input_extensions() {
     let mut e = Engine::default();
-    configure(&mut e, Config {
-        mode: MANUAL,
-        contour: 1.0,
-        velocity: 0.4,
-        ..Config::default()
-    });
+    configure(
+        &mut e,
+        Config {
+            mode: MANUAL,
+            contour: 1.0,
+            velocity: 0.4,
+            ..Config::default()
+        },
+    );
     for (note, velocity) in [(60, 0.35), (64, 0.6), (67, 0.9)] {
         e.midi_note(true, 0, note, velocity, &mut |_| {});
         assert_eq!(e.snapshot().sources[6], velocity);

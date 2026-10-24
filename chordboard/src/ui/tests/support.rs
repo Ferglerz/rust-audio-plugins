@@ -17,7 +17,11 @@ pub(super) fn view(mode: i32, mpe: bool) -> ChordboardView {
         Arc::new(Bridge::default()),
         Arc::new(PreviewContext),
     );
-    Arc::get_mut(&mut view.params).unwrap().arp_pages[0].arp_mode = IntParam::new("Arp repeat", if mode==1 {0} else {2}, IntRange::Linear {min:0,max:3});
+    Arc::get_mut(&mut view.params).unwrap().arp_pages[0].arp_mode = IntParam::new(
+        "Arp repeat",
+        if mode == 1 { 0 } else { 2 },
+        IntRange::Linear { min: 0, max: 3 },
+    );
     view
 }
 /// The arpeggiator module stays open below the keyboard. Chords stay on their page.
@@ -80,10 +84,17 @@ pub(super) fn click(view: &mut ChordboardView, cx: &mut Context, target: Entity,
         WindowEvent::MouseUp(MouseButton::Left),
     );
 }
-pub(super) fn click_menu_trigger(view: &mut ChordboardView, cx: &mut Context, target: Entity, menu: Menu) {
+pub(super) fn click_menu_trigger(
+    view: &mut ChordboardView,
+    cx: &mut Context,
+    target: Entity,
+    menu: Menu,
+) {
     let r = view.menu_trigger_rect(menu);
     click(view, cx, target, r);
-    if menu == Menu::ArpPattern { view.tick_arp_editor(pleasant_ui::page_slide::DURATION); }
+    if menu == Menu::ArpPattern {
+        view.tick_arp_editor(pleasant_ui::page_slide::DURATION);
+    }
 }
 pub(super) fn click_menu_option(
     view: &mut ChordboardView,
@@ -92,7 +103,13 @@ pub(super) fn click_menu_option(
     menu: Menu,
     index: usize,
 ) {
-    let r = if menu == Menu::ArpPattern { arpeggiator::chooser_card_for(index, 7) } else { view.menu_option_rect(menu, index) };
+    let r = if menu == Menu::ArpPattern {
+        arpeggiator::chooser_card_for(index, 7)
+    } else {
+        view.menu_option_rect(menu, index)
+    };
     click(view, cx, target, r);
-    if menu == Menu::ArpPattern { view.tick_arp_editor(pleasant_ui::page_slide::DURATION); }
+    if menu == Menu::ArpPattern {
+        view.tick_arp_editor(pleasant_ui::page_slide::DURATION);
+    }
 }

@@ -297,6 +297,18 @@ impl ApplicationRunner {
                 baseview::MouseEvent::WheelScrolled { delta, modifiers } => {
                     update_modifiers(modifiers);
 
+                    if let baseview::ScrollDelta::Pixels { x, y } = &delta {
+                        cx.send_event(
+                            Event::new(crate::PixelScroll {
+                                x: *x * self.window_scale_factor as f32,
+                                y: *y * self.window_scale_factor as f32,
+                            })
+                            .target(Entity::root())
+                            .origin(Entity::root())
+                            .propagate(Propagation::Subtree),
+                        );
+                    }
+
                     let (lines_x, lines_y) = match delta {
                         baseview::ScrollDelta::Lines { x, y } => (x, y),
                         baseview::ScrollDelta::Pixels { x, y } => (

@@ -58,7 +58,10 @@ mod tests {
         let constructed = Cell::new(0);
         let snapshot = || {
             constructed.set(constructed.get() + 1);
-            Snapshot { root: 67, ..Snapshot::default() }
+            Snapshot {
+                root: 67,
+                ..Snapshot::default()
+            }
         };
         bridge.publish_with(snapshot);
         assert_eq!(constructed.get(), 0);

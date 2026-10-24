@@ -85,7 +85,7 @@ fn quality_changes_with_only_control_notes_do_not_start_an_arp() {
     assert!(notes(&send(&mut e, Command::SetQuality(4))).is_empty());
     assert!(notes(&tick(&mut e, 12000)).is_empty());
     assert!(!e.arp.running);
-    assert_eq!(e.sources[11],0.0);
+    assert_eq!(e.sources[11], 0.0);
 }
 #[test]
 fn low_zone_routes_only_to_bass_and_never_changes_harmony() {

@@ -1,5 +1,5 @@
 // Shared geometry for rendering and event hit-testing.
-use super::{KEY_COLUMNS, arpeggiator};
+use super::{arpeggiator, KEY_COLUMNS};
 const WIDTH_REDUCTION: f32 = 128.0;
 const OLD_MOD_COLUMN: f32 = 122.0;
 pub(super) const MAIN_W: f32 = 1871.0 - WIDTH_REDUCTION - OLD_MOD_COLUMN;
@@ -33,7 +33,12 @@ const fn manual_field_inset(pad: Rect) -> Rect {
     const GRIP: f32 = pleasant_ui::handles::TAG_LONG + pleasant_ui::handles::TAG_POINTER_LEN;
     const LEFT: f32 = 14.0 + GRIP;
     const RIGHT: f32 = 14.0 + pleasant_ui::handles::TAG_THICK * 0.5;
-    (pad.0 + LEFT, pad.1 + LEFT, pad.2 - LEFT - RIGHT, pad.3 - LEFT - 72.0)
+    (
+        pad.0 + LEFT,
+        pad.1 + LEFT,
+        pad.2 - LEFT - RIGHT,
+        pad.3 - LEFT - 72.0,
+    )
 }
 pub(super) const ARP_PAD: Rect = (32.0, 136.0, 892.0, 358.0);
 pub(super) const PLAY_PAD: Rect = manual_field_inset(PAD);
@@ -124,7 +129,12 @@ pub(super) const ARP_PATTERN_NAMES: [&str; 7] = [
     "Random",
 ];
 // Humanize and Swing share the arpeggiator settings row above the string editor.
-pub(super) fn arp_controls() -> [(&'static str, Rect); 2] { [("humanize",arpeggiator::humanize_rect()),("swing",arpeggiator::swing_rect())] }
+pub(super) fn arp_controls() -> [(&'static str, Rect); 2] {
+    [
+        ("humanize", arpeggiator::humanize_rect()),
+        ("swing", arpeggiator::swing_rect()),
+    ]
+}
 pub(super) fn arp_direction_rect() -> Rect {
     arpeggiator::order_rect()
 }
@@ -134,7 +144,9 @@ pub(super) fn arp_rate_sync_rect() -> Rect {
 pub(super) fn arp_rate_rect() -> Rect {
     arpeggiator::rate_rect()
 }
-pub(super) fn arp_power_rect() -> Rect { arpeggiator::power_rect() }
+pub(super) fn arp_power_rect() -> Rect {
+    arpeggiator::power_rect()
+}
 pub(super) const MPE: Rect = (CHORD_CONTAINER.0 + 160.0, KEYBOARD_CONTROL_Y, 208.0, 28.0);
 pub(super) const AFFECT_CHORDS: Rect =
     (MELODY_CONTAINER.0 + 116.0, KEYBOARD_CONTROL_Y, 112.0, 28.0);
@@ -324,7 +336,11 @@ pub(super) const ROUTE_CLEAR: Rect = (674.0, 100.0, 68.0, 28.0);
 pub(super) const ROUTE_GRAPH: Rect = (44.0, 288.0, 868.0, 158.0);
 pub(super) const ROUTE_LINEAR: Rect = (832.0, 466.0, 92.0, 28.0);
 pub(super) fn route_control_rect(id: &str) -> Rect {
-    if id == "route_smoothing_ms" { (456.0, 100.0, 208.0, 28.0) } else { ROUTE_ENABLED }
+    if id == "route_smoothing_ms" {
+        (456.0, 100.0, 208.0, 28.0)
+    } else {
+        ROUTE_ENABLED
+    }
 }
 
 // Arpeggiator settings and string editor above the keyboard.
@@ -467,23 +483,43 @@ pub(super) fn chord_readout_rect() -> Rect {
 pub(super) const METER_NUM: Rect = (1007.0, 24.0, 44.0, 30.0);
 pub(super) const METER_DEN: Rect = (1067.0, 24.0, 44.0, 30.0);
 
-/// Labels sit above/below their tags. Flip sides when another label or tag
-/// occupies that space, including when the Y bounds nearly meet at the top.
-pub(super) fn strum_bound_labels(pad: Rect, field: Rect, x: (f32, f32), y: (f32, f32)) -> [Rect; 4] {
+/// X labels sit beside their tags; Y labels sit above/below. Flip sides when
+/// another label or tag occupies that space, including nearly meeting Y bounds.
+pub(super) fn strum_bound_labels(
+    pad: Rect,
+    field: Rect,
+    x: (f32, f32),
+    y: (f32, f32),
+) -> [Rect; 4] {
     let anchors = [(false, x.0), (false, x.1), (true, y.0), (true, y.1)]
         .map(|(axis, value)| strum_bound_anchor_in(field, axis, value));
     let handles = anchors.map(|(x, y, pointer)| pleasant_ui::handles::tag_body_rect(x, y, pointer));
     let candidates: [[Rect; 2]; 4] = std::array::from_fn(|i| {
-        let (ax, ay, _) = anchors[i];
         let body = handles[i];
-        let center_x = if i < 2 { ax } else { body.0 + body.2 * 0.5 - 2.0 };
+        if i < 2 {
+            let left = (body.0 - 32.0, body.1 + (body.3 - 12.0) * 0.5, 28.0, 12.0);
+            let right = (body.0 + body.2 + 4.0, left.1, 28.0, 12.0);
+            return if i == 0 { [right, left] } else { [left, right] };
+        }
+        let center_x = body.0 + body.2 * 0.5 - 2.0;
         let above = (center_x - 14.0, body.1 - 14.0, 28.0, 12.0);
-        let below = (center_x - 14.0, if i < 2 { ay + 4.0 } else { body.1 + body.3 + 4.0 }, 28.0, 12.0);
-        if i == 3 { [above, below] } else { [below, above] }
+        let below = (
+            center_x - 14.0,
+            body.1 + body.3 + 4.0,
+            28.0,
+            12.0,
+        );
+        if i == 3 {
+            [above, below]
+        } else {
+            [below, above]
+        }
     });
     let overlaps = |a: Rect, b: Rect| {
-        a.0 < b.0 + b.2 + 2.0 && a.0 + a.2 + 2.0 > b.0
-            && a.1 < b.1 + b.3 + 2.0 && a.1 + a.3 + 2.0 > b.1
+        a.0 < b.0 + b.2 + 2.0
+            && a.0 + a.2 + 2.0 > b.0
+            && a.1 < b.1 + b.3 + 2.0
+            && a.1 + a.3 + 2.0 > b.1
     };
     let mut best = candidates.map(|sides| sides[0]);
     let mut best_score = u32::MAX;
@@ -491,11 +527,20 @@ pub(super) fn strum_bound_labels(pad: Rect, field: Rect, x: (f32, f32), y: (f32,
         let labels: [Rect; 4] = std::array::from_fn(|i| candidates[i][((flips >> i) & 1) as usize]);
         let mut score = flips.count_ones();
         for (i, r) in labels.iter().copied().enumerate() {
-            if r.0 < pad.0 || r.1 < pad.1 || r.0 + r.2 > pad.0 + pad.2 || r.1 + r.3 > pad.1 + pad.3 {
+            if r.0 < pad.0 || r.1 < pad.1 || r.0 + r.2 > pad.0 + pad.2 || r.1 + r.3 > pad.1 + pad.3
+            {
                 score += 1000;
             }
-            score += 16 * handles.iter().filter(|&&handle| overlaps(r, handle)).count() as u32;
-            score += 16 * labels[..i].iter().filter(|&&label| overlaps(r, label)).count() as u32;
+            score += 16
+                * handles
+                    .iter()
+                    .filter(|&&handle| overlaps(r, handle))
+                    .count() as u32;
+            score += 16
+                * labels[..i]
+                    .iter()
+                    .filter(|&&label| overlaps(r, label))
+                    .count() as u32;
         }
         if score < best_score {
             best = labels;

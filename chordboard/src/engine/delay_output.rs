@@ -20,7 +20,7 @@ impl Engine {
         if self.resetting {
             return;
         }
-        let settings = self.arp.data.pages[self.arp.active as usize].delay;
+        let settings = self.active_arp_page().delay;
         self.delay.capture(
             settings,
             source,
@@ -41,7 +41,7 @@ impl Engine {
         }
     }
     pub(super) fn update_delay_power(&mut self, out: &mut impl FnMut(Out)) {
-        let power = self.arp.data.pages[self.arp.active as usize].delay.enabled;
+        let power = self.active_arp_page().delay.enabled;
         if self.delay_page == self.arp.active && self.delay_power && !power {
             self.reset_delay(out);
         }
@@ -71,29 +71,56 @@ impl Engine {
     /// Resolve only new attacks. Existing echo tokens retain their actual pitch
     /// until release, so a harmony change cannot misdirect a pending note-off.
     fn delay_note(&self, mut note: u8) -> u8 {
-        let settings = self.arp.data.pages[self.arp.active as usize].delay;
-        if self.notes.len == 0 || self.full_notes.len == 0 {
+        let settings = self.active_arp_page().delay;
+        let chord_notes = if self.config.tracker_enabled {
+            self.arp_cycle_chord()
+        } else {
+            self.full_notes
+        };
+        if self.config.tracker_enabled && chord_notes.len == 0
+            || !self.config.tracker_enabled && (self.notes.len == 0 || self.full_notes.len == 0)
+        {
             return note;
         }
         if settings.follow_chords {
             // Search MIDI pitches rather than clipping octaves near 0 or 127.
             // Equal distances resolve downward, deterministically.
             note = (0..=127u8)
-                .filter(|n| self.full_notes.as_slice().iter().any(|tone| tone % 12 == n % 12))
+                .filter(|n| {
+                    chord_notes
+                        .as_slice()
+                        .iter()
+                        .any(|tone| tone % 12 == n % 12)
+                })
                 .min_by_key(|n| n.abs_diff(note))
                 .unwrap_or(note);
         }
         if settings.voice_leading && self.config.voice_leading < 2 {
             if let Some(recipe) = self.memory {
-                let spread = if self.config.mode == CHORD { 0 } else { recipe.spread };
+                let spread = if self.config.mode == CHORD {
+                    0
+                } else {
+                    recipe.spread
+                };
                 let base = harmony::voice_recipe(recipe, spread);
-                let original = base.as_slice().iter().copied()
-                    .filter(|n| n % 12 == note % 12).min_by_key(|n| n.abs_diff(note));
-                let resolved = self.full_notes.as_slice().iter().copied()
-                    .filter(|n| n % 12 == note % 12).min_by_key(|n| n.abs_diff(note));
+                let original = base
+                    .as_slice()
+                    .iter()
+                    .copied()
+                    .filter(|n| n % 12 == note % 12)
+                    .min_by_key(|n| n.abs_diff(note));
+                let resolved = self
+                    .full_notes
+                    .as_slice()
+                    .iter()
+                    .copied()
+                    .filter(|n| n % 12 == note % 12)
+                    .min_by_key(|n| n.abs_diff(note));
                 if let (Some(original), Some(resolved)) = (original, resolved) {
                     let shifted = i16::from(note) + i16::from(resolved) - i16::from(original);
-                    if (0..=127).contains(&shifted) { note = shifted as u8; }
+                    if (0..=127).contains(&shifted) {
+                        note = shifted as u8;
+                    }
                 }
             }
         }

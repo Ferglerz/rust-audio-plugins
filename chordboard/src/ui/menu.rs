@@ -15,7 +15,13 @@ pub(super) enum Menu {
 impl Menu {
     pub(super) fn items(self) -> Vec<String> {
         let labels: &[&str] = match self {
-            Self::Meter(den) => return if den { (0..=5).map(|n| (1 << n).to_string()).collect() } else { (1..=32).map(|n| n.to_string()).collect() },
+            Self::Meter(den) => {
+                return if den {
+                    (0..=5).map(|n| (1 << n).to_string()).collect()
+                } else {
+                    (1..=32).map(|n| n.to_string()).collect()
+                }
+            }
             Self::RouteSource => &crate::engine::routing::SOURCES,
             Self::RouteTarget => {
                 return crate::engine::routing::available_targets()
@@ -34,7 +40,10 @@ impl Menu {
                 return (min..=max).map(|value| value.to_string()).collect();
             }
             Self::ArpPattern => {
-                return ARP_PATTERN_NAMES.iter().map(|label| (*label).to_string()).collect()
+                return ARP_PATTERN_NAMES
+                    .iter()
+                    .map(|label| (*label).to_string())
+                    .collect()
             }
             Self::ArpRate => {
                 return ARP_RATES
@@ -48,7 +57,13 @@ impl Menu {
 
     pub(super) fn title(self) -> &'static str {
         match self {
-            Self::Meter(den) => if den { "Beat unit" } else { "Beats per bar" },
+            Self::Meter(den) => {
+                if den {
+                    "Beat unit"
+                } else {
+                    "Beats per bar"
+                }
+            }
             Self::RouteSource => "Source",
             Self::RouteTarget => "Destination",
             Self::Key => "Key centre",
@@ -68,7 +83,7 @@ impl Menu {
         match self {
             Self::RouteSource | Self::RouteTarget => 146.0,
             Self::Key => 60.0,
-            Self::Scale => 146.0,
+            Self::Scale => 230.0,
             Self::Meter(_) | Self::KeyboardParam(_) => 40.0,
             Self::ArpRate => 112.0,
             Self::ArpPattern => 148.0,
@@ -79,7 +94,8 @@ impl Menu {
         match self {
             Self::RouteSource => 2,
             Self::RouteTarget => 4,
-            Self::Scale | Self::ArpRate => 2,
+            Self::Scale => 3,
+            Self::ArpRate => 2,
             Self::ArpPattern => 1,
             Self::Key => 3,
             Self::Meter(_) | Self::KeyboardParam(_) => 6,
@@ -88,6 +104,11 @@ impl Menu {
 
     pub(super) fn groups(self) -> Vec<(&'static str, Vec<usize>)> {
         match self {
+            Self::Scale => harmony::SCALE_FAMILIES
+                .iter()
+                .map(|(name, indices)| (*name, indices.to_vec()))
+                .chain(std::iter::once(("Pentatonic", vec![6, 7])))
+                .collect(),
             Self::RouteSource => vec![
                 ("Routing", vec![0]),
                 ("MIDI expression", (1..7).collect()),
@@ -110,10 +131,11 @@ impl Menu {
                         "spread" | "quality" | "inversion" | "transpose" | "filter" => 0,
                         "strings" | "strings_played" | "x" => 1,
                         "arp_pattern" | "rate" | "strum_ms" | "strum_sync" | "strum_hold"
-                        | "gate" | "swing" | "octaves" | "humanize" | "arp_octaves" | "arp_sync" | "arp_free_ms" | "arp_mode" | "arp_page"
-                        | "arp_loop_1_octave" | "arp_loop_2_octave" | "arp_loop_3_octave" | "arp_loop_4_octave" => 2,
-                        "velocity" | "length_ms" | "contour" | "root_on_select" | "latch"
-                        => 3,
+                        | "gate" | "swing" | "octaves" | "humanize" | "arp_octaves"
+                        | "arp_sync" | "arp_free_ms" | "arp_mode" | "arp_page"
+                        | "arp_loop_1_octave" | "arp_loop_2_octave" | "arp_loop_3_octave"
+                        | "arp_loop_4_octave" => 2,
+                        "velocity" | "length_ms" | "contour" | "root_on_select" | "latch" => 3,
                         _ => 4,
                     };
                     groups[group].1.push(index);
@@ -124,6 +146,21 @@ impl Menu {
         }
     }
     pub(super) fn group_heading_rects(self, r: Rect) -> Vec<(&'static str, Rect)> {
+        if self == Self::Scale {
+            return self
+                .groups()
+                .into_iter()
+                .enumerate()
+                .map(|(i, (name, _))| {
+                    let heading = if i < 3 {
+                        (r.0 + 12.0 + i as f32 * 238.0, r.1 + 150.0, 230.0, 20.0)
+                    } else {
+                        (r.0 + 12.0, r.1 + 424.0, r.2 - 24.0, 20.0)
+                    };
+                    (name, heading)
+                })
+                .collect();
+        }
         let mut y = r.1 + 38.0;
         self.groups()
             .into_iter()
@@ -142,8 +179,7 @@ impl Menu {
     pub(super) fn bounds_at(self, trigger: Rect) -> Rect {
         if matches!(self, Self::Key | Self::Scale) {
             let root = KEY_MENU;
-            return (root.0, root.1 + root.3 + 6.0, 356.0,
-                if self == Self::Scale { 330.0 } else { 190.0 });
+            return (root.0, root.1 + root.3 + 6.0, 730.0, 492.0);
         }
         let columns = self.columns();
         let rows = self.items().len().div_ceil(columns);
@@ -181,12 +217,33 @@ impl Menu {
             let (_, note, spelling) = harmony::KEY_CHOICES[index];
             let key = root_key_rect(r, note);
             return if piano_black(note) {
-                (key.0, key.1 + if spelling == 2 { key.3 * 0.5 } else { 0.0 }, key.2, key.3 * 0.5)
-            } else { key };
+                (
+                    key.0,
+                    key.1 + if spelling == 2 { key.3 * 0.5 } else { 0.0 },
+                    key.2,
+                    key.3 * 0.5,
+                )
+            } else {
+                key
+            };
         }
         if self == Self::Scale {
-            return (r.0 + 12.0 + (index % 2) as f32 * 168.0,
-                r.1 + 186.0 + (index / 2) as f32 * 34.0, 164.0, 30.0);
+            for (column, (_, indices)) in harmony::SCALE_FAMILIES.iter().enumerate() {
+                if let Some(row) = indices.iter().position(|&i| i == index) {
+                    return (
+                        r.0 + 12.0 + column as f32 * 238.0,
+                        r.1 + 176.0 + row as f32 * 34.0,
+                        230.0,
+                        30.0,
+                    );
+                }
+            }
+            return (
+                r.0 + 12.0 + (index - 6) as f32 * 238.0,
+                r.1 + 450.0,
+                230.0,
+                30.0,
+            );
         }
         let mut y = r.1 + 38.0;
         for (_, indices) in self.groups() {
@@ -210,11 +267,17 @@ impl Menu {
 
     pub(super) fn trigger_rect(self) -> Rect {
         match self {
-            Self::Meter(den) => if den { METER_DEN } else { METER_NUM },
+            Self::Meter(den) => {
+                if den {
+                    METER_DEN
+                } else {
+                    METER_NUM
+                }
+            }
             Self::RouteSource => ROUTE_SOURCE,
             Self::RouteTarget => ROUTE_TARGET,
             Self::Key => KEY_MENU,
-            Self::Scale => root_scale_rect(Self::Key.bounds_at(KEY_MENU)),
+            Self::Scale => KEY_MENU,
             Self::KeyboardParam(id) => keyboard_control_rect(id, false),
             Self::ArpRate => arp_rate_rect(),
             Self::ArpPattern => arp_direction_rect(),
@@ -227,13 +290,15 @@ pub(super) fn root_key_rect(r: Rect, note: u8) -> Rect {
     let width = (r.2 - 24.0) / 7.0;
     let before = (0..note).filter(|&n| !piano_black(n)).count() as f32;
     if piano_black(note) {
-        (r.0 + 12.0 + (before - 0.31) * width, r.1 + 38.0, width * 0.62, 100.0 * 0.62)
+        (
+            r.0 + 12.0 + (before - 0.31) * width,
+            r.1 + 38.0,
+            width * 0.62,
+            100.0 * 0.62,
+        )
     } else {
         (r.0 + 12.0 + before * width, r.1 + 38.0, width, 100.0)
     }
-}
-pub(super) fn root_scale_rect(r: Rect) -> Rect {
-    (r.0 + 12.0, r.1 + 150.0, r.2 - 24.0, 28.0)
 }
 
 impl ChordboardView {
@@ -241,7 +306,9 @@ impl ChordboardView {
         let bounds = self.menu_bounds(Menu::Key);
         // Accidentals are in front of the natural keys, including both spellings.
         [true, false].into_iter().find_map(|black| {
-            harmony::KEY_CHOICES.iter().enumerate()
+            harmony::KEY_CHOICES
+                .iter()
+                .enumerate()
                 .filter(|(_, (_, note, _))| piano_black(*note) == black)
                 .find(|(i, _)| hit(Menu::Key.option_rect_at(bounds, *i), x, y))
                 .map(|(i, _)| i)
@@ -254,30 +321,83 @@ impl ChordboardView {
         for black in [false, true] {
             for note in (0..12u8).filter(|&n| piano_black(n) == black) {
                 let r = root_key_rect(bounds, note);
-                let fill = if black { if d.light { TEXT } else { BG } }
-                    else if d.light { BG } else { alpha(TEXT, 0.65) };
+                let fill = if black {
+                    if d.light {
+                        TEXT
+                    } else {
+                        BG
+                    }
+                } else if d.light {
+                    BG
+                } else {
+                    alpha(TEXT, 0.65)
+                };
                 d.rect(r.0, r.1, r.2, r.3, fill);
                 d.outline(r, if black || d.light { LINE } else { BG });
-                for (i, (label, pitch, _)) in harmony::KEY_CHOICES.iter().enumerate().filter(|(_, (_, pitch, _))| *pitch == note) {
+                for (i, (label, pitch, _)) in harmony::KEY_CHOICES
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (_, pitch, _))| *pitch == note)
+                {
                     let option = Menu::Key.option_rect_at(bounds, i);
-                    let on = *pitch as i32 == self.params.key.value() && i == self.menu_selection(Menu::Key);
-                    if on || self.hover_pointer().and_then(|(x,y)| self.root_choice_at(x,y)) == Some(i) {
-                        d.rounded_rect(option.0 + 1.5, option.1 + 2.0, option.2 - 3.0, option.3 - 4.0, 1.0, alpha(GOLD, if on { 0.7 } else { 0.3 }));
+                    let on = *pitch as i32 == self.params.key.value()
+                        && i == self.menu_selection(Menu::Key);
+                    if on
+                        || self
+                            .hover_pointer()
+                            .and_then(|(x, y)| self.root_choice_at(x, y))
+                            == Some(i)
+                    {
+                        d.rounded_rect(
+                            option.0 + 1.5,
+                            option.1 + 2.0,
+                            option.2 - 3.0,
+                            option.3 - 4.0,
+                            1.0,
+                            alpha(GOLD, if on { 0.7 } else { 0.3 }),
+                        );
                     }
                     if menu == Menu::Key && self.menu_cursor == i {
-                        d.outline_rounded(option.0 + 1.5, option.1 + 2.0, option.2 - 3.0, option.3 - 4.0, 1.0, GOLD, 1.5);
+                        d.outline_rounded(
+                            option.0 + 1.5,
+                            option.1 + 2.0,
+                            option.2 - 3.0,
+                            option.3 - 4.0,
+                            1.0,
+                            GOLD,
+                            1.5,
+                        );
                     }
-                    d.text_centered(option.0 + option.2 * 0.5, option.1 + option.3 - 8.0, &music::label(label), 11.0,
-                        if on { GOLD } else if black { if d.light { BG } else { TEXT } } else if d.light { TEXT } else { BG });
+                    d.text_centered(
+                        option.0 + option.2 * 0.5,
+                        option.1 + option.3 - 8.0,
+                        &music::label(label),
+                        11.0,
+                        if on {
+                            GOLD
+                        } else if black {
+                            if d.light {
+                                BG
+                            } else {
+                                TEXT
+                            }
+                        } else if d.light {
+                            TEXT
+                        } else {
+                            BG
+                        },
+                    );
                 }
             }
         }
-        self.button_tinted(d, root_scale_rect(bounds), &format!("Scale: {} {}", harmony::SCALE_NAMES[self.params.scale.value() as usize], if menu == Menu::Scale { "▴" } else { "▾" }), menu == Menu::Scale, GOLD);
-        if menu == Menu::Scale {
-            for (i, label) in menu.items().iter().enumerate() {
-                let r = self.menu_option_rect(menu, i);
-                self.button(d, r, label, i == self.menu_selection(menu), GOLD);
-                if self.menu_cursor == i { d.outline_rounded(r.0, r.1, r.2, r.3, 6.0, GOLD, 1.0); }
+        for (label, heading) in Menu::Scale.group_heading_rects(bounds) {
+            d.text(heading.0, heading.1 + 14.0, label, TEXT_SMALL, GOLD);
+        }
+        for (i, label) in Menu::Scale.items().iter().enumerate() {
+            let r = self.menu_option_rect(Menu::Scale, i);
+            self.button(d, r, label, i == self.menu_selection(Menu::Scale), GOLD);
+            if menu == Menu::Scale && self.menu_cursor == i {
+                d.outline_rounded(r.0, r.1, r.2, r.3, 6.0, GOLD, 1.0);
             }
         }
     }
@@ -290,14 +410,25 @@ impl ChordboardView {
             .filter(|&next| next != index && self.route_menu_allowed(menu, next))
             .filter_map(|next| {
                 let r = self.menu_option_rect(menu, next);
-                let primary = if horizontal { r.0 - current.0 } else { r.1 - current.1 };
+                let primary = if horizontal {
+                    r.0 - current.0
+                } else {
+                    r.1 - current.1
+                };
                 if (horizontal && (r.1 - current.1).abs() > 0.5)
-                    || (forward && primary <= 0.5) || (!forward && primary >= -0.5) {
+                    || (forward && primary <= 0.5)
+                    || (!forward && primary >= -0.5)
+                {
                     return None;
                 }
-                let secondary = if horizontal { 0.0 } else { (r.0 - current.0).abs() };
+                let secondary = if horizontal {
+                    0.0
+                } else {
+                    (r.0 - current.0).abs()
+                };
                 Some((next, primary.abs(), secondary))
-            }).collect();
+            })
+            .collect();
         candidates.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.2.total_cmp(&b.2)));
         candidates.first().map_or(index, |candidate| candidate.0)
     }

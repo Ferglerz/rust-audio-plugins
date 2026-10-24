@@ -639,8 +639,18 @@ fn arp_position_is_a_unipolar_source_and_mod_lanes_remain_additive() {
     .additive());
     let mut view = view(2, false);
     view.route_slot = 3;
-    let target_id=crate::engine::routing::TARGETS.iter().position(|t|t.id=="rate").unwrap();
-    Arc::get_mut(&mut view.params).unwrap().routes[3].target=IntParam::new("Target",target_id as i32,IntRange::Linear{min:0,max:crate::engine::routing::TARGETS.len() as i32-1});
+    let target_id = crate::engine::routing::TARGETS
+        .iter()
+        .position(|t| t.id == "rate")
+        .unwrap();
+    Arc::get_mut(&mut view.params).unwrap().routes[3].target = IntParam::new(
+        "Target",
+        target_id as i32,
+        IntRange::Linear {
+            min: 0,
+            max: crate::engine::routing::TARGETS.len() as i32 - 1,
+        },
+    );
     let (mut cx, target, changes) = context();
     view.select_menu(
         &mut EventContext::new_with_current(&mut cx, target),
@@ -703,7 +713,10 @@ fn delay_slide_over_hides_keyboard_destinations_and_keeps_arp_destinations() {
             "covered route target {r:?}"
         );
     }
-    assert!(view.route_targets().iter().any(|(i, _)| crate::engine::routing::TARGETS[*i].id == "arp_page"));
+    assert!(view
+        .route_targets()
+        .iter()
+        .any(|(i, _)| crate::engine::routing::TARGETS[*i].id == "arp_page"));
     click(&mut view, &mut cx, target, arpeggiator::delay_rect());
     view.tick_arp_editor(pleasant_ui::page_slide::DURATION);
     assert!(view

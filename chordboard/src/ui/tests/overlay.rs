@@ -1,6 +1,6 @@
 use super::super::*;
-use nih_plug_vizia::vizia::backend::BackendContext;
 use super::support::*;
+use nih_plug_vizia::vizia::backend::BackendContext;
 
 #[test]
 fn destination_chips_open_the_exact_route_and_remain_reachable() {
@@ -115,7 +115,8 @@ fn modulated_rate_clicks_explain_ownership_without_editing() {
             max: crate::engine::routing::TARGETS.len() as i32 - 1,
         },
     );
-    params.arp_pages[0].arp_mode = IntParam::new("Arp repeat", 2, IntRange::Linear { min: 0, max: 3 });
+    params.arp_pages[0].arp_mode =
+        IntParam::new("Arp repeat", 2, IntRange::Linear { min: 0, max: 3 });
     view.params = Arc::new(params);
     open_arp(&mut view);
     let (mut cx, target, changes) = context();
@@ -204,8 +205,15 @@ fn once_and_loop_share_a_page_with_mode_specific_timing_controls() {
     open_arp(&mut once);
     open_arp(&mut looped);
     assert_eq!(
-        once.base_controls().iter().map(|(c, r)| (c.id, *r)).collect::<Vec<_>>(),
-        looped.base_controls().iter().map(|(c, r)| (c.id, *r)).collect::<Vec<_>>()
+        once.base_controls()
+            .iter()
+            .map(|(c, r)| (c.id, *r))
+            .collect::<Vec<_>>(),
+        looped
+            .base_controls()
+            .iter()
+            .map(|(c, r)| (c.id, *r))
+            .collect::<Vec<_>>()
     );
     for v in [&once, &looped] {
         let ids = v
@@ -220,7 +228,6 @@ fn once_and_loop_share_a_page_with_mode_specific_timing_controls() {
             .iter()
             .any(|(i, _)| crate::engine::routing::TARGETS[*i].id == "octaves"));
     }
-
 }
 #[test]
 fn selected_modulator_connections_survive_pointer_leaving_and_removal_icons_fit() {
@@ -374,9 +381,9 @@ fn keyboard_module_sits_below_the_arpeggiator() {
 }
 #[test]
 fn arp_repeat_exposes_four_modes_and_sync_loop_default() {
-    let params=ChordboardParams::default();
-    assert_eq!(params.arp_pages[0].arp_mode.preview_plain(1.0),3);
-    assert_eq!(params.arp_pages[0].arp_mode.value(),2);
+    let params = ChordboardParams::default();
+    assert_eq!(params.arp_pages[0].arp_mode.preview_plain(1.0), 3);
+    assert_eq!(params.arp_pages[0].arp_mode.value(), 2);
     assert!(!params.arp_enabled.value());
 }
 
@@ -462,7 +469,14 @@ fn escape_cancels_value_draft_before_closing_its_panel() {
     edit.insert("bad");
     view.edit = Some(edit);
     let (mut cx, target, changes) = context();
-    event(&mut view, &mut cx, target, 0.0, 0.0, WindowEvent::KeyDown(Code::Escape, None));
+    event(
+        &mut view,
+        &mut cx,
+        target,
+        0.0,
+        0.0,
+        WindowEvent::KeyDown(Code::Escape, None),
+    );
     assert!(view.edit.is_none());
     assert_eq!(view.panel, Some(Panel::Routes));
     assert!(changes.borrow().is_empty());
@@ -474,22 +488,72 @@ fn fine_adjustment_shift_during_or_before_value_press_does_not_persist_latch() {
         let mut view = view(1, false);
         view.focused = true;
         let (mut cx, target, changes) = context();
-        let r = view.placed_controls().into_iter().find(|(c, _)| c.id == "length_ms").unwrap().1;
+        let r = view
+            .placed_controls()
+            .into_iter()
+            .find(|(c, _)| c.id == "length_ms")
+            .unwrap()
+            .1;
         let (x, y) = (r.0 + r.2 * 0.5, r.1 + r.3 * 0.5);
         if before {
             // The pointer already indicates a parameter gesture before Shift is pressed.
-            event(&mut view, &mut cx, target, x, y, WindowEvent::MouseMove(x, y));
-            event(&mut view, &mut cx, target, x, y, WindowEvent::KeyDown(Code::ShiftLeft, None));
+            event(
+                &mut view,
+                &mut cx,
+                target,
+                x,
+                y,
+                WindowEvent::MouseMove(x, y),
+            );
+            event(
+                &mut view,
+                &mut cx,
+                target,
+                x,
+                y,
+                WindowEvent::KeyDown(Code::ShiftLeft, None),
+            );
         }
-        event(&mut view, &mut cx, target, x, y, WindowEvent::MouseDown(MouseButton::Left));
+        event(
+            &mut view,
+            &mut cx,
+            target,
+            x,
+            y,
+            WindowEvent::MouseDown(MouseButton::Left),
+        );
         assert!(matches!(view.drag, Some(Drag::Control(_))));
         if !before {
-            event(&mut view, &mut cx, target, x, y, WindowEvent::KeyDown(Code::ShiftLeft, None));
+            event(
+                &mut view,
+                &mut cx,
+                target,
+                x,
+                y,
+                WindowEvent::KeyDown(Code::ShiftLeft, None),
+            );
         }
-        event(&mut view, &mut cx, target, x, y - 12.0, WindowEvent::MouseMove(x, y - 12.0));
-        event(&mut view, &mut cx, target, x, y - 12.0, WindowEvent::KeyUp(Code::ShiftLeft, None));
+        event(
+            &mut view,
+            &mut cx,
+            target,
+            x,
+            y - 12.0,
+            WindowEvent::MouseMove(x, y - 12.0),
+        );
+        event(
+            &mut view,
+            &mut cx,
+            target,
+            x,
+            y - 12.0,
+            WindowEvent::KeyUp(Code::ShiftLeft, None),
+        );
         assert!(view.latch_shift.is_none());
-        assert!(!changes.borrow().iter().any(|(ptr, _)| *ptr == view.params.latch.as_ptr()));
+        assert!(!changes
+            .borrow()
+            .iter()
+            .any(|(ptr, _)| *ptr == view.params.latch.as_ptr()));
     }
 }
 
@@ -509,7 +573,12 @@ fn grouped_menu_arrows_follow_visual_rows_and_stop_at_edges() {
     assert_eq!(view.menu_neighbor(menu, 12, Code::ArrowDown), 12);
     for menu in [Menu::RouteSource, Menu::RouteTarget] {
         for i in 0..menu.items().len() {
-            for code in [Code::ArrowLeft, Code::ArrowRight, Code::ArrowUp, Code::ArrowDown] {
+            for code in [
+                Code::ArrowLeft,
+                Code::ArrowRight,
+                Code::ArrowUp,
+                Code::ArrowDown,
+            ] {
                 let next = view.menu_neighbor(menu, i, code);
                 if next != i {
                     assert!(view.route_menu_allowed(menu, next));
@@ -526,12 +595,20 @@ fn grouped_menu_arrows_follow_visual_rows_and_stop_at_edges() {
 
 #[test]
 fn pending_route_removal_cancels_on_escape_focus_and_source_change() {
-    for exit in [WindowEvent::KeyDown(Code::Escape, None), WindowEvent::FocusOut] {
+    for exit in [
+        WindowEvent::KeyDown(Code::Escape, None),
+        WindowEvent::FocusOut,
+    ] {
         let mut view = view(3, false);
         view.toggle_modulator(7);
         let (slot, chip) = view.route_chips()[0];
         let (mut cx, target, changes) = context();
-        click(&mut view, &mut cx, target, ChordboardView::route_remove_rect(chip));
+        click(
+            &mut view,
+            &mut cx,
+            target,
+            ChordboardView::route_remove_rect(chip),
+        );
         assert_eq!(view.pending_route_remove, Some(slot));
         event(&mut view, &mut cx, target, chip.0 + 3.0, chip.1 + 3.0, exit);
         assert_eq!(view.pending_route_remove, None);
@@ -551,11 +628,19 @@ fn route_menu_arrows_skip_destinations_unavailable_for_selected_source() {
     view.route_slot = 0;
     let menu = Menu::RouteTarget;
     let disabled = crate::engine::routing::available_targets()
-        .position(|(_, target)| target.id == "x_reverse").unwrap();
+        .position(|(_, target)| target.id == "x_reverse")
+        .unwrap();
     assert!(!view.route_menu_allowed(menu, disabled));
     for i in 0..menu.items().len() {
-        if !view.route_menu_allowed(menu, i) { continue; }
-        for code in [Code::ArrowLeft, Code::ArrowRight, Code::ArrowUp, Code::ArrowDown] {
+        if !view.route_menu_allowed(menu, i) {
+            continue;
+        }
+        for code in [
+            Code::ArrowLeft,
+            Code::ArrowRight,
+            Code::ArrowUp,
+            Code::ArrowDown,
+        ] {
             assert_ne!(view.menu_neighbor(menu, i, code), disabled);
         }
     }
@@ -568,26 +653,61 @@ fn moving_from_performance_shift_to_value_gesture_restores_latch_immediately() {
         view.focused = true;
         Arc::get_mut(&mut view.params).unwrap().latch = BoolParam::new("Latch", base);
         let (mut cx, target, changes) = context();
-        event(&mut view, &mut cx, target, 0.0, 0.0, WindowEvent::KeyDown(Code::ShiftLeft, None));
+        event(
+            &mut view,
+            &mut cx,
+            target,
+            0.0,
+            0.0,
+            WindowEvent::KeyDown(Code::ShiftLeft, None),
+        );
         assert!(view.latch_shift.is_some());
-        let r = view.placed_controls().into_iter().find(|(c, _)| c.id == "length_ms").unwrap().1;
-        event(&mut view, &mut cx, target, r.0 + r.2 * 0.5, r.1 + r.3 * 0.5, WindowEvent::MouseDown(MouseButton::Left));
+        let r = view
+            .placed_controls()
+            .into_iter()
+            .find(|(c, _)| c.id == "length_ms")
+            .unwrap()
+            .1;
+        event(
+            &mut view,
+            &mut cx,
+            target,
+            r.0 + r.2 * 0.5,
+            r.1 + r.3 * 0.5,
+            WindowEvent::MouseDown(MouseButton::Left),
+        );
         assert!(view.latch_shift.is_none());
-        let latch_changes: Vec<_> = changes.borrow().iter().copied()
-            .filter(|(ptr, _)| *ptr == view.params.latch.as_ptr()).collect();
-        assert_eq!(latch_changes, vec![
-            (view.params.latch.as_ptr(), if base { 0.0 } else { 1.0 }),
-            (view.params.latch.as_ptr(), if base { 1.0 } else { 0.0 }),
-        ]);
+        let latch_changes: Vec<_> = changes
+            .borrow()
+            .iter()
+            .copied()
+            .filter(|(ptr, _)| *ptr == view.params.latch.as_ptr())
+            .collect();
+        assert_eq!(
+            latch_changes,
+            vec![
+                (view.params.latch.as_ptr(), if base { 0.0 } else { 1.0 }),
+                (view.params.latch.as_ptr(), if base { 1.0 } else { 0.0 }),
+            ]
+        );
     }
 }
 
 #[test]
 fn dedicated_modulator_meters_fill_from_center_in_both_directions() {
     for source in [9, 10] {
-        assert_eq!(super::super::performance::meter_fill(source, 0.0), (0.5, 0.5));
-        assert_eq!(super::super::performance::meter_fill(source, -1.0), (0.0, 0.5));
-        assert_eq!(super::super::performance::meter_fill(source, 1.0), (0.5, 1.0));
+        assert_eq!(
+            super::super::performance::meter_fill(source, 0.0),
+            (0.5, 0.5)
+        );
+        assert_eq!(
+            super::super::performance::meter_fill(source, -1.0),
+            (0.0, 0.5)
+        );
+        assert_eq!(
+            super::super::performance::meter_fill(source, 1.0),
+            (0.5, 1.0)
+        );
     }
 }
 
@@ -598,13 +718,22 @@ fn arpeggiator_settings_work_while_strumfield_is_expanded() {
     view.expand_target = 1.0;
     let (mut cx, target, changes) = context();
     click(&mut view, &mut cx, target, arp_power_rect());
-    assert_eq!(changes.borrow().last().copied(), Some((view.params.arp_enabled.as_ptr(), 1.0)));
+    assert_eq!(
+        changes.borrow().last().copied(),
+        Some((view.params.arp_enabled.as_ptr(), 1.0))
+    );
     click(&mut view, &mut cx, target, arp_direction_rect());
     assert!(view.arp_chooser_open());
     view.menu = None;
     let humanize = arp_controls()[0].1;
-    event(&mut view, &mut cx, target, humanize.0 + 5.0, humanize.1 + 5.0,
-        WindowEvent::MouseDown(MouseButton::Left));
+    event(
+        &mut view,
+        &mut cx,
+        target,
+        humanize.0 + 5.0,
+        humanize.1 + 5.0,
+        WindowEvent::MouseDown(MouseButton::Left),
+    );
     assert!(matches!(view.drag, Some(Drag::Control(_))));
 }
 
@@ -614,17 +743,27 @@ fn every_modulator_bypass_button_emits_its_toggle_without_opening_routes() {
     for source in 0..crate::engine::routing::SOURCE_COUNT {
         for bypassed in [false, true] {
             let mut view = view(3, false);
-            Arc::get_mut(&mut view.params).unwrap().modulators[source].bypass = BoolParam::new("Bypass", bypassed);
+            Arc::get_mut(&mut view.params).unwrap().modulators[source].bypass =
+                BoolParam::new("Bypass", bypassed);
             let rect = modulator_bypass_rect(source);
             let meter = meter_rect(source);
             assert!(hit(meter, rect.0, rect.1));
             assert!(hit(meter, rect.0 + rect.2, rect.1 + rect.3));
             click(&mut view, &mut cx, target, rect);
-            assert_eq!(changes.borrow().last().copied(), Some((view.params.modulators[source].bypass.as_ptr(), if bypassed { 0.0 } else { 1.0 })));
+            assert_eq!(
+                changes.borrow().last().copied(),
+                Some((
+                    view.params.modulators[source].bypass.as_ptr(),
+                    if bypassed { 0.0 } else { 1.0 }
+                ))
+            );
             assert!(view.drag.is_none());
             assert!(view.panel.is_none());
             assert!(view.selected_modulator.is_none());
-            assert_eq!(view.modulation_route("x").is_none(), source == 7 && bypassed);
+            assert_eq!(
+                view.modulation_route("x").is_none(),
+                source == 7 && bypassed
+            );
         }
     }
 }

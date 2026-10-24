@@ -1,7 +1,7 @@
 use super::super::*;
+use super::support::*;
 use nih_plug_vizia::vizia::backend::BackendContext;
 use std::{cell::RefCell, rc::Rc};
-use super::support::*;
 
 #[test]
 fn strum_range_grips_clamp_without_playing_notes() {
@@ -305,7 +305,11 @@ fn direction_chooser_selects_exact_patterns() {
         assert!(view.menu.is_none());
         assert!(changes.borrow().iter().any(|(ptr, value)| {
             *ptr == view.arp_params().arp_pattern.as_ptr()
-                && *value == view.arp_params().arp_pattern.preview_normalized(selected as i32)
+                && *value
+                    == view
+                        .arp_params()
+                        .arp_pattern
+                        .preview_normalized(selected as i32)
         }));
         assert!(view.drag.is_none() && view.edit.is_none());
     }
@@ -401,11 +405,7 @@ fn save_requires_a_chord_and_confirms_only_after_slot_update() {
 }
 #[test]
 fn left_performance_targets_do_not_overlap() {
-    let mut targets = vec![
-        LATCH,
-        ORDER,
-        Menu::Key.trigger_rect(),
-    ];
+    let mut targets = vec![LATCH, ORDER, Menu::Key.trigger_rect()];
     targets.extend([ALWAYS_BASS, AFFECT_CHORDS]);
     targets.push(protocol_rect(0));
     targets.extend((0..KEY_COUNT).map(key_rect));
@@ -470,8 +470,16 @@ fn direct_selection_pairs_parameter_gestures() {
 fn displayed_units_round_trip_through_value_entry() {
     let view = view(1, false);
     for (id, text, expected) in [
-        ("swing", "-100%", view.arp_params().swing.preview_normalized(-0.75)),
-        ("swing", "50%", view.arp_params().swing.preview_normalized(0.375)),
+        (
+            "swing",
+            "-100%",
+            view.arp_params().swing.preview_normalized(-0.75),
+        ),
+        (
+            "swing",
+            "50%",
+            view.arp_params().swing.preview_normalized(0.375),
+        ),
         (
             "velocity",
             "42%",
@@ -603,10 +611,24 @@ fn octave_modulation_reserves_its_maximum_string_count() {
     view.snapshot.notes = harmony::voice(60, 0, None, 0, 0, 0);
     let target = TARGETS.iter().position(|t| t.id == "octaves").unwrap();
     let route = &mut Arc::get_mut(&mut view.params).unwrap().routes[1];
-        route.source = IntParam::new("Source", 1, IntRange::Linear { min: 0, max: crate::engine::routing::SOURCE_COUNT as i32 });
-        route.target = IntParam::new("Target", target as i32, IntRange::Linear { min: 0, max: TARGETS.len() as i32 - 1 });
-        route.min = FloatParam::new("Minimum", 1.0, FloatRange::Linear { min: 0.0, max: 1.0 });
-        route.max = FloatParam::new("Maximum", 0.0, FloatRange::Linear { min: 0.0, max: 1.0 });
+    route.source = IntParam::new(
+        "Source",
+        1,
+        IntRange::Linear {
+            min: 0,
+            max: crate::engine::routing::SOURCE_COUNT as i32,
+        },
+    );
+    route.target = IntParam::new(
+        "Target",
+        target as i32,
+        IntRange::Linear {
+            min: 0,
+            max: TARGETS.len() as i32 - 1,
+        },
+    );
+    route.min = FloatParam::new("Minimum", 1.0, FloatRange::Linear { min: 0.0, max: 1.0 });
+    route.max = FloatParam::new("Maximum", 0.0, FloatRange::Linear { min: 0.0, max: 1.0 });
     for norm in [0.0, 0.3, 0.7, 1.0, 0.0] {
         view.snapshot.routed[target] = Some(norm);
         assert_eq!(view.string_count(), 12);

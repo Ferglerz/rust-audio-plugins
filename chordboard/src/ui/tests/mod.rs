@@ -1,10 +1,11 @@
-mod support;
 mod controls;
-mod performance;
-mod strum;
-mod routing;
-mod piano;
 mod layout;
-mod overlay;
 mod midi_learn;
+mod overlay;
+mod performance;
+mod piano;
+mod routing;
+mod strum;
+mod support;
 mod theory;
+mod tracker;

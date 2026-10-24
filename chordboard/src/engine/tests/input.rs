@@ -60,7 +60,13 @@ fn common_notes_are_not_retriggered() {
 fn latch_repress_rearticulates_chords_from_midi_keyboard_and_pointer() {
     for token in [None, Some(0), Some(POINTER_KEY_OFFSET)] {
         let mut e = Engine::default();
-        configure(&mut e, Config { latch: true, ..Config::default() });
+        configure(
+            &mut e,
+            Config {
+                latch: true,
+                ..Config::default()
+            },
+        );
         let press = |e: &mut Engine| match token {
             Some(token) => send(e, Command::KeyDown(token, 60, 0)),
             None => on(e, 60, 1),
@@ -76,8 +82,13 @@ fn latch_repress_rearticulates_chords_from_midi_keyboard_and_pointer() {
             let events = press(&mut e);
             assert_eq!(notes(&events), vec![60, 64, 67], "input {token:?}");
             for note in [60, 64, 67] {
-                let attack = events.iter().position(|v| matches!(v, Out::On(_, n, _) if *n == note)).unwrap();
-                assert!(events[..attack].iter().any(|v| matches!(v, Out::Off(_, n, _) if *n == note)));
+                let attack = events
+                    .iter()
+                    .position(|v| matches!(v, Out::On(_, n, _) if *n == note))
+                    .unwrap();
+                assert!(events[..attack]
+                    .iter()
+                    .any(|v| matches!(v, Out::Off(_, n, _) if *n == note)));
             }
             assert_eq!(e.voices.iter().flatten().count(), 3);
         }
@@ -87,7 +98,13 @@ fn latch_repress_rearticulates_chords_from_midi_keyboard_and_pointer() {
 #[test]
 fn latch_repress_rearticulates_alterations_and_added_notes() {
     let mut e = Engine::default();
-    configure(&mut e, Config { latch: true, ..Config::default() });
+    configure(
+        &mut e,
+        Config {
+            latch: true,
+            ..Config::default()
+        },
+    );
     on(&mut e, 60, 1);
     on(&mut e, 62, 2);
     assert!(off(&mut e, 62, 2).is_empty());
@@ -100,7 +117,15 @@ fn latch_repress_rearticulates_alterations_and_added_notes() {
 #[test]
 fn latch_repress_retriggers_selection_root_without_strumming() {
     let mut e = Engine::default();
-    configure(&mut e, Config { latch: true, mode: MANUAL, root_on_select: true, ..Config::default() });
+    configure(
+        &mut e,
+        Config {
+            latch: true,
+            mode: MANUAL,
+            root_on_select: true,
+            ..Config::default()
+        },
+    );
     assert_eq!(notes(&on(&mut e, 60, 1)), vec![60]);
     assert!(off(&mut e, 60, 1).is_empty());
     assert_eq!(notes(&on(&mut e, 60, 1)), vec![60]);
@@ -110,7 +135,11 @@ fn latch_repress_retriggers_selection_root_without_strumming() {
 #[test]
 fn latch_configuration_and_control_selection_do_not_retrigger_chords() {
     let mut e = Engine::default();
-    let config = Config { latch: true, control_base: 36, ..Config::default() };
+    let config = Config {
+        latch: true,
+        control_base: 36,
+        ..Config::default()
+    };
     configure(&mut e, config);
     on(&mut e, 60, 1);
     off(&mut e, 60, 1);
@@ -605,73 +634,119 @@ fn flat_ninth_replaces_sus2_and_release_restores_it() {
 #[test]
 fn addition_identity_dedup_release_and_capture_preserve_recipe_and_clock() {
     let mut e = Engine::default();
-    configure(&mut e, Config { mode: ARP, ..Config::default() });
-    on(&mut e, 60, 1); on(&mut e, 70, 2);
+    configure(
+        &mut e,
+        Config {
+            mode: ARP,
+            ..Config::default()
+        },
+    );
+    on(&mut e, 60, 1);
+    on(&mut e, 70, 2);
     tick(&mut e, 15);
     let clock = (e.arp.next, e.arp.phase, e.arp.step);
-    on(&mut e, 61, 3); on(&mut e, 74, 4); on(&mut e, 62, 5);
-    assert_eq!(e.notes.as_slice(), &[60,64,67,70,73,74]);
-    assert_eq!((e.arp.next,e.arp.phase,e.arp.step), clock);
+    on(&mut e, 61, 3);
+    on(&mut e, 74, 4);
+    on(&mut e, 62, 5);
+    assert_eq!(e.notes.as_slice(), &[60, 64, 67, 70, 73, 74]);
+    assert_eq!((e.arp.next, e.arp.phase, e.arp.step), clock);
     off(&mut e, 74, 4);
-    assert_eq!(e.notes.as_slice(), &[60,64,67,70,73,74]);
+    assert_eq!(e.notes.as_slice(), &[60, 64, 67, 70, 73, 74]);
     let word = e.memory.unwrap().encode();
     send(&mut e, Command::Capture(0));
     assert_eq!(e.saved.unwrap().1, word);
     off(&mut e, 62, 5);
-    assert_eq!(e.notes.as_slice(), &[60,64,67,70,73]);
-    assert_eq!((e.arp.next,e.arp.phase,e.arp.step), clock);
+    assert_eq!(e.notes.as_slice(), &[60, 64, 67, 70, 73]);
+    assert_eq!((e.arp.next, e.arp.phase, e.arp.step), clock);
     send(&mut e, Command::Recall(word));
-    assert_eq!(e.notes.as_slice(), &[60,64,67,70,73,74]);
+    assert_eq!(e.notes.as_slice(), &[60, 64, 67, 70, 73, 74]);
 }
 
 #[test]
 fn additions_preserve_root_velocity_and_member_expression() {
     let mut e = Engine::default();
-    configure(&mut e, Config { mpe:true, ..Config::default() });
-    on(&mut e,60,1); on(&mut e,70,2);
-    e.pressure(3,None,0.6,&mut |_|{});
+    configure(
+        &mut e,
+        Config {
+            mpe: true,
+            ..Config::default()
+        },
+    );
+    on(&mut e, 60, 1);
+    on(&mut e, 70, 2);
+    e.pressure(3, None, 0.6, &mut |_| {});
     let mut events = Vec::new();
-    e.midi_note(true,3,62,0.4,&mut |v|events.push(v));
-    let (channel,velocity) = events.iter().find_map(|v| match v { Out::On(c,74,v) => Some((*c,*v)), _ => None }).unwrap();
-    assert!((velocity-0.8).abs()<0.0001);
-    assert!(events.contains(&Out::Pressure(channel,0.0)));
-    events.clear(); e.pressure(3,Some(62),0.9,&mut |v|events.push(v));
+    e.midi_note(true, 3, 62, 0.4, &mut |v| events.push(v));
+    let (channel, velocity) = events
+        .iter()
+        .find_map(|v| match v {
+            Out::On(c, 74, v) => Some((*c, *v)),
+            _ => None,
+        })
+        .unwrap();
+    assert!((velocity - 0.8).abs() < 0.0001);
+    assert!(events.contains(&Out::Pressure(channel, 0.0)));
+    events.clear();
+    e.pressure(3, Some(62), 0.9, &mut |v| events.push(v));
     assert!(events.is_empty());
-    assert_eq!(e.expression.pressure,0.0);
-    events.clear(); e.pressure(1,None,0.7,&mut |v|events.push(v));
-    assert!(events.contains(&Out::Pressure(channel,0.7)));
+    assert_eq!(e.expression.pressure, 0.0);
+    events.clear();
+    e.pressure(1, None, 0.7, &mut |v| events.push(v));
+    assert!(events.contains(&Out::Pressure(channel, 0.7)));
 }
 
 #[test]
 fn latch_keeps_additions_and_resets_retained_recipe_without_admitting_old_second() {
     let mut e = Engine::default();
-    configure(&mut e,Config { latch:true, ..Config::default() });
-    on(&mut e,60,1); on(&mut e,62,2); on(&mut e,65,3);
-    off(&mut e,65,3); off(&mut e,60,1); off(&mut e,62,2);
-    assert_eq!(e.memory.unwrap().additions,1<<5);
-    send(&mut e,Command::SetQuality(1));
-    assert_eq!(e.memory.unwrap().additions,0);
-    on(&mut e,60,1); on(&mut e,62,2); on(&mut e,65,3);
-    off(&mut e,60,1); on(&mut e,60,1);
+    configure(
+        &mut e,
+        Config {
+            latch: true,
+            ..Config::default()
+        },
+    );
+    on(&mut e, 60, 1);
+    on(&mut e, 62, 2);
+    on(&mut e, 65, 3);
+    off(&mut e, 65, 3);
+    off(&mut e, 60, 1);
+    off(&mut e, 62, 2);
+    assert_eq!(e.memory.unwrap().additions, 1 << 5);
+    send(&mut e, Command::SetQuality(1));
+    assert_eq!(e.memory.unwrap().additions, 0);
+    on(&mut e, 60, 1);
+    on(&mut e, 62, 2);
+    on(&mut e, 65, 3);
+    off(&mut e, 60, 1);
+    on(&mut e, 60, 1);
     assert!(e.second.is_none());
-    assert_eq!(e.memory.unwrap().additions,1<<5);
-    assert_eq!(e.notes.as_slice(), &[60,63,67,77]);
+    assert_eq!(e.memory.unwrap().additions, 1 << 5);
+    assert_eq!(e.notes.as_slice(), &[60, 63, 67, 77]);
 }
 
 #[test]
 fn several_additions_keep_root_recipe_until_sole_survivor_promotes_in_either_release_order() {
-    for root_first in [false,true] {
-        let mut e=Engine::default();
-        on(&mut e,60,1); on(&mut e,62,2); on(&mut e,63,3); on(&mut e,65,4);
-        let order=if root_first {[(60,1),(62,2)]} else {[(62,2),(60,1)]};
-        for (note,channel) in order { off(&mut e,note,channel); }
-        assert_eq!(e.root.map(|s|s.note),Some(60));
+    for root_first in [false, true] {
+        let mut e = Engine::default();
+        on(&mut e, 60, 1);
+        on(&mut e, 62, 2);
+        on(&mut e, 63, 3);
+        on(&mut e, 65, 4);
+        let order = if root_first {
+            [(60, 1), (62, 2)]
+        } else {
+            [(62, 2), (60, 1)]
+        };
+        for (note, channel) in order {
+            off(&mut e, note, channel);
+        }
+        assert_eq!(e.root.map(|s| s.note), Some(60));
         assert!(e.second.is_none());
-        assert_eq!(e.notes.as_slice(),&[60,64,67,75,77]);
-        off(&mut e,63,3);
-        assert_eq!(e.root.map(|s|s.note),Some(65));
-        assert_eq!(e.notes.as_slice(),&[65,69,72]);
-        off(&mut e,65,4);
+        assert_eq!(e.notes.as_slice(), &[60, 64, 67, 75, 77]);
+        off(&mut e, 63, 3);
+        assert_eq!(e.root.map(|s| s.note), Some(65));
+        assert_eq!(e.notes.as_slice(), &[65, 69, 72]);
+        off(&mut e, 65, 4);
         assert!(e.root.is_none());
         assert!(e.voices.iter().all(Option::is_none));
     }
@@ -679,52 +754,101 @@ fn several_additions_keep_root_recipe_until_sole_survivor_promotes_in_either_rel
 
 #[test]
 fn split_releases_additions_without_latch_and_latch_disable_keeps_held_contributors() {
-    let mut e=Engine::default();
-    configure(&mut e,Config { key_split:true, split_note:100, bass_enabled:false, ..Config::default() });
-    on(&mut e,60,1); on(&mut e,70,2); on(&mut e,62,3);
-    assert_eq!(e.additions,1<<2);
-    off(&mut e,62,3);
-    assert_eq!(e.additions,0);
-    assert_eq!(e.notes.as_slice(),&[60,64,67,70]);
-    let mut e=Engine::default();
-    configure(&mut e,Config { latch:true, ..Config::default() });
-    on(&mut e,60,1); on(&mut e,62,2); on(&mut e,63,3); on(&mut e,65,4);
-    off(&mut e,60,1); off(&mut e,62,2);
-    configure(&mut e,Config::default());
-    assert_eq!(e.notes.as_slice(),&[60,64,67,75,77]);
-    off(&mut e,63,3);
-    assert_eq!(e.root.map(|s|s.note),Some(65));
-    assert_eq!(e.notes.as_slice(),&[65,69,72]);
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            key_split: true,
+            split_note: 100,
+            bass_enabled: false,
+            ..Config::default()
+        },
+    );
+    on(&mut e, 60, 1);
+    on(&mut e, 70, 2);
+    on(&mut e, 62, 3);
+    assert_eq!(e.additions, 1 << 2);
+    off(&mut e, 62, 3);
+    assert_eq!(e.additions, 0);
+    assert_eq!(e.notes.as_slice(), &[60, 64, 67, 70]);
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            latch: true,
+            ..Config::default()
+        },
+    );
+    on(&mut e, 60, 1);
+    on(&mut e, 62, 2);
+    on(&mut e, 63, 3);
+    on(&mut e, 65, 4);
+    off(&mut e, 60, 1);
+    off(&mut e, 62, 2);
+    configure(&mut e, Config::default());
+    assert_eq!(e.notes.as_slice(), &[60, 64, 67, 75, 77]);
+    off(&mut e, 63, 3);
+    assert_eq!(e.root.map(|s| s.note), Some(65));
+    assert_eq!(e.notes.as_slice(), &[65, 69, 72]);
 }
 
 #[test]
 fn addition_release_remaps_pending_strum_register_without_restarting_due_time() {
-    let mut e=Engine::default();
-    configure(&mut e,Config { mode:AUTO, ..Config::default() });
-    on(&mut e,36,1); on(&mut e,42,2);
-    for (n,c) in [(43,3),(46,4),(47,5),(50,6)] { on(&mut e,n,c); }
-    send(&mut e,Command::SetInversion(4));
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            mode: AUTO,
+            ..Config::default()
+        },
+    );
+    on(&mut e, 36, 1);
+    on(&mut e, 42, 2);
+    for (n, c) in [(43, 3), (46, 4), (47, 5), (50, 6)] {
+        on(&mut e, n, c);
+    }
+    send(&mut e, Command::SetInversion(4));
     e.scheduled.fill(None);
     let previous = *e.notes.as_slice().iter().find(|n| **n % 12 == 10).unwrap();
-    e.scheduled[0]=Some(Scheduled { at:100, note:previous, velocity:0.8, duration:100, gate_step:None });
-    off(&mut e,43,3);
+    e.scheduled[0] = Some(Scheduled {
+        at: 100,
+        note: previous,
+        velocity: 0.8,
+        duration: 100,
+        gate_step: None,
+    });
+    off(&mut e, 43, 3);
     let current = *e.notes.as_slice().iter().find(|n| **n % 12 == 10).unwrap();
-    assert_ne!(previous,current);
-    assert_eq!(e.scheduled[0].map(|s|(s.note,s.at)),Some((current,100)));
+    assert_ne!(previous, current);
+    assert_eq!(e.scheduled[0].map(|s| (s.note, s.at)), Some((current, 100)));
 }
 
 #[test]
 fn manual_chord_on_select_sounds_added_tone_and_release_preserves_timed_tail() {
-    let mut e=Engine::default();
-    configure(&mut e,Config { mode:MANUAL, always_chord:true, ..Config::default() });
-    on(&mut e,60,1); on(&mut e,70,2);
-    assert!(notes(&on(&mut e,62,3)).contains(&74));
-    assert!(e.voices.iter().flatten().any(|v|v.note==74&&v.layer));
-    e.strike(74,0.8,100,&mut |_|{});
-    assert!(off(&mut e,62,3).iter().all(|v|!matches!(v,Out::Off(_,74,_))));
-    assert!(e.voices.iter().flatten().any(|v|v.note==74&&!v.layer&&v.off==e.now+100));
-    tick(&mut e,101);
-    assert!(!e.voices.iter().flatten().any(|v|v.note==74));
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            mode: MANUAL,
+            always_chord: true,
+            ..Config::default()
+        },
+    );
+    on(&mut e, 60, 1);
+    on(&mut e, 70, 2);
+    assert!(notes(&on(&mut e, 62, 3)).contains(&74));
+    assert!(e.voices.iter().flatten().any(|v| v.note == 74 && v.layer));
+    e.strike(74, 0.8, 100, &mut |_| {});
+    assert!(off(&mut e, 62, 3)
+        .iter()
+        .all(|v| !matches!(v, Out::Off(_, 74, _))));
+    assert!(e
+        .voices
+        .iter()
+        .flatten()
+        .any(|v| v.note == 74 && !v.layer && v.off == e.now + 100));
+    tick(&mut e, 101);
+    assert!(!e.voices.iter().flatten().any(|v| v.note == 74));
 }
 
 #[test]
@@ -732,14 +856,29 @@ fn midi_degrees_follow_actual_scale_roots_in_every_key_and_register() {
     for key in 0..12 {
         for scale in 0..8 {
             let mut e = Engine::default();
-            e.configure(Config { key, scale, scale_layout: 1, bass_enabled: false, ..Config::default() }, &mut |_| {});
+            e.configure(
+                Config {
+                    key,
+                    scale,
+                    scale_layout: 1,
+                    bass_enabled: false,
+                    ..Config::default()
+                },
+                &mut |_| {},
+            );
             for octave in [12, 60, 108] {
                 for &relative in harmony::scale_tones(scale) {
                     let note = octave + key + relative;
-                    if note > 127 { continue; }
+                    if note > 127 {
+                        continue;
+                    }
                     e.midi_note(true, 0, note, 0.7, &mut |_| {});
                     assert_eq!(e.root.unwrap().note, note);
-                    assert_eq!(e.quality, harmony::scale_quality(scale, relative).unwrap(), "key {key}, scale {scale}, note {note}");
+                    assert_eq!(
+                        e.quality,
+                        harmony::scale_quality(scale, relative).unwrap(),
+                        "key {key}, scale {scale}, note {note}"
+                    );
                     e.midi_note(false, 0, note, 0.0, &mut |_| {});
                 }
             }
@@ -751,7 +890,15 @@ fn midi_degrees_follow_actual_scale_roots_in_every_key_and_register() {
 fn midi_degrees_preserve_chromatic_mode_and_out_of_scale_roots() {
     for (layout, note) in [(0, 62), (1, 61)] {
         let mut e = Engine::default();
-        e.configure(Config { scale_layout: layout, quality: 6, bass_enabled: false, ..Config::default() }, &mut |_| {});
+        e.configure(
+            Config {
+                scale_layout: layout,
+                quality: 6,
+                bass_enabled: false,
+                ..Config::default()
+            },
+            &mut |_| {},
+        );
         e.midi_note(true, 0, note, 0.7, &mut |_| {});
         assert_eq!(e.quality, 6);
         e.midi_note(false, 0, note, 0.0, &mut |_| {});
@@ -762,7 +909,16 @@ fn midi_degrees_preserve_chromatic_mode_and_out_of_scale_roots() {
 #[test]
 fn midi_keyboard_feedback_includes_control_bass_melody_and_all_channels() {
     let mut e = Engine::default();
-    e.configure(Config { control_base: 36, bass_split: 36, key_split: true, split_note: 60, ..Config::default() }, &mut |_| {});
+    e.configure(
+        Config {
+            control_base: 36,
+            bass_split: 36,
+            key_split: true,
+            split_note: 60,
+            ..Config::default()
+        },
+        &mut |_| {},
+    );
     for note in [24, 36, 50, 72] {
         e.midi_note(true, 0, note, 0.7, &mut |_| {});
         e.midi_note(true, 2, note, 0.7, &mut |_| {});

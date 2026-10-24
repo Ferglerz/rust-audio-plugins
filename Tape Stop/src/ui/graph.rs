@@ -2,7 +2,7 @@ use super::{controls::AXIS_LABEL_Y, *};
 
 pub(super) const GRAPH_X: f32 = 60.0;
 pub(super) const GRAPH_Y: f32 = 108.0;
-pub(super) const GRAPH_W: f32 = 852.0 * 0.8;
+pub(super) const GRAPH_W: f32 = 852.0 * 0.8 * 0.75;
 pub(super) const GRAPH_H: f32 = 252.0;
 
 const CURVE_NODE_HIT: f32 = 16.0;
@@ -72,7 +72,7 @@ impl TapeStopView {
         for i in 0..=5 {
             let x = gx + gw * (i as f32 / 5.0);
             d.line(x, gy, x, gy + gh, LINE, 1.0);
-            if i < 5 && !self.show_axis_controls {
+            if i < 5 {
                 let t = drop_time * i as f32 / 5.0;
                 d.text_centered(x, AXIS_LABEL_Y, &format_ms(t), 10.5, MUTED);
             }

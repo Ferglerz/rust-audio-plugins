@@ -36,7 +36,7 @@ fn arp_is_deterministic_and_gate_ends_notes() {
     }
     assert_eq!(tick(&mut a, 1000), tick(&mut b, 1000));
     off(&mut a, 60, 1);
-    assert!(notes(&tick(&mut a,500)).is_empty());
+    assert!(notes(&tick(&mut a, 500)).is_empty());
     assert!(a.voices.iter().all(Option::is_none));
 }
 #[test]

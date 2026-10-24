@@ -84,7 +84,13 @@ impl Draw<'_> {
             self.rect(r.0, r.1 + offset, r.2, height, accent);
         }
         // The opaque face hides the backing except around its lower corners.
-        self.rect(r.0, r.1, r.2, height, LINE);
+        let mut face = LINE;
+        if self.light {
+            self.rect(r.0, r.1, r.2, height, PANEL);
+            // Soften the fill without weakening shared borders and dividers.
+            face.a = 0.35;
+        }
+        self.rect(r.0, r.1, r.2, height, face);
         let mut tint = if selected > 0.0 && color != MUTED {
             color
         } else {
