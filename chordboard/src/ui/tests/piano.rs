@@ -179,12 +179,13 @@ fn routed_controls_use_parameter_scale_and_preserve_the_saved_base() {
 fn module_grid_and_keyboard_midi_controls_fit_without_overlapping() {
     assert!(PIANO_SPLITS.1 + PIANO_SPLITS.3 <= PIANO_KEYS.1);
     assert!(PIANO_LEADING.1 + PIANO_LEADING.3 + 2.0 < PIANO_SPLITS.1);
-    assert!(PIANO_KEYS.1 + PIANO_KEYS.3 < BASS_CONTAINER.1);
+    assert!(PIANO_KEYS.1 + PIANO_KEYS.3 + 18.0 <= BASS_CONTAINER.1);
+    assert!(PIANO_KEYS.1 + PIANO_KEYS.3 + 18.0 <= PIANO_SURFACE.1 + PIANO_SURFACE.3);
     for mpe in [false, true] {
         let melody = melody_container(mpe);
         let chord = chord_container(mpe);
-        assert!(chord.1 > PIANO_KEYS.1 + PIANO_KEYS.3);
-        assert!(melody.1 > PIANO_KEYS.1 + PIANO_KEYS.3);
+        assert!(PIANO_KEYS.1 + PIANO_KEYS.3 + 18.0 <= chord.1);
+        assert!(PIANO_KEYS.1 + PIANO_KEYS.3 + 18.0 <= melody.1);
         assert_eq!(BASS_CONTAINER.0, PIANO_KEYS.0);
         assert_eq!(melody.0 + melody.2, PIANO_KEYS.0 + PIANO_KEYS.2);
         assert!((chord.0 + chord.2 + 12.0 - melody.0).abs() < 0.001);
@@ -212,6 +213,7 @@ fn module_grid_and_keyboard_midi_controls_fit_without_overlapping() {
     assert_eq!(PERF_SURFACE.0 - CHORDS_SURFACE.0 - CHORDS_SURFACE.2, 12.0);
     assert_eq!(MOD_SURFACE.0 - PIANO_SURFACE.0 - PIANO_SURFACE.2, 16.0);
     assert_eq!(MOD_SURFACE.1 + MOD_SURFACE.3, PIANO_SURFACE.1 + PIANO_SURFACE.3);
+    assert_eq!(H, PIANO_SURFACE.1 + PIANO_SURFACE.3 + 18.0);
     for mpe in [false, true] {
         let view = view(1, mpe);
         for (id, module) in [
@@ -243,7 +245,7 @@ fn module_grid_and_keyboard_midi_controls_fit_without_overlapping() {
                         && r.1 + r.3 <= module.1 + module.3),
                 "control outside its module: {r:?}"
             );
-            assert!(r.1 > PIANO_KEYS.1 + PIANO_KEYS.3);
+            assert!(r.1 >= PIANO_KEYS.1 + PIANO_KEYS.3 + 18.0);
             assert!(r.0 >= PIANO_SURFACE.0 && r.0 + r.2 <= PIANO_SURFACE.0 + PIANO_SURFACE.2);
             assert!(r.1 + r.3 <= PIANO_SURFACE.1 + PIANO_SURFACE.3);
             for other in rects.iter().skip(i + 1) {

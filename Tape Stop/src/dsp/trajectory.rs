@@ -62,3 +62,86 @@ pub(super) fn minimum_return_len(s0: f64, lag: f64, requested: f64) -> f64 {
     }
     hi
 }
+
+/// Bernstein speed segment with control values [s0, c..c, 1].
+/// Its convex hull bounds speed, even when replanning above unity. Its integral
+/// is exactly n + lag, so the playhead meets the live head without a final jump.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct LiveReturn {
+    start: f64,
+    middle: f64,
+    degree: f64,
+}
+
+impl LiveReturn {
+    pub fn minimum_len(speed: f64, lag: f64) -> f64 {
+        9.0 * lag / (48.0 + speed)
+    }
+
+    pub fn new(speed: f64, lag: f64, len: f64) -> Self {
+        // Above unity, a long new duration needs a short initial deceleration
+        // followed by gentle catch-up. Raising the degree keeps all inner
+        // controls >= 1, preventing the playhead from passing the live head.
+        let degree = if speed > 1.0 && lag > 0.0 {
+            ((speed - 1.0) * len / lag - 1.0).ceil().max(8.0)
+        } else {
+            8.0
+        };
+        let start = if lag == 0.0 && speed > 1.0 {
+            1.0
+        } else {
+            speed
+        };
+        Self {
+            start,
+            middle: 1.0 + ((degree + 1.0) * lag / len - (start - 1.0)) / (degree - 1.0),
+            degree,
+        }
+    }
+
+    fn integral(self, u: f64) -> f64 {
+        let power = |v: f64| {
+            if self.degree == 8.0 {
+                v.powi(9)
+            } else {
+                v.powf(self.degree + 1.0)
+            }
+        };
+        self.middle * u
+            + (self.start - self.middle) * (1.0 - power(1.0 - u)) / (self.degree + 1.0)
+            + (1.0 - self.middle) * power(u) / (self.degree + 1.0)
+    }
+
+    pub fn advance(self, from: f64, to: f64, len: f64) -> f64 {
+        (self.integral(to) - self.integral(from)) * len
+    }
+}
+
+#[cfg(test)]
+mod live_return_tests {
+    use super::*;
+
+    #[test]
+    fn replans_are_bounded_and_integrate_to_the_live_head() {
+        for speed in [0.0, 0.7, 1.0, 2.0, 7.99, 8.0] {
+            for lag in [0.0, 1.0, 500.0, 100_000.0] {
+                for requested in [1.0_f64, 1000.0, 100_000.0] {
+                    let len = requested.max(LiveReturn::minimum_len(speed, lag)).ceil();
+                    let segment = LiveReturn::new(speed, lag, len);
+                    assert!(segment.middle >= 0.0 && segment.middle <= MAX_RETURN_SPEED + 1e-12);
+                    assert!((segment.advance(0.0, 1.0, len) - (len + lag)).abs() < 1e-8);
+                    for i in 0..100 {
+                        let average =
+                            segment.advance(i as f64 / 100.0, (i + 1) as f64 / 100.0, 100.0);
+                        assert!((-1e-9..=MAX_RETURN_SPEED + 1e-9).contains(&average));
+                        let u = (i + 1) as f64 / 100.0;
+                        assert!(
+                            segment.integral(u) * len <= lag + u * len + 1e-8,
+                            "playhead passed live audio"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}

@@ -21,6 +21,64 @@ fn layer_notes(e: &Engine) -> Vec<u8> {
     notes
 }
 #[test]
+fn split_chord_selection_sounds_without_melody_and_melody_never_opens_its_gate() {
+    for affect_chords in [false, true] {
+        for ui in [false, true] {
+            let mut e = Engine::default();
+            configure(
+                &mut e,
+                Config {
+                    always_chord: true,
+                    affect_chords,
+                    ..split_config()
+                },
+            );
+            let events = if ui {
+                send(&mut e, Command::KeyDown(0, 48, 0))
+            } else {
+                on(&mut e, 48, 0)
+            };
+            assert_eq!(notes(&events), vec![48, 52, 55]);
+            assert!(on(&mut e, 74, 0).contains(&Out::On(0, 74, 0.8)));
+            assert_eq!(e.memory.unwrap().root, 48);
+            assert_eq!(
+                e.full_notes.as_slice().iter().any(|n| n % 12 == 2),
+                affect_chords
+            );
+            if ui {
+                send(&mut e, Command::KeyUp(0));
+            } else {
+                off(&mut e, 48, 0);
+            }
+            assert!(layer_notes(&e).is_empty());
+            assert!(e.melody_note_held(0, 74));
+            assert!(notes(&off(&mut e, 74, 0)).is_empty());
+            assert_eq!(notes(&on(&mut e, 76, 0)), vec![76]);
+            assert!(layer_notes(&e).is_empty());
+        }
+    }
+}
+
+#[test]
+fn split_melody_affect_does_not_restart_a_released_chord() {
+    let mut e = Engine::default();
+    configure(
+        &mut e,
+        Config {
+            mode: CHORD,
+            affect_chords: true,
+            ..split_config()
+        },
+    );
+    assert_eq!(notes(&on(&mut e, 48, 0)), vec![48, 52, 55]);
+    off(&mut e, 48, 0);
+    assert!(e.voices.iter().all(Option::is_none));
+    assert_eq!(notes(&on(&mut e, 74, 0)), vec![74]);
+    assert!(notes(&off(&mut e, 74, 0)).is_empty());
+    assert!(e.voices.iter().all(Option::is_none));
+}
+
+#[test]
 fn split_keeps_left_selection_and_passes_right_notes_on_original_channels() {
     let mut e = Engine::default();
     configure(&mut e, split_config());
@@ -38,7 +96,7 @@ fn split_keeps_left_selection_and_passes_right_notes_on_original_channels() {
     assert!(!e.snapshot().sounding_notes[60]);
 }
 #[test]
-fn split_layer_gate_counts_each_right_hand_key_and_channel() {
+fn split_layer_gate_counts_each_chord_key_and_channel() {
     let mut e = Engine::default();
     configure(
         &mut e,
@@ -48,23 +106,22 @@ fn split_layer_gate_counts_each_right_hand_key_and_channel() {
         },
     );
     on(&mut e, 48, 0);
-    assert!(layer_notes(&e).is_empty());
-    on(&mut e, 72, 2);
+    assert_eq!(layer_notes(&e), vec![48]);
+    on(&mut e, 48, 2);
     on(&mut e, 72, 3);
-    assert_eq!(layer_notes(&e), vec![48]);
-    off(&mut e, 48, 0);
-    assert_eq!(layer_notes(&e), vec![48]);
-    assert!(!off(&mut e, 72, 2)
+    assert!(!off(&mut e, 48, 0)
         .iter()
         .any(|v| matches!(v, Out::Off(_, 48, _))));
     assert_eq!(layer_notes(&e), vec![48]);
-    assert!(off(&mut e, 72, 3)
+    assert!(off(&mut e, 48, 2)
         .iter()
         .any(|v| matches!(v, Out::Off(_, 48, _))));
     assert!(layer_notes(&e).is_empty());
+    assert!(e.melody_note_held(3, 72));
+    assert!(off(&mut e, 72, 3).contains(&Out::Off(3, 72, 0.3)));
 }
 #[test]
-fn split_right_hand_can_open_gate_before_a_chord_is_selected() {
+fn split_melody_before_selection_does_not_block_chord_gate() {
     let mut e = Engine::default();
     configure(
         &mut e,
@@ -128,8 +185,8 @@ fn split_shared_melody_and_layer_pitch_has_one_attack_and_one_final_release() {
             ..split_config()
         };
         configure(&mut e, config);
-        on(&mut e, 55, 1);
-        let events = on(&mut e, 62, 0);
+        let mut events = on(&mut e, 55, 1);
+        events.extend(on(&mut e, 62, 0));
         assert_eq!(
             events
                 .iter()
@@ -155,12 +212,11 @@ fn split_shared_melody_and_layer_pitch_has_one_attack_and_one_final_release() {
                 1
             );
         } else {
-            on(&mut e, 64, 2);
             assert!(!off(&mut e, 62, 0)
                 .iter()
                 .any(|v| matches!(v, Out::Off(0, 62, _))));
             assert_eq!(
-                off(&mut e, 64, 2)
+                off(&mut e, 55, 1)
                     .iter()
                     .filter(|v| matches!(v, Out::Off(0, 62, _)))
                     .count(),
@@ -184,7 +240,7 @@ fn split_layer_release_preserves_overlapping_strum_deadline() {
     on(&mut e, 48, 0);
     on(&mut e, 72, 2);
     e.strike(48, 0.8, 100, &mut |_| {});
-    assert!(!off(&mut e, 72, 2)
+    assert!(!off(&mut e, 48, 0)
         .iter()
         .any(|v| matches!(v, Out::Off(_, 48, _))));
     assert!(e.snapshot().sounding_notes[48]);
@@ -336,6 +392,8 @@ fn split_output_route_changes_preserve_transparent_melody_and_its_gate() {
     assert!(off(&mut e, 72, 1).contains(&Out::Off(1, 72, 0.3)));
     assert_eq!(layer_notes(&e), vec![48, 52, 55]);
     assert!(off(&mut e, 76, 2).contains(&Out::Off(2, 76, 0.3)));
+    assert_eq!(layer_notes(&e), vec![48, 52, 55]);
+    off(&mut e, 48, 0);
     assert!(layer_notes(&e).is_empty());
 }
 #[test]
@@ -387,6 +445,9 @@ fn split_recall_preserves_held_melody_and_updates_layer() {
     assert!(e.snapshot().held_notes[72]);
     assert_eq!(layer_notes(&e), vec![50, 54, 57]);
     assert!(off(&mut e, 72, 2).contains(&Out::Off(2, 72, 0.3)));
+    assert_eq!(layer_notes(&e), vec![50, 54, 57]);
+    on(&mut e, 52, 0);
+    off(&mut e, 52, 0);
     assert!(layer_notes(&e).is_empty());
 }
 #[test]
@@ -466,7 +527,8 @@ fn chord_hand_seventh_and_fifth_reach_sustained_output() {
             assert_eq!(harmony::chord_name(e.memory.unwrap()), label);
             off(&mut e, second, channel);
             off(&mut e, 48, 0);
-            assert_eq!(layer_notes(&e), expected);
+            assert_eq!(e.full_notes.as_slice(), expected.as_slice());
+            assert!(layer_notes(&e).is_empty());
         }
     }
 }

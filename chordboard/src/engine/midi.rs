@@ -52,6 +52,7 @@ impl Engine {
         }
         let pressed = on && velocity > 0.0;
         let learn_id = channel as usize * 128 + note as usize;
+        self.midi_held[learn_id] = pressed;
         if self.learned_note_held[learn_id] {
             if !pressed {
                 self.learned_note_held[learn_id] = false;
@@ -126,7 +127,10 @@ impl Engine {
         }
         let id = channel as u16 * 128 + note as u16;
         if pressed {
-            self.note_on(id, note, channel, velocity, None, out);
+            let quality = (self.config.scale_layout > 0)
+                .then(|| harmony::scale_quality(self.config.scale, (note % 12 + 12 - self.config.key.min(11)) % 12))
+                .flatten();
+            self.note_on(id, note, channel, velocity, quality, out);
         } else {
             self.note_off(id, velocity, out);
         }

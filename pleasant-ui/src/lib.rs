@@ -10,6 +10,8 @@ pub mod preferences;
 pub mod readout;
 pub mod spectrum;
 pub mod theme;
+pub mod tempo;
+pub mod xy_pad;
 pub mod value_edit;
 
 pub use draw::{ButtonAnim, Draw, TRACE_REST_PX};

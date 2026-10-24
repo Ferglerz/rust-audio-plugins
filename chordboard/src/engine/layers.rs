@@ -217,14 +217,17 @@ impl Engine {
         self.layer_latched = false;
     }
 
+    pub(super) fn chord_input_held(&self) -> bool {
+        self.root.is_some_and(|root| root.held)
+            || self.held_inputs.iter().any(Option::is_some)
+    }
+
     pub(super) fn sync_layers(&mut self, out: &mut impl FnMut(Out)) {
         let enabled =
             (self.config.always_bass && self.config.bass_enabled) || self.config.always_chord;
-        let held = if self.config.key_split {
-            self.melody.iter().any(|channel| channel.iter().any(|&v| v))
-        } else {
-            self.held_inputs.iter().any(Option::is_some)
-        };
+        // Melody owns only its transparent notes; chord selection gates the
+        // accompaniment regardless of whether the melody split is enabled.
+        let held = self.chord_input_held();
         if !self.config.latch || !enabled {
             self.layer_latched = false;
         }

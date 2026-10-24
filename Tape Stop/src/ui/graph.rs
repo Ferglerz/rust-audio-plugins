@@ -1,7 +1,4 @@
-use super::{
-    controls::{AXIS_LABEL_Y, DROP_TIME_SLIDER},
-    *,
-};
+use super::{controls::AXIS_LABEL_Y, *};
 
 pub(super) const GRAPH_X: f32 = 60.0;
 pub(super) const GRAPH_Y: f32 = 108.0;
@@ -43,7 +40,12 @@ impl TapeStopView {
         let gw = GRAPH_W;
         let gh = GRAPH_H;
         let curve_exp = self.params.drop_curve.value();
-        let drop_time = self.params.drop_time.value();
+        let bpm = if self.params.tempo_sync.value() {
+            self.telemetry.tempo.load(Ordering::Relaxed)
+        } else {
+            self.params.tempo.value()
+        };
+        let drop_time = self.params.timing(bpm as f64).0;
         let braking = self.telemetry.is_braking.load(Ordering::Relaxed);
         let crossfading = self.telemetry.is_crossfading.load(Ordering::Relaxed);
         let prog_l = self.telemetry.brake_progress_l.load(Ordering::Relaxed);
@@ -75,13 +77,6 @@ impl TapeStopView {
                 d.text_centered(x, AXIS_LABEL_Y, &format_ms(t), 10.5, MUTED);
             }
         }
-        d.text_centered(
-            DROP_TIME_SLIDER.0 + DROP_TIME_SLIDER.2 * 0.5,
-            gy - 8.0,
-            "DROP",
-            10.0,
-            MUTED,
-        );
         d.outline(
             (gx, gy, gw, gh),
             if braking || crossfading { TEAL } else { LINE },

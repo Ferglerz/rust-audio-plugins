@@ -5,4 +5,5 @@ pub mod envelope;
 pub mod filters;
 pub mod interpolation;
 pub mod spectrum;
+pub mod tempo;
 pub mod units;

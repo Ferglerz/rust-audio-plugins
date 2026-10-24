@@ -19,23 +19,11 @@ impl ChordboardView {
             d.text(METER_NUM.0 + 49.0, 43.5, "/", 13.0, MUTED);
             self.button(d, METER_DEN, &den.to_string(), false, GOLD);
         }
-        self.icon_button(
-            d,
-            TEMPO_SYNC,
-            if synced { "Host tempo" } else { "Manual tempo" },
-            false,
-            if synced { TEAL } else { GOLD },
-            if synced { style::Icon::Host } else { style::Icon::Manual },
+        pleasant_ui::tempo::Header { source: TEMPO_SYNC, bpm: TEMPO_CONTROL }.draw(
+            d, synced,
+            if synced { self.snapshot.tempo as f64 } else { self.params.tempo.value() as f64 },
+            self.params.tempo.unmodulated_normalized_value(), self.hover_amount(TEMPO_SYNC),
         );
-        if synced {
-            d.text(
-                TEMPO_CONTROL.0 + 16.0,
-                TEMPO_CONTROL.1 + TEMPO_CONTROL.3 * 0.5 + 13.0 * 0.35,
-                &format!("{:.1} bpm", self.snapshot.tempo),
-                13.0,
-                TEXT,
-            );
-        }
     }
 
     pub(super) fn draw_strumfield_header(&self, d: &mut Draw) {
@@ -104,9 +92,7 @@ impl ChordboardView {
     }
 
     pub(super) fn string_count(&self) -> usize {
-        let octaves = self
-            .routed_plain("octaves")
-            .unwrap_or(self.params.octaves.value() as f32);
+        let octaves = self.maximum_routed_plain("octaves", self.params.octaves.value() as f32);
         harmony::string_count(self.snapshot.notes.len, octaves as u8)
     }
 
@@ -286,7 +272,8 @@ impl ChordboardView {
         for (i, label) in SOURCE_SHORT.iter().enumerate() {
             let r = meter_rect(i);
             let value = self.snapshot.sources[i];
-            let accent = if matches!(i,9|10) { GOLD } else { TEAL };
+            let bypassed = self.params.modulators[i].bypass.value();
+            let accent = if bypassed { MUTED } else if matches!(i,9|10) { GOLD } else { TEAL };
             let hover = self.hover_amount(r);
             let dragging = matches!(self.drag, Some(Drag::Route(drag)) if drag.source == i);
             let route_count = self
@@ -353,7 +340,28 @@ impl ChordboardView {
             }
             let color = if matches!(i,9|10) || linked || dragging || hover > 0.3 { accent } else { MUTED };
             style::MODULATOR_ICONS[i].draw(d, x + 8.0, r.1 + 14.0, color);
-            d.text_right(x + width, r.1 + 14.0 + TEXT_SMALL * 0.35, label, TEXT_SMALL, color);
+            d.text_right(modulator_bypass_rect(i).0 - 5.0, r.1 + 14.0 + TEXT_SMALL * 0.35, label, TEXT_SMALL, color);
+            let power = modulator_bypass_rect(i);
+            let power_hover = self.hover_amount(power);
+            let flash = self.action_flash
+                .filter(|(rect, _)| *rect == power)
+                .map_or(0.0, |(_, amount)| amount);
+            let center = (power.0 + power.2 * 0.5, power.1 + power.3 * 0.5);
+            let pulse = if power_hover > 0.0 {
+                let seconds = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() % 100_000;
+                let seconds = seconds as f32 * 0.001;
+                (seconds * 4.5).sin() * 0.5 + 0.5
+            } else { 0.0 };
+            let power_color = if bypassed && power_hover > 0.01 { TEXT } else { accent };
+            if power_hover > 0.0 || flash > 0.0 {
+                d.circle(center.0, center.1, 8.0 + pulse + flash * 2.0,
+                    alpha(power_color, power_hover * (0.04 + 0.06 * pulse) + flash * 0.2), true);
+            }
+            d.power_icon_scaled(center.0, center.1, power_color,
+                0.7 * (1.0 + flash * 0.15), 1.1 + flash * 0.3);
         }
         d.font = self.ui_font.get();
     }

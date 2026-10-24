@@ -244,7 +244,7 @@ fn scale_layout_pointer_and_typing_resolve_the_same_notes_without_overlapping_ti
 }
 #[test]
 fn compact_layout_preserves_keyboard_velocity_heights_and_memory_gap() {
-    assert_eq!(PIANO_SURFACE.3, 200.0);
+    assert_eq!(PIANO_SURFACE.3, 248.0);
     assert_eq!(PERF_SURFACE.3, CHORDS_SURFACE.3);
     let tile = key_rect(KEY_COLUMNS * 2);
     assert_eq!(memory_rect(0).1 - tile.1 - tile.3, 10.0);
@@ -398,7 +398,6 @@ fn split_drag_repairs_extreme_loaded_boundaries() {
 fn module_header_controls_fit_inline_without_overlap() {
     let chords = vec![
         Menu::Key.trigger_rect(),
-        Menu::Scale.trigger_rect(),
         ORDER,
         TRANSPOSE,
     ];

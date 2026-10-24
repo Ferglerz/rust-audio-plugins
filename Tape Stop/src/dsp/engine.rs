@@ -1,7 +1,8 @@
 use super::ring_buffer::{StereoRingBuffer, BUFFER_SIZE};
 pub use super::trajectory::{inv_s_curve, s_curve};
 use super::trajectory::{
-    lag_samples, minimum_return_len, return_coeff, return_speed_at, MAX_RETURN_SPEED, SEMI_DROP,
+    lag_samples, minimum_return_len, return_coeff, return_speed_at, LiveReturn, MAX_RETURN_SPEED,
+    SEMI_DROP,
 };
 
 /// Shortest crossfade when pre/post channels do not match.
@@ -139,6 +140,9 @@ pub struct TapeStopEngine {
     return_s0_r: f64,
     return_a_l: f64,
     return_a_r: f64,
+    return_elapsed: f64,
+    return_requested_sec: f32,
+    live_return: Option<[LiveReturn; 2]>,
 
     // MIDI Note tracking
     active_note_count: usize,
@@ -194,6 +198,9 @@ impl TapeStopEngine {
             return_s0_r: 1.0,
             return_a_l: 0.0,
             return_a_r: 0.0,
+            return_elapsed: 0.0,
+            return_requested_sec: 0.0,
+            live_return: None,
             active_note_count: 0,
             held_notes: [0; 128],
             manual_trigger: false,
@@ -249,6 +256,8 @@ impl TapeStopEngine {
         self.is_returning = false;
         self.pending_release = false;
         self.return_pos = 0.0;
+        self.return_elapsed = 0.0;
+        self.live_return = None;
         self.active_note_count = 0;
         self.held_notes.fill(0);
         self.manual_trigger = false;
@@ -446,6 +455,8 @@ impl TapeStopEngine {
 
         if self.pending_release {
             self.begin_return(prepared.xfade_ms, prepared.return_sec);
+        } else if self.is_returning && prepared.return_sec != self.return_requested_sec {
+            self.retime_return(prepared.return_sec);
         }
 
         // 5. State evaluation & speed computation
@@ -480,13 +491,25 @@ impl TapeStopEngine {
             (out_l, out_r)
         } else if self.is_returning {
             let u = ((self.return_pos + 0.5) / self.return_len).clamp(0.0, 1.0);
-            self.speed_l =
-                return_speed_at(self.return_s0_l, self.return_a_l, u).clamp(0.0, MAX_RETURN_SPEED);
-            self.speed_r =
-                return_speed_at(self.return_s0_r, self.return_a_r, u).clamp(0.0, MAX_RETURN_SPEED);
+            if let Some([left, right]) = self.live_return {
+                let from = self.return_pos / self.return_len;
+                let to = ((self.return_pos + 1.0) / self.return_len).min(1.0);
+                self.speed_l = left
+                    .advance(from, to, self.return_len)
+                    .clamp(0.0, MAX_RETURN_SPEED);
+                self.speed_r = right
+                    .advance(from, to, self.return_len)
+                    .clamp(0.0, MAX_RETURN_SPEED);
+            } else {
+                self.speed_l = return_speed_at(self.return_s0_l, self.return_a_l, u)
+                    .clamp(0.0, MAX_RETURN_SPEED);
+                self.speed_r = return_speed_at(self.return_s0_r, self.return_a_r, u)
+                    .clamp(0.0, MAX_RETURN_SPEED);
+            }
             self.play_pos_l += self.speed_l;
             self.play_pos_r += self.speed_r;
             self.return_pos += 1.0;
+            self.return_elapsed += 1.0;
             if self.return_pos >= self.return_len {
                 let head = self.ring_buffer.live_head() as f64;
                 self.play_pos_l = head;
@@ -540,6 +563,9 @@ impl TapeStopEngine {
         self.is_braking = false;
         self.is_crossfading = false;
         self.return_pos = 0.0;
+        self.return_elapsed = 0.0;
+        self.return_requested_sec = return_sec;
+        self.live_return = None;
 
         // The first return sample has already been pushed. Measure lag at the
         // preceding live frame so n return advances meet the live frame at n.
@@ -562,6 +588,25 @@ impl TapeStopEngine {
         let knob = xfade_ms.clamp(XFADE_FLOOR_MS, 500.0);
         let len_ms = XFADE_FLOOR_MS + (knob - XFADE_FLOOR_MS) * matched;
         self.xfade_len_samples = (len_ms as f64 * self.sample_rate as f64 / 1000.0).max(1.0);
+    }
+
+    fn retime_return(&mut self, return_sec: f32) {
+        // This frame is already recorded; the new segment starts at the preceding live frame.
+        let head = (self.ring_buffer.live_head() + BUFFER_SIZE - 1) % BUFFER_SIZE;
+        let lag_l = lag_samples(head, self.play_pos_l, BUFFER_SIZE);
+        let lag_r = lag_samples(head, self.play_pos_r, BUFFER_SIZE);
+        let remaining =
+            (return_sec as f64 * self.sample_rate as f64 - self.return_elapsed).max(1.0);
+        self.return_len = remaining
+            .max(LiveReturn::minimum_len(self.speed_l, lag_l))
+            .max(LiveReturn::minimum_len(self.speed_r, lag_r))
+            .ceil();
+        self.live_return = Some([
+            LiveReturn::new(self.speed_l, lag_l, self.return_len),
+            LiveReturn::new(self.speed_r, lag_r, self.return_len),
+        ]);
+        self.return_pos = 0.0;
+        self.return_requested_sec = return_sec;
     }
 
     fn release_match(&mut self) -> f32 {

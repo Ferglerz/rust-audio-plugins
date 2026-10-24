@@ -3,12 +3,14 @@ use crossbeam_queue::ArrayQueue;
 use nih_plug::params::persist::PersistentField;
 use serde::{Deserialize, Serialize};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, RwLock,
 };
 
 pub const PAGES: usize = 8;
-pub const STEPS: usize = 96; // twelve chord tones × four octaves × a two-pass ordering
+pub const LOOPS: usize = 4;
+pub const LOOP_STEPS: usize = 24;
+pub const STEPS: usize = LOOP_STEPS * LOOPS;
 pub const TAPS: usize = 8;
 pub const MODE_NAMES: [&str; 4] = ["Once", "Loop", "Sync Loop", "Aligned Loop"];
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,6 +30,7 @@ impl ArpMode {
 pub struct Settings {
     pub mode: ArpMode,
     pub pattern: u8,
+    /// Number of pattern passes (historical parameter ID: arp_octaves).
     pub octaves: u8,
     pub sync: bool,
     pub rate: f32,
@@ -131,6 +134,10 @@ pub struct DelaySettings {
     pub enabled: bool,
     pub sync: bool,
     pub ping_pong: bool,
+    /// Join the main voice-leading mode, including sounding echo references.
+    pub voice_leading: bool,
+    /// Resolve each new echo against the chord active at playback time.
+    pub follow_chords: bool,
     pub sources: u8,
     pub count: u8,
     pub taps: [DelayTap; TAPS],
@@ -141,6 +148,8 @@ impl Default for DelaySettings {
             enabled: false,
             sync: true,
             ping_pong: false,
+            voice_leading: false,
+            follow_chords: false,
             sources: source::ARP,
             count: 1,
             taps: [DelayTap::default(); TAPS],
@@ -172,91 +181,83 @@ fn finite(value: f32, default: f32) -> f32 {
         default
     }
 }
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Loop {
+    pub octave: i8,
+    pub steps: [Step; LOOP_STEPS],
+}
+impl Default for Loop {
+    fn default() -> Self { Self { octave: 0, steps: [Step::default(); LOOP_STEPS] } }
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Replacement {
+    pub serial: u64,
+    pub settings: Settings,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Page {
-    #[serde(with = "step_array")]
-    pub steps: [Step; STEPS],
+    pub loops: [Loop; LOOPS],
+    pub initialized: u8,
     pub delay: DelaySettings,
+    #[serde(skip)]
+    pub replacement: Option<Replacement>,
 }
 impl Default for Page {
     fn default() -> Self {
-        Self {
-            steps: [Step::default(); STEPS],
-            delay: DelaySettings::default(),
-        }
+        Self { loops: [Loop::default(); LOOPS], initialized: 1, delay: DelaySettings::default(), replacement: None }
     }
+}
+impl Page {
+    pub fn ensure_loops(&mut self, count: usize) -> bool {
+        let count = count.clamp(1, LOOPS);
+        let before = self.initialized;
+        while (self.initialized as usize) < count {
+            let i = self.initialized as usize;
+            self.loops[i] = self.loops[i - 1];
+            self.initialized += 1;
+        }
+        before != self.initialized
+    }
+    pub fn step(&self, occurrence: usize, pass_len: usize) -> &Step {
+        &self.loops[occurrence / pass_len.max(1)].steps[occurrence % pass_len.max(1)]
+    }
+    pub fn step_mut(&mut self, occurrence: usize, pass_len: usize) -> &mut Step {
+        &mut self.loops[occurrence / pass_len.max(1)].steps[occurrence % pass_len.max(1)]
+    }
+    pub fn flattened_steps(&self, pass_len: usize) -> [Step; STEPS] {
+        let pass_len = pass_len.clamp(1, LOOP_STEPS);
+        std::array::from_fn(|i| if i < pass_len * LOOPS { *self.step(i, pass_len) } else { Step::default() })
+    }
+    pub fn octaves(&self) -> [i8; LOOPS] { self.loops.map(|l| l.octave) }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
-pub struct State {
-    pub pages: [Page; PAGES],
-}
+pub struct State { pub pages: [Page; PAGES] }
 impl Default for State {
-    fn default() -> Self {
-        Self {
-            pages: std::array::from_fn(|_| Page::default()),
-        }
-    }
+    fn default() -> Self { Self { pages: [Page::default(); PAGES] } }
 }
 impl State {
     fn sanitize(&mut self) {
         for page in &mut self.pages {
-            for step in &mut page.steps {
-                step.velocity = step.velocity.min(200);
-                step.gate = step.gate.clamp(1, 100);
-                step.probability = step.probability.min(100);
-                step.octave = step.octave.clamp(-4, 4);
-                step.micro = step.micro.clamp(-49, 49);
-                for v in &mut step.mods {
-                    *v = (*v).clamp(-100, 100);
+            page.initialized = page.initialized.clamp(1, LOOPS as u8);
+            for variation in &mut page.loops {
+                variation.octave = variation.octave.clamp(-4, 4);
+                for step in &mut variation.steps {
+                    step.velocity = step.velocity.min(200);
+                    step.gate = step.gate.clamp(1, 100);
+                    step.probability = step.probability.min(100);
+                    step.octave = step.octave.clamp(-4, 4);
+                    step.micro = step.micro.clamp(-49, 49);
+                    for v in &mut step.mods { *v = (*v).clamp(-100, 100); }
                 }
             }
             page.delay.sanitize();
         }
     }
 }
-mod step_array {
-    use super::*;
-    pub fn serialize<S: serde::Serializer>(
-        steps: &[Step; STEPS],
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        steps.as_slice().serialize(serializer)
-    }
-    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<[Step; STEPS], D::Error> {
-        struct StepVisitor;
-        impl<'de> serde::de::Visitor<'de> for StepVisitor {
-            type Value = [Step; STEPS];
-            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str("96 arp steps")
-            }
-            fn visit_seq<A: serde::de::SeqAccess<'de>>(
-                self,
-                mut seq: A,
-            ) -> Result<Self::Value, A::Error> {
-                let mut steps = [Step::default(); STEPS];
-                for (i, step) in steps.iter_mut().enumerate() {
-                    *step = seq
-                        .next_element()?
-                        .ok_or_else(|| serde::de::Error::invalid_length(i, &self))?;
-                }
-                if seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
-                    return Err(serde::de::Error::invalid_length(STEPS + 1, &self));
-                }
-                Ok(steps)
-            }
-        }
-        deserializer.deserialize_seq(StepVisitor)
-    }
-}
-#[derive(Clone, Copy, Debug)]
-pub struct PreparedPage {
-    pub steps: [Step; STEPS],
-    pub delay: DelaySettings,
-}
+pub type PreparedPage = Page;
 #[derive(Debug)]
 pub struct Prepared {
     pub generation: u64,
@@ -268,10 +269,7 @@ impl Prepared {
         Self {
             generation,
             restore_epoch,
-            pages: std::array::from_fn(|p| PreparedPage {
-                steps: state.pages[p].steps,
-                delay: state.pages[p].delay,
-            }),
+            pages: std::array::from_fn(|p| state.pages[p]),
         }
     }
 }
@@ -286,6 +284,8 @@ pub struct Store {
     updates: ArrayQueue<Box<Prepared>>,
     retired: ArrayQueue<Box<Prepared>>,
     consuming: AtomicBool,
+    pub initialization_pending: AtomicBool,
+    pub replacement_serials: [AtomicU64; PAGES],
 }
 
 impl Default for Store {
@@ -299,6 +299,8 @@ impl Default for Store {
             updates: ArrayQueue::new(2),
             retired: ArrayQueue::new(4),
             consuming: AtomicBool::new(false),
+            initialization_pending: AtomicBool::new(false),
+            replacement_serials: std::array::from_fn(|_| AtomicU64::new(0)),
         }
     }
 }
@@ -316,6 +318,30 @@ impl Store {
         self.edit_inner(edit, false);
     }
 
+    /// Control/background thread only; already initialized variations are never overwritten.
+    pub fn ensure_loops(&self, counts: [u8; PAGES]) {
+        let mut control = self.control.write().unwrap();
+        let mut changed = false;
+        for (page, count) in control.state.pages.iter_mut().zip(counts) {
+            changed |= page.ensure_loops(count as usize);
+        }
+        if changed {
+            while self.retired.pop().is_some() {}
+            control.generation = control.generation.wrapping_add(1);
+            self.publish(&control);
+        }
+    }
+    pub fn replace_page(&self, index: usize, mut page: Page, settings: Settings) {
+        let mut control = self.control.write().unwrap();
+        while self.retired.pop().is_some() {}
+        control.generation = control.generation.wrapping_add(1);
+        // Advertise the pending transaction before sending any host parameter changes.
+        self.replacement_serials[index].store(control.generation, Ordering::Release);
+        page.replacement = Some(Replacement { serial: control.generation, settings });
+        control.state.pages[index] = page;
+        control.state.sanitize();
+        self.publish(&control);
+    }
     fn edit_inner(&self, edit: impl FnOnce(&mut State), restore: bool) {
         let mut control = self.control.write().unwrap();
         while self.retired.pop().is_some() {}
@@ -323,6 +349,7 @@ impl Store {
         control.state.sanitize();
         control.generation = control.generation.wrapping_add(1);
         if restore {
+            for serial in &self.replacement_serials { serial.store(0, Ordering::Release); }
             control.restore_epoch = control.restore_epoch.wrapping_add(1);
         }
         self.publish(&control);

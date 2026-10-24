@@ -2,7 +2,30 @@ use super::{controls::*, *};
 
 impl TapeStopView {
     pub(super) fn handle_event(&mut self, cx: &mut EventContext, event: &mut Event) {
+        let binding = (
+            self.params.xy_x_axis.value(),
+            self.params.xy_mode.value(),
+            self.params.time_sync.value(),
+        );
+        let stale = self.pad_binding.is_some_and(|old| old != binding)
+            || match self.drag {
+                Some(DragState::Slider { id, .. } | DragState::Value { id, .. }) => {
+                    self.gesture_params[0] != Some(self.knob_ptr(id))
+                }
+                _ => false,
+            };
+        if stale {
+            self.end_drag(cx);
+        }
         event.map(|window_event, meta| {
+            if matches!(
+                window_event,
+                WindowEvent::FocusOut
+                    | WindowEvent::KeyDown(Code::Escape, _)
+                    | WindowEvent::MouseDown(MouseButton::Right)
+            ) {
+                self.end_drag(cx);
+            }
             let bounds = cx.bounds();
             let Some(viewport) =
                 EditorViewport::fit((bounds.x, bounds.y, bounds.w, bounds.h), (UI_W, UI_H))
@@ -17,7 +40,9 @@ impl TapeStopView {
                         if self.edit.is_some() {
                             self.commit_edit(cx);
                         }
-                        let step = if matches!(id, KnobId::OverrideCc | KnobId::OverrideNote) {
+                        let step = if self.division_param(id).is_some() {
+                            dy.signum() / (pleasant_dsp::tempo::DIVISIONS.len() - 1) as f32
+                        } else if matches!(id, KnobId::OverrideCc | KnobId::OverrideNote) {
                             dy.signum() / 127.0
                         } else {
                             *dy * if cx.modifiers().shift() { 0.001 } else { 0.01 }
@@ -39,6 +64,7 @@ impl TapeStopView {
                 PressAction::Inactive => {}
                 PressAction::Blocked => return,
                 PressAction::BeginDrag(press) => {
+                    self.begin_gesture(cx, &[press.target]);
                     self.drag = Some(DragState::Value {
                         id: press.target,
                         start_x: press.origin.0,
@@ -83,6 +109,57 @@ impl TapeStopView {
 
             match window_event {
                 WindowEvent::MouseDown(MouseButton::Left) => {
+                    if Self::inside(mouse_x, mouse_y, TIME_SYNC) {
+                        self.end_drag(cx);
+                        self.emit_param_norm(
+                            cx,
+                            self.params.time_sync.as_ptr(),
+                            (!self.params.time_sync.value()) as u8 as f32,
+                        );
+                        cx.needs_redraw();
+                        return;
+                    }
+                    if TEMPO_HEADER.hit(mouse_x, mouse_y) == Some(pleasant_ui::tempo::Hit::Source) {
+                        self.end_drag(cx);
+                        self.emit_param_norm(
+                            cx,
+                            self.params.tempo_sync.as_ptr(),
+                            (!self.params.tempo_sync.value()) as u8 as f32,
+                        );
+                        cx.needs_redraw();
+                        return;
+                    }
+                    if !self.params.tempo_sync.value()
+                        && TEMPO_HEADER.hit(mouse_x, mouse_y) == Some(pleasant_ui::tempo::Hit::Bpm)
+                    {
+                        self.press_value(cx, KnobId::Tempo, TEMPO_HEADER.bpm, (mouse_x, mouse_y));
+                        return;
+                    }
+                    if Self::inside(mouse_x, mouse_y, XY_AXIS)
+                        || Self::inside(mouse_x, mouse_y, XY_MODE)
+                    {
+                        self.end_drag(cx);
+                        if Self::inside(mouse_x, mouse_y, XY_AXIS) {
+                            self.emit_param_norm(
+                                cx,
+                                self.params.xy_x_axis.as_ptr(),
+                                (self.params.xy_x_axis.value() == XAxis::Curve) as u8 as f32,
+                            );
+                        } else {
+                            self.emit_param_norm(
+                                cx,
+                                self.params.xy_mode.as_ptr(),
+                                (self.params.xy_mode.value() == PadMode::Absolute) as u8 as f32,
+                            );
+                        }
+                        cx.needs_redraw();
+                        return;
+                    }
+                    if Self::inside(mouse_x, mouse_y, XY_PAD) {
+                        self.begin_pad(cx, (mouse_x, mouse_y));
+                        cx.needs_redraw();
+                        return;
+                    }
                     // Circular STOP / REW overlay at the bottom-left of the graph
                     let (sx, sy, sw, sh) = STOP_BUTTON;
                     let scx = sx + sw * 0.5;
@@ -123,30 +200,30 @@ impl TapeStopView {
                         return;
                     }
 
-                    if Self::inside(mouse_x, mouse_y, DROP_TIME_READOUT) {
-                        self.press_value(
-                            cx,
-                            KnobId::DropTime,
-                            DROP_TIME_READOUT,
-                            (mouse_x, mouse_y),
-                        );
-                        cx.needs_redraw();
-                        return;
-                    }
-
-                    if Self::inside(mouse_x, mouse_y, DROP_TIME_SLIDER) {
-                        let bar_r = Self::drop_bar_rect();
-                        let new_norm = (1.0 - (mouse_y - bar_r.1) / bar_r.3).clamp(0.0, 1.0);
-                        self.emit_knob_norm(cx, KnobId::DropTime, new_norm);
-                        self.drag = Some(DragState::Slider {
-                            id: KnobId::DropTime,
-                            start_x: mouse_x,
-                            start_y: mouse_y,
-                            start_norm: new_norm,
-                            vertical: true,
-                        });
-                        cx.needs_redraw();
-                        return;
+                    for (id, readout) in [
+                        (KnobId::DropTime, DROP_TIME_READOUT),
+                        (KnobId::Return, RETURN_TIME_READOUT),
+                    ] {
+                        if Self::inside(mouse_x, mouse_y, readout) {
+                            self.press_value(cx, id, readout, (mouse_x, mouse_y));
+                            return;
+                        }
+                        let slider = Self::slider_rect(id);
+                        let panel = (readout.0, slider.1, readout.2, readout.1 - slider.1);
+                        if Self::inside(mouse_x, mouse_y, panel) {
+                            let bar = Self::time_bar_rect(id);
+                            let norm = (1.0 - (mouse_y - bar.1) / bar.3).clamp(0.0, 1.0);
+                            self.begin_gesture(cx, &[id]);
+                            self.emit_knob_norm(cx, id, norm);
+                            self.drag = Some(DragState::Slider {
+                                id,
+                                start_x: mouse_x,
+                                start_y: mouse_y,
+                                start_norm: norm,
+                                vertical: true,
+                            });
+                            return;
+                        }
                     }
 
                     if self.show_axis_controls {
@@ -165,7 +242,7 @@ impl TapeStopView {
                             cx.needs_redraw();
                             return;
                         }
-                        for &id in &[KnobId::Return, KnobId::Xfade, KnobId::StereoDiv] {
+                        for &id in &[KnobId::Xfade, KnobId::StereoDiv] {
                             let r = Self::slider_rect(id);
                             let val_r = axis_value_rect(r);
                             let bar_r = axis_bar_rect(r);
@@ -176,6 +253,7 @@ impl TapeStopView {
                             }
                             if Self::inside(mouse_x, mouse_y, r) {
                                 let new_norm = ((mouse_x - bar_r.0) / bar_r.2).clamp(0.0, 1.0);
+                                self.begin_gesture(cx, &[id]);
                                 self.emit_knob_norm(cx, id, new_norm);
                                 self.drag = Some(DragState::Slider {
                                     id,
@@ -202,6 +280,7 @@ impl TapeStopView {
                         {
                             let bar_r = trigger_bar_rect();
                             let new_norm = ((mouse_x - bar_r.0) / bar_r.2).clamp(0.0, 1.0);
+                            self.begin_gesture(cx, &[KnobId::RestartThresh]);
                             self.emit_knob_norm(cx, KnobId::RestartThresh, new_norm);
                             self.drag = Some(DragState::Slider {
                                 id: KnobId::RestartThresh,
@@ -216,6 +295,7 @@ impl TapeStopView {
                     }
 
                     if Self::hit_curve_node(mouse_x, mouse_y) {
+                        self.begin_gesture(cx, &[KnobId::Curve]);
                         self.drag = Some(DragState::Curve {
                             start_x: mouse_x,
                             start_y: mouse_y,
@@ -226,6 +306,7 @@ impl TapeStopView {
                 }
 
                 WindowEvent::MouseDoubleClick(MouseButton::Left) => {
+                    self.end_drag(cx);
                     if Self::hit_curve_node(mouse_x, mouse_y) {
                         self.reset_knob(cx, KnobId::Curve);
                         self.drag = None;
@@ -238,8 +319,12 @@ impl TapeStopView {
                         cx.needs_redraw();
                         return;
                     }
+                    if Self::inside(mouse_x, mouse_y, RETURN_TIME_SLIDER) {
+                        self.reset_knob(cx, KnobId::Return);
+                        return;
+                    }
                     if self.show_axis_controls {
-                        for &id in &[KnobId::Return, KnobId::Xfade, KnobId::StereoDiv] {
+                        for &id in &[KnobId::Xfade, KnobId::StereoDiv] {
                             let r = Self::slider_rect(id);
                             let val_r = axis_value_rect(r);
                             if Self::inside(mouse_x, mouse_y, val_r) {
@@ -266,8 +351,7 @@ impl TapeStopView {
                 }
 
                 WindowEvent::MouseUp(MouseButton::Left) | WindowEvent::FocusOut => {
-                    self.drag = None;
-                    cx.release();
+                    self.end_drag(cx);
                     cx.needs_redraw();
                 }
 
@@ -289,6 +373,12 @@ impl TapeStopView {
                     }
 
                     match self.drag {
+                        Some(DragState::Pad(mut drag)) => {
+                            let value =
+                                drag.update(XY_PAD, (mouse_x, mouse_y), cx.modifiers().shift());
+                            self.set_pad(cx, value);
+                            self.drag = Some(DragState::Pad(drag));
+                        }
                         Some(DragState::Value {
                             id,
                             start_x,
@@ -311,7 +401,7 @@ impl TapeStopView {
                             vertical,
                         }) => {
                             let bar_r = match id {
-                                KnobId::DropTime => Self::drop_bar_rect(),
+                                KnobId::DropTime | KnobId::Return => Self::time_bar_rect(id),
                                 KnobId::RestartThresh => trigger_bar_rect(),
                                 _ => axis_bar_rect(Self::slider_rect(id)),
                             };

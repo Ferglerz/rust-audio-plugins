@@ -1,4 +1,5 @@
 mod chords;
+mod theory;
 mod music;
 mod events;
 mod layout;
@@ -14,6 +15,7 @@ use routing::RouteDrag;
 mod performance;
 mod piano;
 mod render;
+mod midi_learn;
 use crate::{
     bridge::Bridge,
     engine::{Command, Snapshot, POINTER_KEY_OFFSET},
@@ -180,6 +182,7 @@ struct ChordboardView {
     route_slot: usize,
     selected_modulator: Option<usize>,
     modulator_pulse: f32,
+    quick_midi: midi_learn::QuickMidiUi,
     pending_route_remove: Option<usize>,
     route_progress: f32,
     route_start: f32,
@@ -191,6 +194,7 @@ struct ChordboardView {
 }
 impl Drop for ChordboardView {
     fn drop(&mut self) {
+        self.bridge.quick_learn.store(0, Ordering::Release);
         self.bridge.send(Command::ReleaseKeyboard);
         self.bridge.send(Command::EndGesture);
         self.bridge.visible.store(false, Ordering::Relaxed);
@@ -248,6 +252,7 @@ impl ChordboardView {
             route_slot: 0,
             selected_modulator: None,
             modulator_pulse: 0.0,
+            quick_midi: midi_learn::QuickMidiUi::default(),
             pending_route_remove: None,
             route_progress: 0.0,
             route_start: 0.0,
@@ -334,6 +339,7 @@ impl ChordboardView {
             .map_or(self.snapshot.learning, |pending| pending.0)
     }
     fn request_learn(&mut self, target: u8) {
+        if target != 0 { self.bridge.quick_learn.store(0, Ordering::Release); }
         let mapping = if (1..=2).contains(&target) {
             self.params
                 .mapping(target as usize - 1)
@@ -527,6 +533,8 @@ impl ChordboardView {
                 self.arp_params().arp_pattern.preview_normalized(index as i32),
             ),
             Menu::Key => {
+                self.menu = Some(Menu::Key);
+                self.menu_cursor = index;
                 let (_, key, spelling) = harmony::KEY_CHOICES[index];
                 Self::emit(
                     cx,
@@ -666,11 +674,7 @@ impl ChordboardView {
         }
     }
     fn pad_norm(&self, x: f32, y: f32) -> (f32, f32) {
-        let play = self.play_pad();
-        (
-            ((x - play.0) / play.2).clamp(0.0, 1.0),
-            (1.0 - (y - play.1) / play.3).clamp(0.0, 1.0),
-        )
+        pleasant_ui::xy_pad::normalized(self.play_pad(), (x, y))
     }
     fn strum_bound_at(&self, x: f32, y: f32) -> Option<(bool, bool)> {
         if !self.manual_playing() {
@@ -823,6 +827,7 @@ impl ChordboardView {
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
+        if self.tick_quick_midi(cx, dt) { cx.needs_redraw(); }
         if !self.params.mpe_enabled() && self.params.detected_mpe.load(Ordering::Relaxed) {
             self.mpe_pulse = (self.mpe_pulse + dt * 3.0) % std::f32::consts::TAU;
             cx.needs_redraw();

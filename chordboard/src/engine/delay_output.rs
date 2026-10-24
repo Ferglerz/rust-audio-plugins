@@ -68,6 +68,37 @@ impl Engine {
             || self.bass.iter().any(|notes| notes.contains(&Some(channel)))
             || self.voices.iter().flatten().any(|v| v.channel == channel)
     }
+    /// Resolve only new attacks. Existing echo tokens retain their actual pitch
+    /// until release, so a harmony change cannot misdirect a pending note-off.
+    fn delay_note(&self, mut note: u8) -> u8 {
+        let settings = self.arp.data.pages[self.arp.active as usize].delay;
+        if self.notes.len == 0 || self.full_notes.len == 0 {
+            return note;
+        }
+        if settings.follow_chords {
+            // Search MIDI pitches rather than clipping octaves near 0 or 127.
+            // Equal distances resolve downward, deterministically.
+            note = (0..=127u8)
+                .filter(|n| self.full_notes.as_slice().iter().any(|tone| tone % 12 == n % 12))
+                .min_by_key(|n| n.abs_diff(note))
+                .unwrap_or(note);
+        }
+        if settings.voice_leading && self.config.voice_leading < 2 {
+            if let Some(recipe) = self.memory {
+                let spread = if self.config.mode == CHORD { 0 } else { recipe.spread };
+                let base = harmony::voice_recipe(recipe, spread);
+                let original = base.as_slice().iter().copied()
+                    .filter(|n| n % 12 == note % 12).min_by_key(|n| n.abs_diff(note));
+                let resolved = self.full_notes.as_slice().iter().copied()
+                    .filter(|n| n % 12 == note % 12).min_by_key(|n| n.abs_diff(note));
+                if let (Some(original), Some(resolved)) = (original, resolved) {
+                    let shifted = i16::from(note) + i16::from(resolved) - i16::from(original);
+                    if (0..=127).contains(&shifted) { note = shifted as u8; }
+                }
+            }
+        }
+        note
+    }
     pub(super) fn tick_delay(&mut self, out: &mut impl FnMut(Out)) {
         while let Some(action) = self.delay.pop_due(self.now, self.beat) {
             match action {
@@ -89,6 +120,7 @@ impl Engine {
                     pan,
                     channel: requested,
                 } => {
+                    let note = self.delay_note(note);
                     let allowed = |channel: u8| {
                         if self.config.mpe {
                             (0..self.config.members.clamp(1, 15) as usize)

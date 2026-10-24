@@ -172,6 +172,7 @@ impl ChordboardView {
     }
     pub(super) fn window_event(&mut self, cx: &mut EventContext, event: &WindowEvent) -> bool {
         if matches!(event, WindowEvent::FocusOut) {
+            self.bridge.quick_learn.store(0, Ordering::Release);
             self.restore_shift_latch(cx);
             self.cancel_arp_editor();
             cx.release();
@@ -260,6 +261,12 @@ impl ChordboardView {
             WindowEvent::KeyDown(Code::Escape, _) | WindowEvent::KeyUp(Code::Escape, _)
         ) {
             if matches!(event, WindowEvent::KeyDown(Code::Escape, _))
+                && self.bridge.quick_learn.swap(0, Ordering::AcqRel) != 0
+            {
+                cx.needs_redraw();
+                return true;
+            }
+            if matches!(event, WindowEvent::KeyDown(Code::Escape, _))
                 && self.pending_route_remove.take().is_some()
             {
                 cx.needs_redraw();
@@ -347,6 +354,16 @@ impl ChordboardView {
                 }
                 WindowEvent::KeyUp(_, _) => return true,
                 WindowEvent::MouseDown(MouseButton::Left) => {
+                    if matches!(menu, Menu::Key | Menu::Scale) {
+                        if let Some(index) = self.root_choice_at(x, y) {
+                            self.select_menu(cx, Menu::Key, index);
+                            return true;
+                        }
+                        if hit(menu::root_scale_rect(self.menu_bounds(menu)), x, y) {
+                            self.open_menu(if menu == Menu::Scale { Menu::Key } else { Menu::Scale });
+                            return true;
+                        }
+                    }
                     for index in 0..menu.items().len() {
                         if hit(self.menu_option_rect(menu, index), x, y) {
                             self.select_menu(cx, menu, index);
@@ -357,7 +374,8 @@ impl ChordboardView {
                         return true;
                     }
                     self.menu = None;
-                    if hit(self.menu_trigger_rect(menu), x, y) {
+                    if hit(self.menu_trigger_rect(menu), x, y)
+                        || (matches!(menu, Menu::Key | Menu::Scale) && hit(KEY_MENU, x, y)) {
                         return true;
                     }
                 }
@@ -443,6 +461,7 @@ impl ChordboardView {
             WindowEvent::MouseDown(MouseButton::Left) => {
                 cx.focus();
                 self.focused = true;
+                if self.press_quick_midi(cx, x, y, false) { return true; }
                 if self.strum_bound_at(x, y).is_some()
                     || !(self.manual_playing() && hit(self.play_pad(), x, y))
                 {
@@ -478,6 +497,11 @@ impl ChordboardView {
                     hit(meter_rect(i), x, y)
                         && self.panel.is_none_or(|p| !hit(self.panel_rect(p), x, y))
                 }) {
+                    if hit(modulator_bypass_rect(source), x, y) {
+                        let bypass = &self.params.modulators[source].bypass;
+                        Self::emit(cx, bypass.as_ptr(), if bypass.value() { 0.0 } else { 1.0 });
+                        return true;
+                    }
                     self.end_drag(cx);
                     self.drag = Some(Drag::Route(RouteDrag::new(source, x, y)));
                     cx.capture();
@@ -515,7 +539,7 @@ impl ChordboardView {
                     self.open_menu(Menu::Meter(hit(METER_DEN, x, y)));
                     return true;
                 }
-                if hit(TEMPO_SYNC, x, y) {
+                if (pleasant_ui::tempo::Header { source: TEMPO_SYNC, bpm: TEMPO_CONTROL }).hit(x, y) == Some(pleasant_ui::tempo::Hit::Source) {
                     self.set(
                         cx,
                         "tempo_sync",
@@ -582,10 +606,6 @@ impl ChordboardView {
                     self.open_menu(Menu::Key);
                     return true;
                 }
-                if hit(Menu::Scale.trigger_rect(), x, y) {
-                    self.open_menu(Menu::Scale);
-                    return true;
-                }
                 if self.memory_press(cx, x, y) {
                     return true;
                 }
@@ -623,6 +643,7 @@ impl ChordboardView {
                 return true;
             }
             WindowEvent::MouseDown(MouseButton::Right) => {
+                if self.press_quick_midi(cx, x, y, true) { return true; }
                 if hit(PIANO_SURFACE, x, y)
                     && self.panel.is_none_or(|p| !hit(self.panel_rect(p), x, y))
                 {

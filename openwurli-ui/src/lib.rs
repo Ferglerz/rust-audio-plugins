@@ -9,6 +9,10 @@ pub mod ui;
 
 use params::{CpuMode, OpenWurliUiParams};
 
+// Preserve the default signal level feeding Extra Sag. Volume is applied
+// after all nonlinear stages, relative to this fixed engine output level.
+const ENGINE_VOLUME: f32 = 0.5;
+
 pub struct OpenWurliUi {
     params: Arc<OpenWurliUiParams>,
     engine: WurliEngine,
@@ -80,7 +84,7 @@ impl OpenWurliUi {
                 CpuMode::Fast => CircuitMode::Fast,
                 CpuMode::Heavy => CircuitMode::Heavy,
             });
-        self.engine.set_volume(self.params.volume.value() as f64);
+        self.engine.set_volume(ENGINE_VOLUME as f64);
         self.engine
             .set_tremolo_depth(self.params.tremolo_depth.value() as f64);
         self.engine
@@ -150,6 +154,13 @@ impl OpenWurliUi {
             event = next_event();
         }
     }
+
+    fn finish_output(&mut self, output: &mut [f32]) {
+        self.finish.process(output, self.params.rail_sag.value());
+        for sample in output {
+            *sample *= self.params.volume.smoothed.next() / ENGINE_VOLUME;
+        }
+    }
 }
 
 impl Plugin for OpenWurliUi {
@@ -175,6 +186,12 @@ impl Plugin for OpenWurliUi {
     }
 
     fn filter_state(state: &mut PluginState) {
+        // NIH-plug restores plain floats without clamping them to the range.
+        if let Some(nih_plug::wrapper::state::ParamValue::F32(drive)) =
+            state.params.get_mut("pickup_drive")
+        {
+            *drive = drive.clamp(0.5, params::PICKUP_DRIVE_MAX);
+        }
         // Missing parameters retain their current value in NIH-plug. Explicitly
         // restore the old Fast sound even when loading into a Heavy instance.
         state
@@ -234,10 +251,7 @@ impl Plugin for OpenWurliUi {
         // finished signal to the second output channel.
         let channels = buffer.as_slice();
         self.render_block(&mut channels[0][..num_samples], || context.next_event());
-        self.finish.process(
-            &mut channels[0][..num_samples],
-            self.params.rail_sag.value(),
-        );
+        self.finish_output(&mut channels[0][..num_samples]);
         let (left, rest) = channels.split_at_mut(1);
         for channel in rest {
             channel[..num_samples].copy_from_slice(&left[0][..num_samples]);
@@ -642,6 +656,85 @@ mod tests {
         assert_eq!(finish.sag_envelope, 0.0);
         finish.reset();
         assert_eq!(finish.sag_envelope, 0.0);
+    }
+
+    #[test]
+    fn drive_and_volume_drive_range_ends_at_1_04() {
+        let params = OpenWurliUiParams::default();
+        assert_eq!(params.pickup_drive.preview_plain(0.0), 0.5);
+        assert_eq!(params.pickup_drive.preview_plain(1.0), 1.04);
+        assert!((params.pickup_drive.preview_plain(0.5) - 0.77).abs() < 1e-6);
+        assert_eq!(params.pickup_drive.default_plain_value(), 1.0);
+        // The other character controls retain their existing ranges.
+        assert_eq!(params.hammer_hardness.preview_plain(1.0), 2.0);
+        assert_eq!(params.tremolo_response.preview_plain(1.0), 2.0);
+    }
+
+    #[test]
+    fn drive_and_volume_saved_drive_values_respect_the_new_ceiling() {
+        for (saved, expected) in [(0.5, 0.5), (1.0, 1.0), (1.04, 1.04), (2.0, 1.04)] {
+            let mut state = PluginState {
+                version: "0.1.1".into(),
+                params: Default::default(),
+                fields: Default::default(),
+            };
+            state.params.insert(
+                "pickup_drive".into(),
+                nih_plug::wrapper::state::ParamValue::F32(saved),
+            );
+            OpenWurliUi::filter_state(&mut state);
+            let nih_plug::wrapper::state::ParamValue::F32(actual) = state.params["pickup_drive"]
+            else {
+                panic!("Pickup Drive must remain a float");
+            };
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn drive_and_volume_output_scales_linearly_even_with_extra_sag() {
+        with_circuit_stack(|| {
+            for mode in [CpuMode::Fast, CpuMode::Heavy] {
+                for sag in [false, true] {
+                    let render = |volume| {
+                        let mut plugin = OpenWurliUi::default();
+                        let params = Arc::get_mut(&mut plugin.params).unwrap();
+                        params.cpu_mode = EnumParam::new("CPU Mode", mode);
+                        params.rail_sag = BoolParam::new("Extra Sag", sag);
+                        params.volume = FloatParam::new(
+                            "Volume",
+                            volume,
+                            FloatRange::Linear { min: 0.0, max: 1.0 },
+                        )
+                        .with_smoother(SmoothingStyle::Linear(5.0));
+                        params.volume.smoothed.reset(volume);
+                        plugin.sync_params();
+                        plugin.engine.warm_up();
+                        for note in [48, 60, 64, 67] {
+                            plugin.handle_event(&note_on(0, note));
+                        }
+                        let mut audio = vec![0.0; 4096];
+                        for block in audio.chunks_mut(256) {
+                            plugin.render_block(block, || None);
+                            plugin.finish_output(block);
+                        }
+                        assert!(audio.iter().all(|s| s.is_finite()));
+                        (audio, plugin.finish.sag_envelope)
+                    };
+                    let (quiet, quiet_sag) = render(0.5);
+                    let (loud, loud_sag) = render(1.0);
+                    let (muted, muted_sag) = render(0.0);
+                    assert!(quiet.iter().any(|s| s.abs() > 1e-6));
+                    assert!(
+                        quiet.iter().zip(&loud).all(|(a, b)| (2.0 * a - b).abs() < 1e-6),
+                        "{mode:?}, sag={sag}: Volume must scale output without changing tone"
+                    );
+                    assert_eq!(quiet_sag, loud_sag, "Volume changed the sag envelope");
+                    assert_eq!(quiet_sag, muted_sag, "Mute changed the sag envelope");
+                    assert!(muted.iter().all(|s| *s == 0.0));
+                }
+            }
+        });
     }
 
     #[test]

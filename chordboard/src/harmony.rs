@@ -218,6 +218,8 @@ fn movement(a: Notes, b: Notes) -> i32 {
 
 /// Search inversions and octave placements within one octave of the requested
 /// voicing. Invalid/clipped candidates are discarded, preserving every chord tone.
+/// Sounding delay voices join the movement score without changing chord tones.
+#[allow(clippy::too_many_arguments)]
 pub fn lead(
     chord: SavedChord,
     spread: u8,
@@ -225,6 +227,7 @@ pub fn lead(
     previous_notes: Notes,
     base: Notes,
     furthest_dominant: bool,
+    echoes: &[u8],
 ) -> Notes {
     if previous_notes.len == 0 || base.len == 0 {
         return base;
@@ -243,8 +246,16 @@ pub fn lead(
         && (tones.as_slice().contains(&3) || tones.as_slice().contains(&4))
         && tones.as_slice().contains(&7);
     let maximize = furthest_dominant && dominant;
-    let score = |notes| {
-        let distance = movement(previous_notes, notes);
+    let score = |notes: Notes| {
+        let echo_movement: i32 = echoes
+            .iter()
+            .map(|&echo| {
+                notes.as_slice().iter()
+                    .map(|&note| i32::from(echo.abs_diff(note)))
+                    .min().unwrap_or(0)
+            })
+            .sum();
+        let distance = movement(previous_notes, notes) + echo_movement;
         (
             if maximize { -distance } else { distance },
             movement(base, notes),
@@ -302,7 +313,7 @@ mod tests {
                     };
                     let base = voice(root, quality, None, 0, 0, spread);
                     for far in [false, true] {
-                        let notes = lead(chord, spread, previous, previous_notes, base, far);
+                        let notes = lead(chord, spread, previous, previous_notes, base, far, &[]);
                         assert_eq!(notes.len, base.len);
                         assert!(notes.as_slice().windows(2).all(|w| w[0] < w[1]));
                         let mut expected: Vec<_> = base.as_slice().iter().map(|n| n % 12).collect();

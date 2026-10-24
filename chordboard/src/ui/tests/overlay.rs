@@ -359,7 +359,7 @@ fn arp_strings_cover_octaves_and_flash_short_notes_after_they_end() {
     assert!(v.note_anim[96] > 0.0);
 }
 #[test]
-fn arpeggiator_module_sits_above_the_keyboard() {
+fn keyboard_module_sits_below_the_arpeggiator() {
     let mut view = view(1, false);
     assert!(view.arp_editor_open());
     assert!(ARP_SURFACE.1 + ARP_SURFACE.3 <= PIANO_SURFACE.1);
@@ -606,4 +606,25 @@ fn arpeggiator_settings_work_while_strumfield_is_expanded() {
     event(&mut view, &mut cx, target, humanize.0 + 5.0, humanize.1 + 5.0,
         WindowEvent::MouseDown(MouseButton::Left));
     assert!(matches!(view.drag, Some(Drag::Control(_))));
+}
+
+#[test]
+fn every_modulator_bypass_button_emits_its_toggle_without_opening_routes() {
+    let (mut cx, target, changes) = context();
+    for source in 0..crate::engine::routing::SOURCE_COUNT {
+        for bypassed in [false, true] {
+            let mut view = view(3, false);
+            Arc::get_mut(&mut view.params).unwrap().modulators[source].bypass = BoolParam::new("Bypass", bypassed);
+            let rect = modulator_bypass_rect(source);
+            let meter = meter_rect(source);
+            assert!(hit(meter, rect.0, rect.1));
+            assert!(hit(meter, rect.0 + rect.2, rect.1 + rect.3));
+            click(&mut view, &mut cx, target, rect);
+            assert_eq!(changes.borrow().last().copied(), Some((view.params.modulators[source].bypass.as_ptr(), if bypassed { 0.0 } else { 1.0 })));
+            assert!(view.drag.is_none());
+            assert!(view.panel.is_none());
+            assert!(view.selected_modulator.is_none());
+            assert_eq!(view.modulation_route("x").is_none(), source == 7 && bypassed);
+        }
+    }
 }

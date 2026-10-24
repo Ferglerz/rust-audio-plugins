@@ -112,6 +112,18 @@ pub fn note_name_in_key(pitch: u8, key: u8, scale: u8, preference: i32) -> Strin
     let (letter, accidental) = spell(pitch, key, scale, preference);
     render(letter, accidental)
 }
+/// Keep the original note's letter when teaching a chromatic alteration.
+/// For example, lowering A gives Ab even in a key that otherwise favors sharps.
+pub fn altered_note_name_in_key(
+    pitch: u8,
+    semitones: i8,
+    key: u8,
+    scale: u8,
+    preference: i32,
+) -> String {
+    let (letter, accidental) = spell(pitch, key, scale, preference);
+    render(letter, accidental + semitones)
+}
 pub fn midi_note_name_in_key(note: u8, key: u8, scale: u8, preference: i32) -> String {
     let (letter, accidental) = spell(note, key, scale, preference);
     let octave = (note as i16 - NATURAL[letter] as i16 - accidental as i16).div_euclid(12) - 1;

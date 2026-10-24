@@ -57,6 +57,71 @@ fn common_notes_are_not_retriggered() {
     assert_eq!(tail.off, e.now + e.duration());
 }
 #[test]
+fn latch_repress_rearticulates_chords_from_midi_keyboard_and_pointer() {
+    for token in [None, Some(0), Some(POINTER_KEY_OFFSET)] {
+        let mut e = Engine::default();
+        configure(&mut e, Config { latch: true, ..Config::default() });
+        let press = |e: &mut Engine| match token {
+            Some(token) => send(e, Command::KeyDown(token, 60, 0)),
+            None => on(e, 60, 1),
+        };
+        assert_eq!(notes(&press(&mut e)), vec![60, 64, 67]);
+        for _ in 0..3 {
+            assert!(press(&mut e).is_empty(), "held key repeats must be ignored");
+            let released = match token {
+                Some(token) => send(&mut e, Command::KeyUp(token)),
+                None => off(&mut e, 60, 1),
+            };
+            assert!(released.is_empty());
+            let events = press(&mut e);
+            assert_eq!(notes(&events), vec![60, 64, 67], "input {token:?}");
+            for note in [60, 64, 67] {
+                let attack = events.iter().position(|v| matches!(v, Out::On(_, n, _) if *n == note)).unwrap();
+                assert!(events[..attack].iter().any(|v| matches!(v, Out::Off(_, n, _) if *n == note)));
+            }
+            assert_eq!(e.voices.iter().flatten().count(), 3);
+        }
+    }
+}
+
+#[test]
+fn latch_repress_rearticulates_alterations_and_added_notes() {
+    let mut e = Engine::default();
+    configure(&mut e, Config { latch: true, ..Config::default() });
+    on(&mut e, 60, 1);
+    on(&mut e, 62, 2);
+    assert!(off(&mut e, 62, 2).is_empty());
+    assert_eq!(notes(&on(&mut e, 62, 2)), vec![60, 62, 67]);
+    on(&mut e, 65, 3);
+    assert!(off(&mut e, 65, 3).is_empty());
+    assert_eq!(notes(&on(&mut e, 65, 3)), vec![60, 62, 67, 77]);
+}
+
+#[test]
+fn latch_repress_retriggers_selection_root_without_strumming() {
+    let mut e = Engine::default();
+    configure(&mut e, Config { latch: true, mode: MANUAL, root_on_select: true, ..Config::default() });
+    assert_eq!(notes(&on(&mut e, 60, 1)), vec![60]);
+    assert!(off(&mut e, 60, 1).is_empty());
+    assert_eq!(notes(&on(&mut e, 60, 1)), vec![60]);
+    assert_eq!(e.voices.iter().flatten().count(), 1);
+}
+
+#[test]
+fn latch_configuration_and_control_selection_do_not_retrigger_chords() {
+    let mut e = Engine::default();
+    let config = Config { latch: true, control_base: 36, ..Config::default() };
+    configure(&mut e, config);
+    on(&mut e, 60, 1);
+    off(&mut e, 60, 1);
+    let mut events = Vec::new();
+    e.configure(config, &mut |v| events.push(v));
+    assert!(events.is_empty());
+    assert!(on(&mut e, 36, 1).is_empty());
+    assert!(notes(&send(&mut e, Command::SetQuality(0))).is_empty());
+}
+
+#[test]
 fn release_velocity_and_zero_velocity_note_on() {
     let mut e = Engine::default();
     on(&mut e, 60, 1);
@@ -660,4 +725,54 @@ fn manual_chord_on_select_sounds_added_tone_and_release_preserves_timed_tail() {
     assert!(e.voices.iter().flatten().any(|v|v.note==74&&!v.layer&&v.off==e.now+100));
     tick(&mut e,101);
     assert!(!e.voices.iter().flatten().any(|v|v.note==74));
+}
+
+#[test]
+fn midi_degrees_follow_actual_scale_roots_in_every_key_and_register() {
+    for key in 0..12 {
+        for scale in 0..8 {
+            let mut e = Engine::default();
+            e.configure(Config { key, scale, scale_layout: 1, bass_enabled: false, ..Config::default() }, &mut |_| {});
+            for octave in [12, 60, 108] {
+                for &relative in harmony::scale_tones(scale) {
+                    let note = octave + key + relative;
+                    if note > 127 { continue; }
+                    e.midi_note(true, 0, note, 0.7, &mut |_| {});
+                    assert_eq!(e.root.unwrap().note, note);
+                    assert_eq!(e.quality, harmony::scale_quality(scale, relative).unwrap(), "key {key}, scale {scale}, note {note}");
+                    e.midi_note(false, 0, note, 0.0, &mut |_| {});
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn midi_degrees_preserve_chromatic_mode_and_out_of_scale_roots() {
+    for (layout, note) in [(0, 62), (1, 61)] {
+        let mut e = Engine::default();
+        e.configure(Config { scale_layout: layout, quality: 6, bass_enabled: false, ..Config::default() }, &mut |_| {});
+        e.midi_note(true, 0, note, 0.7, &mut |_| {});
+        assert_eq!(e.quality, 6);
+        e.midi_note(false, 0, note, 0.0, &mut |_| {});
+        assert!(e.root.is_none());
+    }
+}
+
+#[test]
+fn midi_keyboard_feedback_includes_control_bass_melody_and_all_channels() {
+    let mut e = Engine::default();
+    e.configure(Config { control_base: 36, bass_split: 36, key_split: true, split_note: 60, ..Config::default() }, &mut |_| {});
+    for note in [24, 36, 50, 72] {
+        e.midi_note(true, 0, note, 0.7, &mut |_| {});
+        e.midi_note(true, 2, note, 0.7, &mut |_| {});
+        assert!(e.snapshot().held_notes[note as usize], "note {note}");
+        e.midi_note(false, 0, note, 0.0, &mut |_| {});
+        assert!(e.snapshot().held_notes[note as usize]);
+        e.midi_note(true, 2, note, 0.0, &mut |_| {});
+        assert!(!e.snapshot().held_notes[note as usize]);
+    }
+    e.midi_note(true, 0, 36, 0.7, &mut |_| {});
+    e.panic(&mut |_| {});
+    assert!(!e.snapshot().held_notes.iter().any(|&n| n));
 }

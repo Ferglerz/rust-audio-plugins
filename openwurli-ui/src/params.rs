@@ -2,6 +2,8 @@ use nih_plug::prelude::*;
 use nih_plug_vizia::ViziaState;
 use std::sync::Arc;
 
+pub(crate) const PICKUP_DRIVE_MAX: f32 = 1.04;
+
 #[derive(Enum, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum CpuMode {
     #[id = "fast"]
@@ -82,9 +84,9 @@ impl Default for OpenWurliUiParams {
             .with_string_to_value(Arc::new(|text| {
                 text.trim().trim_end_matches('×').parse().ok()
             })),
-            hammer_hardness: multiplier_param("Hammer Hardness"),
-            pickup_drive: multiplier_param("Pickup Drive"),
-            tremolo_response: multiplier_param("Tremolo Response"),
+            hammer_hardness: multiplier_param("Hammer Hardness", 2.0),
+            pickup_drive: multiplier_param("Pickup Drive", PICKUP_DRIVE_MAX),
+            tremolo_response: multiplier_param("Tremolo Response", 2.0),
             // Retain inert, hidden IDs so older saved sessions still load.
             noise_enabled: BoolParam::new("Hiss (removed)", false).hide(),
             noise_gain: FloatParam::new(
@@ -107,8 +109,8 @@ impl Default for OpenWurliUiParams {
     }
 }
 
-fn multiplier_param(name: &'static str) -> FloatParam {
-    FloatParam::new(name, 1.0, FloatRange::Linear { min: 0.5, max: 2.0 })
+fn multiplier_param(name: &'static str, max: f32) -> FloatParam {
+    FloatParam::new(name, 1.0, FloatRange::Linear { min: 0.5, max })
         .with_unit("×")
         .with_value_to_string(Arc::new(|value| format!("{value:.2}")))
         .with_string_to_value(Arc::new(|text| {

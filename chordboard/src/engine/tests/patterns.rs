@@ -208,6 +208,11 @@ fn note_feedback_records_octave_strikes_even_after_short_notes_end() {
         sample_rate: 1000.0,
         ..Engine::default()
     };
+    e.arp.data.pages[0].ensure_loops(4);
+    for (i, variation) in e.arp.data.pages[0].loops.iter_mut().enumerate() {
+        variation.octave = i as i8;
+        for step in &mut variation.steps { step.gate = 5; }
+    }
     configure(
         &mut e,
         Config {
@@ -218,7 +223,6 @@ fn note_feedback_records_octave_strikes_even_after_short_notes_end() {
             ..Config::default()
         },
     );
-    for step in &mut e.arp.data.pages[0].steps {step.gate=5;}
     on(&mut e, 60, 1);
     tick(&mut e, 285);
     let snapshot = e.snapshot();

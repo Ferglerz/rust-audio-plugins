@@ -1,5 +1,6 @@
 //! Fixed-capacity routing with bounded source-to-source resolution.
 use super::{Config, Engine, Out};
+pub const LOOP_OCTAVE_IDS: [&str; 4] = ["arp_loop_1_octave", "arp_loop_2_octave", "arp_loop_3_octave", "arp_loop_4_octave"];
 pub const ROUTE_COUNT: usize = 16;
 pub const SOURCE_COUNT: usize = 12;
 pub const SOURCES: [&str; SOURCE_COUNT + 1] = [
@@ -378,15 +379,35 @@ pub const TARGETS: &[Target] = &[
     Target { name: "Mod 1", id: "source_9", min: -1.0, max: 1.0, discrete: false },
     Target { name: "Mod 2", id: "source_10", min: -1.0, max: 1.0, discrete: false },
     Target { name: "Arp position", id: "source_11", min: 0.0, max: 1.0, discrete: false },
-    Target { name: "Arp octaves", id: "arp_octaves", min: 1.0, max: 4.0, discrete: true },
+    Target { name: "Arp loop length", id: "arp_octaves", min: 1.0, max: 4.0, discrete: true },
     Target { name: "Arp sync", id: "arp_sync", min: 0.0, max: 1.0, discrete: true },
     Target { name: "Arp rate (free)", id: "arp_free_ms", min: 1.0, max: 1500.0, discrete: false },
+    Target { name: "Arp loop 1 octave", id: "arp_loop_1_octave", min: -4.0, max: 4.0, discrete: true },
+    Target { name: "Arp loop 2 octave", id: "arp_loop_2_octave", min: -4.0, max: 4.0, discrete: true },
+    Target { name: "Arp loop 3 octave", id: "arp_loop_3_octave", min: -4.0, max: 4.0, discrete: true },
+    Target { name: "Arp loop 4 octave", id: "arp_loop_4_octave", min: -4.0, max: 4.0, discrete: true },
 ];
+pub fn maximum_for_routes(id: &str, base: f32, routes: &[Route]) -> f32 {
+    let Some((index, target)) = TARGETS.iter().enumerate().find(|(_, t)| t.id == id) else { return base; };
+    let mut maximum = (base - target.min) / (target.max - target.min);
+    for route in routes.iter().filter(|r| r.active() && r.target as usize == index && !r.additive()) {
+        maximum = route.min.max(route.max);
+    }
+    for route in routes.iter().filter(|r| r.active() && r.target as usize == index && r.additive()) {
+        maximum += (route.max - route.min).abs();
+    }
+    target.plain(maximum.clamp(0.0, 1.0)).max(base)
+}
 impl Target {
     fn normalized(&self, c: &Config) -> f32 {
         let v = match self.id {
             "arp_page" => c.arp_page as f32,
             "arp_octaves" => c.arp_octaves as f32,
+            "arp_loop_1_octave" => c.arp_loop_octaves[0] as f32,
+            "arp_loop_2_octave" => c.arp_loop_octaves[1] as f32,
+            "arp_loop_3_octave" => c.arp_loop_octaves[2] as f32,
+            "arp_loop_4_octave" => c.arp_loop_octaves[3] as f32,
+
             "arp_sync" => c.arp_sync as u8 as f32,
             "arp_free_ms" => c.arp_free_ms,
             "strings" => c.strings as f32,
@@ -508,6 +529,7 @@ impl Target {
             "arp_sync" | "strum_sync" | "strum_hold" | "root_on_select" | "latch" | "x_reverse"
             | "y_reverse" => if v >= 0.5 { "On" } else { "Off" }.into(),
             "length_ms" | "strum_ms" | "arp_free_ms" => format!("{v:.0} ms"),
+            "arp_loop_1_octave" | "arp_loop_2_octave" | "arp_loop_3_octave" | "arp_loop_4_octave" => format!("{v:+.0} oct"),
             "transpose" => format!("{v:+.0} st"),
             "bend_range" | "master_range" => format!("{v:.0} st"),
             "arp_page" => format!("{:.0}", v + 1.0),
@@ -523,6 +545,11 @@ impl Target {
         match self.id {
             "arp_page" => c.arp_page = v as u8,
             "arp_octaves" => c.arp_octaves = v as u8,
+            "arp_loop_1_octave" => c.arp_loop_octaves[0] = v as i8,
+            "arp_loop_2_octave" => c.arp_loop_octaves[1] = v as i8,
+            "arp_loop_3_octave" => c.arp_loop_octaves[2] = v as i8,
+            "arp_loop_4_octave" => c.arp_loop_octaves[3] = v as i8,
+
             "arp_sync" => c.arp_sync = v >= 0.5,
             "arp_free_ms" => c.arp_free_ms = v,
             "strings" => c.strings = v as u8,

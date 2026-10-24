@@ -340,7 +340,7 @@ fn dropdowns_dismiss_without_close_buttons_or_parameter_changes() {
         let header = (bounds.0 + bounds.2 - 80.0, bounds.1 + 4.0, 72.0, 30.0);
         click(&mut view, &mut cx, target, header);
         assert_eq!(view.menu, Some(menu));
-        click(&mut view, &mut cx, target, menu.trigger_rect());
+        click(&mut view, &mut cx, target, Menu::Key.trigger_rect());
         assert!(view.menu.is_none());
 
         view.open_menu(menu);
@@ -405,7 +405,6 @@ fn left_performance_targets_do_not_overlap() {
         LATCH,
         ORDER,
         Menu::Key.trigger_rect(),
-        Menu::Scale.trigger_rect(),
     ];
     targets.extend([ALWAYS_BASS, AFFECT_CHORDS]);
     targets.push(protocol_rect(0));
@@ -595,4 +594,21 @@ fn split_drags_suppress_other_hovers_until_release() {
     view.tick_motion(0.1);
     assert_eq!(view.hover_amount(view.voice_leading_rect()), 1.0);
     assert!(view.bridge.commands.pop().is_none());
+}
+
+#[test]
+fn octave_modulation_reserves_its_maximum_string_count() {
+    use crate::engine::routing::TARGETS;
+    let mut view = view(2, false);
+    view.snapshot.notes = harmony::voice(60, 0, None, 0, 0, 0);
+    let target = TARGETS.iter().position(|t| t.id == "octaves").unwrap();
+    let route = &mut Arc::get_mut(&mut view.params).unwrap().routes[1];
+        route.source = IntParam::new("Source", 1, IntRange::Linear { min: 0, max: crate::engine::routing::SOURCE_COUNT as i32 });
+        route.target = IntParam::new("Target", target as i32, IntRange::Linear { min: 0, max: TARGETS.len() as i32 - 1 });
+        route.min = FloatParam::new("Minimum", 1.0, FloatRange::Linear { min: 0.0, max: 1.0 });
+        route.max = FloatParam::new("Maximum", 0.0, FloatRange::Linear { min: 0.0, max: 1.0 });
+    for norm in [0.0, 0.3, 0.7, 1.0, 0.0] {
+        view.snapshot.routed[target] = Some(norm);
+        assert_eq!(view.string_count(), 12);
+    }
 }

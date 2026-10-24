@@ -562,3 +562,24 @@ fn control_octave_per_note_pressure_is_consumed() {
     assert!(events.is_empty());
     assert_eq!(e.sources[4], 0.0);
 }
+
+#[test]
+fn host_voicing_changes_update_every_position_of_a_held_chord() {
+    let mut e = Engine::default();
+    let mut config = Config { mode: MANUAL, bass_enabled: false, quality: 3, ..Config::default() };
+    e.configure(config, &mut |_| {});
+    e.midi_note(true, 0, 60, 0.8, &mut |_| {});
+    for (spread, expected) in [
+        [60, 64, 67, 71], // Close
+        [60, 67, 76, 83], // Open
+        [60, 64, 79, 83], // Wide
+        [55, 60, 64, 71], // Drop 2
+        [52, 60, 67, 71], // Drop 3
+    ].into_iter().enumerate() {
+        config.spread = spread as u8;
+        e.configure(config, &mut |_| {});
+        assert_eq!(e.snapshot().full_notes.as_slice(), expected, "Voicing {spread}");
+    }
+    e.midi_note(false, 0, 60, 0.0, &mut |_| {});
+    assert!(e.root.is_none());
+}

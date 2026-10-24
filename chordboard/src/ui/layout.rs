@@ -57,9 +57,10 @@ pub(super) const LATCH: Rect = (
     78.0,
     TILE_HEIGHT,
 );
-// Chords header row: Key, Scale, Order, selection mode, Transpose on an 8px rhythm.
-pub(super) const KEY_MENU: Rect = (104.0, 100.0, 104.0, 28.0);
-pub(super) const SCALE_MENU: Rect = (216.0, 100.0, 148.0, 28.0);
+// Root and scale share one popover in the chords header.
+pub(super) const KEY_MENU: Rect = (104.0, 100.0, 260.0, 28.0);
+pub(super) const DELAY_POWER: Rect = (822.0, 25.0, 28.0, 28.0);
+pub(super) const DELAY_MENU: Rect = (858.0, 25.0, 132.0, 28.0);
 pub(super) const ORDER: Rect = (372.0, 100.0, 116.0, 28.0);
 pub(super) const ROOT_ON_SELECT: Rect = (496.0, 100.0, 148.0, 28.0);
 pub(super) const TRANSPOSE: Rect = (652.0, 100.0, 272.0, 28.0);
@@ -191,6 +192,11 @@ pub(super) fn meter_rect(i: usize) -> Rect {
         MOD_SURFACE.2 - 2.0 * INSET,
         height,
     )
+}
+
+pub(super) fn modulator_bypass_rect(source: usize) -> Rect {
+    let r = meter_rect(source);
+    (r.0 + r.2 - 36.0, r.1 + 4.0, 32.0, 20.0)
 }
 
 pub(super) const KEY_PITCH: f32 = 70.0;
@@ -325,36 +331,37 @@ pub(super) fn route_control_rect(id: &str) -> Rect {
 #[cfg(test)]
 pub(super) const ARP_SETTINGS_H: f32 = 44.0;
 pub(super) const ARP_LANE_TOP: f32 = 80.0;
-const ARP_LANE_BODY: f32 = 156.0;
+const ARP_LANE_BODY: f32 = 200.0;
 pub(super) const ARP_H: f32 = ARP_LANE_TOP + ARP_LANE_BODY + 8.0;
 pub(super) const ARP_SURFACE: Rect = (16.0, 522.0, MAIN_W - 32.0, ARP_H);
 pub(super) const PIANO_SURFACE: Rect = (
     16.0,
     ARP_SURFACE.1 + ARP_SURFACE.3 + 12.0,
     MAIN_W - 32.0,
-    200.0,
+    248.0,
 );
 const KEYBOARD_MODULE_W: f32 = (MAIN_W - 64.0 - 24.0) / 3.0;
-const KEYBOARD_CONTROL_Y: f32 = PIANO_SURFACE.1 + 152.0;
-pub(super) const BASS_CONTAINER: Rect = (32.0, PIANO_SURFACE.1 + 144.0, KEYBOARD_MODULE_W, 44.0);
+const KEYBOARD_MODULE_Y: f32 = PIANO_SURFACE.1 + PIANO_SURFACE.3 - 54.0;
+const KEYBOARD_CONTROL_Y: f32 = KEYBOARD_MODULE_Y + 8.0;
+pub(super) const BASS_CONTAINER: Rect = (32.0, KEYBOARD_MODULE_Y, KEYBOARD_MODULE_W, 44.0);
 pub(super) const CHORD_CONTAINER: Rect = (
     44.0 + KEYBOARD_MODULE_W,
-    PIANO_SURFACE.1 + 144.0,
+    KEYBOARD_MODULE_Y,
     KEYBOARD_MODULE_W,
     44.0,
 );
 pub(super) const MELODY_CONTAINER: Rect = (
     56.0 + KEYBOARD_MODULE_W * 2.0,
-    PIANO_SURFACE.1 + 144.0,
+    KEYBOARD_MODULE_Y,
     KEYBOARD_MODULE_W,
     44.0,
 );
-pub(super) const BASS_BYPASS: Rect = (42.0, PIANO_SURFACE.1 + 154.0, 24.0, 24.0);
+pub(super) const BASS_BYPASS: Rect = (42.0, KEYBOARD_MODULE_Y + 10.0, 24.0, 24.0);
 pub(super) const ALWAYS_BASS: Rect = (BASS_CONTAINER.0 + 116.0, KEYBOARD_CONTROL_Y, 112.0, 28.0);
 pub(super) const SPLIT_NOTE: Rect = (MELODY_CONTAINER.0 + 236.0, KEYBOARD_CONTROL_Y, 112.0, 28.0);
-pub(super) const PIANO_KEYS: Rect = (32.0, PIANO_SURFACE.1 + 72.0, MAIN_W - 64.0, 60.0);
-pub(super) const PIANO_SPLITS: Rect = (32.0, PIANO_SURFACE.1 + 44.0, MAIN_W - 64.0, 24.0);
-pub(super) const PIANO_LEADING: Rect = (32.0, PIANO_SURFACE.1 + 10.0, MAIN_W - 64.0, 28.0);
+pub(super) const PIANO_KEYS: Rect = (32.0, KEYBOARD_MODULE_Y - 78.0, MAIN_W - 64.0, 60.0);
+pub(super) const PIANO_SPLITS: Rect = (32.0, PIANO_KEYS.1 - 28.0, MAIN_W - 64.0, 24.0);
+pub(super) const PIANO_LEADING: Rect = (32.0, PIANO_SPLITS.1 - 34.0, MAIN_W - 64.0, 28.0);
 
 pub(super) fn piano_black(note: u8) -> bool {
     matches!(note % 12, 1 | 3 | 6 | 8 | 10)
@@ -454,7 +461,7 @@ pub(super) fn keyboard_menu_range(id: &str) -> Option<(i32, i32)> {
 
 // Chord names share the header and keep enough room for extensions and slash bass.
 pub(super) fn chord_readout_rect() -> Rect {
-    (202.0, 18.0, METER_NUM.0 - 16.0 - 202.0, 40.0)
+    (202.0, 18.0, DELAY_POWER.0 - 16.0 - 202.0, 40.0)
 }
 
 pub(super) const METER_NUM: Rect = (1007.0, 24.0, 44.0, 30.0);

@@ -1,4 +1,4 @@
-use crate::engine::routing::{Route, ROUTE_COUNT, SOURCES, TARGETS};
+use crate::engine::routing::{Route, ROUTE_COUNT, SOURCE_COUNT, SOURCES, TARGETS};
 use crate::engine::{Config, Mapping};
 use nih_plug::prelude::*;
 use nih_plug_vizia::ViziaState;
@@ -28,6 +28,10 @@ pub struct ChordboardParams {
     pub root_on_select: BoolParam,
     #[nested(array, group = "Modulation")]
     pub routes: [RouteParams; ROUTE_COUNT],
+    #[nested(array, group = "Modulator Bypass")]
+    pub modulators: [ModulatorParams; SOURCE_COUNT],
+    #[nested(array, group = "Quick MIDI Learn")]
+    pub quick_midi: [crate::midi_learn::Binding; crate::midi_learn::COUNT],
     #[persist = "arpeggiator-v1"]
     pub arpeggiator: Arc<crate::arpeggiator::Store>,
     #[nested(array, group = "Arpeggiator Pages")]
@@ -242,6 +246,8 @@ impl Default for ChordboardParams {
             routes: std::array::from_fn(|i| {
                 RouteParams::from_route(crate::engine::routing::default_routes()[i])
             }),
+            modulators: std::array::from_fn(|_| ModulatorParams::default()),
+            quick_midi: std::array::from_fn(|_| crate::midi_learn::Binding::default()),
             arpeggiator: crate::arpeggiator::Store::new(),
             arp_pages: std::array::from_fn(|_| ArpPageParams::default()),
             arp_page: IntParam::new("Arp page", 0, IntRange::Linear { min: 0, max: 7 }),
@@ -546,7 +552,22 @@ impl ChordboardParams {
             _ => self.detected_mpe.load(Ordering::Relaxed),
         }
     }
+    /// Suspend outgoing modulation without changing the saved route settings.
+    pub fn required_arp_loops(&self) -> [u8; 8] {
+        let routes = std::array::from_fn::<_, ROUTE_COUNT, _>(|i| self.effective_route(self.routes[i].route()));
+        std::array::from_fn(|p| crate::engine::routing::maximum_for_routes("arp_octaves", self.arp_pages[p].arp_octaves.value() as f32, &routes).round().clamp(1.0, 4.0) as u8)
+    }
+    pub fn effective_route(&self, mut route: Route) -> Route {
+        if let Some(source) = route.source.checked_sub(1) {
+            if self.modulators.get(source as usize).is_some_and(|p| p.bypass.value()) {
+                route.enabled = false;
+            }
+        }
+        route
+    }
     pub fn config(&self) -> Config {
+        let quick = |i| crate::midi_learn::value(self, i);
+        let arp_page = quick(7) as usize;
         Config {
             always_bass: self.always_bass.value(),
             always_chord: self.always_chord.value(),
@@ -557,17 +578,21 @@ impl ChordboardParams {
             bass_enabled: self.bass_enabled.value(),
             strum_enabled: self.strum_enabled.value(),
             root_on_select: self.root_on_select.value(),
-            routes: std::array::from_fn(|i| self.routes[i].route()),
+            routes: std::array::from_fn(|i| self.effective_route(self.routes[i].route())),
             mode: crate::engine::MANUAL,
-            arp_enabled: self.arp_enabled.value(),
-            arp_page: self.arp_page.value() as u8,
+            arp_enabled: quick(6) != 0,
+            arp_page: arp_page as u8,
             arp_settings: std::array::from_fn(|i| self.arp_pages[i].settings()),
-            quality: self.quality.value() as u8,
-            voice_leading: self.voice_leading.value() as u8,
-            inversion: self.inversion.value() as u8,
-            transpose: self.transpose.value() as i8,
-            spread: self.spread.value() as u8,
-            latch: self.latch.value(),
+            arp_loop_octaves: [0; 4],
+            quality: quick(4) as u8,
+            key: self.key.value() as u8,
+            scale: self.scale.value() as u8,
+            scale_layout: self.scale_layout.value() as u8,
+            voice_leading: quick(1) as u8,
+            inversion: quick(2) as u8,
+            transpose: quick(3) as i8,
+            spread: quick(0) as u8,
+            latch: quick(5) != 0,
             velocity: self.velocity.value(),
             length_ms: self.length_ms.value(),
             strings: self.strings.value() as u8,
@@ -581,27 +606,27 @@ impl ChordboardParams {
             direction: self.direction.value() as u8,
             contour: self.contour.value(),
             contour_curve: self.contour_curve.value(),
-            arp_pattern: self.arp_pages[self.arp_page.value() as usize]
+            arp_pattern: self.arp_pages[arp_page]
                 .arp_pattern
                 .value() as u8,
-            rate: self.arp_pages[self.arp_page.value() as usize].rate.value(),
+            rate: self.arp_pages[arp_page].rate.value(),
             gate: 0.65,
-            swing: self.arp_pages[self.arp_page.value() as usize].swing.value(),
-            arp_mode: self.arp_pages[self.arp_page.value() as usize]
+            swing: self.arp_pages[arp_page].swing.value(),
+            arp_mode: self.arp_pages[arp_page]
                 .settings()
                 .mode,
-            arp_octaves: self.arp_pages[self.arp_page.value() as usize]
+            arp_octaves: self.arp_pages[arp_page]
                 .arp_octaves
                 .value() as u8,
-            arp_sync: self.arp_pages[self.arp_page.value() as usize]
+            arp_sync: self.arp_pages[arp_page]
                 .arp_sync
                 .value(),
-            arp_free_ms: self.arp_pages[self.arp_page.value() as usize]
+            arp_free_ms: self.arp_pages[arp_page]
                 .arp_free_ms
                 .value(),
             host_sync: self.tempo_sync.value(),
             octaves: self.octaves.value() as u8,
-            humanize: self.arp_pages[self.arp_page.value() as usize]
+            humanize: self.arp_pages[arp_page]
                 .humanize
                 .value(),
             mpe: self.mpe_enabled(),
@@ -679,6 +704,7 @@ macro_rules! control_catalog {
                     index += 1;
                 };
                 $(visit(self.$field.unmodulated_normalized_value());)*
+                for modulator in &self.modulators { visit(modulator.bypass.unmodulated_normalized_value()); }
                 for route in &self.routes {
                     for value in route.values() { visit(value); }
                 }
@@ -690,6 +716,7 @@ macro_rules! control_catalog {
 
             pub fn controls(&self) -> Vec<Control> {
                 let mut controls = vec![$($builder(stringify!($field), $group, &self.$field)),*];
+                for modulator in &self.modulators { controls.push(toggle("modulator_bypass", 6, &modulator.bypass)); }
                 for route in &self.routes { controls.extend(route.controls()); }
                 controls.extend(self.arp_pages[self.arp_page.value() as usize].controls());
                 controls
@@ -895,6 +922,17 @@ mod tests {
 }
 
 #[derive(Params)]
+pub struct ModulatorParams {
+    #[id = "modulator_bypass"]
+    pub bypass: BoolParam,
+}
+impl Default for ModulatorParams {
+    fn default() -> Self {
+        Self { bypass: BoolParam::new("Bypass modulator", false) }
+    }
+}
+
+#[derive(Params)]
 pub struct RouteParams {
     #[id = "route_enabled"]
     pub enabled: BoolParam,
@@ -1024,6 +1062,58 @@ nested_control_catalog! {
 mod routing_state_tests {
     use super::*;
     #[test]
+    fn modulator_bypass_preserves_routes_and_resumes_every_source() {
+        let mut p = ChordboardParams::default();
+        for source in 0..SOURCE_COUNT {
+            let route = Route { source: source as u8 + 1, target: 4, min: 0.2, max: 0.7,
+                curve: -0.3, smoothing_ms: 50.0, ..Route::default() };
+            p.routes[0] = RouteParams::from_route(route);
+            p.routes[1] = RouteParams::from_route(Route { target: 5, ..route });
+            p.routes[2] = RouteParams::from_route(Route { enabled: false, ..route });
+            p.routes[3] = RouteParams::from_route(Route { source: (source as u8 + 1) % SOURCE_COUNT as u8 + 1, ..route });
+            assert_eq!(p.config().routes[0], route);
+            p.modulators[source].bypass = BoolParam::new("Bypass", true);
+            let config = p.config();
+            assert!(!config.routes[0].active());
+            assert!(!config.routes[1].active());
+            assert!(config.routes[3].active());
+            assert_eq!(p.routes[0].route(), route);
+            assert_eq!(config.routes[0], Route { enabled: false, ..route });
+            p.modulators[source].bypass = BoolParam::new("Bypass", false);
+            assert_eq!(p.config().routes[0], route);
+            assert!(p.config().routes[1].active());
+            assert!(!p.config().routes[2].active());
+        }
+        let ids: Vec<_> = p.param_map().into_iter().map(|v| v.0).collect();
+        for index in 1..=SOURCE_COUNT {
+            assert_eq!(ids.iter().filter(|id| **id == format!("modulator_bypass_{index}")).count(), 1);
+        }
+    }
+
+    #[test]
+    fn modulator_bypass_restores_bases_and_breaks_outgoing_chains() {
+        let mut p = ChordboardParams::default();
+        let target = |id| TARGETS.iter().position(|t| t.id == id).unwrap() as u8;
+        p.routes[0] = RouteParams::from_route(Route { source: 2, target: target("source_9"), ..Route::default() });
+        p.routes[1] = RouteParams::from_route(Route { source: 2, target: target("velocity"), smoothing_ms: 100.0, ..Route::default() });
+        p.routes[2] = RouteParams::from_route(Route { source: 10, target: target("transpose"), ..Route::default() });
+        let mut engine = crate::engine::Engine::default();
+        engine.sources[1] = 1.0;
+        engine.configure(p.config(), &mut |_| {});
+        assert_eq!(engine.config.transpose, 24);
+        assert_eq!(engine.config.velocity, 1.0);
+        p.modulators[1].bypass = BoolParam::new("Bypass", true);
+        engine.configure(p.config(), &mut |_| {});
+        assert_eq!(engine.config.transpose, p.config().transpose);
+        assert_eq!(engine.config.velocity, p.config().velocity);
+        assert_eq!(engine.effective_sources()[1], 1.0);
+        engine.sources[1] = 0.5;
+        p.modulators[1].bypass = BoolParam::new("Bypass", false);
+        engine.configure(p.config(), &mut |_| {});
+        assert_eq!(engine.config.velocity, TARGETS[target("velocity") as usize].plain(0.5));
+    }
+
+    #[test]
     fn route_constructor_preserves_every_nondefault_field() {
         let route = Route {
             enabled: false,
@@ -1120,7 +1210,7 @@ impl Default for ArpPageParams {
                     ][v as usize]
                         .into()
                 })),
-            arp_octaves: IntParam::new("Arp octaves", 1, IntRange::Linear { min: 1, max: 4 }),
+            arp_octaves: IntParam::new("Loop Length", 1, IntRange::Linear { min: 1, max: 4 }),
             arp_sync: BoolParam::new("Arp tempo sync", true),
             arp_free_ms: FloatParam::new(
                 "Arp rate ms",

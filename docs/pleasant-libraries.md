@@ -49,6 +49,10 @@ Damian keeps dual-EQ routing, sidechain EQ, band IDs, audition, Lift, transition
 
 `pleasant-ui::graph` provides viewport transforms, axis mappings, nearest-point hit testing, and semantic graph actions. Plugin adapters remain responsible for automation begin/set/end events and domain-specific edits.
 
+`pleasant-ui::xy_pad` provides normalized pad coordinates (right/up increase), absolute/relative drag state with fine movement, and pad drawing. Adapters own axis bindings, gesture lifetime, pointer capture, and persisted interaction choices. Chordboard retains its strumming and hover behavior while sharing coordinate mapping with Tape Stop.
+
+`pleasant-ui::tempo::Header` shares Host/Manual presentation, BPM geometry, and hit testing. Adapters own host transport, BPM parameter editing, and timing-mode selection. `pleasant-dsp::tempo` provides musical divisions in quarter-note beats, tempo validation, and beat-to-second conversion; audio processors never depend on the UI header.
+
 ## Compatibility
 
 `pleasant-ui::math` and `pleasant-ui::spectrum` temporarily re-export their original symbols from `pleasant-dsp`. New audio code should import `pleasant-dsp` directly. Existing plugin parameter IDs, persistence keys, plugin identifiers, and saved-state JSON shapes are compatibility boundaries.

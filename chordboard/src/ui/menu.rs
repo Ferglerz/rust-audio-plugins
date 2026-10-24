@@ -110,7 +110,8 @@ impl Menu {
                         "spread" | "quality" | "inversion" | "transpose" | "filter" => 0,
                         "strings" | "strings_played" | "x" => 1,
                         "arp_pattern" | "rate" | "strum_ms" | "strum_sync" | "strum_hold"
-                        | "gate" | "swing" | "octaves" | "humanize" | "arp_octaves" | "arp_sync" | "arp_free_ms" | "arp_mode" | "arp_page" => 2,
+                        | "gate" | "swing" | "octaves" | "humanize" | "arp_octaves" | "arp_sync" | "arp_free_ms" | "arp_mode" | "arp_page"
+                        | "arp_loop_1_octave" | "arp_loop_2_octave" | "arp_loop_3_octave" | "arp_loop_4_octave" => 2,
                         "velocity" | "length_ms" | "contour" | "root_on_select" | "latch"
                         => 3,
                         _ => 4,
@@ -139,6 +140,11 @@ impl Menu {
     }
 
     pub(super) fn bounds_at(self, trigger: Rect) -> Rect {
+        if matches!(self, Self::Key | Self::Scale) {
+            let root = KEY_MENU;
+            return (root.0, root.1 + root.3 + 6.0, 356.0,
+                if self == Self::Scale { 330.0 } else { 190.0 });
+        }
         let columns = self.columns();
         let rows = self.items().len().div_ceil(columns);
         let width = (self.cell_width() + 4.0) * columns as f32 + 12.0;
@@ -171,6 +177,17 @@ impl Menu {
     }
 
     pub(super) fn option_rect_at(self, r: Rect, index: usize) -> Rect {
+        if self == Self::Key {
+            let (_, note, spelling) = harmony::KEY_CHOICES[index];
+            let key = root_key_rect(r, note);
+            return if piano_black(note) {
+                (key.0, key.1 + if spelling == 2 { key.3 * 0.5 } else { 0.0 }, key.2, key.3 * 0.5)
+            } else { key };
+        }
+        if self == Self::Scale {
+            return (r.0 + 12.0 + (index % 2) as f32 * 168.0,
+                r.1 + 186.0 + (index / 2) as f32 * 34.0, 164.0, 30.0);
+        }
         let mut y = r.1 + 38.0;
         for (_, indices) in self.groups() {
             if let Some(position) = indices.iter().position(|&i| i == index) {
@@ -197,7 +214,7 @@ impl Menu {
             Self::RouteSource => ROUTE_SOURCE,
             Self::RouteTarget => ROUTE_TARGET,
             Self::Key => KEY_MENU,
-            Self::Scale => SCALE_MENU,
+            Self::Scale => root_scale_rect(Self::Key.bounds_at(KEY_MENU)),
             Self::KeyboardParam(id) => keyboard_control_rect(id, false),
             Self::ArpRate => arp_rate_rect(),
             Self::ArpPattern => arp_direction_rect(),
@@ -205,7 +222,65 @@ impl Menu {
     }
 }
 
+// Use the same natural/accidental proportions as the performance keyboard.
+pub(super) fn root_key_rect(r: Rect, note: u8) -> Rect {
+    let width = (r.2 - 24.0) / 7.0;
+    let before = (0..note).filter(|&n| !piano_black(n)).count() as f32;
+    if piano_black(note) {
+        (r.0 + 12.0 + (before - 0.31) * width, r.1 + 38.0, width * 0.62, 100.0 * 0.62)
+    } else {
+        (r.0 + 12.0 + before * width, r.1 + 38.0, width, 100.0)
+    }
+}
+pub(super) fn root_scale_rect(r: Rect) -> Rect {
+    (r.0 + 12.0, r.1 + 150.0, r.2 - 24.0, 28.0)
+}
+
 impl ChordboardView {
+    pub(super) fn root_choice_at(&self, x: f32, y: f32) -> Option<usize> {
+        let bounds = self.menu_bounds(Menu::Key);
+        // Accidentals are in front of the natural keys, including both spellings.
+        [true, false].into_iter().find_map(|black| {
+            harmony::KEY_CHOICES.iter().enumerate()
+                .filter(|(_, (_, note, _))| piano_black(*note) == black)
+                .find(|(i, _)| hit(Menu::Key.option_rect_at(bounds, *i), x, y))
+                .map(|(i, _)| i)
+        })
+    }
+    pub(super) fn draw_root_menu(&self, d: &mut Draw, menu: Menu) {
+        let bounds = self.menu_bounds(menu);
+        self.surface(d, bounds);
+        d.text(bounds.0 + 12.0, bounds.1 + 24.0, "Root note", 12.0, MUTED);
+        for black in [false, true] {
+            for note in (0..12u8).filter(|&n| piano_black(n) == black) {
+                let r = root_key_rect(bounds, note);
+                let fill = if black { if d.light { TEXT } else { BG } }
+                    else if d.light { BG } else { alpha(TEXT, 0.65) };
+                d.rect(r.0, r.1, r.2, r.3, fill);
+                d.outline(r, if black || d.light { LINE } else { BG });
+                for (i, (label, pitch, _)) in harmony::KEY_CHOICES.iter().enumerate().filter(|(_, (_, pitch, _))| *pitch == note) {
+                    let option = Menu::Key.option_rect_at(bounds, i);
+                    let on = *pitch as i32 == self.params.key.value() && i == self.menu_selection(Menu::Key);
+                    if on || self.hover_pointer().and_then(|(x,y)| self.root_choice_at(x,y)) == Some(i) {
+                        d.rounded_rect(option.0 + 1.5, option.1 + 2.0, option.2 - 3.0, option.3 - 4.0, 1.0, alpha(GOLD, if on { 0.7 } else { 0.3 }));
+                    }
+                    if menu == Menu::Key && self.menu_cursor == i {
+                        d.outline_rounded(option.0 + 1.5, option.1 + 2.0, option.2 - 3.0, option.3 - 4.0, 1.0, GOLD, 1.5);
+                    }
+                    d.text_centered(option.0 + option.2 * 0.5, option.1 + option.3 - 8.0, &music::label(label), 11.0,
+                        if on { GOLD } else if black { if d.light { BG } else { TEXT } } else if d.light { TEXT } else { BG });
+                }
+            }
+        }
+        self.button_tinted(d, root_scale_rect(bounds), &format!("Scale: {} {}", harmony::SCALE_NAMES[self.params.scale.value() as usize], if menu == Menu::Scale { "▴" } else { "▾" }), menu == Menu::Scale, GOLD);
+        if menu == Menu::Scale {
+            for (i, label) in menu.items().iter().enumerate() {
+                let r = self.menu_option_rect(menu, i);
+                self.button(d, r, label, i == self.menu_selection(menu), GOLD);
+                if self.menu_cursor == i { d.outline_rounded(r.0, r.1, r.2, r.3, 6.0, GOLD, 1.0); }
+            }
+        }
+    }
     /// Navigate the displayed rows, including grouped menus and disabled choices.
     pub(super) fn menu_neighbor(&self, menu: Menu, index: usize, code: Code) -> usize {
         let current = self.menu_option_rect(menu, index);

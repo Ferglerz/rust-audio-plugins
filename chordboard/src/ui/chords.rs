@@ -6,7 +6,7 @@ impl ChordboardView {
             return None;
         }
         let current = SavedChord::decode(self.snapshot.captured)?;
-        let matches_root = |chord: harmony::KeyboardChord| chord.root == current.root % 12;
+        let matches_root = |chord: harmony::KeyboardChord| chord.root % 12 == current.root % 12;
         (0..KEY_COUNT)
             .find(|&i| {
                 self.keyboard_chord(i)
@@ -128,18 +128,8 @@ impl ChordboardView {
         self.button_tinted(
             d,
             Menu::Key.trigger_rect(),
-            &format!("Key {} ▾", music::label(&self.key_name())),
-            self.menu == Some(Menu::Key),
-            GOLD,
-        );
-        self.button_tinted(
-            d,
-            Menu::Scale.trigger_rect(),
-            &format!(
-                "{} ▾",
-                harmony::SCALE_NAMES[self.params.scale.value() as usize]
-            ),
-            self.menu == Some(Menu::Scale),
+            &format!("{} · {} ▾", music::label(&self.key_name()), harmony::SCALE_NAMES[self.params.scale.value() as usize]),
+            matches!(self.menu, Some(Menu::Key | Menu::Scale)),
             GOLD,
         );
         self.button_tinted(

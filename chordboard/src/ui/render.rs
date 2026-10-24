@@ -38,9 +38,16 @@ impl ChordboardView {
         let width = self.text_width(&d, &name, 22.0);
         let size = 22.0 * (readout.2 / width.max(1.0)).min(1.0);
         d.text(readout.0, 46.0, &name, size, TEXT);
+        let theory = self.selected_degree_theory();
+        d.font = self.ui_font.get();
+        if let Some(theory) = &theory {
+            let summary = self.fit_text(&d, &theory.summary, readout.2, TEXT_SMALL);
+            d.text(readout.0, 66.0, &summary, TEXT_SMALL, MUTED);
+        }
         d.appearance_button(APPEARANCE, prefs().label());
         d.font = self.ui_font.get();
         self.draw_tempo_header(&mut d);
+        self.draw_delay_header(&mut d);
         let expand = self.expand_t();
         let chords = shrink_width(CHORDS_SURFACE, expand);
         let modulation = MOD_SURFACE;
@@ -51,7 +58,9 @@ impl ChordboardView {
         if modulation.2 > 1.0 {
             self.surface(&mut d, modulation);
         }
+        d.disabled = !self.params.strum_enabled.value();
         self.surface(&mut d, performance);
+        d.disabled = false;
         if expand < 1.0 {
             d.scissor(chords.0, chords.1, chords.2.max(0.0), CHORDS_SURFACE.3);
             d.offset_x = -self.route_progress * CHORDS_SURFACE.2;
@@ -69,7 +78,7 @@ impl ChordboardView {
             d.offset_x = 0.0;
             d.reset_scissor();
         }
-        self.draw_meters(&mut d);
+        self.draw_modulator_pages(&mut d);
         let pad = self.pad();
         d.scissor(pad.0, pad.1, pad.2, pad.3);
         d.font = self.font.get();
@@ -107,16 +116,11 @@ impl ChordboardView {
             self.draw_control(&mut d, c, *r, GOLD);
         }
         self.draw_strumfield_header(&mut d);
+        d.disabled = !self.params.arp_enabled.value();
         self.surface(&mut d, ARP_SURFACE);
+        d.disabled = false;
         self.draw_arp_editor(&mut d);
-        d.scissor(
-            PIANO_SURFACE.0,
-            PIANO_SURFACE.1,
-            PIANO_SURFACE.2,
-            PIANO_SURFACE.3,
-        );
-        self.draw_piano(&mut d);
-        d.reset_scissor();
+        self.draw_keyboard_pages(&mut d);
 
         self.draw_memory_drag(&mut d);
         self.draw_route_drag(&mut d);
@@ -137,6 +141,8 @@ impl ChordboardView {
             self.status.as_str()
         } else if let Some(hint) = &hint {
             hint
+        } else if let Some(theory) = &theory {
+            &theory.detail
         } else if !self.status.is_empty() {
             &self.status
         } else {
@@ -151,6 +157,10 @@ impl ChordboardView {
             if feedback { GOLD } else { MUTED },
         );
         if let Some(menu) = self.menu {
+            if matches!(menu, Menu::Key | Menu::Scale) {
+                self.draw_root_menu(&mut d, menu);
+                return;
+            }
             self.surface(&mut d, self.menu_bounds(menu));
             let r = self.menu_bounds(menu);
             d.text(r.0 + 12.0, r.1 + 24.0, menu.title(), 12.0, MUTED);
@@ -196,7 +206,7 @@ impl ChordboardView {
         }
     }
 
-    fn hover_hint(&self, controls: &[(Control, Rect)]) -> Option<String> {
+    pub(super) fn hover_hint(&self, controls: &[(Control, Rect)]) -> Option<String> {
         if let Some(hint) = self.route_drag_hint() {
             return Some(hint);
         }
@@ -204,6 +214,7 @@ impl ChordboardView {
         if self.menu.is_some() {
             return None;
         }
+        if let Some(hint) = self.quick_midi_hint(x, y) { return Some(hint); }
         if let Some((slot, rect)) = self.route_chips().into_iter().find(|(_, rect)| hit(*rect, x, y)) {
             if self.pending_route_remove == Some(slot) {
                 return Some("Click the check mark to remove this route · Escape cancels".into());
@@ -306,6 +317,21 @@ impl ChordboardView {
             .any(|i| self.snapshot.ignored & (1 << i) != 0 && hit(self.keyboard_key_rect(i), x, y))
         {
             return Some("Extra key pending · The last held key becomes the next root".into());
+        }
+        if self.panel.is_none() && self.route_progress == 0.0 {
+            if let Some(index) = (0..KEY_COUNT).find(|&i| hit(self.keyboard_key_rect(i), x, y)) {
+                if let Some(theory) = self.degree_theory(index) {
+                    return Some(theory.detail);
+                }
+            }
+        }
+        if hit(ORDER, x, y) {
+            return Some(match self.keyboard_layout() {
+                2 => "Degrees · Q: scale triads · Numbers: raise one chord tone · A: lower one chord tone · Hover a chord for theory and a phrase to try",
+                3 => "Passing · Numbers: chromatic approaches from below · Q: scale triads · A: alternate chord colours",
+                1 => "Fifths · Roots move by fifths · Rows: major / minor / dominant seventh · Click to change layout",
+                _ => "Chromatic · Roots move by semitones · Rows: major / minor / dominant seventh · Click to change layout",
+            }.into());
         }
         if hit(self.expand_button(), x, y) {
             return Some("Expand the strum field over the plugin body".into());
@@ -432,6 +458,12 @@ impl ChordboardView {
             );
         }
         for i in 0..crate::engine::routing::SOURCE_COUNT {
+            if self.quick_midi.show || self.quick_midi.progress > 0.0 { break; }
+            if hit(modulator_bypass_rect(i), x, y) {
+                return Some(format!("{} · Click to {} all outgoing routes · Route settings are preserved",
+                    crate::engine::routing::SOURCES[i + 1],
+                    if self.params.modulators[i].bypass.value() { "resume" } else { "bypass" }));
+            }
             if hit(meter_rect(i), x, y) {
                 return Some(format!(
                     "{} input: {:.0}% · Drag to a control to link · Click to edit routes; click again to close",
@@ -441,6 +473,9 @@ impl ChordboardView {
             }
         }
         if hit(chord_readout_rect(), x, y) {
+            if let Some(theory) = self.selected_degree_theory() {
+                return Some(theory.detail);
+            }
             return Some(SavedChord::decode(self.snapshot.captured).map_or_else(
                 || "Play two notes to choose harmony · Third and later notes add extensions through thirteenths".into(),
                 |chord| format!("{} · Third and later notes add extensions · Chord latch retains the complete recipe", self.named_chord(chord)),
@@ -464,6 +499,7 @@ impl ChordboardView {
         }
     }
     pub(super) fn draw_control(&self, d: &mut Draw, c: &Control, rect: Rect, color: Color) {
+        if c.id == "tempo" { return; } // Shared header owns BPM drawing; local controls retain editing.
         if c.id == "root_on_select" {
             let mode = self.selection_mode();
             self.button(
@@ -559,6 +595,8 @@ impl ChordboardView {
             );
         } else {
             let hover = self.hover_amount(rect);
+            let in_arp = hit(ARP_SURFACE, rect.0, rect.1);
+            let text_size = if in_arp { 13.0 } else { 11.0 };
             d.rounded_rect(
                 rect.0,
                 rect.1,
@@ -569,7 +607,7 @@ impl ChordboardView {
             );
             d.font = self.ui_font.get();
             if c.id != "tempo" {
-                d.text(rect.0 + 12.0, rect.1 + 15.0, name, 11.0, MUTED);
+                d.text(rect.0 + 12.0, rect.1 + 15.0, name, text_size, MUTED);
             }
             d.font = self.font.get();
             let value = self.display_value(c);
@@ -577,25 +615,28 @@ impl ChordboardView {
                 rect.0 + rect.2 - 12.0,
                 rect.1 + if c.id == "tempo" { 16.0 } else { 15.0 },
                 &value,
-                11.0,
+                text_size,
                 color,
             );
             let y = rect.1
                 + if c.id == "tempo" {
                     11.0
+                } else if in_arp {
+                    24.0
                 } else {
                     25.0 + pleasant_ui::value_edit::SLIDER_SPACING_EXTRA
                 };
             let x = rect.0 + 12.0;
             let width = rect.2 - if c.id == "tempo" { 92.0 } else { 24.0 };
-            d.rounded_rect(x, y, width, 3.0, 1.5, LINE);
-            d.rounded_rect(x, y, width * c.norm, 3.0, 1.5, color);
+            let thickness = if in_arp { 5.0 } else { 3.0 };
+            d.rounded_rect(x, y, width, thickness, thickness * 0.5, LINE);
+            d.rounded_rect(x, y, width * c.norm, thickness, thickness * 0.5, color);
             if routed.is_some() {
                 // The saved position remains visible while the teal marker moves.
                 let base_x = x + width * base.norm;
                 d.line(base_x, y - 4.0, base_x, y + 7.0, GOLD, 2.0);
             }
-            d.circle(x + width * c.norm, y + 1.5, 3.0 + hover, color, true);
+            d.circle(x + width * c.norm, y + thickness * 0.5, if in_arp { 5.0 + hover } else { 3.0 + hover }, color, true);
             d.font = self.ui_font.get();
         }
         if rect.3 >= 42.0 {
@@ -669,7 +710,7 @@ mod tests {
         }
     }
     #[test]
-    fn arp_settings_share_one_row_above_the_strings() {
+    fn arp_settings_fit_two_rows_above_the_strings() {
         let row = [
             arp_power_rect(),
             arpeggiator::mode_rect(),
@@ -679,12 +720,11 @@ mod tests {
             arp_controls()[1].1,
             arp_rate_sync_rect(),
             arp_rate_rect(),
-            arpeggiator::delay_rect(),
         ];
         let top = ARP_SURFACE.1;
-        let bottom = ARP_SURFACE.1 + ARP_SETTINGS_H;
+        let bottom = ARP_SURFACE.1 + ARP_LANE_TOP;
         for r in row {
-            assert!(r.1 >= top && r.1 + r.3 <= bottom, "{r:?} leaves the settings row");
+            assert!(r.1 >= top && r.1 + r.3 <= bottom, "{r:?} leaves the settings rows");
             assert!(
                 r.0 >= ARP_SURFACE.0 && r.0 + r.2 <= ARP_SURFACE.0 + ARP_SURFACE.2,
                 "{r:?} leaves the arpeggiator module"
@@ -701,8 +741,8 @@ mod tests {
     #[test]
     fn performance_rows_fill_width_and_share_direction_sizes() {
         let right = ARP_SURFACE.0 + ARP_SURFACE.2 - 12.0;
-        let delay = arpeggiator::delay_rect();
-        assert!((delay.0 + delay.2 - right).abs() < 0.001);
+        let last_adjustment = arpeggiator::lane_rect(2);
+        assert!((last_adjustment.0 + last_adjustment.2 - right).abs() < 0.001);
         let [(_, humanize), (_, swing)] = arp_controls();
         assert_eq!((swing.1, swing.3), (humanize.1, humanize.3));
         assert!(swing.0 > humanize.0 + humanize.2);
@@ -728,7 +768,6 @@ mod tests {
     fn chords_header_selection_button_sits_between_order_and_transpose() {
         let row = [
             Menu::Key.trigger_rect(),
-            Menu::Scale.trigger_rect(),
             ORDER,
             ROOT_ON_SELECT,
             TRANSPOSE,

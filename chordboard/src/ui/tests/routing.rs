@@ -692,17 +692,18 @@ fn arp_pages_and_octaves_are_routable_without_affecting_manual_octaves() {
 }
 
 #[test]
-fn delay_slide_over_removes_covered_arp_modulation_destinations() {
+fn delay_slide_over_hides_keyboard_destinations_and_keeps_arp_destinations() {
     let mut view = view(2, false);
     let (mut cx, target, _) = context();
     click(&mut view, &mut cx, target, arpeggiator::delay_rect());
     view.tick_arp_editor(pleasant_ui::page_slide::DURATION);
     for (_, r) in view.route_targets() {
         assert!(
-            !hit(ARP_SURFACE, r.0 + r.2 * 0.5, r.1 + r.3 * 0.5),
+            !hit(PIANO_SURFACE, r.0 + r.2 * 0.5, r.1 + r.3 * 0.5),
             "covered route target {r:?}"
         );
     }
+    assert!(view.route_targets().iter().any(|(i, _)| crate::engine::routing::TARGETS[*i].id == "arp_page"));
     click(&mut view, &mut cx, target, arpeggiator::delay_rect());
     view.tick_arp_editor(pleasant_ui::page_slide::DURATION);
     assert!(view

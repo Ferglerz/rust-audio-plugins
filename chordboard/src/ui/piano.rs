@@ -417,10 +417,10 @@ impl ChordboardView {
             return Some("Learn Bass split from the next MIDI note or click a keyboard key".into());
         }
         if self.bass_marker().is_some_and(|r| hit(r, x, y)) {
-            return Some("Drag the gold handle above the keys to set the bass boundary · Control keys always select quality · Set Bass below to Auto to follow the control octave".into());
+            return Some("Drag the gold handle above the keys to set the bass boundary · Control keys always select quality · Set Bass above to Auto to follow the control octave".into());
         }
         if hit(ALWAYS_BASS, x, y) {
-            return Some("Always play bass · Sustain the chord’s bass while right-hand notes are held · Latch keeps it until the next chord".into());
+            return Some("Always play bass · Sustain the chord’s bass while chord keys are held · Latch keeps it until the next chord".into());
         }
         if hit(key_split_rect(self.params.mpe_enabled()), x, y)
             || hit(melody_split_rect(self.params.mpe_enabled()), x, y)
@@ -466,6 +466,9 @@ impl ChordboardView {
             }
             if self.snapshot.full_notes.as_slice().contains(&note) {
                 parts.push("Chord voicing".into());
+                if self.theory_changed_pitch() == Some(note % 12) {
+                    parts.push("Altered degree chord tone · Purple marker".into());
+                }
             }
             return Some(parts.join(" · "));
         }
@@ -500,7 +503,6 @@ impl ChordboardView {
     }
 
     pub(super) fn draw_piano(&self, d: &mut Draw) {
-        self.surface(d, PIANO_SURFACE);
         self.draw_piano_keyboard_containers(d);
         d.font = self.ui_font.get();
         self.button(
@@ -577,6 +579,7 @@ impl ChordboardView {
             0.0,
         );
         let voicing = self.spread_preview_notes();
+        let theory_pitch = self.theory_changed_pitch();
         let learn_hover = if matches!(self.learning(), 4..=6) {
             self.hover_pointer()
                 .and_then(|(px, py)| piano_note_at(px, py))
@@ -629,6 +632,18 @@ impl ChordboardView {
                         GOLD,
                         1.5,
                     );
+                }
+                let input = self.snapshot.held_notes[note as usize];
+                let output = self.snapshot.sounding_notes[note as usize];
+                let pulse = self.note_anim[note as usize];
+                if input || output || pulse > 0.01 {
+                    d.rounded_rect(r.0 + 1.0, r.1 + 1.0, (r.2 - 2.0).max(1.0), r.3 - 2.0, 1.0,
+                        alpha(if output || pulse > 0.01 { GOLD } else { TEAL }, if input || output { 0.75 } else { pulse * 0.6 }));
+                }
+                if theory_pitch == Some(note % 12) && voicing.as_slice().contains(&note) {
+                    // A separate purple marker identifies the altered tone without
+                    // obscuring held-input and sounding-output indicators.
+                    d.rounded_rect(r.0 + 1.5, r.1 + r.3 - 31.0, (r.2 - 3.0).max(1.0), 4.0, 1.0, COLORS[1]);
                 }
                 let center = r.0 + r.2 / 2.0;
                 if self.snapshot.sounding_notes[note as usize] {
@@ -1042,7 +1057,7 @@ impl ChordboardView {
         }
     }
 
-    /// Draws the three labelled containers below the keyboard:
+    /// Draws the three labelled containers above the keyboard:
     /// Bass (GOLD, left) · Chord (neutral, center) · Melody (TEAL, right)
     fn draw_piano_keyboard_containers(&self, d: &mut Draw) {
         let mpe = self.params.mpe_enabled();

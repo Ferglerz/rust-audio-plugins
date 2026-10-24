@@ -80,13 +80,13 @@ impl ChordboardView {
     pub(super) fn modulation_route(&self, id: &str) -> Option<usize> {
         self.params.routes.iter().rposition(|p| {
             let r = p.route();
-            r.active() && TARGETS[r.target as usize].id == id
+            self.params.effective_route(r).active() && TARGETS[r.target as usize].id == id
         })
     }
     fn replacing_modulation_route(&self, id: &str) -> Option<usize> {
         self.params.routes.iter().rposition(|p| {
             let route = p.route();
-            route.active() && !route.additive() && TARGETS[route.target as usize].id == id
+            self.params.effective_route(route).active() && !route.additive() && TARGETS[route.target as usize].id == id
         })
     }
     pub(super) fn modulation_hint(&self, id: &str) -> Option<String> {
@@ -172,6 +172,10 @@ impl ChordboardView {
             .collect()
     }
     pub(super) fn update_route_hover(&mut self, x: f32, y: f32) {
+        if self.quick_midi.show || self.quick_midi.progress > 0.0 {
+            self.route_hover = None;
+            return;
+        }
         if let Some(source) =
             (0..crate::engine::routing::SOURCE_COUNT).find(|&i| hit(meter_rect(i), x, y))
         {
@@ -211,7 +215,7 @@ impl ChordboardView {
     pub(super) fn draw_route_chips(&self, d: &mut Draw) {
         for (slot, r) in self.route_chips() {
             let route = self.params.routes[slot].route();
-            let color = if route.enabled { TEAL } else { MUTED };
+            let color = if self.params.effective_route(route).enabled { TEAL } else { MUTED };
             d.rounded_rect(r.0, r.1, r.2, r.3, 5.0, BG);
             d.outline_rounded(r.0, r.1, r.2, r.3, 5.0, alpha(color, 0.65), 1.0);
             let label = self.fit_text(
@@ -287,7 +291,7 @@ impl ChordboardView {
             });
             targets.extend(self.panel_controls().into_iter().map(|(c, r)| (c.id, r)));
         }
-        if self.arp_editor_overlay_visible() {targets.retain(|(_,r)|!hit(ARP_SURFACE,r.0+r.2/2.0,r.1+r.3/2.0));}
+        if self.arp_editor_overlay_visible() {targets.retain(|(_,r)|!hit(PIANO_SURFACE,r.0+r.2/2.0,r.1+r.3/2.0));}
         let mut mapped: Vec<_> = targets
             .into_iter()
             .filter_map(|(id, r)| {
@@ -316,7 +320,7 @@ impl ChordboardView {
         self.params
             .routes
             .iter()
-            .rposition(|p| p.route().active() && p.target.value() as usize == target)
+            .rposition(|p| self.params.effective_route(p.route()).active() && p.target.value() as usize == target)
             .or_else(|| {
                 self.params
                     .routes
@@ -429,7 +433,7 @@ impl ChordboardView {
                 continue;
             }
             let linked = self.params.routes.iter().any(|p| {
-                p.route().active()
+                self.params.effective_route(p.route()).active()
                     && p.source.value() as usize == source + 1
                     && p.target.value() as usize == target
             });
@@ -700,7 +704,7 @@ impl ChordboardView {
                 r,
                 TARGETS[assigned.target as usize].name,
                 slot == self.route_slot,
-                if assigned.enabled { TEAL } else { MUTED },
+                if self.params.effective_route(assigned).enabled { TEAL } else { MUTED },
             );
         }
         if let Some(r) = self.add_route_rect() {
@@ -773,7 +777,7 @@ impl ChordboardView {
             TEAL,
         );
         self.icon_button(d, ROUTE_LINEAR, "Linear", route.curve.abs() < 0.001, GOLD, style::Icon::Reset);
-        if route.active() {
+        if self.params.effective_route(route).active() {
             let source_value = self.snapshot.sources[route.source as usize - 1];
             let input = if route.additive() { source_value.abs() } else { source_value };
             d.circle(
@@ -809,9 +813,11 @@ impl ChordboardView {
             .skip(self.route_slot + 1)
             .find(|(_, p)| {
                 let other = p.route();
-                other.active() && !other.additive() && !route.additive() && other.target == route.target
+                self.params.effective_route(other).active() && !other.additive() && !route.additive() && other.target == route.target
             });
-        let help = if let Some((i, _)) = overridden.filter(|_| route.active()) {
+        let help = if route.enabled && !self.params.effective_route(route).enabled {
+            "Modulator bypassed · Click its power icon to resume outgoing routes".into()
+        } else if let Some((i, _)) = overridden.filter(|_| self.params.effective_route(route).active()) {
             format!("Route {} has priority for this destination", i + 1)
         } else if route.additive() {
             format!("Zero keeps the base value · Offset depth {:.0}% · Drag contour to adjust", (route.max - route.min) * 100.0)
@@ -837,6 +843,12 @@ impl ChordboardView {
         {
             self.live_highlight(d, r);
         }
+    }
+
+    /// Reserve the entire modulation range so editable controls never chase live MIDI.
+    pub(super) fn maximum_routed_plain(&self, id: &str, base: f32) -> f32 {
+        let routes = std::array::from_fn::<_, { crate::engine::routing::ROUTE_COUNT }, _>(|i| self.params.effective_route(self.params.routes[i].route()));
+        crate::engine::routing::maximum_for_routes(id, base, &routes)
     }
 
     pub(super) fn routed_plain(&self, id: &str) -> Option<f32> {

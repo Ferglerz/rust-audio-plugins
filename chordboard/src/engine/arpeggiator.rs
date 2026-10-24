@@ -1,7 +1,8 @@
 //! Automatic arp clock, independent of the live Strumfield.
 use super::*;
-use crate::arpeggiator::{ArpMode, Prepared, Settings, Step, StepState, Store, STEPS};
+use crate::arpeggiator::{ArpMode, Prepared, Settings, Step, StepState, Store, STEPS, LOOPS};
 pub const ARP_OWNER: u8 = 1;
+pub fn pass_length(notes: usize, pattern: u8) -> usize { Engine::pattern_length(pattern, notes) }
 #[derive(Clone, Copy)]
 struct Event {
     at: u64,
@@ -9,7 +10,7 @@ struct Event {
     seed: u32,
     phase: i64,
     step: usize,
-    note: u8,
+    note: i16,
     adjustment: Step,
     interval: f64,
     position: f32,
@@ -37,6 +38,9 @@ pub struct Runtime {
     restore_epoch: u64,
     aligned: bool,
     last_settings: Settings,
+    pub(super) paste_settings: [Option<Settings>; 8],
+    paste_seen: [u64; 8],
+    pub(super) preserve_paste_clock: bool,
 }
 impl Default for Runtime {
     fn default() -> Self {
@@ -62,14 +66,17 @@ impl Default for Runtime {
             restore_epoch: 0,
             aligned: false,
             last_settings: Settings::default(),
+            paste_settings: [None; 8],
+            paste_seen: [0; 8],
+            preserve_paste_clock: false,
         }
     }
 }
 /// The displayed cycle is exactly the played cycle, including repeated occurrences.
 pub fn cycle_notes(notes: Notes, settings: Settings, mut seed: u32) -> ([u8; STEPS], usize) {
-    let mut strings = [0; 48];
+    let mut strings = [0; 96];
     let mut count = 0;
-    for i in 0..notes.len * settings.octaves.clamp(1, 4) as usize {
+    for i in 0..notes.len * settings.octaves.clamp(1, LOOPS as u8) as usize {
         if let Some(note) = notes.string(i) {
             strings[count] = note;
             count += 1;
@@ -86,6 +93,19 @@ pub fn cycle_notes(notes: Notes, settings: Settings, mut seed: u32) -> ([u8; STE
     }
     (result, len)
 }
+/// Each loop traverses the selected ordering at its own octave, with stable step slots.
+pub fn loop_cycle_notes(notes: Notes, settings: Settings, octaves: [i8; LOOPS], mut seed: u32) -> ([i16; STEPS], usize) {
+    let mut result = [0; STEPS];
+    if notes.len == 0 { return (result, 0); }
+    let pass_len = Engine::pattern_length(settings.pattern, notes.len);
+    let len = (pass_len * settings.octaves.clamp(1, LOOPS as u8) as usize).min(STEPS);
+    for (step, slot) in result.iter_mut().enumerate().take(len) {
+        let index = ordering::index(settings.pattern, step % pass_len, notes.len, &mut seed);
+        *slot = notes.values[index] as i16 + octaves[step / pass_len] as i16 * 12;
+    }
+    (result, len)
+}
+
 impl Engine {
     pub(super) fn retime_arp(&mut self, old_tempo: f64, new_tempo: f64) {
         if !self.config.arp_sync || old_tempo == new_tempo {
@@ -112,10 +132,27 @@ impl Engine {
     pub fn accept_arp_generation(&mut self, out: &mut impl FnMut(Out)) {
         if self.arp.restore_epoch != self.arp.data.restore_epoch {
             self.arp.restore_epoch = self.arp.data.restore_epoch;
+            self.arp.paste_settings.fill(None);
+            self.arp.paste_seen.fill(0);
+            self.arp.preserve_paste_clock = false;
             self.reset_automatic_arp(out);
             self.reset_delay(out);
             self.arp.active = self.host_config.arp_page.min(7);
             self.configure(self.host_config, out);
+        }
+        for page in 0..8 {
+            if let Some(replacement) = self.arp.data.pages[page].replacement {
+                if replacement.serial != self.arp.paste_seen[page] {
+                    self.arp.paste_seen[page] = replacement.serial;
+                    self.arp.paste_settings[page] = Some(replacement.settings);
+                    if page == self.arp.active as usize {
+                        self.arp.preserve_paste_clock = true;
+                        if !self.arp.finished { self.arp.done = false; }
+                        self.delay_power = self.arp.data.pages[page].delay.enabled;
+                        self.delay_page = self.arp.active;
+                    }
+                }
+            }
         }
         self.update_delay_power(out);
     }
@@ -178,21 +215,27 @@ impl Engine {
         }
         notes
     }
-    fn arp_slots(&self) -> ([usize; STEPS], usize, [u8; STEPS]) {
-        let (notes, len) = cycle_notes(
+    pub(super) fn arp_pass_len(&self) -> usize {
+        Self::pattern_length(self.config.arp_pattern, self.notes.len).max(1)
+    }
+    pub(super) fn effective_arp_gate(&self, gate: u8) -> f32 {
+        let mut config = self.config;
+        config.gate = gate as f32 / 100.0;
+        self.apply_routes(&mut config);
+        config.gate
+    }
+    fn arp_slots(&self) -> ([usize; STEPS], usize, [i16; STEPS]) {
+        let (notes, len) = loop_cycle_notes(
             self.arp_cycle_chord(),
             self.arp_live_settings(),
+            self.config.arp_loop_octaves,
             self.arp.plan_seed,
         );
         let mut slots = [0; STEPS];
         let mut count = 0;
-        for (i, step) in self.arp.data.pages[self.arp.active as usize]
-            .steps
-            .iter()
-            .enumerate()
-            .take(len)
-        {
-            if step.state != StepState::Skip {
+        let pass_len = self.arp_pass_len();
+        for i in 0..len {
+            if self.arp.data.pages[self.arp.active as usize].step(i, pass_len).state != StepState::Skip {
                 slots[count] = i;
                 count += 1;
             }
@@ -268,7 +311,7 @@ impl Engine {
         }
         let ordinal = phase.rem_euclid(count as i64) as usize;
         let index = slots[ordinal];
-        let step = self.arp.data.pages[self.arp.active as usize].steps[index];
+        let step = *self.arp.data.pages[self.arp.active as usize].step(index, self.arp_pass_len());
         let interval = self.arp_interval(phase);
         let jitter = self.humanize_timing(interval);
         let at = (boundary + interval * step.micro as f64 / 100.0 + jitter)
@@ -303,7 +346,7 @@ impl Engine {
         {
             return;
         }
-        if self.arp_alignment_available()
+        if !self.arp.preserve_paste_clock && self.arp_alignment_available()
             && (settings.rate != self.arp.cached_settings.rate
                 || settings.swing != self.arp.cached_settings.swing)
         {
@@ -341,6 +384,11 @@ impl Engine {
         }
         let aligned = self.arp_alignment_available();
         let settings = self.arp_live_settings();
+        if self.arp.preserve_paste_clock {
+            self.arp.aligned = aligned;
+            self.arp.last_settings = settings;
+            self.arp.preserve_paste_clock = false;
+        }
         if aligned
             && (!self.arp.aligned
                 || settings.rate != self.arp.last_settings.rate
@@ -372,7 +420,7 @@ impl Engine {
                 self.arp.events.fill(None);
                 self.arp.early = if consumed { Some(self.arp.phase) } else { None };
                 if self.arp.done
-                    || self.host_config.arp_settings[requested as usize].mode == ArpMode::Once
+                    || self.arp.paste_settings[requested as usize].unwrap_or(self.host_config.arp_settings[requested as usize]).mode == ArpMode::Once
                 {
                     self.arp.phase = 0;
                     self.arp.next = self.now as f64;
@@ -407,7 +455,7 @@ impl Engine {
                 self.arp.next += self.arp_interval(phase);
                 self.arp.phase = self.arp.phase.wrapping_add(1);
                 self.arp.done =
-                    self.config.arp_mode == ArpMode::Once && self.arp.phase >= count as i64;
+                    self.config.arp_mode == ArpMode::Once && self.arp.phase.rem_euclid(count as i64) == 0;
                 if self.config.arp_pattern == 6 && self.arp.phase.rem_euclid(count as i64) == 0 {
                     self.arp.plan_seed = self.random();
                 }
@@ -447,24 +495,20 @@ impl Engine {
             self.configure(self.host_config, out);
             if event.audible {
                 let (notes, len) =
-                    cycle_notes(self.arp_cycle_chord(), self.arp_live_settings(), event.seed);
+                    loop_cycle_notes(self.arp_cycle_chord(), self.arp_live_settings(), self.config.arp_loop_octaves, event.seed);
                 let note = if len > 0 {
                     notes[event.step % len]
                 } else {
                     event.note
                 };
-                let pitch = note as i16 + event.adjustment.octave as i16 * 12;
+                let pitch = note + event.adjustment.octave as i16 * 12;
                 if (0..=127).contains(&pitch) {
                     let velocity = self.base_strike_velocity() * event.adjustment.velocity as f32
                         / 100.0
                         * self.humanize_velocity_factor();
                     // Gate is the cell's absolute percentage, with routed Gate replacing or
                     // offsetting that base through the existing modulation matrix.
-                    let mut gate_config = self.config;
-                    gate_config.gate = event.adjustment.gate as f32 / 100.0;
-                    self.apply_routes(&mut gate_config);
-                    let duration =
-                        (event.interval * gate_config.gate as f64).round().max(1.0) as u64;
+                    let duration = (event.interval * self.effective_arp_gate(event.adjustment.gate) as f64).round().max(1.0) as u64;
                     if velocity > 0.0 {
                         self.strike_prepared(pitch as u8, velocity, duration, ARP_OWNER, out);
                     }

@@ -6,3 +6,5 @@ mod routing;
 mod piano;
 mod layout;
 mod overlay;
+mod midi_learn;
+mod theory;

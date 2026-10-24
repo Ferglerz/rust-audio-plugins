@@ -3,7 +3,7 @@ use super::*;
 /// Small vector marks shared by Chordboard controls.
 #[derive(Clone, Copy)]
 pub(super) enum Icon {
-    Lock, Once, Loop, SyncLoop, AlignedLoop, Host, Manual, Learn, Trash, Add, Reset, Touch, TuningFork, Glyph(&'static str),
+    Lock, Once, Loop, SyncLoop, AlignedLoop, Host, Learn, MidiDin, Trash, Add, Reset, Touch, TuningFork, Glyph(&'static str),
 }
 
 pub(super) const MODULATOR_ICONS: [Icon; crate::engine::routing::SOURCE_COUNT] = [
@@ -81,14 +81,31 @@ impl Icon {
                     );
                 }
             }
-            Self::Manual => {
-                d.poly(&[(x-6.0,y+6.0),(x,y-7.0),(x+6.0,y+6.0),(x-6.0,y+6.0)],color,1.4);
-                line(d,(0.0,3.0),(5.0,-5.0));
-                line(d,(-3.0,3.0),(3.0,3.0));
-            }
             Self::Learn => {
                 d.outline((x-7.0,y-5.0,14.0,10.0),color);
                 for key in [-3.0,1.0,4.0] { line(d,(key,-5.0),(key,1.0)); }
+            }
+            Self::MidiDin => {
+                // Reaper UI Overlay/assets/preferences/icons/midi-din.svg,
+                // scaled from its 24px view box to an 18px control icon.
+                use nih_plug_vizia::vizia::vg::{Paint, Path};
+                let mut path = Path::new();
+                path.circle(12.0, 12.0, 10.0);
+                path.move_to(10.0, 2.0);
+                path.line_to(10.0, 5.0);
+                path.line_to(14.0, 5.0);
+                path.line_to(14.0, 2.0);
+                for (sx, sy) in [(5.65, 11.0), (7.65, 15.5), (12.0, 17.4), (16.35, 15.5), (18.35, 11.0)] {
+                    path.circle(sx, sy, 0.65);
+                }
+                let mut paint = Paint::color(d.color(color));
+                paint.set_line_width(2.0);
+                d.c.save();
+                d.c.translate(d.ox + (x + d.offset_x) * d.s, d.oy + y * d.s);
+                d.c.scale(d.s * 0.75, d.s * 0.75);
+                d.c.translate(-12.0, -12.0);
+                d.c.stroke_path(&path, &paint);
+                d.c.restore();
             }
             Self::Trash => {
                 line(d,(-7.0,-4.0),(7.0,-4.0));
@@ -143,9 +160,18 @@ impl ChordboardView {
         }
         let mut targets = Vec::new();
         targets.extend(self.route_chips().into_iter().map(|(_, r)| (r, false)));
+        targets.push((midi_learn::switch_rect(), self.quick_midi.show));
+        if self.quick_midi.show {
+            for i in 0..crate::midi_learn::COUNT {
+                targets.push((midi_learn::chip_rect(i), self.bridge.quick_learn.load(Ordering::Acquire) == i as u32 + 1));
+            }
+        }
         if self.expand_t() == 0.0 {
-            targets
-                .extend((0..crate::engine::routing::SOURCE_COUNT).map(|i| (meter_rect(i), false)));
+            for i in 0..crate::engine::routing::SOURCE_COUNT {
+                if self.quick_midi.show { break; }
+                targets.push((modulator_bypass_rect(i), self.params.modulators[i].bypass.value()));
+                targets.push((meter_rect(i), false));
+            }
         }
         if let Some(panel) = self.panel {
             targets.push((self.panel_close_rect(panel), false));
@@ -186,7 +212,6 @@ impl ChordboardView {
             (self.control_octave_bounds(), self.learning() == 4),
             (TEMPO_SYNC, false),
             (Menu::Key.trigger_rect(), self.menu == Some(Menu::Key)),
-            (Menu::Scale.trigger_rect(), self.menu == Some(Menu::Scale)),
         ]);
         targets.push((self.expand_button(), self.expand_target > 0.5));
         targets.extend((0..KEY_COUNT).map(|i| (self.keyboard_key_rect(i), false)));
@@ -358,6 +383,11 @@ impl ChordboardView {
         let reserved = if icon.is_some() { 23.0 } else { 0.0 };
         let text = self.fit_text(d, label, (r.2 - padding - reserved).max(0.0), 11.0);
         if let Some(icon) = icon {
+            if label.is_empty() {
+                icon.draw(d, r.0 + r.2 * 0.5, r.1 + r.3 * 0.5, label_color);
+                d.font = old;
+                return;
+            }
             const ICON_WIDTH: f32 = 18.0;
             const GAP: f32 = 5.0;
             let text_w = self.text_width(d, &text, 11.0);

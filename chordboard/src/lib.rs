@@ -1,5 +1,6 @@
 //! Chordboard: realtime MIDI harmony, strumming, and expression routing.
 mod bridge;
+mod midi_learn;
 pub mod engine;
 pub mod harmony;
 pub mod params;
@@ -46,6 +47,7 @@ pub struct Chordboard {
     expected_position: Option<i64>,
     last_axes: [f32; 2],
     pending_reset: bool,
+    quick_midi: midi_learn::Input,
 }
 impl Default for Chordboard {
     fn default() -> Self {
@@ -56,6 +58,7 @@ impl Default for Chordboard {
             expected_position: None,
             last_axes: [0.0, 0.8],
             pending_reset: false,
+            quick_midi: midi_learn::Input::default(),
         }
     }
 }
@@ -128,6 +131,15 @@ impl Chordboard {
 
     fn current_config(&self) -> engine::Config {
         let mut config = self.params.config();
+        // A UI paste can arrive after this callback consumed its data queue. Freeze
+        // that page’s host settings until its complete prepared transaction arrives.
+        for page in 0..arpeggiator::PAGES {
+            let pending = self.params.arpeggiator.replacement_serials[page].load(Ordering::Acquire);
+            let applied = self.engine.arp.data.pages[page].replacement.map_or(0, |r| r.serial);
+            if pending != 0 && pending != applied {
+                config.arp_settings[page] = self.engine.host_config.arp_settings[page];
+            }
+        }
         let encoded = self.bridge.learned_split.load(Ordering::Acquire);
         if let Some(learned) = engine::LearnedSplit::decode(encoded) {
             if config.bass_split == learned.bass as i16
@@ -187,6 +199,22 @@ impl Chordboard {
         }
     }
     fn input(&mut self, event: NoteEvent<()>, out: &mut impl FnMut(Out)) {
+        if matches!(event, NoteEvent::Choke { .. }) {
+            self.quick_midi = midi_learn::Input::default();
+        }
+        if self.quick_midi.consume(event, &self.params, &self.bridge.quick_learn, [self.engine.quality, self.engine.inversion]) {
+            // A note newly assigned while already sounding still needs its release.
+            if let NoteEvent::NoteOn { channel, note, .. } | NoteEvent::NoteOff { channel, note, .. } = event {
+                if channel < 16 && note < 128 && self.engine.down[channel as usize * 128 + note as usize] {
+                    self.engine.midi_note(false, channel, note, 0.0, out);
+                }
+            }
+            self.engine.configure(self.current_config(), out);
+            if let Some(selection) = self.quick_midi.selection.take() {
+                self.engine.select_root(selection, out);
+            }
+            return;
+        }
         if let Some(detected) = self.detect_mpe_input(&event) {
             self.params.detected_mpe.store(detected, Ordering::Relaxed);
             self.engine.configure(self.current_config(), out);
@@ -340,7 +368,14 @@ impl Plugin for Chordboard {
     const MIDI_OUTPUT: MidiConfig = MidiConfig::MidiCCs;
     const SAMPLE_ACCURATE_AUTOMATION: bool = true;
     type SysExMessage = ();
-    type BackgroundTask = ();
+    type BackgroundTask = [u8; 8];
+    fn task_executor(&mut self) -> TaskExecutor<Self> {
+        let store = self.params.arpeggiator.clone();
+        Box::new(move |counts| {
+            store.ensure_loops(counts);
+            store.initialization_pending.store(false, Ordering::Release);
+        })
+    }
     fn params(&self) -> Arc<dyn Params> {
         self.params.clone()
     }
@@ -358,6 +393,7 @@ impl Plugin for Chordboard {
         true
     }
     fn reset(&mut self) {
+        self.quick_midi = midi_learn::Input::default();
         self.bridge.learned_split.store(0, Ordering::Release);
         self.pending_reset = true;
         self.engine.quality = self.params.selected_quality.load(Ordering::Relaxed).min(11) as u8;
@@ -389,6 +425,7 @@ impl Plugin for Chordboard {
         let panic_requested = self.bridge.panic.swap(false, Ordering::AcqRel);
         let reset_requested = self.bridge.reset.swap(false, Ordering::AcqRel);
         if self.pending_reset || panic_requested || reset_requested {
+            self.quick_midi = midi_learn::Input::default();
             self.engine.panic(&mut |e| emitted.push(0, e));
             if reset_requested {
                 self.engine.quality = self.params.quality.value() as u8;
@@ -400,6 +437,11 @@ impl Plugin for Chordboard {
                     break;
                 }
             }
+        }
+        let required = self.params.required_arp_loops();
+        if required.iter().zip(&self.engine.arp.data.pages).any(|(&count, page)| count > page.initialized)
+            && !self.params.arpeggiator.initialization_pending.swap(true, Ordering::AcqRel) {
+            context.execute_background(required);
         }
         let mut arp_updated = false;
         for _ in 0..2 {
@@ -831,4 +873,21 @@ mod protocol_tests {
         assert_eq!(plugin.current_config().split_note, 20);
         assert_eq!(plugin.bridge.learned_split.load(Ordering::Acquire), 0);
     }
+    #[test]
+    fn arp_paste_parameter_notifications_wait_for_the_complete_data_transaction() {
+        let mut plugin = Chordboard::default();
+        let before = plugin.current_config().arp_settings[0];
+        plugin.engine.configure(plugin.current_config(), &mut |_| {});
+        let settings = arpeggiator::Settings { free_ms: 150.0, ..before };
+        plugin.params.arpeggiator.replace_page(0, arpeggiator::Page::default(), settings);
+        Arc::get_mut(&mut plugin.params).unwrap().arp_pages[0].arp_free_ms = FloatParam::new("Free", 200.0, FloatRange::Linear { min: 1.0, max: 1500.0 });
+        assert_eq!(plugin.current_config().arp_settings[0], before);
+        assert!(plugin.params.arpeggiator.apply_pending(&mut plugin.engine.arp.data));
+        plugin.engine.accept_arp_generation(&mut |_| {});
+        assert_eq!(plugin.current_config().arp_settings[0].free_ms, 200.0);
+        plugin.engine.configure(plugin.current_config(), &mut |_| {});
+        // The page data and staged complete settings agree, despite partial host updates.
+        assert_eq!(plugin.engine.config.arp_settings[0], settings);
+    }
+
 }

@@ -4,31 +4,51 @@ use super::{
 };
 
 const THEME_BUTTON_W: f32 = 72.0;
-/// Align the theme button with the drop-time module.
-pub(super) const MODULE_RIGHT: f32 = GRAPH_X + GRAPH_W + DROP_SLIDER_GAP + DROP_SLIDER_W;
 pub(super) const THEME_BUTTON: (f32, f32, f32, f32) =
-    (MODULE_RIGHT - THEME_BUTTON_W, 22.0, THEME_BUTTON_W, 26.0);
+    (UI_W - 20.0 - THEME_BUTTON_W, 22.0, THEME_BUTTON_W, 26.0);
 
 pub(super) const DROP_SLIDER_GAP: f32 = 10.0;
 pub(super) const DROP_SLIDER_W: f32 = 40.0;
 const DROP_SLIDER_EXTRA: f32 = 10.0;
 pub(super) const DROP_TIME_SLIDER: (f32, f32, f32, f32) = (
-    GRAPH_X + GRAPH_W + DROP_SLIDER_GAP,
+    GRAPH_X + GRAPH_W + DROP_SLIDER_GAP + 16.0,
     GRAPH_Y,
     DROP_SLIDER_W,
     GRAPH_H + DROP_SLIDER_EXTRA,
 );
-const DROP_READOUT_W: f32 = 46.0 + DROP_SLIDER_GAP + DROP_SLIDER_W;
+const DROP_READOUT_W: f32 = 72.0;
 pub(super) const DROP_READOUT_H: f32 = 36.0;
 const DROP_CHROME: Color = PANEL;
 pub(super) const AXIS_LABEL_Y: f32 = GRAPH_Y + GRAPH_H + 32.0;
 pub(super) const DROP_READOUT_TEXT_Y: f32 = DROP_READOUT_H * 0.5 + 5.0;
 pub(super) const DROP_TIME_READOUT: (f32, f32, f32, f32) = (
-    GRAPH_X + GRAPH_W - 46.0,
+    DROP_TIME_SLIDER.0 + (DROP_SLIDER_W - DROP_READOUT_W) * 0.5,
     AXIS_LABEL_Y - DROP_READOUT_TEXT_Y,
     DROP_READOUT_W,
     DROP_READOUT_H,
 );
+
+pub(super) const RETURN_TIME_SLIDER: (f32, f32, f32, f32) = (
+    DROP_TIME_SLIDER.0 + 80.0,
+    GRAPH_Y,
+    DROP_SLIDER_W,
+    GRAPH_H + DROP_SLIDER_EXTRA,
+);
+pub(super) const RETURN_TIME_READOUT: (f32, f32, f32, f32) = (
+    DROP_TIME_READOUT.0 + 80.0,
+    DROP_TIME_READOUT.1,
+    DROP_READOUT_W,
+    DROP_READOUT_H,
+);
+pub(super) const XY_PAD: (f32, f32, f32, f32) =
+    (RETURN_TIME_SLIDER.0 + 80.0, GRAPH_Y, GRAPH_H, GRAPH_H);
+pub(super) const XY_AXIS: (f32, f32, f32, f32) = (XY_PAD.0, 376.0, 124.0, 28.0);
+pub(super) const XY_MODE: (f32, f32, f32, f32) = (XY_PAD.0 + 132.0, 376.0, 120.0, 28.0);
+pub(super) const TIME_SYNC: (f32, f32, f32, f32) = (490.0, 22.0, 96.0, 30.0);
+pub(super) const TEMPO_HEADER: pleasant_ui::tempo::Header = pleasant_ui::tempo::Header {
+    source: (600.0, 22.0, 136.0, 30.0),
+    bpm: (746.0, 22.0, 150.0, 30.0),
+};
 
 const GRAPH_OVERLAY_MARGIN: f32 = 14.0;
 const STOP_SIZE: f32 = 68.0;
@@ -47,7 +67,7 @@ const AXIS_GAP: f32 = 8.0;
 const AXIS_VALUE_W: f32 = 60.0;
 
 pub(super) fn trigger_column() -> (f32, f32, f32, f32) {
-    axis_slot(3)
+    axis_slot(2)
 }
 
 pub(super) fn trigger_bypass_rect() -> (f32, f32, f32, f32) {
@@ -93,11 +113,11 @@ pub(super) fn axis_slot(index: usize) -> (f32, f32, f32, f32) {
     let start = midi.0 + midi.2 + AXIS_GAP;
     // Preserve the trigger's extra label space while shortening all four sliders equally.
     let trigger_extra = 40.0;
-    let width = (cog_rect().0 - AXIS_GAP - start - AXIS_GAP * 3.0 - trigger_extra) / 4.0;
+    let width = (cog_rect().0 - AXIS_GAP - start - AXIS_GAP * 2.0 - trigger_extra) / 3.0;
     (
         start + index as f32 * (width + AXIS_GAP),
         DROP_TIME_READOUT.1,
-        if index == 3 {
+        if index == 2 {
             width + trigger_extra
         } else {
             width
@@ -137,6 +157,14 @@ impl TapeStopView {
     }
 
     pub(super) fn readout_at(&self, x: f32, y: f32) -> Option<KnobId> {
+        if Self::inside(x, y, RETURN_TIME_READOUT) {
+            return Some(KnobId::Return);
+        }
+        if !self.params.tempo_sync.value()
+            && TEMPO_HEADER.hit(x, y) == Some(pleasant_ui::tempo::Hit::Bpm)
+        {
+            return Some(KnobId::Tempo);
+        }
         if Self::inside(x, y, DROP_TIME_READOUT) {
             return Some(KnobId::DropTime);
         }
@@ -150,7 +178,7 @@ impl TapeStopView {
             if Self::inside(x, y, midi_value_rect()) {
                 return Some(self.midi_number_id());
             }
-            return [KnobId::Return, KnobId::Xfade, KnobId::StereoDiv]
+            return [KnobId::Xfade, KnobId::StereoDiv]
                 .into_iter()
                 .find(|id| Self::inside(x, y, axis_value_rect(Self::slider_rect(*id))));
         }
@@ -192,6 +220,7 @@ impl TapeStopView {
             KnobId::Curve => &self.params.drop_curve,
             KnobId::StereoDiv => &self.params.stereo_div,
             KnobId::RestartThresh => &self.params.auto_restart_thresh,
+            KnobId::Tempo => &self.params.tempo,
             KnobId::OverrideCc | KnobId::OverrideNote => unreachable!("MIDI numbers are IntParams"),
         }
     }
@@ -199,16 +228,16 @@ impl TapeStopView {
     pub(super) fn slider_rect(id: KnobId) -> (f32, f32, f32, f32) {
         match id {
             KnobId::DropTime => DROP_TIME_SLIDER,
-            KnobId::Return => axis_slot(0),
-            KnobId::Xfade => axis_slot(1),
-            KnobId::StereoDiv => axis_slot(2),
+            KnobId::Return => RETURN_TIME_SLIDER,
+            KnobId::Xfade => axis_slot(0),
+            KnobId::StereoDiv => axis_slot(1),
             KnobId::RestartThresh => trigger_column(),
             _ => (0.0, 0.0, 0.0, 0.0),
         }
     }
 
-    pub(super) fn drop_bar_rect() -> (f32, f32, f32, f32) {
-        let r = DROP_TIME_SLIDER;
+    pub(super) fn time_bar_rect(id: KnobId) -> (f32, f32, f32, f32) {
+        let r = Self::slider_rect(id);
         (r.0 + 10.0, r.1 + 10.0, r.2 - 20.0, r.3 - 20.0)
     }
 
@@ -221,10 +250,18 @@ impl TapeStopView {
     }
 
     pub(super) fn emit_param_norm(&self, cx: &mut EventContext, ptr: ParamPtr, norm: f32) {
-        pleasant_ui::param::set_normalized_once(cx, ptr, norm);
+        if self.gesture_params.contains(&Some(ptr)) {
+            pleasant_ui::param::set_normalized(cx, ptr, norm);
+        } else {
+            pleasant_ui::param::set_normalized_once(cx, ptr, norm);
+        }
     }
 
     pub(super) fn reset_knob(&self, cx: &mut EventContext, id: KnobId) {
+        if let Some(p) = self.division_param(id) {
+            self.emit_param_norm(cx, p.as_ptr(), p.default_normalized_value());
+            return;
+        }
         match id {
             KnobId::OverrideCc => self.emit_param_norm(
                 cx,
@@ -241,22 +278,21 @@ impl TapeStopView {
     }
 
     pub(super) fn emit_knob_norm(&self, cx: &mut EventContext, id: KnobId, norm: f32) {
-        if id == KnobId::OverrideCc {
+        if let Some(p) = self.division_param(id) {
+            self.emit_param_norm(cx, p.as_ptr(), norm);
+        } else if id == KnobId::OverrideCc {
             self.emit_param_norm(cx, self.params.override_cc.as_ptr(), norm);
         } else if id == KnobId::OverrideNote {
             self.emit_param_norm(cx, self.params.override_note.as_ptr(), norm);
-        } else if id == KnobId::DropTime {
-            let plain = self.params.drop_time.preview_plain(norm);
-            let snapped = snap_drop_time(plain);
-            let snapped_norm = self.params.drop_time.preview_normalized(snapped);
-            self.emit_param_norm(cx, self.params.drop_time.as_ptr(), snapped_norm);
         } else {
             self.emit_param_norm(cx, self.param(id).as_ptr(), norm);
         }
     }
 
     pub(super) fn get_knob_norm(&self, id: KnobId) -> f32 {
-        if id == KnobId::OverrideCc {
+        if let Some(p) = self.division_param(id) {
+            p.unmodulated_normalized_value()
+        } else if id == KnobId::OverrideCc {
             self.params.override_cc.unmodulated_normalized_value()
         } else if id == KnobId::OverrideNote {
             self.params.override_note.unmodulated_normalized_value()
@@ -266,7 +302,23 @@ impl TapeStopView {
     }
 
     pub(super) fn knob_info(&self, id: KnobId) -> (&'static str, String, Color) {
+        if let Some(p) = self.division_param(id) {
+            return (
+                if id == KnobId::DropTime {
+                    "DROP TIME"
+                } else {
+                    "RETURN"
+                },
+                pleasant_dsp::tempo::division(p.value()).label.to_owned(),
+                if id == KnobId::DropTime {
+                    COLORS[4]
+                } else {
+                    COLORS[0]
+                },
+            );
+        }
         match id {
+            KnobId::Tempo => ("TEMPO", format!("{:.1}", self.params.tempo.value()), GOLD),
             KnobId::DropTime => (
                 "DROP TIME",
                 format_ms(self.params.drop_time.value()),
@@ -314,6 +366,12 @@ impl TapeStopView {
         if let Some(edit) = self.edit.take() {
             let target = edit.target;
             let text = edit.text;
+            if let Some(p) = self.division_param(target) {
+                if let Some(index) = pleasant_dsp::tempo::parse_division(&text) {
+                    self.emit_param_norm(cx, p.as_ptr(), p.preview_normalized(index));
+                }
+                return;
+            }
             let parsed = match target {
                 KnobId::DropTime => parse_number_with_units(&text, &[("ms", 1.0), ("s", 1000.0)]),
                 KnobId::Return => parse_number_with_units(&text, &[("ms", 1.0), ("s", 1000.0)]),
@@ -323,9 +381,10 @@ impl TapeStopView {
                 KnobId::OverrideCc => parse_number_with_units(&text, &[]),
                 KnobId::OverrideNote => parse_number_with_units(&text, &[]),
                 KnobId::Curve => parse_number_with_units(&text, &[]),
+                KnobId::Tempo => parse_number_with_units(&text, &[("bpm", 1.0)]),
             };
 
-            if let Some(v) = parsed {
+            if let Some(v) = parsed.filter(|v| v.is_finite()) {
                 if target == KnobId::OverrideCc {
                     let norm = self.params.override_cc.preview_normalized(v as i32);
                     self.emit_param_norm(cx, self.params.override_cc.as_ptr(), norm);
@@ -333,8 +392,7 @@ impl TapeStopView {
                     let norm = self.params.override_note.preview_normalized(v as i32);
                     self.emit_param_norm(cx, self.params.override_note.as_ptr(), norm);
                 } else if target == KnobId::DropTime {
-                    let snapped = snap_drop_time(v as f32 / 1000.0);
-                    let norm = self.params.drop_time.preview_normalized(snapped);
+                    let norm = self.params.drop_time.preview_normalized(v as f32 / 1000.0);
                     self.emit_param_norm(cx, self.params.drop_time.as_ptr(), norm);
                 } else if target == KnobId::Return {
                     let norm = self.params.return_sec.preview_normalized(v as f32 / 1000.0);
@@ -348,34 +406,57 @@ impl TapeStopView {
         }
     }
 
-    pub(super) fn drop_l_points() -> [(f32, f32); 6] {
-        let s = DROP_TIME_SLIDER;
-        let r = DROP_TIME_READOUT;
-        [
-            (s.0, s.1),
-            (s.0 + s.2, s.1),
-            (s.0 + s.2, r.1 + r.3),
-            (r.0, r.1 + r.3),
-            (r.0, r.1),
-            (s.0, r.1),
-        ]
+    pub(super) fn draw_drop_time(&self, d: &mut Draw) {
+        self.draw_time_slider(d, KnobId::DropTime);
+        self.draw_time_slider(d, KnobId::Return);
     }
 
-    pub(super) fn draw_drop_time(&self, d: &mut Draw) {
-        let (_, val_str, color) = self.knob_info(KnobId::DropTime);
-        let n = self.get_knob_norm(KnobId::DropTime);
-        let readout = DROP_TIME_READOUT;
-        let bar = Self::drop_bar_rect();
+    fn draw_time_slider(&self, d: &mut Draw, id: KnobId) {
+        let (_, val_str, color) = self.knob_info(id);
+        let n = self.get_knob_norm(id);
+        let readout = if id == KnobId::DropTime {
+            DROP_TIME_READOUT
+        } else {
+            RETURN_TIME_READOUT
+        };
+        let slider = Self::slider_rect(id);
+        let bar = Self::time_bar_rect(id);
+        d.text_centered(
+            slider.0 + slider.2 * 0.5,
+            GRAPH_Y - 8.0,
+            if id == KnobId::DropTime {
+                "DROP"
+            } else {
+                "RETURN"
+            },
+            10.0,
+            MUTED,
+        );
 
-        d.fill_rounded_poly(&Self::drop_l_points(), 8.0, DROP_CHROME);
-        d.stroke_rounded_poly(&Self::drop_l_points(), 8.0, LINE, 1.0);
+        d.rounded_rect(
+            readout.0,
+            slider.1,
+            readout.2,
+            readout.1 + readout.3 - slider.1,
+            8.0,
+            DROP_CHROME,
+        );
+        d.outline(
+            (
+                readout.0,
+                slider.1,
+                readout.2,
+                readout.1 + readout.3 - slider.1,
+            ),
+            LINE,
+        );
         d.rect(bar.0, bar.1, bar.2, bar.3, LINE);
         let fill_h = bar.3 * n.clamp(0.0, 1.0);
         if fill_h > 0.5 {
             d.rect(bar.0, bar.1 + bar.3 - fill_h, bar.2, fill_h, color);
         }
         if let Some(edit) = &self.edit {
-            if edit.target == KnobId::DropTime {
+            if edit.target == id {
                 d.value_edit(edit, color);
                 return;
             }
@@ -387,6 +468,26 @@ impl TapeStopView {
             13.0,
             color,
         );
+        if self.params.time_sync.value() {
+            let bpm = if self.params.tempo_sync.value() {
+                self.telemetry.tempo.load(Ordering::Relaxed)
+            } else {
+                self.params.tempo.value()
+            };
+            let times = self.params.timing(bpm as f64);
+            let seconds = if id == KnobId::DropTime {
+                times.0
+            } else {
+                times.1
+            };
+            d.text_centered(
+                readout.0 + readout.2 * 0.5,
+                readout.1 + readout.3 + 14.0,
+                &format_ms(seconds),
+                10.0,
+                MUTED,
+            );
+        }
         if self.edit.is_none() {
             if let Some((hx, hy)) = self.idle_hover() {
                 if Self::inside(hx, hy, readout) {

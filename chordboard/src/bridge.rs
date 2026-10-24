@@ -8,6 +8,7 @@ pub struct Bridge {
     pub reset: AtomicBool,
     pub visible: AtomicBool,
     pub learned_split: AtomicU32,
+    pub quick_learn: AtomicU32,
 }
 impl Default for Bridge {
     fn default() -> Self {
@@ -18,6 +19,7 @@ impl Default for Bridge {
             reset: AtomicBool::new(false),
             visible: AtomicBool::new(false),
             learned_split: AtomicU32::new(0),
+            quick_learn: AtomicU32::new(0),
         }
     }
 }

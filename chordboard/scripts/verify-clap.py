@@ -70,13 +70,13 @@ def decode(blob):
     return ('other',header.time,header.type)
 
 class Harness:
-    def __init__(self,path):
+    def __init__(self,path,plugin_id=b'com.fergler.chordboard'):
         self.library=C.CDLL(str(path));self.entry=Entry.in_dll(self.library,'clap_entry')
         assert self.entry.init(str(path).encode())
         self.factory_ptr=self.entry.factory(b'clap.plugin-factory')
         self.factory=C.cast(self.factory_ptr,C.POINTER(Factory)).contents
         self.host=Host(Version(1,2,0),None,b'Chordboard test host',b'Fergler',b'',b'1',F(P,P,C.c_char_p)(lambda *_:None),F(None,P)(lambda *_:None),F(None,P)(lambda *_:None),F(None,P)(lambda *_:None))
-        self.ptr=self.factory.create(self.factory_ptr,C.byref(self.host),b'com.fergler.chordboard');assert self.ptr
+        self.ptr=self.factory.create(self.factory_ptr,C.byref(self.host),plugin_id);assert self.ptr
         self.plugin=C.cast(self.ptr,C.POINTER(Plugin)).contents;assert self.plugin.init(self.ptr)
         self.params=C.cast(self.plugin.extension(self.ptr,b'clap.params'),C.POINTER(Params)).contents
         self.ids={}
@@ -263,36 +263,46 @@ def run_strum_tests(path):
         h.close()
 
 def run_split_tests(path):
-    for full,latch in [(False,False),(True,False),(True,True)]:
+    for full,latch,affect in [(full,latch,affect)
+                              for full,latch in [(False,False),(True,False),(True,True)]
+                              for affect in [False,True]]:
         h=Harness(path)
         try:
             h.run([h.parameter('Output protocol',2),
                    h.parameter('Key split',1),h.parameter('First right-hand note',60),
                    h.parameter('Always play bass',1),h.parameter('Always play full chord',int(full)),
-                   h.parameter('Latch',int(latch))])
-            # Melody passes through on its own channel; it cannot become a chord root.
-            events=h.run([midi(0,0x94,72,100)])
-            assert [(e[2],e[3]) for e in events if e[0]=='on']==[(4,72)],events
+                   h.parameter('Melody affects chords',int(affect)),h.parameter('Latch',int(latch))])
+            # Chord keys sound immediately, before any melody key is held.
             events=h.run([midi(0,0x90,48,100)])
             chord=[48,52,55] if full else [48]
             assert [e[3] for e in events if e[0]=='on']==chord,events
-            h.run([midi(0,0x80,48,50),midi(1,0x94,76,100)])
+            for note in [72,76]:
+                events=h.run([midi(0,0x94,note,100)])
+                assert [(e[2],e[3]) for e in events if e[0]=='on']==[(4,note)],events
+            if full and affect:
+                events=h.run([midi(0,0x94,74,100)])
+                assert {e[3] for e in events if e[0]=='on'}=={50,74},events
+                h.run([midi(0,0x84,74,50)])
             events=[]
             for _ in range(40):
                 events.extend(h.run(frames=512))
             assert not any(e[0]=='off' and e[3] in chord for e in events),'held layer timed out'
-            events=h.run([midi(0,0x84,72,50)])
-            assert any(e[0]=='off' and e[2:4]==(4,72) for e in events),events
-            assert not any(e[0]=='off' and e[3] in chord for e in events),'first RH release closed gate'
-            events=h.run([midi(0,0x84,76,50)])
-            assert any(e[0]=='off' and e[2:4]==(4,76) for e in events),events
+            events=h.run([midi(0,0x80,48,50)])
             if latch:
                 assert not any(e[0]=='off' and e[3] in chord for e in events),'latch released layer'
+            else:
+                assert {e[3] for e in events if e[0]=='off'} >= set(chord),events
+            for note in [72,76]:
+                events=h.run([midi(0,0x84,note,50)])
+                assert any(e[0]=='off' and e[2:4]==(4,note) for e in events),events
+                assert not any(e[0]=='on' for e in events),'melody release restarted chord'
+            if latch:
                 events=h.run([midi(0,0x90,50,100)])
                 assert {e[3] for e in events if e[0]=='off'}==set(chord),events
                 assert [e[3] for e in events if e[0]=='on']==[50,54,57],events
             else:
-                assert {e[3] for e in events if e[0]=='off'} >= set(chord),events
+                events=h.run([midi(0,0x94,76,100)])
+                assert [(e[2],e[3]) for e in events if e[0]=='on']==[(4,76)],events
             h.run([midi(0,0xb0,123,0)])
         finally:
             h.close()
@@ -322,7 +332,7 @@ def run_split_tests(path):
             assert sounding==expected,('chord-hand interval',second,sounding,expected)
         finally:
             h.close()
-    print('CLAP split controls passed: melody passthrough, sustained bass/full chord, last-right-key gate, latch replacement, and overflow recovery.')
+    print('CLAP split controls passed: melody passthrough, sustained bass/full chord, chord-key gate, independent melody, melody harmony influence, latch replacement, and overflow recovery.')
 
 def state_value(state,key,value):
     """Edit the typed value already present in NIH-plug's saved state."""
@@ -347,7 +357,7 @@ def arp_state(h,enabled=True):
     state=json.loads(json.dumps(h.baseline_state))
     assert 'arpeggiator-v1' in state['fields'],'installed plugin lacks the new arpeggiator state'
     program=json.loads(state['fields']['arpeggiator-v1'])
-    assert len(program['pages'])==8 and all(len(p['steps'])==96 for p in program['pages'])
+    assert len(program['pages'])==8 and all(len(p['loops'])==4 and all(len(loop['steps'])==24 for loop in p['loops']) for p in program['pages'])
     for key,value in [('arp_enabled',enabled),('arp_page',0),('output_mode',2),
                       ('voice_leading',0),('root_on_select',False),('always_chord',False),
                       ('always_bass',False),('tempo_sync',False),('tempo',120.0),('latch',False)]:
@@ -358,6 +368,8 @@ def arp_state(h,enabled=True):
     # Preserve the manual controller mapping; eliminate unrelated optional links.
     for slot in range(1,16):
         state_value(state,array_parameter(state,'route_source',slot,16),0)
+    for page in program['pages']:
+        page['initialized']=4
     return state,program
 
 def load_program(h,state,program):
@@ -393,10 +405,10 @@ def run_arpeggiator_tests(path):
     try:
         state,program=arp_state(h)
         page_value(state,'arp_pattern',2) # C -> E -> G -> E, four occurrences
-        for step,velocity in zip(program['pages'][0]['steps'],[100,50,125,25]):
+        for step,velocity in zip(program['pages'][0]['loops'][0]['steps'],[100,50,125,25]):
             step['velocity']=velocity
         # Distinct values on the repeated E prove indexing is by occurrence.
-        program['pages'][1]['steps'][0]['velocity']=67
+        program['pages'][1]['loops'][0]['steps'][0]['velocity']=67
         program['pages'][1]['delay']['taps'][0]['feedback']=0.5
         page_value(state,'arp_mode',1,page=1)
         page_value(state,'arp_octaves',3,page=1)
@@ -413,15 +425,42 @@ def run_arpeggiator_tests(path):
         assert json.loads(h.save_state()['fields']['arpeggiator-v1'])==program,'arp/Delay roundtrip changed'
         for status,expected in [('Mute',[(16,60),(12016,67)]),('Skip',[(16,60),(6016,67)])]:
             page_value(state,'arp_pattern',0)
-            program['pages'][0]['steps'][1]['state']=status
+            program['pages'][0]['loops'][0]['steps'][1]['state']=status
             load_program(h,state,program)
             events=timeline(h,20000,[midi(16,0x90,60,100)])
             assert [(e[1],e[3]) for e in attacks(events)]==expected,(status,attacks(events))
             assert_released(events)
-        for step in program['pages'][0]['steps'][:3]:step['state']='Skip'
+        for step in program['pages'][0]['loops'][0]['steps'][:3]:step['state']='Skip'
         load_program(h,state,program)
         assert not attacks(timeline(h,12000,[midi(16,0x90,60,100)])),'all-skipped cycle emitted notes'
-        print('CLAP arpeggiator passed: repeated-note occurrences, exact 1/16 timing, Once completion, Mute versus Skip, all-skipped silence, and eight-Page state roundtrip.')
+        # Four independent loop records must match the installed engine's cycle.
+        state,program=arp_state(h)
+        page_value(state,'arp_octaves',4)
+        for loop,octave,velocity in zip(program['pages'][0]['loops'],[0,1,-1,0],[100,50,75,25]):
+            loop['octave']=octave
+            loop['steps'][0]['velocity']=velocity
+        expected=[60,64,67,72,76,79,48,52,55,60,64,67]
+        load_program(h,state,program)
+        events=timeline(h,75000,[midi(16,0x90,60,100)])
+        ons=attacks(events)
+        assert [(e[1],e[3]) for e in ons]==[(16+i*6000,note) for i,note in enumerate(expected)],('four loop ordering',ons)
+        assert [round(ons[i][4]*127) for i in [0,3,6,9]]==[100,50,75,25],('loop-local adjustments',ons)
+        assert_released(events)
+        # The four loop octave destinations are appended to the routing catalog.
+        final_target=None
+        for index in range(h.params.count(h.ptr)):
+            info=ParamInfo();assert h.params.info(h.ptr,index,C.byref(info))
+            if info.name.decode()=='Destination':final_target=int(info.maximum)
+        assert final_target is not None
+        state_value(state,array_parameter(state,'route_source',1,16),2)
+        state_value(state,array_parameter(state,'route_target',1,16),final_target-3)
+        state_value(state,array_parameter(state,'route_min',1,16),0.75)
+        state_value(state,array_parameter(state,'route_max',1,16),0.75)
+        load_program(h,state,program)
+        events=timeline(h,75000,[midi(16,0x90,60,100)])
+        assert [e[3] for e in attacks(events)]==[84,88,91]+expected[3:],('independent loop octave routing',attacks(events))
+        assert_released(events)
+        print('CLAP arpeggiator passed: repeated-note occurrences, exact 1/16 timing, Once completion, Mute versus Skip, all-skipped silence, eight-Page state roundtrip, four loop variations, and independent octave routing.')
     finally:
         h.close()
 
@@ -429,8 +468,8 @@ def single_note_delay(h,feedback=0.5,gate=25,free_ms=2.0):
     state,program=arp_state(h)
     page_value(state,'arp_sync',False)
     page_value(state,'arp_free_ms',free_ms)
-    for step in program['pages'][0]['steps'][1:3]:step['state']='Skip'
-    program['pages'][0]['steps'][0]['gate']=gate
+    for step in program['pages'][0]['loops'][0]['steps'][1:3]:step['state']='Skip'
+    program['pages'][0]['loops'][0]['steps'][0]['gate']=gate
     delay=program['pages'][0]['delay']
     delay.update(enabled=True,sync=False,sources=1,count=1)
     delay['taps'][0].update(time=10.0,velocity=0.75,feedback=feedback)
@@ -541,7 +580,7 @@ def run_play_contract_tests(path):
                     state,program=arp_state(h,enabled=arp)
                     state_value(state,'strum_enabled',strumming)
                     state_value(state,'always_chord',chord_on_select)
-                    program['pages'][0]['steps'][0]['octave']=1
+                    program['pages'][0]['loops'][0]['steps'][0]['octave']=1
                     load_program(h,state,program)
                     events=h.run([midi(16,0x90,60,100)])
                     expected={60,64,67} if chord_on_select else set()

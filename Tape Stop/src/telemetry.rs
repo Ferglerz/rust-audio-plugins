@@ -3,6 +3,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 pub struct TapeStopTelemetry {
+    pub tempo: AtomicF32,
+    pub effective_drop: AtomicF32,
+    pub effective_return: AtomicF32,
     pub speed_l: AtomicF32,
     pub speed_r: AtomicF32,
     pub is_braking: AtomicBool,
@@ -20,6 +23,9 @@ pub struct TapeStopTelemetry {
 impl TapeStopTelemetry {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
+            tempo: AtomicF32::new(120.0),
+            effective_drop: AtomicF32::new(0.5),
+            effective_return: AtomicF32::new(0.5),
             speed_l: AtomicF32::new(1.0),
             speed_r: AtomicF32::new(1.0),
             is_braking: AtomicBool::new(false),

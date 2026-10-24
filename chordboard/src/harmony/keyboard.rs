@@ -21,17 +21,25 @@ fn degree_quality(scale: u8, column: usize) -> u8 {
         7 => 1,
         _ => scale,
     };
-    let tones = scale_tones(parent);
     let root = degree_root(scale, column) % 12;
-    let degree = tones.iter().position(|&n| n == root).unwrap_or(0);
-    let third = (tones[(degree + 2) % 7] + 12 - root) % 12;
-    let fifth = (tones[(degree + 4) % 7] + 12 - root) % 12;
-    match (third, fifth) {
+    scale_quality(parent, root).unwrap_or(0)
+}
+
+/// Diatonic triad for an actual pitch class relative to the selected tonic.
+/// Pentatonic notes use the triads of their parent scale.
+pub fn scale_quality(scale: u8, relative: u8) -> Option<u8> {
+    if !scale_tones(scale).contains(&relative) { return None; }
+    let parent = match scale { 6 => 0, 7 => 1, _ => scale };
+    let tones = scale_tones(parent);
+    let degree = tones.iter().position(|&n| n == relative)?;
+    let third = (tones[(degree + 2) % tones.len()] + 12 - relative) % 12;
+    let fifth = (tones[(degree + 4) % tones.len()] + 12 - relative) % 12;
+    Some(match (third, fifth) {
         (3, 6) => 5,
         (3, 7) => 1,
         (4, 8) => 6,
         _ => 0,
-    }
+    })
 }
 
 fn shade(quality: u8, brighter: bool) -> u8 {
