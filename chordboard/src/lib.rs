@@ -3,6 +3,7 @@ pub mod arpeggiator;
 mod bridge;
 pub mod engine;
 pub mod harmony;
+pub mod midi_fx;
 mod midi_learn;
 pub mod params;
 mod ui;
@@ -168,7 +169,7 @@ impl Chordboard {
         if self.params.tempo_sync.value() {
             host_tempo.unwrap_or(120.0)
         } else {
-            self.params.tempo.value() as f64
+            crate::midi_learn::float_value(&self.params, crate::midi_learn::TEMPO) as f64
         }
     }
     fn detect_mpe_input(&self, event: &NoteEvent<()>) -> Option<bool> {
@@ -311,6 +312,30 @@ impl Chordboard {
 impl Plugin for Chordboard {
     fn filter_state(state: &mut PluginState) {
         use nih_plug::wrapper::state::ParamValue;
+        if state
+            .fields
+            .get("global-controls-version")
+            .is_none_or(|v| v != "1")
+        {
+            // Move assignments only: old absolute parameters/pending values retain
+            // their original meaning, while the new controls start neutral.
+            for (old, new) in [(1, 14), (3, 10)] {
+                for prefix in ["quick-midi-map-v1", "quick-midi-step-v1"] {
+                    if let Some(value) = state.fields.get(&format!("{prefix}_{old}")).cloned() {
+                        state
+                            .fields
+                            .entry(format!("{prefix}_{new}"))
+                            .or_insert(value);
+                    }
+                }
+                state
+                    .fields
+                    .insert(format!("quick-midi-map-v1_{old}"), "0".into());
+            }
+            state
+                .fields
+                .insert("global-controls-version".into(), "1".into());
+        }
         state
             .params
             .entry("bass_split".into())
@@ -780,6 +805,85 @@ mod protocol_tests {
             assert!(matches!(state.params["output_mode"], ParamValue::I32(0)));
         }
     }
+    #[test]
+    fn global_control_migration_moves_assignments_without_reinterpreting_legacy_values() {
+        let mut state = PluginState {
+            version: "0.1.0".into(),
+            params: Default::default(),
+            fields: Default::default(),
+        };
+        state.fields.insert("schema-version".into(), "2".into());
+        state.params.insert("inversion".into(), ParamValue::I32(2));
+        state.params.insert("spread".into(), ParamValue::I32(3));
+        for (key, value) in [
+            ("quick-midi-map-v1_1", "1001"),
+            ("quick-midi-step-v1_1", "true"),
+            ("quick-midi-value-v1_1", "99101"),
+            ("quick-midi-map-v1_3", "1003"),
+            ("quick-midi-step-v1_3", "false"),
+            ("quick-midi-value-v1_3", "99103"),
+            ("quick-midi-map-v1_4", "1004"),
+            ("quick-midi-step-v1_4", "true"),
+            ("quick-midi-value-v1_4", "99104"),
+            ("quick-midi-map-v1_9", "1009"),
+            ("quick-midi-step-v1_9", "false"),
+        ] {
+            state.fields.insert(key.into(), value.into());
+        }
+        Chordboard::filter_state(&mut state);
+        assert_eq!(state.fields["global-controls-version"], "1");
+        assert_eq!(state.fields["quick-midi-map-v1_14"], "1001");
+        assert_eq!(state.fields["quick-midi-step-v1_14"], "true");
+        assert_eq!(state.fields["quick-midi-map-v1_10"], "1003");
+        assert_eq!(state.fields["quick-midi-step-v1_10"], "false");
+        assert_eq!(state.fields["quick-midi-map-v1_1"], "0");
+        assert_eq!(state.fields["quick-midi-map-v1_3"], "0");
+        assert_eq!(state.fields["quick-midi-value-v1_1"], "99101");
+        assert_eq!(state.fields["quick-midi-value-v1_3"], "99103");
+        assert!(!state.fields.contains_key("quick-midi-value-v1_14"));
+        assert!(!state.fields.contains_key("quick-midi-value-v1_10"));
+        assert_eq!(state.fields["quick-midi-map-v1_4"], "1004");
+        assert_eq!(state.fields["quick-midi-step-v1_4"], "true");
+        assert_eq!(state.fields["quick-midi-value-v1_4"], "99104");
+        assert_eq!(state.fields["quick-midi-map-v1_9"], "1009");
+        assert_eq!(state.fields["quick-midi-step-v1_9"], "false");
+        assert!(matches!(state.params["inversion"], ParamValue::I32(2)));
+        assert!(matches!(state.params["spread"], ParamValue::I32(3)));
+        let migrated = serde_json::to_value(&state).unwrap();
+        Chordboard::filter_state(&mut state);
+        assert_eq!(serde_json::to_value(&state).unwrap(), migrated);
+    }
+
+    #[test]
+    fn global_control_migration_preserves_existing_destination_assignments() {
+        let mut state = PluginState {
+            version: "0.1.0".into(),
+            params: Default::default(),
+            fields: Default::default(),
+        };
+        state.fields.insert("schema-version".into(), "2".into());
+        for (old, new) in [(1, 14), (3, 10)] {
+            state
+                .fields
+                .insert(format!("quick-midi-map-v1_{old}"), "1000".into());
+            state
+                .fields
+                .insert(format!("quick-midi-step-v1_{old}"), "true".into());
+            state
+                .fields
+                .insert(format!("quick-midi-map-v1_{new}"), "2000".into());
+            state
+                .fields
+                .insert(format!("quick-midi-step-v1_{new}"), "false".into());
+        }
+        Chordboard::filter_state(&mut state);
+        for (old, new) in [(1, 14), (3, 10)] {
+            assert_eq!(state.fields[&format!("quick-midi-map-v1_{old}")], "0");
+            assert_eq!(state.fields[&format!("quick-midi-map-v1_{new}")], "2000");
+            assert_eq!(state.fields[&format!("quick-midi-step-v1_{new}")], "false");
+        }
+    }
+
     #[test]
     fn legacy_strumfield_migration_preserves_links_and_is_idempotent() {
         let mut state = PluginState {

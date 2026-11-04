@@ -75,11 +75,16 @@ fn source_meter_click_opens_routes_and_selection_mode_follows_the_strumfield() {
     for mode in 1..=3 {
         let mut view = view(mode, false);
         let (mut cx, target, changes) = context();
+        assert_eq!(view.selection_mode(), 2);
         click(&mut view, &mut cx, target, ROOT_ON_SELECT);
         assert!(changes
             .borrow()
             .iter()
-            .any(|(p, v)| *p == view.params.root_on_select.as_ptr() && *v == 1.0));
+            .any(|(p, v)| *p == view.params.root_on_select.as_ptr() && *v == 0.0));
+        assert!(changes
+            .borrow()
+            .iter()
+            .any(|(p, v)| *p == view.params.always_chord.as_ptr() && *v == 0.0));
         changes.borrow_mut().clear();
         click(&mut view, &mut cx, target, meter_rect(3));
         assert_eq!(view.panel, Some(Panel::Routes));
@@ -117,7 +122,7 @@ fn route_drag_to(
 }
 #[test]
 fn route_drag_links_only_on_drop_and_never_moves_the_destination_control() {
-    for (source, id) in [(0, "length_ms"), (3, "spread"), (8, "humanize")] {
+    for (source, id) in [(0, "length_ms"), (3, "velocity_scale"), (8, "complexity")] {
         let mut view = view(2, false);
         if id == "humanize" {
             open_arp(&mut view);
@@ -358,7 +363,15 @@ fn route_drag_with_no_free_slots_does_not_overwrite_an_unrelated_link() {
         );
     }
     let (mut cx, entity, changes) = context();
-    route_drag_to(&mut view, &mut cx, entity, 1, 200.0, PIANO_KEYS.1 + 20.0); // Spread; every slot is assigned.
+    let r = globals::global_rect("velocity_scale");
+    route_drag_to(
+        &mut view,
+        &mut cx,
+        entity,
+        1,
+        r.0 + r.2 * 0.5,
+        r.1 + r.3 * 0.5,
+    );
     assert!(changes.borrow().is_empty());
     assert!(view.status.starts_with("All 16 routes"));
     assert!(view.panel.is_none());
@@ -375,12 +388,9 @@ fn arp_repeat_choice_keeps_the_manual_field_expandable() {
     assert_eq!(view.expand_target, 1.0);
 }
 #[test]
-fn modulator_drop_targets_include_arp_order_and_manual_sweep() {
-    for (mode, id) in [(1, "arp_pattern"), (2, "x")] {
+fn modulator_drop_targets_include_global_complexity_and_manual_sweep() {
+    for (mode, id) in [(1, "complexity"), (2, "x")] {
         let mut view = view(mode, false);
-        if id == "arp_pattern" {
-            open_arp(&mut view);
-        }
         let (mut cx, entity, changes) = context();
         let target = crate::engine::routing::TARGETS
             .iter()
@@ -641,7 +651,7 @@ fn arp_position_is_a_unipolar_source_and_mod_lanes_remain_additive() {
     view.route_slot = 3;
     let target_id = crate::engine::routing::TARGETS
         .iter()
-        .position(|t| t.id == "rate")
+        .position(|t| t.id == "velocity")
         .unwrap();
     Arc::get_mut(&mut view.params).unwrap().routes[3].target = IntParam::new(
         "Target",
@@ -666,9 +676,14 @@ fn arp_position_is_a_unipolar_source_and_mod_lanes_remain_additive() {
 }
 
 #[test]
-fn arp_pages_and_octaves_are_routable_without_affecting_manual_octaves() {
+fn tracker_row_settings_are_not_route_targets_and_loop_edits_keep_manual_octaves() {
+    use crate::engine::routing::{available_targets, TARGETS};
     let mut view = view(2, false);
+    Arc::get_mut(&mut view.params).unwrap().octaves =
+        IntParam::new("Octaves", 3, IntRange::Linear { min: 1, max: 4 });
     open_arp(&mut view);
+    let available: Vec<_> = available_targets().map(|(_, t)| t.id).collect();
+    let targets = view.route_targets();
     for id in [
         "arp_page",
         "arp_octaves",
@@ -676,51 +691,71 @@ fn arp_pages_and_octaves_are_routable_without_affecting_manual_octaves() {
         "humanize",
         "swing",
         "rate",
-        "octaves",
+        "gate",
+        "arp_sync",
+        "arp_free_ms",
+        "arp_loop_1_octave",
+        "arp_loop_2_octave",
+        "arp_loop_3_octave",
+        "arp_loop_4_octave",
     ] {
         assert!(
-            view.route_targets()
-                .iter()
-                .any(|(i, _)| crate::engine::routing::TARGETS[*i].id == id),
-            "missing {id}"
+            TARGETS.iter().any(|t| t.id == id),
+            "legacy target ID missing: {id}"
         );
+        assert!(
+            !available.contains(&id),
+            "row setting must not be host-routable: {id}"
+        );
+        assert!(!targets.iter().any(|(i, _)| TARGETS[*i].id == id));
     }
-    let arp = view
-        .route_targets()
-        .into_iter()
-        .find(|(i, _)| crate::engine::routing::TARGETS[*i].id == "arp_octaves")
+    for id in [
+        "octaves",
+        "base_inversion",
+        "complexity",
+        "velocity_scale",
+        "gate_scale",
+        "transpose",
+    ] {
+        assert!(available.contains(&id), "global target unavailable: {id}");
+        assert!(targets.iter().any(|(i, _)| TARGETS[*i].id == id));
+    }
+    let manual = targets
+        .iter()
+        .find(|(i, _)| TARGETS[*i].id == "octaves")
         .unwrap()
         .1;
-    let manual = view
-        .route_targets()
-        .into_iter()
-        .find(|(i, _)| crate::engine::routing::TARGETS[*i].id == "octaves")
-        .unwrap()
-        .1;
-    assert!(hit(ARP_SURFACE, arp.0, arp.1));
     assert!(!hit(ARP_SURFACE, manual.0, manual.1));
+    let (mut cx, target, changes) = context();
+    click(&mut view, &mut cx, target, arpeggiator::loop_add_rect());
+    let state = view.params.arpeggiator.snapshot();
+    assert_eq!(state.rows[0].settings.octaves, 2);
+    assert_eq!(view.params.octaves.value(), 3);
+    assert!(!changes
+        .borrow()
+        .iter()
+        .any(|(ptr, _)| *ptr == view.params.octaves.as_ptr()));
 }
 
 #[test]
-fn delay_slide_over_hides_keyboard_destinations_and_keeps_arp_destinations() {
+fn delay_fx_page_hides_performance_destinations_and_restores_them_on_return() {
+    use crate::engine::routing::TARGETS;
     let mut view = view(2, false);
     let (mut cx, target, _) = context();
+    assert!(view
+        .route_targets()
+        .iter()
+        .any(|(i, _)| TARGETS[*i].id == "output_channel"));
     click(&mut view, &mut cx, target, arpeggiator::delay_rect());
     view.tick_arp_editor(pleasant_ui::page_slide::DURATION);
-    for (_, r) in view.route_targets() {
-        assert!(
-            !hit(PIANO_SURFACE, r.0 + r.2 * 0.5, r.1 + r.3 * 0.5),
-            "covered route target {r:?}"
-        );
+    assert!(view.route_targets().is_empty());
+    click(&mut view, &mut cx, target, midi_fx::PERFORMANCE_TAB);
+    view.tick_arp_editor(pleasant_ui::page_slide::DURATION);
+    let targets = view.route_targets();
+    assert!(targets
+        .iter()
+        .any(|(i, _)| TARGETS[*i].id == "output_channel"));
+    for id in globals::GLOBAL_IDS {
+        assert!(targets.iter().any(|(i, _)| TARGETS[*i].id == id));
     }
-    assert!(view
-        .route_targets()
-        .iter()
-        .any(|(i, _)| crate::engine::routing::TARGETS[*i].id == "arp_page"));
-    click(&mut view, &mut cx, target, arpeggiator::delay_rect());
-    view.tick_arp_editor(pleasant_ui::page_slide::DURATION);
-    assert!(view
-        .route_targets()
-        .iter()
-        .any(|(i, _)| crate::engine::routing::TARGETS[*i].id == "arp_page"));
 }

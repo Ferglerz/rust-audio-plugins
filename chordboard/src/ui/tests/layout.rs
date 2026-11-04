@@ -84,18 +84,13 @@ fn self_modulation_is_rejected_by_drag_and_both_route_menus() {
     assert!(changes.borrow().is_empty());
 }
 #[test]
-fn relocated_transpose_and_tempo_targets_fit_their_modules() {
-    for mpe in [false, true] {
-        let module = CHORDS_SURFACE;
-        let first = transpose_control_rect(mpe, 0);
-        let last = transpose_control_rect(mpe, 4);
-        assert!(first.0 > ORDER.0 + ORDER.2);
-        assert_eq!(first.0, TRANSPOSE.0);
-        assert_eq!(last.0 + last.2, TRANSPOSE.0 + TRANSPOSE.2);
-        for r in (0..TRANSPOSE_STEPS.len()).map(|i| transpose_control_rect(mpe, i)) {
-            assert!(r.0 >= module.0 && r.0 + r.2 <= module.0 + module.2);
-            assert!(r.1 >= module.1 && r.1 + r.3 <= module.1 + MODULE_HEADER_H);
-        }
+fn tempo_targets_fit_the_header() {
+    assert!(TEMPO_CONTROL.2 >= 3.0 * 150.0);
+    let controls = [super::super::midi_fx::PERFORMANCE_TAB, super::super::midi_fx::FX_TAB,
+        METER_NUM, METER_DEN, TEMPO_SYNC, TEMPO_CONTROL, APPEARANCE];
+    for pair in controls.windows(2) {
+        assert!(pair[0].0 + pair[0].2 + 8.0 <= pair[1].0);
+        assert_eq!(pair[0].1 + pair[0].3 * 0.5, pair[1].1 + pair[1].3 * 0.5);
     }
     for r in [TEMPO_SYNC, TEMPO_CONTROL] {
         assert!(r.0 >= 0.0 && r.0 + r.2 < APPEARANCE.0);
@@ -244,12 +239,16 @@ fn scale_layout_pointer_and_typing_resolve_the_same_notes_without_overlapping_ti
 }
 #[test]
 fn compact_layout_preserves_keyboard_velocity_heights_and_memory_gap() {
-    assert_eq!(PIANO_SURFACE.3, 248.0);
+    assert!(PIANO_LEADING.1 - PIANO_SURFACE.1 <= 28.0);
+    assert_eq!(PIANO_KEYS.3, 60.0);
     assert_eq!(PERF_SURFACE.3, CHORDS_SURFACE.3);
     let tile = key_rect(KEY_COLUMNS * 2);
     assert_eq!(memory_rect(0).1 - tile.1 - tile.3, 10.0);
     assert!(tile.3 / tile.2 < 1.3);
-    assert_eq!(PIANO_SURFACE.2, MAIN_W - 32.0);
+    assert_eq!(PIANO_SURFACE.2, W - 32.0);
+    assert_eq!(PIANO_SURFACE.0 + PIANO_SURFACE.2, MOD_SURFACE.0 + MOD_SURFACE.2);
+    assert_eq!(MOD_SURFACE.1 + MOD_SURFACE.3, GLOBAL_SURFACE.1 + GLOBAL_SURFACE.3);
+    assert_eq!(PIANO_KEYS.0 + PIANO_KEYS.2, W - 32.0);
     let first = key_rect(0);
     let last = memory_rect(MEMORY_COUNT - 1);
     let body_top = CHORDS_SURFACE.1 + MODULE_HEADER_H;
@@ -396,7 +395,7 @@ fn split_drag_repairs_extreme_loaded_boundaries() {
 }
 #[test]
 fn module_header_controls_fit_inline_without_overlap() {
-    let chords = vec![Menu::Key.trigger_rect(), ORDER, TRANSPOSE];
+    let chords = vec![Menu::Key.trigger_rect(), ORDER, ROW_CONTEXT];
     for (module, title_width, controls) in [(CHORDS_SURFACE, 78.0, chords)] {
         let mut right = module.0 + title_width;
         for r in controls {
@@ -451,7 +450,7 @@ fn strum_header_controls_remain_adjacent_through_expansion() {
         assert_eq!(zoom.0 - latch.0 - latch.2, 8.0);
         assert_eq!(zoom.1 + zoom.3 * 0.5, latch.1 + latch.3 * 0.5);
     }
-    assert_eq!(initial_editor_size(), (W as u32, H as u32));
+    assert_eq!(initial_editor_size(), (EDITOR_W as u32, H as u32));
 }
 
 #[test]
@@ -531,4 +530,60 @@ fn arp_editor_bypass_is_local_and_old_header_location_is_inactive() {
             )]
         );
     }
+}
+
+#[test]
+fn global_footer_fits_short_host_windows_and_hit_testing_uses_the_same_scale() {
+    for (width, height) in [
+        (EDITOR_W, H),
+        (EDITOR_W, H - 200.0),
+        (EDITOR_W * 0.6, H),
+        (EDITOR_W * 1.4, H * 0.7),
+    ] {
+        let scale = editor_scale(width, height);
+        assert!(EDITOR_W * scale <= width + 0.001);
+        assert!(H * scale <= height + 0.001);
+        let r = globals::global_rect("gate_scale");
+        let x = r.0 + r.2 * 0.5;
+        let y = r.1 + r.3 * 0.5;
+        let local = pleasant_ui::local_xy(
+            0.0,
+            0.0,
+            scale * EDITOR_W,
+            EDITOR_W,
+            (x + CONTENT_X) * scale,
+            y * scale,
+        )
+        .unwrap();
+        assert!((local.0 - CONTENT_X - x).abs() < 0.001 && (local.1 - y).abs() < 0.001);
+        assert!((PIANO_SURFACE.1 + PIANO_SURFACE.3) * scale < height);
+    }
+}
+
+#[test]
+fn row_context_has_no_hidden_transpose_action() {
+    let mut view = view(2, false);
+    let (mut cx, target, changes) = context();
+    click(&mut view, &mut cx, target, ROW_CONTEXT);
+    assert!(changes.borrow().is_empty());
+}
+
+#[test]
+fn chord_readout_follows_complexity_without_changing_saved_recipe() {
+    let mut view = view(0, false);
+    let mut engine = crate::engine::Engine::default();
+    let config = crate::engine::Config::default();
+    engine.configure(config, &mut |_| {});
+    engine.midi_note(true, 0, 60, 0.8, &mut |_| {});
+    let saved = engine.snapshot().captured;
+    for (complexity, expected) in [(0, "C"), (1, "C"), (2, "Cmaj7"), (3, "Cmaj9"),
+        (4, "Cmaj9(add11)"), (5, "Cmaj9(add11,add13)"), (1, "C"), (0, "C")] {
+        engine.configure(crate::engine::Config { complexity, ..config }, &mut |_| {});
+        view.snapshot = engine.snapshot();
+        assert_eq!(view.chord_readout(), expected);
+        assert_eq!(view.snapshot.captured, saved);
+    }
+    engine.configure(crate::engine::Config { complexity: 3, inversion: 1, transpose: 2, ..config }, &mut |_| {});
+    view.snapshot = engine.snapshot();
+    assert_eq!(view.chord_readout(), "Dmaj9/F#");
 }

@@ -1,6 +1,11 @@
 //! Fixed-capacity harmonic resolution. No allocation or host/UI dependencies.
+mod globals;
 mod keyboard;
 mod spelling;
+pub use globals::{
+    custom_degree_note, custom_degree_pitch, degree_palette, resolve_chord, resolve_loop_chord,
+    rotate_voicing, GlobalHarmony,
+};
 pub use keyboard::*;
 pub use spelling::*;
 
@@ -257,11 +262,37 @@ pub fn lead(
     furthest_dominant: bool,
     echoes: &[u8],
 ) -> Notes {
+    lead_with_globals(
+        chord,
+        spread,
+        previous,
+        previous_notes,
+        base,
+        furthest_dominant,
+        echoes,
+        GlobalHarmony::default(),
+    )
+}
+
+/// Voice-leading candidates use the same effective harmony as direct playback.
+/// The stored recipes remain unchanged; globals affect both pitch content and
+/// voicing before a candidate is scored.
+#[allow(clippy::too_many_arguments)]
+pub fn lead_with_globals(
+    chord: SavedChord,
+    spread: u8,
+    previous: SavedChord,
+    previous_notes: Notes,
+    base: Notes,
+    furthest_dominant: bool,
+    echoes: &[u8],
+    global: GlobalHarmony,
+) -> Notes {
     if previous_notes.len == 0 || base.len == 0 {
         return base;
     }
-    let old_tones = recipe_intervals(previous);
-    let tones = recipe_intervals(chord);
+    let old_tones = globals::complexity_intervals(previous, global);
+    let tones = globals::complexity_intervals(chord, global);
     // Recognize major/dominant harmony resolving down a fifth to major or minor.
     let dominant = (previous.root as i16 + previous.transpose as i16
         - chord.root as i16
@@ -297,13 +328,14 @@ pub fn lead(
     for inversion in 0..tones.len {
         for octave in [-24i16, -12, 0, 12] {
             let transpose = chord.transpose as i16 + octave;
-            let candidate = voice_recipe(
+            let candidate = resolve_chord(
                 SavedChord {
                     transpose: transpose as i8,
                     inversion: inversion as u8,
+                    spread,
                     ..chord
                 },
-                spread,
+                global,
             );
             if candidate.len != tones.len
                 || candidate.len != base.len
@@ -516,9 +548,11 @@ mod scale_tests {
         for mode in 8..SCALE_NAMES.len() as u8 {
             for root in 0..12 {
                 // A power chord is in key exactly when both root and fifth are.
-                assert_eq!(in_key(root, 11, 0, mode),
+                assert_eq!(
+                    in_key(root, 11, 0, mode),
                     scale_tones(mode).contains(&root)
-                        && scale_tones(mode).contains(&((root + 7) % 12)));
+                        && scale_tones(mode).contains(&((root + 7) % 12))
+                );
             }
         }
         assert_eq!(note_name_in_key(3, 0, 14, 0), "D#");
@@ -808,6 +842,22 @@ pub fn chord_name_in_key(chord: SavedChord, key: u8, scale: u8, preference: i32)
     let pitch = (chord.root as i16 + chord.transpose as i16).rem_euclid(12) as u8;
     chord_name_with_root(chord, &note_name_in_key(pitch, key, scale, preference))
 }
+/// Name the same complexity-resolved tones used by playback, without changing
+/// the saved recipe. The captured recipe already includes global transpose.
+pub fn resolved_chord_name_in_key(chord: SavedChord, globals: GlobalHarmony, preference: i32) -> String {
+    if globals.complexity == 0 {
+        return chord_name_in_key(chord, globals.key, globals.scale, preference);
+    }
+    let pitch = (chord.root as i16 + chord.transpose as i16).rem_euclid(12) as u8;
+    let root = note_name_in_key(pitch, globals.key, globals.scale, preference);
+    let tones = globals::complexity_intervals(chord, globals);
+    let mut base = Notes::default();
+    for &tone in tones.as_slice().iter().filter(|&&tone| tone < 12) {
+        base.push(tone as i16);
+    }
+    chord_name_from_intervals(&root, base, tones)
+}
+
 fn chord_name_with_root(chord: SavedChord, root: &str) -> String {
     let base = intervals(
         chord.quality,
@@ -816,6 +866,10 @@ fn chord_name_with_root(chord: SavedChord, root: &str) -> String {
             .map(|n| (n as i16 - chord.root as i16).rem_euclid(12) as u8),
     );
     let tones = recipe_intervals(chord);
+    chord_name_from_intervals(root, base, tones)
+}
+
+fn chord_name_from_intervals(root: &str, base: Notes, tones: Notes) -> String {
     let has = |n| base.as_slice().contains(&n) && tones.as_slice().contains(&n);
     let resolved_has = |n| tones.as_slice().contains(&n);
     let sus = if has(2) && !has(3) && !has(4) {

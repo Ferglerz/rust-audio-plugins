@@ -7,6 +7,7 @@ pub(super) type Changes = Rc<RefCell<Vec<(ParamPtr, f32)>>>;
 pub(super) fn view(mode: i32, mpe: bool) -> ChordboardView {
     let mut view = ChordboardView::new(
         Arc::new(ChordboardParams {
+            scale_layout: IntParam::new("Layout", 0, IntRange::Linear { min: 0, max: 2 }),
             output_mode: IntParam::new(
                 "Output protocol",
                 if mpe { 1 } else { 2 },
@@ -17,11 +18,14 @@ pub(super) fn view(mode: i32, mpe: bool) -> ChordboardView {
         Arc::new(Bridge::default()),
         Arc::new(PreviewContext),
     );
-    Arc::get_mut(&mut view.params).unwrap().arp_pages[0].arp_mode = IntParam::new(
-        "Arp repeat",
-        if mode == 1 { 0 } else { 2 },
-        IntRange::Linear { min: 0, max: 3 },
-    );
+    view.params.arpeggiator.edit(|state| {
+        state.rows[0].settings.mode = if mode == 1 {
+            crate::arpeggiator::ArpMode::Once
+        } else {
+            crate::arpeggiator::ArpMode::SyncLoop
+        };
+    });
+    view.refresh_arp_editor_params();
     view
 }
 /// The arpeggiator module stays open below the keyboard. Chords stay on their page.
@@ -31,7 +35,7 @@ pub(super) fn context() -> (Context, Entity, Changes) {
     let target = Element::new(&mut cx).entity();
     BackendContext::new(&mut cx)
         .cache()
-        .set_bounds(target, BoundingBox::from_min_max(0.0, 0.0, W, H));
+        .set_bounds(target, BoundingBox::from_min_max(0.0, 0.0, EDITOR_W, H));
     let changes: Changes = Rc::new(RefCell::new(Vec::new()));
     let observed = changes.clone();
     cx.add_global_listener(move |_, event| {
@@ -52,19 +56,17 @@ pub(super) fn event(
     event: WindowEvent,
 ) {
     let mut backend = BackendContext::new_with_event_manager(cx);
-    backend.emit_origin(WindowEvent::MouseMove(x, y));
+    backend.emit_origin(WindowEvent::MouseMove(x + CONTENT_X, y));
     backend.process_events();
     view.window_event(&mut EventContext::new_with_current(cx, target), &event);
     BackendContext::new_with_event_manager(cx).process_events();
 }
 pub(super) fn click(view: &mut ChordboardView, cx: &mut Context, target: Entity, r: Rect) {
     // Ordinary interaction tests operate after the quarter-second page slide.
+    view.refresh_arp_editor_params();
+    view.row_slide.tick(pleasant_ui::page_slide::DURATION);
     view.route_elapsed = pleasant_ui::page_slide::DURATION;
-    view.route_progress = if view.panel == Some(Panel::Routes) {
-        1.0
-    } else {
-        0.0
-    };
+    view.route_progress = if view.panel.is_some() { 1.0 } else { 0.0 };
     let x = r.0 + r.2 / 2.0;
     let y = r.1 + r.3 / 2.0;
     event(
@@ -104,7 +106,7 @@ pub(super) fn click_menu_option(
     index: usize,
 ) {
     let r = if menu == Menu::ArpPattern {
-        arpeggiator::chooser_card_for(index, 7)
+        arpeggiator::chooser_card_for(index, 8)
     } else {
         view.menu_option_rect(menu, index)
     };

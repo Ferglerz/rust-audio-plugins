@@ -1,6 +1,8 @@
 mod arpeggiator;
 mod chords;
+mod custom;
 mod events;
+mod globals;
 mod layout;
 mod menu;
 mod music;
@@ -13,10 +15,12 @@ use menu::Menu;
 mod memories;
 use memories::{MemoryDrag, MemoryUi};
 use routing::RouteDrag;
+mod midi_fx;
 mod midi_learn;
 mod performance;
 mod piano;
 mod render;
+mod row_slide;
 use crate::{
     bridge::Bridge,
     engine::{Command, Snapshot, POINTER_KEY_OFFSET},
@@ -148,8 +152,12 @@ struct ChordboardView {
     icon_font: Cell<Option<FontId>>,
     motion: Vec<style::ControlMotion>,
     action_flash: Option<(Rect, f32)>,
+    button_press_origin: Option<(f32, f32)>,
     memory_ui: MemoryUi,
     arp_ui: arpeggiator::ArpUi,
+    fx_ui: midi_fx::FxUi,
+    row_slide: row_slide::RowSlide,
+    row_frames: std::cell::RefCell<Option<row_slide::RowFrames>>,
     mpe_pulse: f32,
     latch_shift: Option<(bool, Instant, bool)>,
     shift_keys: [bool; 2],
@@ -164,6 +172,7 @@ struct ChordboardView {
     drag: Option<Drag>,
     pad_hover: bool,
     panel: Option<Panel>,
+    slide_panel: Panel,
     edit: Option<ValueEdit<&'static str>>,
     menu: Option<Menu>,
     menu_cursor: usize,
@@ -178,9 +187,7 @@ struct ChordboardView {
     expand_start: f32,
     expand_target: f32,
     expand_elapsed: f32,
-    tracker_open: bool,
     tracker_selection: bool,
-    tracker_restore_expand: bool,
     arp_editor_params: Box<crate::params::ArpPageParams>,
     tracker_proxy_row: usize,
     tracker_proxy_settings: crate::arpeggiator::Settings,
@@ -190,9 +197,6 @@ struct ChordboardView {
     tracker_scroll_target: f32,
     tracker_skip_line_scroll: bool,
     tracker_drag: Option<(usize, usize)>,
-    tracker_progress: f32,
-    tracker_start: f32,
-    tracker_elapsed: f32,
     controls_signature: Vec<f32>,
     slot_signature: [u64; MEMORY_COUNT],
     route_slot: usize,
@@ -233,8 +237,12 @@ impl ChordboardView {
             icon_font: Cell::new(None),
             motion: Vec::new(),
             action_flash: None,
+            button_press_origin: None,
             memory_ui: MemoryUi::default(),
             arp_ui: arpeggiator::ArpUi::default(),
+            fx_ui: midi_fx::FxUi::default(),
+            row_slide: row_slide::RowSlide::default(),
+            row_frames: std::cell::RefCell::new(None),
             mpe_pulse: 0.0,
             latch_shift: None,
             shift_keys: [false; 2],
@@ -249,6 +257,7 @@ impl ChordboardView {
             drag: None,
             pad_hover: false,
             panel: None,
+            slide_panel: Panel::Routes,
             edit: None,
             menu: None,
             menu_cursor: 0,
@@ -263,9 +272,7 @@ impl ChordboardView {
             expand_start: 0.0,
             expand_target: 0.0,
             expand_elapsed: pleasant_ui::page_slide::DURATION,
-            tracker_open: false,
             tracker_selection: false,
-            tracker_restore_expand: false,
             arp_editor_params: Box::new(crate::params::ArpPageParams::from_settings(
                 params.arpeggiator.snapshot().rows[0].settings,
             )),
@@ -277,9 +284,6 @@ impl ChordboardView {
             tracker_scroll_target: 0.0,
             tracker_skip_line_scroll: false,
             tracker_drag: None,
-            tracker_progress: 0.0,
-            tracker_start: 0.0,
-            tracker_elapsed: pleasant_ui::page_slide::DURATION,
             controls_signature: Vec::new(),
             slot_signature: [0; MEMORY_COUNT],
             route_slot: 0,
@@ -360,9 +364,12 @@ impl ChordboardView {
         self.memory_held.fill(false);
         self.request_learn(0);
         self.memory_ui.armed = false;
-        if (self.panel == Some(Panel::Routes)) != (panel == Some(Panel::Routes)) {
+        if self.panel.is_some() != panel.is_some() {
             self.route_start = self.route_progress;
             self.route_elapsed = 0.0;
+        }
+        if let Some(page) = panel {
+            self.slide_panel = page;
         }
         self.panel = panel;
         if panel != Some(Panel::Routes) {
@@ -401,6 +408,7 @@ impl ChordboardView {
     fn base_controls(&self) -> Vec<(Control, Rect)> {
         let mut positions = Vec::new();
         positions.extend(voicing_controls());
+        positions.extend(globals::global_controls());
         positions.push(("root_on_select", ROOT_ON_SELECT));
         positions.extend(output_controls());
         positions.extend(arp_controls());
@@ -512,7 +520,7 @@ impl ChordboardView {
                 .iter()
                 .position(|(_, beats)| (*beats - self.arp_params().rate.value()).abs() < 0.0001)
                 .unwrap_or(3),
-            Menu::ArpPattern => self.arp_params().arp_pattern.value().clamp(0, 6) as usize,
+            Menu::ArpPattern => self.arp_params().arp_pattern.value().clamp(0, 7) as usize,
             Menu::Key => harmony::KEY_CHOICES
                 .iter()
                 .position(|(name, _, _)| *name == self.key_name())
@@ -780,6 +788,8 @@ impl ChordboardView {
     }
     fn can_pad_hover(&self) -> bool {
         self.manual_playing()
+            && !self.fx_ui.open
+            && !self.row_slide.active()
             && !self.arp_editor_editing()
             && self.params.strum_latch.value()
             && self.menu.is_none()
@@ -893,8 +903,11 @@ impl ChordboardView {
         let dt = (now - self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
         self.refresh_arp_editor_params();
-        if !self.params.arp_enabled.value() {
-            self.close_tracker(cx);
+        if self.row_slide.tick(dt) {
+            cx.needs_redraw();
+        }
+        if self.tick_midi_fx(dt) {
+            cx.needs_redraw();
         }
         if self.tick_tracker_scroll(dt) {
             cx.needs_redraw();
@@ -909,22 +922,6 @@ impl ChordboardView {
         if self.tick_arp_editor(dt) {
             cx.needs_redraw();
         }
-        let was_tracker_moving = self.tracker_elapsed < pleasant_ui::page_slide::DURATION;
-        self.tracker_elapsed = (self.tracker_elapsed + dt).min(pleasant_ui::page_slide::DURATION);
-        self.tracker_progress = pleasant_ui::page_slide::position(
-            self.tracker_start,
-            if self.tracker_open { 1.0 } else { 0.0 },
-            self.tracker_elapsed,
-        );
-        if was_tracker_moving || self.tracker_elapsed < pleasant_ui::page_slide::DURATION {
-            cx.needs_redraw();
-        }
-        if !self.tracker_open && self.tracker_progress <= 0.0 && self.tracker_restore_expand {
-            self.tracker_restore_expand = false;
-            if self.expand_target < 0.5 {
-                self.toggle_expand();
-            }
-        }
         if self.selected_modulator.is_some() {
             self.modulator_pulse = (self.modulator_pulse + dt * 3.0) % std::f32::consts::TAU;
             cx.needs_redraw();
@@ -933,11 +930,7 @@ impl ChordboardView {
         self.route_elapsed = (self.route_elapsed + dt).min(pleasant_ui::page_slide::DURATION);
         self.route_progress = pleasant_ui::page_slide::position(
             self.route_start,
-            if self.panel == Some(Panel::Routes) {
-                1.0
-            } else {
-                0.0
-            },
+            if self.panel.is_some() { 1.0 } else { 0.0 },
             self.route_elapsed,
         );
         if was_routing {
@@ -1048,7 +1041,8 @@ impl ChordboardView {
         let voicing_hovered = self
             .hover_pointer()
             .is_some_and(|(x, y)| self.voicing_bounds().is_some_and(|r| hit(r, x, y)));
-        if self.current_chord_key().is_some()
+        if self.snapshot.arp_running
+            || self.current_chord_key().is_some()
             || voicing_hovered
             || self.hover_pointer().is_some_and(|(x, y)| {
                 hit(PIANO_LEADING, x, y) || hit(self.control_octave_bounds(), x, y)
@@ -1070,17 +1064,25 @@ impl View for ChordboardView {
         let was_editing = self.edit.is_some() || self.arp_editor_editing();
         event.map(|_: &Tick, _| self.tick(cx));
         event.map(|scroll: &nih_plug_vizia::PixelScroll, meta| {
+            if self.quick_midi.show {
+                meta.consume();
+                return;
+            }
             let bounds = cx.bounds();
             if let Some((x, y)) = pleasant_ui::local_xy(
                 bounds.x,
                 bounds.y,
-                bounds.w,
-                W,
+                editor_scale(bounds.w, bounds.h) * EDITOR_W,
+                EDITOR_W,
                 cx.mouse().cursorx,
                 cx.mouse().cursory,
             ) {
-                self.tracker_skip_line_scroll =
-                    self.scroll_tracker(x, y, scroll.y * W / bounds.w, true);
+                self.tracker_skip_line_scroll = self.scroll_tracker(
+                    x - CONTENT_X,
+                    y,
+                    scroll.y / editor_scale(bounds.w, bounds.h),
+                    true,
+                );
                 if self.tracker_skip_line_scroll {
                     meta.consume();
                     cx.needs_redraw();
@@ -1088,6 +1090,11 @@ impl View for ChordboardView {
             }
         });
         event.map(|param: &RawParamEvent, meta| {
+            if matches!(param, RawParamEvent::ParametersChanged) {
+                self.refresh_arp_editor_params();
+                cx.needs_redraw();
+                return;
+            }
             if self.arp_row_param_event(param) {
                 meta.consume();
                 cx.needs_redraw();
@@ -1123,7 +1130,7 @@ impl View for ChordboardView {
     }
 }
 pub(crate) fn initial_editor_size() -> (u32, u32) {
-    (W as u32, H as u32)
+    (EDITOR_W as u32, H as u32)
 }
 
 pub fn create(params: Arc<ChordboardParams>, bridge: Arc<Bridge>) -> Option<Box<dyn Editor>> {

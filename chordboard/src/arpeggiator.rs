@@ -11,7 +11,39 @@ pub const PAGES: usize = 8;
 pub const LOOPS: usize = 4;
 pub const LOOP_STEPS: usize = 24;
 pub const STEPS: usize = LOOP_STEPS * LOOPS;
-pub const TAPS: usize = 8;
+pub const CUSTOM_STEPS: usize = 7;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Fill {
+    #[default]
+    Repeat,
+    Evolve,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CustomStep {
+    pub degree: u8,
+    pub octave: i8,
+    pub rest: bool,
+    pub velocity: u8,
+    pub gate: u8,
+}
+impl Default for CustomStep {
+    fn default() -> Self {
+        Self {
+            degree: 1,
+            octave: 0,
+            rest: false,
+            velocity: 100,
+            gate: 100,
+        }
+    }
+}
+pub fn default_custom() -> [CustomStep; CUSTOM_STEPS] {
+    std::array::from_fn(|i| CustomStep {
+        degree: i as u8 + 1,
+        ..CustomStep::default()
+    })
+}
 pub const MODE_NAMES: [&str; 4] = ["Once", "Loop", "Sync Loop", "Aligned Loop"];
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ArpMode {
@@ -31,6 +63,10 @@ impl ArpMode {
 pub struct Settings {
     pub mode: ArpMode,
     pub pattern: u8,
+    pub lock_length: bool,
+    pub steps: u8,
+    pub fill: Fill,
+    pub custom: [CustomStep; CUSTOM_STEPS],
     /// Number of pattern passes (historical parameter ID: arp_octaves).
     pub octaves: u8,
     pub sync: bool,
@@ -44,6 +80,10 @@ impl Default for Settings {
         Self {
             mode: ArpMode::SyncLoop,
             pattern: 0,
+            lock_length: false,
+            steps: 4,
+            fill: Fill::Repeat,
+            custom: default_custom(),
             octaves: 1,
             sync: true,
             rate: 0.25,
@@ -93,88 +133,6 @@ impl Default for Step {
         }
     }
 }
-pub mod source {
-    pub const ARP: u8 = 1;
-    pub const STRUM: u8 = 2;
-    pub const CHORDS: u8 = 4;
-    pub const BASS: u8 = 8;
-    pub const MELODY: u8 = 16;
-}
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct DelayTap {
-    pub enabled: bool,
-    /// Beat interval in sync mode, milliseconds otherwise.
-    pub time: f32,
-    pub velocity: f32,
-    pub feedback: f32,
-    pub pitch: i8,
-    pub fine: f32,
-    /// Bipolar MIDI pan. Ping pong replaces this with alternating hard pan.
-    pub pan: f32,
-    /// Zero = automatic, 1..16 = explicit MIDI channel.
-    pub channel: u8,
-}
-impl Default for DelayTap {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            time: 0.5,
-            velocity: 0.75,
-            feedback: 0.35,
-            pitch: 0,
-            fine: 0.0,
-            pan: 0.0,
-            channel: 0,
-        }
-    }
-}
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct DelaySettings {
-    pub enabled: bool,
-    pub sync: bool,
-    pub ping_pong: bool,
-    /// Join the main voice-leading mode, including sounding echo references.
-    pub voice_leading: bool,
-    /// Resolve each new echo against the chord active at playback time.
-    pub follow_chords: bool,
-    pub sources: u8,
-    pub count: u8,
-    pub taps: [DelayTap; TAPS],
-}
-impl Default for DelaySettings {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            sync: true,
-            ping_pong: false,
-            voice_leading: false,
-            follow_chords: false,
-            sources: source::ARP,
-            count: 1,
-            taps: [DelayTap::default(); TAPS],
-        }
-    }
-}
-impl DelaySettings {
-    pub fn sanitize(&mut self) {
-        self.count = self.count.clamp(1, TAPS as u8);
-        self.sources &= 31;
-        for tap in &mut self.taps {
-            tap.time = finite(tap.time, if self.sync { 0.5 } else { 250.0 }).clamp(
-                if self.sync { 1.0 / 64.0 } else { 1.0 },
-                if self.sync { 16.0 } else { 8000.0 },
-            );
-            tap.velocity = finite(tap.velocity, 0.75).clamp(0.0, 2.0);
-            tap.feedback = finite(tap.feedback, 0.35).clamp(0.0, 0.95);
-            tap.pitch = tap.pitch.clamp(-24, 24);
-            tap.fine = finite(tap.fine, 0.0).clamp(-100.0, 100.0);
-            tap.pan = finite(tap.pan, 0.0).clamp(-1.0, 1.0);
-            tap.channel = tap.channel.min(16);
-        }
-    }
-}
 fn finite(value: f32, default: f32) -> f32 {
     if value.is_finite() {
         value
@@ -186,12 +144,14 @@ fn finite(value: f32, default: f32) -> f32 {
 #[serde(default)]
 pub struct Loop {
     pub octave: i8,
+    pub inversion: i8,
     pub steps: [Step; LOOP_STEPS],
 }
 impl Default for Loop {
     fn default() -> Self {
         Self {
             octave: 0,
+            inversion: 0,
             steps: [Step::default(); LOOP_STEPS],
         }
     }
@@ -206,7 +166,6 @@ pub struct Replacement {
 pub struct Page {
     pub loops: [Loop; LOOPS],
     pub initialized: u8,
-    pub delay: DelaySettings,
     #[serde(skip)]
     pub replacement: Option<Replacement>,
 }
@@ -215,7 +174,6 @@ impl Default for Page {
         Self {
             loops: [Loop::default(); LOOPS],
             initialized: 1,
-            delay: DelaySettings::default(),
             replacement: None,
         }
     }
@@ -225,6 +183,7 @@ impl Page {
         self.initialized = self.initialized.clamp(1, LOOPS as u8);
         for variation in &mut self.loops {
             variation.octave = variation.octave.clamp(-4, 4);
+            variation.inversion = variation.inversion.clamp(-12, 12);
             for step in &mut variation.steps {
                 step.velocity = step.velocity.min(200);
                 step.gate = step.gate.clamp(1, 100);
@@ -236,7 +195,6 @@ impl Page {
                 }
             }
         }
-        self.delay.sanitize();
     }
     pub fn ensure_loops(&mut self, count: usize) -> bool {
         let count = count.clamp(1, LOOPS);
@@ -291,7 +249,14 @@ impl Default for TrackerRow {
 impl TrackerRow {
     fn sanitize(&mut self) {
         self.duration = self.duration.max(1);
-        self.settings.pattern = self.settings.pattern.min(6);
+        self.settings.pattern = self.settings.pattern.min(7);
+        self.settings.steps = self.settings.steps.clamp(1, LOOP_STEPS as u8);
+        for step in &mut self.settings.custom {
+            step.degree = step.degree.clamp(1, 7);
+            step.octave = step.octave.clamp(-4, 4);
+            step.velocity = step.velocity.min(200);
+            step.gate = step.gate.clamp(1, 200);
+        }
         self.settings.octaves = self.settings.octaves.clamp(1, LOOPS as u8);
         self.settings.rate = finite(self.settings.rate, 0.25).clamp(1.0 / 64.0, 2.0);
         self.settings.free_ms = finite(self.settings.free_ms, 125.0).clamp(1.0, 1500.0);
@@ -304,6 +269,7 @@ impl TrackerRow {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct State {
+    pub midi_fx: crate::midi_fx::MidiFxState,
     /// Dynamic composition rows. Audio processing only reads the prepared copy.
     pub rows: Vec<TrackerRow>,
     /// Retained for the old editor's unit fixtures; deliberately omitted from persistence.
@@ -313,6 +279,7 @@ pub struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
+            midi_fx: crate::midi_fx::MidiFxState::default(),
             rows: vec![TrackerRow::default()],
             pages: [Page::default(); PAGES],
         }
@@ -320,6 +287,7 @@ impl Default for State {
 }
 impl State {
     fn sanitize(&mut self) {
+        self.midi_fx.sanitize();
         if self.rows.is_empty() {
             self.rows.push(TrackerRow::default());
         }
@@ -352,7 +320,6 @@ impl State {
             .unwrap_or(0)
             .saturating_add(1)
             .max(1);
-        row.duration = 1;
         let index = selected + 1;
         self.rows.insert(index, row);
         index
@@ -387,6 +354,7 @@ impl State {
 pub type PreparedPage = Page;
 #[derive(Debug)]
 pub struct Prepared {
+    pub midi_fx: crate::midi_fx::MidiFxState,
     pub generation: u64,
     pub restore_epoch: u64,
     pub rows: Vec<TrackerRow>,
@@ -397,6 +365,7 @@ impl Prepared {
         Self {
             generation,
             restore_epoch,
+            midi_fx: state.midi_fx.clone(),
             rows: state.rows.clone(),
             pages: std::array::from_fn(|p| state.pages[p]),
         }

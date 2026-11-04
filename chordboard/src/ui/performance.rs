@@ -12,6 +12,7 @@ impl ChordboardView {
         }
     }
     pub(super) fn draw_tempo_header(&self, d: &mut Draw) {
+        self.icon_button(d, DAW_ALIGNMENT, "DAW align", self.params.daw_alignment.value(), GOLD, style::Icon::AlignedLoop);
         let synced = self.params.tempo_sync.value();
         let (num, den) = self.meter();
         let host_meter = synced && self.snapshot.time_sig_host;
@@ -47,15 +48,15 @@ impl ChordboardView {
             !self.params.strum_enabled.value(),
             TEAL,
             self.hover_amount(bypass) > 0.01,
-            0.0,
+            self.button_press_amount(bypass),
         );
         let disabled = d.disabled;
-        d.disabled = !self.params.strum_enabled.value();
+        d.disabled = false;
         d.font = self.font.get();
         d.text(
             surface.0 + 48.0,
             module_title_y(PERF_SURFACE.1, MODULE_TITLE_SIZE),
-            "STRUMFIELD",
+            if self.params.strum_enabled.value() { "STRUMFIELD" } else { "STRUMFIELD · Off" },
             MODULE_TITLE_SIZE,
             TEXT,
         );
@@ -275,7 +276,7 @@ impl ChordboardView {
     }
 
     pub(super) fn draw_meters(&self, d: &mut Draw) {
-        use crate::engine::routing::SOURCE_SHORT;
+        use crate::engine::routing::SOURCES;
         d.font = self.font.get();
         d.text(
             MOD_SURFACE.0 + 10.0,
@@ -284,7 +285,8 @@ impl ChordboardView {
             MODULE_TITLE_SIZE,
             TEXT,
         );
-        for (i, label) in SOURCE_SHORT.iter().enumerate() {
+        for (i, label) in SOURCES[1..].iter().enumerate() {
+            let label = if i == 6 { "Input velocity" } else if i == 11 { "Arp position" } else { label };
             let r = meter_rect(i);
             let value = self.snapshot.sources[i];
             let bypassed = self.params.modulators[i].bypass.value();
@@ -384,7 +386,7 @@ impl ChordboardView {
             style::MODULATOR_ICONS[i].draw(d, x + 8.0, r.1 + 14.0, color);
             d.text_right(
                 modulator_bypass_rect(i).0 - 5.0,
-                r.1 + 14.0 + TEXT_SMALL * 0.35,
+                r.1 + 37.0,
                 label,
                 TEXT_SMALL,
                 color,
@@ -423,6 +425,9 @@ impl ChordboardView {
                     ),
                     true,
                 );
+            }
+            if bypassed {
+                d.line(center.0 - 6.0, center.1 + 6.0, center.0 + 6.0, center.1 - 6.0, MUTED, 1.5);
             }
             d.power_icon_scaled(
                 center.0,

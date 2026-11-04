@@ -3,29 +3,177 @@ use super::support::*;
 
 fn first_chord_cell() -> Rect {
     let r = tracker::row_rect(0, 0.0);
-    (r.0 + 50.0, r.1, r.2 - 198.0, r.3)
+    (r.0 + 50.0, r.1, r.2 - 202.0, r.3)
+}
+
+#[test]
+fn row_slide_keeps_tracker_live_and_blocks_moving_controls_until_settled() {
+    let mut view = view(2, false);
+    view.params.arpeggiator.edit(|state| {
+        state.rows[0].settings.free_ms = 333.0;
+        state.add_row_after(0);
+        state.rows[1].settings.free_ms = 777.0;
+    });
+    let (mut cx, target, changes) = context();
+    let second = tracker::row_rect(1, 0.0);
+    event(
+        &mut view,
+        &mut cx,
+        target,
+        second.0 + 65.0,
+        second.1 + 18.0,
+        WindowEvent::MouseDown(MouseButton::Left),
+    );
+    assert!(view.row_slide.active());
+    assert_eq!(view.arp_ui.edit_page, 1);
+    assert_eq!(view.arp_params().arp_free_ms.value(), 777.0);
+    let control = globals::global_rect("velocity_scale");
+    let (x, y) = (control.0 + control.2 * 0.5, control.1 + 84.0);
+    event(
+        &mut view,
+        &mut cx,
+        target,
+        x,
+        y,
+        WindowEvent::MouseDown(MouseButton::Left),
+    );
+    assert!(view.drag.is_none());
+    assert!(changes.borrow().is_empty());
+
+    // A second selection can interrupt the slide and immediately binds its row.
+    let first = tracker::row_rect(0, 0.0);
+    event(
+        &mut view,
+        &mut cx,
+        target,
+        first.0 + 65.0,
+        first.1 + 18.0,
+        WindowEvent::MouseDown(MouseButton::Left),
+    );
+    assert!(view.row_slide.active());
+    assert_eq!(view.arp_ui.edit_page, 0);
+    assert_eq!(view.arp_params().arp_free_ms.value(), 333.0);
+    view.row_slide.tick(pleasant_ui::page_slide::DURATION);
+    event(
+        &mut view,
+        &mut cx,
+        target,
+        x,
+        y,
+        WindowEvent::MouseDown(MouseButton::Left),
+    );
+    assert!(matches!(view.drag, Some(Drag::Control(_))));
+    event(
+        &mut view,
+        &mut cx,
+        target,
+        x,
+        y,
+        WindowEvent::MouseUp(MouseButton::Left),
+    );
+    assert_eq!(
+        view.params.arpeggiator.snapshot().rows[1].settings.free_ms,
+        777.0
+    );
+}
+
+#[test]
+fn tracker_duplicate_inserts_the_complete_selected_row_with_a_new_identity() {
+    let mut view = view(2, false);
+    view.params.arpeggiator.edit(|s| {
+        s.add_row_after(0);
+        s.rows[0].duration = 7;
+        s.rows[0].chord = Some(harmony::parse_chord_symbol("Dm9").unwrap());
+        s.rows[0].settings.pattern = 4;
+        s.rows[0].page.loops[0].steps[3].velocity = 41;
+    });
+    let before = view.params.arpeggiator.snapshot().rows;
+    let (mut cx, target, changes) = context();
+    click(&mut view, &mut cx, target, tracker::action_rect(0));
+    let after = view.params.arpeggiator.snapshot().rows;
+    assert_eq!(after.len(), 3);
+    assert_eq!(after[0], before[0]);
+    assert_eq!(after[2], before[1]);
+    assert!(before.iter().all(|row| row.id != after[1].id));
+    let mut expected = before[0].clone();
+    expected.id = after[1].id;
+    assert_eq!(after[1], expected);
+    assert_eq!(view.arp_ui.edit_page, 1);
+    assert!(changes.borrow().is_empty());
+}
+
+#[test]
+fn tracker_add_is_centered_below_rows_and_inherits_the_last_rows_loops() {
+    let mut view = view(2, false);
+    view.params.arpeggiator.edit(|s| {
+        s.add_row_after(0);
+        s.rows[0].duration = 2;
+        s.rows[1].duration = 9;
+    });
+    let button = tracker::add_row_rect(2, 0.0);
+    let last = tracker::row_rect(1, 0.0);
+    assert!(button.1 > last.1 + last.3);
+    assert_eq!(
+        button.0 + button.2 * 0.5,
+        TRACKER_SURFACE.0 + TRACKER_SURFACE.2 * 0.5
+    );
+    let (mut cx, target, _) = context();
+    click(&mut view, &mut cx, target, button);
+    let rows = view.params.arpeggiator.snapshot().rows;
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[2].duration, 9);
+    assert_eq!(view.arp_ui.edit_page, 2);
+}
+
+#[test]
+fn tracker_delete_targets_its_row_and_keeps_the_other_selected_row() {
+    let mut view = view(2, false);
+    view.params.arpeggiator.edit(|s| {
+        s.add_row_after(0);
+        s.add_row_after(1);
+        s.rows[1].duration = 8;
+    });
+    let selected = view.params.arpeggiator.snapshot().rows[1].clone();
+    view.arp_ui.edit_page = 1;
+    let (mut cx, target, _) = context();
+    let first = tracker::row_rect(0, 0.0);
+    let delete = tracker::delete_button(first);
+    let plus = tracker::duration_button(first, true);
+    assert!(delete.0 > plus.0 + plus.2);
+    click(&mut view, &mut cx, target, delete);
+    assert_eq!(view.params.arpeggiator.snapshot().rows[0], selected);
+    assert_eq!(view.arp_ui.edit_page, 0);
+    assert!(!view.tracker_selection);
+    click(
+        &mut view,
+        &mut cx,
+        target,
+        tracker::delete_button(tracker::row_rect(1, 0.0)),
+    );
+    assert_eq!(view.params.arpeggiator.snapshot().rows[0], selected);
+    click(&mut view, &mut cx, target, delete);
+    let rows = view.params.arpeggiator.snapshot().rows;
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].chord.is_none());
+    assert_eq!(rows[0].duration, 1);
+    assert_eq!(view.arp_ui.edit_page, 0);
 }
 
 #[test]
 fn tracker_done_exits_chord_selection_without_closing_or_changing_the_row() {
     let mut view = view(2, false);
-    view.tracker_open = true;
-    view.tracker_progress = 1.0;
     let (mut cx, target, _) = context();
     click(&mut view, &mut cx, target, first_chord_cell());
     assert!(view.tracker_selection);
     let rows = view.params.arpeggiator.snapshot().rows;
     click(&mut view, &mut cx, target, tracker::action_rect(4));
     assert!(!view.tracker_selection);
-    assert!(view.tracker_open);
     assert_eq!(view.params.arpeggiator.snapshot().rows, rows);
 }
 
 #[test]
 fn tracker_done_accepts_a_valid_typed_chord_and_ends_editing() {
     let mut view = view(2, false);
-    view.tracker_open = true;
-    view.tracker_progress = 1.0;
     view.tracker_symbol_edit = true;
     view.tracker_symbol = "Dm7".into();
     let (mut cx, target, _) = context();
@@ -33,7 +181,6 @@ fn tracker_done_accepts_a_valid_typed_chord_and_ends_editing() {
     assert!(!view.tracker_symbol_edit);
     assert!(!view.tracker_selection);
     assert!(view.tracker_symbol.is_empty());
-    assert!(view.tracker_open);
     let chord = harmony::parse_chord_symbol("Dm7").unwrap();
     assert_eq!(
         view.params.arpeggiator.snapshot().rows[0].chord,
@@ -47,8 +194,6 @@ fn tracker_done_accepts_a_valid_typed_chord_and_ends_editing() {
 #[test]
 fn tracker_keyboard_assignment_keeps_selection_mode_open_without_audition() {
     let mut view = view(2, false);
-    view.tracker_open = true;
-    view.tracker_progress = 1.0;
     let (mut cx, target, _) = context();
     let row = first_chord_cell();
     click(&mut view, &mut cx, target, row);
@@ -79,8 +224,6 @@ fn tracker_keyboard_assignment_keeps_selection_mode_open_without_audition() {
 #[test]
 fn tracker_row_selection_allows_chord_changes_from_the_row_edge() {
     let mut view = view(2, false);
-    view.tracker_open = true;
-    view.tracker_progress = 1.0;
     view.params.arpeggiator.edit(|s| {
         s.add_row_after(0);
     });
@@ -112,8 +255,6 @@ fn tracker_row_selection_allows_chord_changes_from_the_row_edge() {
 #[test]
 fn tracker_loop_buttons_change_duration_without_starting_chord_selection() {
     let mut view = view(2, false);
-    view.tracker_open = true;
-    view.tracker_progress = 1.0;
     let (mut cx, target, _) = context();
     let row = tracker::row_rect(0, 0.0);
     let initial = view.params.arpeggiator.snapshot().rows[0].duration;
@@ -121,7 +262,7 @@ fn tracker_loop_buttons_change_duration_without_starting_chord_selection() {
         &mut view,
         &mut cx,
         target,
-        (row.0 + row.2 - 40.0, row.1 + 4.0, 28.0, 28.0),
+        tracker::duration_button(row, true),
     );
     assert_eq!(
         view.params.arpeggiator.snapshot().rows[0].duration,
@@ -131,7 +272,7 @@ fn tracker_loop_buttons_change_duration_without_starting_chord_selection() {
         &mut view,
         &mut cx,
         target,
-        (row.0 + row.2 - 120.0, row.1 + 4.0, 28.0, 28.0),
+        tracker::duration_button(row, false),
     );
     assert_eq!(view.params.arpeggiator.snapshot().rows[0].duration, initial);
     assert!(!view.tracker_selection);
@@ -140,8 +281,6 @@ fn tracker_loop_buttons_change_duration_without_starting_chord_selection() {
 #[test]
 fn tracker_double_click_enters_and_validates_chord_symbols() {
     let mut view = view(2, false);
-    view.tracker_open = true;
-    view.tracker_progress = 1.0;
     let (mut cx, target, _) = context();
     let row = first_chord_cell();
     click(&mut view, &mut cx, target, row);
@@ -207,116 +346,24 @@ fn tracker_double_click_enters_and_validates_chord_symbols() {
 }
 
 #[test]
-fn tracker_toggle_cannot_open_from_a_bypassed_arp_but_can_close() {
+fn tracker_remains_editable_when_bypassed_and_strumfield_expanded() {
     let mut view = view(2, false);
     assert!(!view.params.arp_enabled.value());
     view.expand_progress = 1.0;
     view.expand_start = 1.0;
     view.expand_target = 1.0;
-    let (mut cx, target, changes) = context();
-    let toggle = tracker::toggle_rect();
-    for press in [
-        WindowEvent::MouseDown(MouseButton::Left),
-        WindowEvent::MouseDoubleClick(MouseButton::Left),
-        WindowEvent::MouseTripleClick(MouseButton::Left),
-    ] {
-        event(
-            &mut view,
-            &mut cx,
-            target,
-            toggle.0 + toggle.2 / 2.0,
-            toggle.1 + toggle.3 / 2.0,
-            press,
-        );
-        assert!(!view.tracker_open);
-        assert!(!view.tracker_restore_expand);
-        assert_eq!(view.expand_target, 1.0);
-        assert!(changes.borrow().is_empty());
-    }
-    view.tracker_open = true;
-    click(&mut view, &mut cx, target, toggle);
-    assert!(!view.tracker_open);
-}
-
-#[test]
-fn tracker_bypass_button_slides_back_and_cancels_row_interactions() {
-    let mut view = view(2, false);
-    Arc::get_mut(&mut view.params).unwrap().arp_enabled = BoolParam::new("Arpeggiator", true);
-    view.tracker_open = true;
-    view.tracker_progress = 0.7;
-    view.tracker_selection = true;
-    view.tracker_symbol_edit = true;
-    view.tracker_symbol = "Dm".into();
-    let (mut cx, target, changes) = context();
-    click(&mut view, &mut cx, target, arpeggiator::power_rect());
-    assert!(!view.tracker_open);
-    assert_eq!(view.tracker_start, 0.7);
-    assert_eq!(view.tracker_elapsed, 0.0);
-    assert!(!view.tracker_selection);
-    assert!(!view.tracker_symbol_edit);
-    assert!(view.tracker_symbol.is_empty());
-    assert!(changes
-        .borrow()
-        .contains(&(view.params.arp_enabled.as_ptr(), 0.0)));
-}
-
-#[test]
-fn tracker_host_bypass_closes_and_restores_the_expanded_strumfield() {
-    let mut view = view(2, false);
-    Arc::get_mut(&mut view.params).unwrap().arp_enabled = BoolParam::new("Arpeggiator", true);
-    view.tracker_open = true;
-    view.tracker_progress = 1.0;
-    view.tracker_start = 1.0;
-    view.tracker_selection = true;
-    view.tracker_drag = Some((0, 0));
-    view.tracker_restore_expand = true;
     let (mut cx, target, _) = context();
+    click(&mut view, &mut cx, target, tracker::add_row_rect(1, 0.0));
+    assert_eq!(view.params.arpeggiator.snapshot().rows.len(), 2);
+    click(&mut view, &mut cx, target, first_chord_cell());
     view.tick(&mut EventContext::new_with_current(&mut cx, target));
-    assert!(view.tracker_open);
-
-    Arc::get_mut(&mut view.params).unwrap().arp_enabled = BoolParam::new("Arpeggiator", false);
-    for frame in 0..3 {
-        view.last_frame = Instant::now() - std::time::Duration::from_millis(100);
-        view.tick(&mut EventContext::new_with_current(&mut cx, target));
-        assert!(!view.tracker_open);
-        assert!(!view.tracker_selection);
-        assert!(view.tracker_drag.is_none());
-        if frame == 0 {
-            assert!(view.tracker_progress > 0.0 && view.tracker_progress < 1.0);
-        }
-    }
-    assert_eq!(view.tracker_progress, 0.0);
-    assert!(!view.tracker_restore_expand);
+    assert!(view.tracker_selection);
     assert_eq!(view.expand_target, 1.0);
-}
-
-#[test]
-fn tracker_open_collapses_and_remembers_an_expanded_strumfield() {
-    let mut view = view(2, false);
-    Arc::get_mut(&mut view.params).unwrap().arp_enabled = BoolParam::new("Arpeggiator", true);
-    view.expand_progress = 1.0;
-    view.expand_start = 1.0;
-    view.expand_target = 1.0;
-    let (mut cx, target, _) = context();
-    let toggle = (ARP_SURFACE.0 + ARP_SURFACE.2 - 58.0, ARP_SURFACE.1 + 20.0);
-    event(
-        &mut view,
-        &mut cx,
-        target,
-        toggle.0,
-        toggle.1,
-        WindowEvent::MouseDown(MouseButton::Left),
-    );
-    assert!(view.tracker_open);
-    assert!(view.tracker_restore_expand);
-    assert_eq!(view.expand_target, 0.0);
 }
 
 #[test]
 fn tracker_drag_dots_reorder_the_complete_row_and_keep_its_selection() {
     let mut view = view(2, false);
-    view.tracker_open = true;
-    view.tracker_progress = 1.0;
     view.params.arpeggiator.edit(|s| {
         s.add_row_after(0);
         s.add_row_after(1);
@@ -367,8 +414,6 @@ fn tracker_drag_dots_reorder_the_complete_row_and_keep_its_selection() {
 #[test]
 fn tracker_text_edit_does_not_swallow_arpeggiator_clicks() {
     let mut view = view(2, false);
-    view.tracker_open = true;
-    view.tracker_progress = 1.0;
     view.tracker_symbol_edit = true;
     view.tracker_symbol = "Dm7".into();
     let (mut cx, target, changes) = context();
@@ -394,11 +439,15 @@ fn tracker_text_edit_does_not_swallow_arpeggiator_clicks() {
 }
 
 #[test]
-fn tracker_toggle_has_its_own_target_beside_all_six_lanes() {
-    let r = tracker::toggle_rect();
-    for i in 0..6 {
-        let lane = arpeggiator::lane_rect(i);
-        assert!(lane.0 + lane.2 <= r.0 || lane.1 >= r.1 + r.3);
+fn tracker_is_a_separate_full_height_module_below_the_header() {
+    let r = TRACKER_SURFACE;
+    assert!(r.1 > HEADER_H);
+    assert!(r.0 + r.2 < CHORDS_SURFACE.0);
+    assert_eq!(r.1 + r.3, PIANO_SURFACE.1 + PIANO_SURFACE.3);
+    for i in [0, 1, 2, 4] {
+        let button = tracker::action_rect(i);
+        assert!(button.0 >= r.0 && button.0 + button.2 <= r.0 + r.2);
+        assert!(button.1 + button.3 < tracker::row_rect(0, 0.0).1);
     }
 }
 
@@ -506,11 +555,9 @@ fn tracker_row_events_stop_before_the_host_model() {
 }
 
 fn scrolling_tracker() -> ChordboardView {
-    let mut view = view(2, false);
-    view.tracker_open = true;
-    view.tracker_progress = 1.0;
+    let view = view(2, false);
     view.params.arpeggiator.edit(|s| {
-        for i in 0..11 {
+        for i in 0..63 {
             s.add_row_after(i);
         }
     });
@@ -571,8 +618,11 @@ fn tracker_partial_rows_hit_the_visible_row_and_do_not_cover_the_header() {
     );
     assert_eq!(view.arp_ui.edit_page, 1);
     assert!(view.scroll_tracker(row.0, row.1, -10000.0, true));
-    let last = tracker::row_rect(11, view.tracker_scroll);
-    assert!((last.1 + last.3 - (PERF_SURFACE.1 + PERF_SURFACE.3 - 28.0)).abs() < 0.001);
+    let last = tracker::row_rect(63, view.tracker_scroll);
+    assert!((last.1 + last.3 - (TRACKER_SURFACE.1 + TRACKER_SURFACE.3 - 64.0)).abs() < 0.001);
+    let add = tracker::add_row_rect(64, view.tracker_scroll);
+    assert!(add.1 > last.1 + last.3);
+    assert!(add.1 + add.3 < TRACKER_SURFACE.1 + TRACKER_SURFACE.3 - 20.0);
     view.params.arpeggiator.edit(|s| s.rows.truncate(1));
     view.tick_tracker_scroll(0.016);
     assert_eq!(view.tracker_scroll, 0.0);
@@ -587,13 +637,13 @@ fn tracker_native_pixels_reach_the_view_and_the_legacy_event_is_not_applied_twic
     let entity = ui.build(&mut cx, |_| {}).entity();
     BackendContext::new(&mut cx).cache().set_bounds(
         entity,
-        BoundingBox::from_min_max(0.0, 0.0, W * 2.0, H * 2.0),
+        BoundingBox::from_min_max(0.0, 0.0, EDITOR_W * 2.0, H * 2.0),
     );
     let row = tracker::row_rect(0, 0.0);
     {
         let mut backend = BackendContext::new_with_event_manager(&mut cx);
         backend.emit_origin(WindowEvent::MouseMove(
-            (row.0 + 60.0) * 2.0,
+            (row.0 + CONTENT_X + 60.0) * 2.0,
             (row.1 + 18.0) * 2.0,
         ));
         backend.send_event(
@@ -616,4 +666,92 @@ fn tracker_native_pixels_reach_the_view_and_the_legacy_event_is_not_applied_twic
         "legacy line event applied the gesture twice"
     );
     assert!(!ui.tracker_skip_line_scroll);
+}
+
+#[test]
+fn tracker_chord_selection_keeps_header_buttons_and_route_panel_usable() {
+    let mut view = view(2, false);
+    let (mut cx, target, changes) = context();
+    click(&mut view, &mut cx, target, first_chord_cell());
+    assert!(view.tracker_selection);
+    click(&mut view, &mut cx, target, ORDER);
+    assert!(changes
+        .borrow()
+        .iter()
+        .any(|(ptr, _)| *ptr == view.params.scale_layout.as_ptr()));
+    click(&mut view, &mut cx, target, KEY_MENU);
+    assert_eq!(view.menu, Some(Menu::Key));
+    view.menu = None;
+    view.set_panel(Some(Panel::Routes));
+    view.route_elapsed = pleasant_ui::page_slide::DURATION;
+    view.route_progress = 1.0;
+    click(&mut view, &mut cx, target, ROUTE_TARGET);
+    assert_eq!(view.menu, Some(Menu::RouteTarget));
+}
+
+#[test]
+fn degrees_is_the_initial_keyboard_layout() {
+    let view = ChordboardView::new(
+        Arc::new(ChordboardParams::default()),
+        Arc::new(Bridge::default()),
+        Arc::new(PreviewContext),
+    );
+    assert_eq!(view.keyboard_layout(), 2);
+}
+
+#[test]
+fn tracker_buttons_hover_without_motion_registration_and_hold_until_release() {
+    let mut view = view(2, false);
+    let (mut cx, target, _) = context();
+    let r = tracker::action_rect(1);
+    let (x, y) = (r.0 + 10.0, r.1 + 10.0);
+    event(
+        &mut view,
+        &mut cx,
+        target,
+        x,
+        y,
+        WindowEvent::MouseMove(x, y),
+    );
+    assert_eq!(view.hover_amount(r), 1.0);
+    event(
+        &mut view,
+        &mut cx,
+        target,
+        x,
+        y,
+        WindowEvent::MouseDown(MouseButton::Left),
+    );
+    view.tick_motion(1.0);
+    assert_eq!(
+        view.button_press_amount(r),
+        1.0,
+        "held state must outlive the click flash"
+    );
+    event(
+        &mut view,
+        &mut cx,
+        target,
+        x,
+        y,
+        WindowEvent::MouseUp(MouseButton::Left),
+    );
+    assert_eq!(view.button_press_amount(r), 0.0);
+}
+
+#[test]
+fn narrow_tracker_keeps_actions_and_row_controls_separate() {
+    let panel = TRACKER_SURFACE;
+    for i in 0..6 {
+        let r = tracker::action_rect(i);
+        assert!(r.0 >= panel.0 && r.0 + r.2 <= panel.0 + panel.2);
+    }
+    let row = tracker::row_rect(0, 0.0);
+    let chord = (row.0 + 50.0, row.1, row.2 - 202.0, row.3);
+    let minus = tracker::duration_button(row, false);
+    let plus = tracker::duration_button(row, true);
+    let delete = tracker::delete_button(row);
+    assert!(chord.0 + chord.2 < minus.0);
+    assert!(minus.0 + minus.2 < plus.0);
+    assert!(plus.0 + plus.2 < delete.0);
 }

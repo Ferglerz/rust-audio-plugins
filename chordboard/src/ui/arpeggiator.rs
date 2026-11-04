@@ -1,9 +1,9 @@
 //! String-based arp adjustments and the independently powered MIDI delay.
 //! All pointer geometry is shared with drawing; edits publish only from the UI thread.
+use super::midi_fx::DELAY_SURFACE;
 use super::*;
-use crate::arpeggiator::{
-    DelaySettings, DelayTap, Step, StepState, LOOPS, MODE_NAMES, STEPS, TAPS,
-};
+use crate::arpeggiator::{Fill, Step, StepState, LOOPS, STEPS};
+use crate::midi_fx::{DelaySettings, DelayTap, TAPS};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Lane {
@@ -11,7 +11,7 @@ enum Lane {
     Velocity,
     Chance,
     Octave,
-    Timing,
+    Gate,
     Mod1,
     Mod2,
 }
@@ -19,7 +19,7 @@ const LANES: [Lane; 6] = [
     Lane::Velocity,
     Lane::Chance,
     Lane::Octave,
-    Lane::Timing,
+    Lane::Gate,
     Lane::Mod1,
     Lane::Mod2,
 ];
@@ -30,26 +30,26 @@ impl Lane {
             Self::Velocity => "\u{eab1}",          // gauge
             Self::Chance => "\u{eb66}",            // dice
             Self::Octave => "\u{eb5b}",            // arrows-vertical
-            Self::Timing => "\u{ea70}",            // clock
+            Self::Gate => "\u{ea70}",            // clock
             Self::Mod1 | Self::Mod2 => "\u{ecd4}", // wave-sine
         }
     }
     fn description(self) -> &'static str {
         match self {
-            Self::Velocity => "Strength + duration",
+            Self::Velocity => "Note strength",
             Self::Chance => "Play probability",
             Self::Octave => "Pitch in octaves",
-            Self::Timing => "Early / late",
+            Self::Gate => "Note duration",
             Self::Mod1 => "Bipolar source 1",
             Self::Mod2 => "Bipolar source 2",
         }
     }
     fn label(self) -> &'static str {
         match self {
-            Self::Velocity => "Vel / Gate",
+            Self::Velocity => "Velocity",
             Self::Chance => "Chance",
             Self::Octave => "Octave",
-            Self::Timing => "Timing",
+            Self::Gate => "Gate",
             Self::Mod1 => "Mod 1",
             Self::Mod2 => "Mod 2",
         }
@@ -59,7 +59,7 @@ impl Lane {
             Self::Velocity => (0.0, 200.0),
             Self::Chance => (0.0, 100.0),
             Self::Octave => (-4.0, 4.0),
-            Self::Timing => (-49.0, 49.0),
+            Self::Gate => (1.0, 100.0),
             Self::Mod1 | Self::Mod2 => (-100.0, 100.0),
         }
     }
@@ -68,7 +68,7 @@ impl Lane {
             Self::Velocity => s.velocity as f32,
             Self::Chance => s.probability as f32,
             Self::Octave => s.octave as f32,
-            Self::Timing => s.micro as f32,
+            Self::Gate => s.gate as f32,
             Self::Mod1 => s.mods[0] as f32,
             Self::Mod2 => s.mods[1] as f32,
         }
@@ -80,7 +80,7 @@ impl Lane {
             Self::Velocity => s.velocity = v as u8,
             Self::Chance => s.probability = v as u8,
             Self::Octave => s.octave = v as i8,
-            Self::Timing => s.micro = v as i16,
+            Self::Gate => s.gate = v as u8,
             Self::Mod1 => s.mods[0] = v as i16,
             Self::Mod2 => s.mods[1] = v as i16,
         }
@@ -88,7 +88,7 @@ impl Lane {
     fn format(self, value: f32) -> String {
         match self {
             Self::Octave => format!("{value:+.0}"),
-            Self::Mod1 | Self::Mod2 | Self::Timing => format!("{value:+.0}%"),
+            Self::Mod1 | Self::Mod2 => format!("{value:+.0}%"),
             _ => format!("{value:.0}%"),
         }
     }
@@ -180,7 +180,6 @@ impl TapLane {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Dropdown {
-    Mode,
     TapLane,
     Pages,
     Paste(usize),
@@ -193,7 +192,6 @@ enum Chooser {
 enum DragKind {
     Step(Lane),
     Timing,
-    Gate,
     Tap(TapLane),
     TapTime,
     BasicTime,
@@ -230,10 +228,6 @@ pub(super) struct ArpUi {
     page_from: usize,
     page_elapsed: f32,
     drag: Option<Drag>,
-    delay_open: bool,
-    delay_position: f32,
-    delay_start: f32,
-    delay_elapsed: f32,
     pending_tap_remove: Option<usize>,
 }
 impl Default for ArpUi {
@@ -255,57 +249,75 @@ impl Default for ArpUi {
             page_from: 0,
             page_elapsed: pleasant_ui::page_slide::DURATION,
             drag: None,
-            delay_open: false,
-            delay_position: 0.0,
-            delay_start: 0.0,
-            delay_elapsed: pleasant_ui::page_slide::DURATION,
             pending_tap_remove: None,
         }
     }
 }
 
-fn header_slot(index: usize) -> Rect {
-    let s = ARP_SURFACE;
-    let widths = [130.0, 148.0, 152.0, 104.0, 138.0, 150.0, 150.0];
-    let start = s.0 + 190.0;
-    let remaining = super::tracker::toggle_rect().0 - 12.0 - start - 6.0 * 8.0;
-    let scale = remaining / widths.iter().sum::<f32>();
-    let x = start + widths[..index].iter().sum::<f32>() * scale + index as f32 * 8.0;
-    (x, s.1 + 10.0, widths[index] * scale, 28.0)
-}
 pub(super) fn power_rect() -> Rect {
     (ARP_SURFACE.0 + 12.0, ARP_SURFACE.1 + 10.0, 28.0, 28.0)
 }
 pub(super) fn mode_rect() -> Rect {
-    header_slot(0)
+    (ARP_SURFACE.0 + 838.0, ARP_SURFACE.1 + 10.0, 90.0, 28.0)
 }
 pub(super) fn order_rect() -> Rect {
-    header_slot(1)
-}
-pub(super) fn octaves_rect() -> Rect {
-    header_slot(2)
+    (ARP_SURFACE.0 + 214.0, ARP_SURFACE.1 + 10.0, 134.0, 28.0)
 }
 pub(super) fn loop_add_rect() -> Rect {
-    let r = octaves_rect();
-    (r.0 + r.2 - 28.0, r.1, 28.0, r.3)
+    (ARP_SURFACE.0 + ARP_SURFACE.2 - 102.0, ARP_SURFACE.1 + 280.0, 90.0, 24.0)
 }
 pub(super) fn sync_rect() -> Rect {
-    header_slot(3)
+    (ARP_SURFACE.0 + ARP_SURFACE.2 - 272.0, ARP_SURFACE.1 + 10.0, 104.0, 28.0)
 }
 pub(super) fn rate_rect() -> Rect {
-    header_slot(4)
+    let r = sync_rect();
+    (r.0 + r.2 + 8.0, r.1, 148.0, r.3)
 }
 pub(super) fn humanize_rect() -> Rect {
-    header_slot(5)
+    let r = loop_add_rect();
+    (r.0, ARP_SURFACE.1 + 64.0, r.2, 96.0)
 }
 pub(super) fn swing_rect() -> Rect {
-    header_slot(6)
+    let r = loop_add_rect();
+    (r.0, ARP_SURFACE.1 + 172.0, r.2, 96.0)
 }
+fn adjustment_knob_layout(rect: Rect) -> pleasant_ui::draw::KnobLayout {
+    let mut layout = pleasant_ui::draw::KnobLayout::new(rect);
+    layout.radius = 22.0;
+    layout.cy = rect.1 + 43.0;
+    layout.label_y = rect.1 + 12.0;
+    layout.value_y = rect.1 + 79.0;
+    layout.with_text_sizes(12.0, 12.0)
+}
+pub(super) fn adjustment_value_rect(rect: Rect) -> Rect {
+    adjustment_knob_layout(rect).value_rect(rect.0 + 4.0, rect.2 - 8.0)
+}
+#[cfg(test)]
 pub(super) fn delay_rect() -> Rect {
-    DELAY_MENU
+    super::midi_fx::FX_TAB
+}
+pub(super) fn lock_length_rect() -> Rect {
+    (ARP_SURFACE.0 + 356.0, ARP_SURFACE.1 + 10.0, 28.0, 28.0)
+}
+pub(super) fn fixed_steps_rect() -> Rect {
+    let r = lock_length_rect();
+    (r.0 + r.2 + 8.0, r.1, 142.0, r.3)
+}
+pub(super) fn fill_rect() -> Rect {
+    let r = fixed_steps_rect();
+    (r.0 + r.2 + 8.0, r.1, 156.0, r.3)
+}
+pub(super) fn custom_edit_rect() -> Rect {
+    let r = fill_rect();
+    (r.0 + r.2 + 8.0, r.1, 120.0, r.3)
 }
 pub(super) fn page_block() -> Rect {
-    (ARP_SURFACE.0 + 12.0, ARP_SURFACE.1 + 52.0, 134.0, 28.0)
+    (
+        ARP_SURFACE.0 + 12.0,
+        ARP_SURFACE.1 + ARP_LANE_TOP - 28.0,
+        134.0,
+        28.0,
+    )
 }
 // A page dropdown row has independent selection, copy and paste columns.
 pub(super) fn page_rect(page: usize) -> Rect {
@@ -321,7 +333,7 @@ pub(super) fn page_paste_rect(page: usize) -> Rect {
     (r.0 + 162.0, r.1, 66.0, r.3)
 }
 const LANE_BUTTON_W: f32 = 64.0;
-const LANE_GRID_TOP: f32 = 88.0;
+const LANE_GRID_TOP: f32 = ARP_LANE_TOP + 8.0;
 const LANE_GAP: f32 = 6.0;
 pub(super) fn lane_rect(index: usize) -> Rect {
     let height = ((ARP_SURFACE.3 - LANE_GRID_TOP - 12.0 - 2.0 * LANE_GAP) / 3.0).floor();
@@ -338,22 +350,32 @@ pub(super) fn gate_rect() -> Rect {
 }
 fn content_rect() -> Rect {
     let g = graph_rect();
-    (g.0, ARP_SURFACE.1 + 52.0, g.2, ARP_SURFACE.3 - 64.0)
+    (
+        g.0,
+        ARP_SURFACE.1 + ARP_LANE_TOP - 28.0,
+        g.2,
+        ARP_SURFACE.3 - ARP_LANE_TOP + 16.0,
+    )
 }
 fn loop_rect(index: usize, count: usize) -> Rect {
     let g = graph_rect();
     let width = g.2 / count.max(1) as f32;
     (
         g.0 + index as f32 * width + 2.0,
-        ARP_SURFACE.1 + 54.0,
+        ARP_SURFACE.1 + ARP_LANE_TOP - 26.0,
         width - 4.0,
         32.0,
     )
 }
 fn loop_header_button(r: Rect, button: usize) -> Rect {
-    let widths = [68.0, 68.0, 30.0];
+    // Keep the close action at the right edge, including at four loops.
+    if button == 2 {
+        return (r.0 + r.2 - 26.0, r.1 + 2.0, 22.0, r.3 - 4.0);
+    }
+    let offsets = [124.0, 212.0, 0.0, 0.0, 96.0];
+    let widths = [22.0; 5];
     (
-        r.0 + r.2 - 178.0 + widths[..button].iter().sum::<f32>() + button as f32 * 4.0,
+        r.0 + 60.0 + offsets[button],
         r.1 + 2.0,
         widths[button],
         r.3 - 4.0,
@@ -362,9 +384,9 @@ fn loop_header_button(r: Rect, button: usize) -> Rect {
 pub(super) fn graph_rect() -> Rect {
     (
         ARP_SURFACE.0 + 162.0,
-        ARP_SURFACE.1 + 100.0,
-        ARP_SURFACE.2 - 184.0,
-        ARP_SURFACE.3 - 187.0,
+        ARP_SURFACE.1 + ARP_LANE_TOP + 36.0,
+        ARP_SURFACE.2 - 280.0,
+        ARP_SURFACE.3 - ARP_LANE_TOP - 123.0,
     )
 }
 struct StringLayout {
@@ -417,15 +439,6 @@ impl StringLayout {
         )
     }
 }
-fn repeat_icon(mode: usize) -> style::Icon {
-    match mode {
-        0 => style::Icon::Once,
-        1 => style::Icon::Loop,
-        2 => style::Icon::SyncLoop,
-        _ => style::Icon::AlignedLoop,
-    }
-}
-
 pub(super) fn page_paste_option_rect(page: usize, index: usize) -> Rect {
     let r = page_paste_rect(page);
     let y = r.1.min(ARP_SURFACE.1 + ARP_SURFACE.3 - 50.0);
@@ -436,20 +449,18 @@ fn dropdown_rect(which: Dropdown, index: usize) -> Rect {
         return page_paste_option_rect(page, index);
     }
     let r = match which {
-        Dropdown::Mode => mode_rect(),
         Dropdown::TapLane => tap_lane_rect(),
         Dropdown::Pages => page_block(),
         Dropdown::Paste(_) => unreachable!(),
     };
     let n = match which {
-        Dropdown::Mode => 4,
         Dropdown::TapLane => 6,
         Dropdown::Pages => 8,
         Dropdown::Paste(_) => 2,
     };
     let h = 22.0;
     let surface = if which == Dropdown::TapLane {
-        PIANO_SURFACE
+        DELAY_SURFACE
     } else {
         ARP_SURFACE
     };
@@ -458,11 +469,16 @@ fn dropdown_rect(which: Dropdown, index: usize) -> Rect {
 }
 fn chooser_area() -> Rect {
     let s = ARP_SURFACE;
-    (s.0 + 16.0, s.1 + 85.0, s.2 - 32.0, s.3 - 97.0)
+    (
+        s.0 + 16.0,
+        s.1 + ARP_LANE_TOP + 5.0,
+        s.2 - 128.0,
+        s.3 - ARP_LANE_TOP - 17.0,
+    )
 }
 #[cfg(test)]
 pub(super) fn chooser_card(index: usize) -> Rect {
-    chooser_card_for(index, 7)
+    chooser_card_for(index, 8)
 }
 pub(super) fn chooser_card_for(index: usize, count: usize) -> Rect {
     let r = chooser_area();
@@ -472,7 +488,7 @@ pub(super) fn chooser_card_for(index: usize, count: usize) -> Rect {
 }
 
 // These are the ordering depictions from 00d16be's performance controls.
-const ORDER_CONTOURS: [[u8; 5]; 7] = [
+const ORDER_CONTOURS: [[u8; 5]; 8] = [
     [0, 1, 2, 3, 4],
     [4, 3, 2, 1, 0],
     [0, 2, 4, 2, 0],
@@ -480,44 +496,37 @@ const ORDER_CONTOURS: [[u8; 5]; 7] = [
     [4, 2, 3, 1, 2],
     [0, 3, 1, 2, 4],
     [2, 4, 0, 3, 1],
+    [0, 2, 1, 4, 3],
 ];
 
-fn delay_close_rect() -> Rect {
-    (
-        PIANO_SURFACE.0 + PIANO_SURFACE.2 - 100.0,
-        PIANO_SURFACE.1 + 8.0,
-        88.0,
-        28.0,
-    )
-}
-fn delay_power_rect() -> Rect {
-    DELAY_POWER
+pub(super) fn delay_power_rect() -> Rect {
+    (DELAY_SURFACE.0 + 12.0, DELAY_SURFACE.1 + 8.0, 28.0, 28.0)
 }
 fn delay_sync_rect() -> Rect {
-    (PIANO_SURFACE.0 + 20.0, PIANO_SURFACE.1 + 48.0, 106.0, 26.0)
+    (DELAY_SURFACE.0 + 20.0, DELAY_SURFACE.1 + 48.0, 106.0, 26.0)
 }
 fn delay_time_rect() -> Rect {
-    (PIANO_SURFACE.0 + 134.0, PIANO_SURFACE.1 + 48.0, 144.0, 26.0)
+    (DELAY_SURFACE.0 + 134.0, DELAY_SURFACE.1 + 48.0, 144.0, 26.0)
 }
 fn delay_gain_rect() -> Rect {
-    (PIANO_SURFACE.0 + 286.0, PIANO_SURFACE.1 + 48.0, 132.0, 26.0)
+    (DELAY_SURFACE.0 + 286.0, DELAY_SURFACE.1 + 48.0, 132.0, 26.0)
 }
 fn delay_feedback_rect() -> Rect {
-    (PIANO_SURFACE.0 + 426.0, PIANO_SURFACE.1 + 48.0, 140.0, 26.0)
+    (DELAY_SURFACE.0 + 426.0, DELAY_SURFACE.1 + 48.0, 140.0, 26.0)
 }
 fn tap_lane_rect() -> Rect {
-    (PIANO_SURFACE.0 + 574.0, PIANO_SURFACE.1 + 48.0, 140.0, 26.0)
+    (DELAY_SURFACE.0 + 574.0, DELAY_SURFACE.1 + 48.0, 140.0, 26.0)
 }
 fn ping_rect() -> Rect {
-    (PIANO_SURFACE.0 + 730.0, PIANO_SURFACE.1 + 48.0, 104.0, 26.0)
+    (DELAY_SURFACE.0 + 730.0, DELAY_SURFACE.1 + 48.0, 104.0, 26.0)
 }
 pub(super) fn delay_leading_rect() -> Rect {
-    (PIANO_SURFACE.0 + 850.0, PIANO_SURFACE.1 + 48.0, 144.0, 26.0)
+    (DELAY_SURFACE.0 + 850.0, DELAY_SURFACE.1 + 48.0, 144.0, 26.0)
 }
 pub(super) fn delay_follow_rect() -> Rect {
     (
-        PIANO_SURFACE.0 + 1002.0,
-        PIANO_SURFACE.1 + 48.0,
+        DELAY_SURFACE.0 + 1002.0,
+        DELAY_SURFACE.1 + 48.0,
         144.0,
         26.0,
     )
@@ -539,32 +548,32 @@ pub(super) fn add_rect(delay: &DelaySettings, domain: f32) -> Rect {
         .fold(g.0, f32::max);
     let x = next
         .max(last + 42.0)
-        .min(PIANO_SURFACE.0 + PIANO_SURFACE.2 - 24.0);
+        .min(DELAY_SURFACE.0 + DELAY_SURFACE.2 - 24.0);
     (x - 12.0, g.1 + g.3 * 0.5 - 12.0, 24.0, 24.0)
 }
 pub(super) fn tap_remove_rect(tap: &DelayTap, domain: f32) -> Rect {
     (
         tap_x(tap, domain) - 9.0,
-        tap_graph().1 + tap_graph().3 + 26.0,
+        tap_graph().1 + tap_graph().3 + 18.0,
         18.0,
         18.0,
     )
 }
-const SOURCE_NAMES: [&str; 5] = ["Arp", "Manual Strum", "Chords", "Bass", "Melody"];
+const SOURCE_NAMES: [&str; 5] = ["Arp", "Strumfield", "Chords", "Bass", "Melody"];
 pub(super) fn source_rect(index: usize) -> Rect {
     (
-        PIANO_SURFACE.0 + 490.0 + index as f32 * 124.0,
-        PIANO_SURFACE.1 + 10.0,
+        DELAY_SURFACE.0 + 490.0 + index as f32 * 124.0,
+        DELAY_SURFACE.1 + 10.0,
         116.0,
         23.0,
     )
 }
 fn tap_graph() -> Rect {
     (
-        PIANO_SURFACE.0 + 26.0,
-        PIANO_SURFACE.1 + 106.0,
-        PIANO_SURFACE.2 - 96.0,
-        PIANO_SURFACE.3 - 156.0,
+        DELAY_SURFACE.0 + 26.0,
+        DELAY_SURFACE.1 + 94.0,
+        DELAY_SURFACE.2 - 96.0,
+        DELAY_SURFACE.3 - 132.0,
     )
 }
 fn time_range(sync: bool) -> (f32, f32) {
@@ -580,8 +589,9 @@ pub(super) fn time_domain(delay: &DelaySettings) -> f32 {
         .iter()
         .map(|t| t.time)
         .fold(if delay.sync { 2.0 } else { 1000.0 }, f32::max)
-        .mul_add(1.25, 0.0)
-        .min(time_range(delay.sync).1)
+        // Show the source tap and its first three feedback repeats, including
+        // taps at the maximum interval. This is a display range, not a time limit.
+        .mul_add(4.25, 0.0)
 }
 fn tap_x(tap: &DelayTap, domain: f32) -> f32 {
     let g = tap_graph();
@@ -620,9 +630,39 @@ fn time_label(time: f32, sync: bool) -> String {
 impl ChordboardView {
     pub(super) fn refresh_arp_editor_params(&mut self) {
         let state = self.params.arpeggiator.snapshot();
+        // A host preset restores the rows without recreating the open editor.
+        // Reconcile both ends of a page animation and any in-flight row edits
+        // before the next input event or draw can index the restored rows.
+        let count = state.rows.len();
+        if self.arp_ui.edit_page >= count
+            || self.arp_ui.page_from >= count
+            || self.arp_ui.drag.is_some_and(|drag| drag.page >= count)
+            || self
+                .tracker_drag
+                .is_some_and(|(from, to)| from >= count || to >= count)
+        {
+            self.arp_ui.edit_page = self.arp_ui.edit_page.min(count.saturating_sub(1));
+            self.arp_ui.page_from = self.arp_ui.edit_page;
+            self.arp_ui.page_elapsed = pleasant_ui::page_slide::DURATION;
+            self.arp_ui.drag = None;
+            self.arp_ui.dropdown = None;
+            self.tracker_drag = None;
+            self.tracker_selection = false;
+            self.tracker_symbol_edit = false;
+            self.tracker_symbol.clear();
+            self.tracker_proxy_row = usize::MAX;
+        }
         let Some(row) = state.rows.get(self.arp_ui.edit_page) else {
             return;
         };
+        if self.row_slide.select(row.id, self.arp_ui.edit_page) {
+            // The entire stack now slides; do not also slide the pattern within it.
+            self.arp_ui.page_from = self.arp_ui.edit_page;
+            self.arp_ui.page_elapsed = pleasant_ui::page_slide::DURATION;
+            self.cancel_arp_editor();
+            self.edit = None;
+            self.menu = None;
+        }
         if self.tracker_proxy_row != self.arp_ui.edit_page
             || self.tracker_proxy_settings != row.settings
         {
@@ -679,16 +719,17 @@ impl ChordboardView {
         // Let users configure a row before assigning its chord. The editor previews
         // the current chordboard voicing; the audio engine still treats the row as
         // silent until the row itself has a chord.
-        let count = row.chord.map_or(self.snapshot.notes.len, |c| {
-            harmony::voice_recipe(c, c.spread).len
+        let recipe = row
+            .chord
+            .or_else(|| SavedChord::decode(self.snapshot.captured));
+        let count = recipe.map_or(self.snapshot.notes.len, |chord| {
+            harmony::resolve_chord(chord, self.params.global_harmony()).len
         });
-        crate::engine::arpeggiator::pass_length(count, row.settings.pattern).max(1)
+        crate::engine::arpeggiator::settings_pass_length(count, row.settings).max(1)
     }
     fn arp_string_layout(&self, page: usize, len: usize) -> StringLayout {
         let state = self.params.arpeggiator.snapshot();
-        let steps = state.rows[page]
-            .page
-            .flattened_steps(self.arp_pass_len_for_page(page));
+        let steps = state.rows[page].page.flattened_steps(self.arp_pass_len_for_page(page));
         let swing = state.rows.get(page).map_or(0.0, |row| row.settings.swing);
         // A fixed cycle origin keeps edit targets still across odd cycles and length modulation.
         StringLayout::new(&steps, len, swing, 0)
@@ -713,6 +754,12 @@ impl ChordboardView {
         let p = &self.arp_params().arp_octaves;
         Self::emit(cx, p.as_ptr(), p.preview_normalized(count as i32));
     }
+    fn loop_remove_visible(&self, index: usize, count: usize) -> bool {
+        let r = loop_rect(index, count);
+        let content = content_rect();
+        count > 1 && self.pointer.is_some_and(|(x, y)|
+            hit((r.0, content.1, r.2, content.3), x, y))
+    }
     fn remove_arp_loop(&self, cx: &mut EventContext, index: usize) {
         let count = self.visible_loops();
         if count <= 1 {
@@ -726,7 +773,7 @@ impl ChordboardView {
         self.set_arp_loop_count(cx, count - 1);
     }
     fn chooser_count(&self) -> usize {
-        7
+        8
     }
     fn chooser_hit_rect(&self, i: usize) -> Rect {
         chooser_card_for(i, self.chooser_count())
@@ -739,9 +786,6 @@ impl ChordboardView {
                 .ensure_row_loops(self.arp_ui.edit_page, row.settings.octaves as usize);
         }
     }
-    pub(super) fn arp_editor_overlay_visible(&self) -> bool {
-        self.arp_ui.delay_open || self.arp_ui.delay_position > 0.0
-    }
     fn arp_cycle_for_editor(&self) -> ([i16; STEPS], usize) {
         self.arp_cycle_for_page(self.arp_ui.edit_page)
     }
@@ -751,15 +795,23 @@ impl ChordboardView {
             return ([0; STEPS], 0);
         };
         let settings = row.settings;
-        let chord = row
+        let recipe = row
             .chord
-            .map(|c| harmony::voice_recipe(c, c.spread))
+            .or_else(|| SavedChord::decode(self.snapshot.captured));
+        let mut globals = self.params.global_harmony();
+        if row.chord.is_none() {
+            globals.transpose = 0;
+        }
+        let chord = recipe
+            .map(|c| harmony::resolve_chord(c, globals))
             .unwrap_or(self.snapshot.notes);
-        let (mut notes, len) = crate::engine::arpeggiator::loop_cycle_notes(
-            chord,
-            settings,
-            std::array::from_fn(|i| state.rows[page].page.loops[i].octave),
-            0x4e6f7465,
+        let phase = if row.chord.is_some() && self.snapshot.arp_row_index as usize == page {
+            self.snapshot.arp_phase
+        } else {
+            0
+        };
+        let (mut notes, len) = crate::engine::arpeggiator::program_cycle(
+            chord, recipe, globals, settings, &row.page, 0x4e6f7465, phase,
         );
         if row.chord.is_some() && self.snapshot.arp_row_index as usize == page {
             let live = (self.snapshot.arp_len as usize).min(len);
@@ -786,24 +838,53 @@ impl ChordboardView {
             };
         });
     }
-    fn copy_arp_page(&mut self, page: usize) {
+    fn edit_loop_inversion(&self, index: usize, delta: i8, reset: bool) {
+        let page = self.arp_ui.edit_page;
+        self.params.arpeggiator.edit(|s| {
+            let inversion = &mut s.rows[page].page.loops[index].inversion;
+            *inversion = if reset {
+                0
+            } else {
+                (*inversion + delta).clamp(-12, 12)
+            };
+        });
+    }
+    fn edit_fixed_steps(&self, delta: i8, reset: bool) {
+        let page = self.arp_ui.edit_page;
+        self.params.arpeggiator.edit(|s| {
+            let steps = &mut s.rows[page].settings.steps;
+            *steps = if reset {
+                4
+            } else {
+                (*steps as i16 + delta as i16).clamp(1, 24) as u8
+            };
+        });
+    }
+    pub(super) fn copy_arp_page(&mut self, page: usize) {
         let state = self.params.arpeggiator.snapshot();
         if let Some(row) = state.rows.get(page) {
             self.arp_ui.clipboard = Some((row.page, row.settings));
         }
     }
-    fn paste_arp_page(&self, _cx: &mut EventContext, destination_page: usize, pattern_only: bool) {
+    pub(super) fn paste_arp_page(
+        &self,
+        _cx: &mut EventContext,
+        destination_page: usize,
+        pattern_only: bool,
+    ) {
         let Some((copied, copied_settings)) = self.arp_ui.clipboard else {
             return;
         };
         self.params.arpeggiator.edit(|s| {
             if let Some(row) = s.rows.get_mut(destination_page) {
-                let delay = row.page.delay;
                 row.page = copied;
                 if pattern_only {
-                    row.page.delay = delay;
                     row.settings.pattern = copied_settings.pattern;
                     row.settings.octaves = copied_settings.octaves;
+                    row.settings.lock_length = copied_settings.lock_length;
+                    row.settings.steps = copied_settings.steps;
+                    row.settings.fill = copied_settings.fill;
+                    row.settings.custom = copied_settings.custom;
                 } else {
                     row.settings = copied_settings;
                 }
@@ -812,21 +893,10 @@ impl ChordboardView {
     }
 
     pub(in crate::ui) fn arp_editor_button_rects(&self) -> Vec<(Rect, bool)> {
-        let mut delay_buttons = vec![
-            (delay_rect(), self.arp_ui.delay_open),
-            (
-                delay_power_rect(),
-                self.params.arpeggiator.snapshot().rows[self.arp_ui.edit_page]
-                    .page
-                    .delay
-                    .enabled,
-            ),
-        ];
-        if self.arp_ui.delay_open && self.arp_ui.delay_position == 1.0 {
+        if self.fx_ui.open {
             let state = self.params.arpeggiator.snapshot();
-            let delay = &state.rows[self.arp_ui.edit_page].page.delay;
+            let delay = &state.midi_fx.delay;
             let mut v = vec![
-                (delay_close_rect(), true),
                 (delay_power_rect(), delay.enabled),
                 (delay_sync_rect(), delay.sync),
                 (delay_time_rect(), false),
@@ -858,25 +928,28 @@ impl ChordboardView {
                         }),
                 );
             }
-            delay_buttons = v;
-            delay_buttons.push((delay_rect(), true));
+            return v
+                .into_iter()
+                .map(|(r, on)| (self.fx_delay_screen_rect(r), on))
+                .collect();
         }
-        let mut v = delay_buttons;
+        let mut v = Vec::new();
         v.extend([
             (power_rect(), self.params.arp_enabled.value()),
-            (mode_rect(), self.arp_ui.dropdown == Some(Dropdown::Mode)),
+            (mode_rect(), self.arp_params().arp_mode.value() != 0),
             (order_rect(), self.arp_ui.chooser == Some(Chooser::Order)),
             (loop_add_rect(), false),
-            (super::tracker::toggle_rect(), self.tracker_open),
             (sync_rect(), self.arp_params().arp_sync.value()),
-            (
-                page_block(),
-                matches!(
-                    self.arp_ui.dropdown,
-                    Some(Dropdown::Pages | Dropdown::Paste(_))
-                ),
-            ),
         ]);
+        let settings = self.params.arpeggiator.snapshot().rows[self.arp_ui.edit_page].settings;
+        v.extend([
+            (lock_length_rect(), settings.lock_length),
+            (fixed_steps_rect(), false),
+            (fill_rect(), settings.fill == Fill::Evolve),
+        ]);
+        if settings.pattern == 7 {
+            v.push((custom_edit_rect(), self.panel == Some(Panel::Custom)));
+        }
         v.extend(
             LANES
                 .iter()
@@ -905,8 +978,8 @@ impl ChordboardView {
             return v;
         }
         for i in 0..self.visible_loops() {
-            for button in 0..3 {
-                if button < 2 || self.visible_loops() > 1 {
+            for button in 0..5 {
+                if button != 2 || self.loop_remove_visible(i, self.visible_loops()) {
                     v.push((self.loop_button_rect(i, button), false));
                 }
             }
@@ -937,23 +1010,13 @@ impl ChordboardView {
         Vec::new()
     }
     pub(in crate::ui) fn arp_editor_hint(&self, x: f32, y: f32) -> Option<String> {
-        if hit(delay_rect(), x, y) {
-            return Some(
-                "Show MIDI Delay in place of the keyboard · Keep editing the arp above".into(),
-            );
-        }
-        if hit(delay_power_rect(), x, y) {
-            return Some("MIDI Delay power · Independent of arpeggiator power".into());
-        }
-        if self.arp_ui.delay_position > 0.0 && hit(PIANO_SURFACE, x, y) {
+        if self.fx_ui.open {
+            let y = self.fx_delay_local_y(y);
             if hit(delay_leading_rect(), x, y) {
                 return Some("Include sounding echoes in chord voice leading and apply its octave placement to repeats · Uses the keyboard's Nearest / Furthest mode; Off leaves pitches unchanged".into());
             }
             if hit(delay_follow_rect(), x, y) {
                 return Some("Resolve each new repeat to the nearest tone of the active chord · Rechecks every feedback repeat · Keeps the captured pitch when no chord is active".into());
-            }
-            if hit(delay_close_rect(), x, y) {
-                return Some("Return to the keyboard · Delay and its tails keep playing".into());
             }
             if hit(delay_power_rect(), x, y) {
                 return Some("MIDI Delay power · Independent of arpeggiator power".into());
@@ -984,33 +1047,46 @@ impl ChordboardView {
             );
         }
         if hit(mode_rect(), x, y) {
-            return Some("Once: one cycle · Loop: restart on chord change · Sync Loop: preserve rhythm · Aligned Loop: follow host beat zero (falls back to Sync Loop without host beats or a synced rate)".into());
+            return Some("Repeat this row · On: repeat continuously · Off: play once · DAW alignment is set in the global tempo area".into());
         }
-        if hit(octaves_rect(), x, y) {
-            return Some("Loop Length · Add a pass with + · Remove a pass with × in its header · Use OCT -1 / OCT +1 to change its octave".into());
+        if hit(loop_add_rect(), x, y) {
+            return Some("Loops · + Loop adds a pass · Hover a loop and click × to remove that pass".into());
         }
         if matches!(
             self.arp_ui.dropdown,
             Some(Dropdown::Pages | Dropdown::Paste(_))
         ) {
             if (0..8).any(|p| hit(page_copy_rect(p), x, y)) {
-                return Some(
-                    "Copy this complete page, including settings, adjustments and MIDI delay"
-                        .into(),
-                );
+                return Some("Copy this complete row, including settings and adjustments".into());
             }
             if (0..8).any(|p| hit(page_paste_rect(p), x, y)) {
-                return Some("Paste into this page · Choose Complete page or Pattern only".into());
+                return Some("Paste into this row · Choose Complete row or Pattern only".into());
             }
         }
-        if self.arp_ui.lane == Lane::Velocity && hit(gate_rect(), x, y) {
-            return Some("Gate · Click a note’s slot, then drag horizontally anywhere · 200 units spans 1–100% · Outline handle: saved value · Filled bar: live duration · Cmd/Ctrl resets".into());
+        if hit(gate_rect(), x, y) {
+            return Some("Timing · Drag the ↔ handle sideways ±49% of the step interval · Available on every adjustment layer · Cmd/Ctrl-click resets".into());
+        }
+        if hit(lock_length_rect(), x, y) {
+            return Some("Lock Length · Keep a fixed number of clock steps despite chord complexity · Mute consumes time; Skip always removes time".into());
+        }
+        if !self.params.arpeggiator.snapshot().rows[self.arp_ui.edit_page].settings.lock_length
+            && (hit(fixed_steps_rect(), x, y) || hit(fill_rect(), x, y))
+        {
+            return Some("Enable Lock Length to set Steps and Repeat/Evolve".into());
+        }
+        if hit(fixed_steps_rect(), x, y) {
+            return Some("Steps per loop · Click left/right or scroll: 1–24 · Cmd/Ctrl-click restores 4 · Applies at the next loop boundary".into());
+        }
+        if hit(fill_rect(), x, y) {
+            return Some("Repeat restarts the note order each loop · Evolve carries it across loops and row repetitions".into());
+        }
+        if hit(custom_edit_rect(), x, y) && self.arp_params().arp_pattern.value() == 7 {
+            return Some(
+                "Edit the row's seven Custom degree steps in place of the chordboard".into(),
+            );
         }
         if (0..self.visible_loops()).any(|i| hit(loop_rect(i, self.visible_loops()), x, y)) {
-            return Some("Loop octave · Click left/right to lower/raise · Scroll ±4 octaves · Cmd/Ctrl-click resets".into());
-        }
-        if hit(page_block(), x, y) {
-            return Some("Eight complete arp and Delay variations · The selected Page starts at the next rhythmic boundary".into());
+            return Some("INV −/+ rotates voices down/up, atop global inversion · OCT −/+ shifts octaves · Scroll either control · Cmd/Ctrl-click resets".into());
         }
         if let Some(i) = (0..LANES.len()).find(|&i| hit(lane_rect(i), x, y)) {
             return Some(format!(
@@ -1022,10 +1098,10 @@ impl ChordboardView {
         let (_, len) = self.arp_cycle_for_editor();
         let layout = self.arp_string_layout(self.arp_ui.edit_page, len);
         if (0..len).any(|i| hit(layout.status(i), x, y)) {
-            return Some("Click: Play → Mute → Skip · Mute consumes time; Skip removes this occurrence · Cmd/Ctrl-click restores Play".into());
+            return Some("Click: Play → Mute → Skip · Mute keeps its clock slot; Skip always removes time, including with Lock Length · Cmd/Ctrl-click restores Play".into());
         }
         if hit(graph_rect(), x, y) {
-            return Some(if self.arp_ui.lane==Lane::Timing {"Drag a string sideways ±49% of its interval · The dotted line marks its original position · Cmd/Ctrl-click resets"}else{"Drag vertically to adjust · Drag across strings to paint (fast moves fill the gaps) · Shift draws a straight ramp · Cmd/Ctrl-click or drag resets"}.into());
+            return Some("Drag vertically to adjust · Drag across strings to paint · Shift draws a straight ramp · Cmd/Ctrl-click or drag resets".into());
         }
         None
     }
@@ -1034,10 +1110,14 @@ impl ChordboardView {
     }
     pub(super) fn arp_controls_covered(&self, x: f32, y: f32) -> bool {
         self.arp_ui.dropdown.is_some() && hit(ARP_SURFACE, x, y)
-            || self.arp_editor_overlay_visible() && hit(PIANO_SURFACE, x, y)
+            || self.fx_ui.open && hit(DELAY_SURFACE, x, y)
     }
     pub(in crate::ui) fn arp_editor_value_at(&self, x: f32, y: f32) -> bool {
-        hit(graph_rect(), x, y) || (self.arp_ui.delay_open && hit(tap_graph(), x, y))
+        if self.fx_ui.open {
+            hit(tap_graph(), x, self.fx_delay_local_y(y))
+        } else {
+            hit(graph_rect(), x, y)
+        }
     }
     pub(in crate::ui) fn arp_editor_dragging(&self) -> bool {
         self.arp_ui.drag.is_some()
@@ -1062,15 +1142,6 @@ impl ChordboardView {
             u.page_elapsed = (u.page_elapsed + dt).min(pleasant_ui::page_slide::DURATION);
             changed = true;
         }
-        if u.delay_elapsed < pleasant_ui::page_slide::DURATION {
-            u.delay_elapsed = (u.delay_elapsed + dt).min(pleasant_ui::page_slide::DURATION);
-            u.delay_position = pleasant_ui::page_slide::position(
-                u.delay_start,
-                if u.delay_open { 1.0 } else { 0.0 },
-                u.delay_elapsed,
-            );
-            changed = true;
-        }
         changed
     }
     fn set_arp_editor_page(&mut self, page: usize) {
@@ -1078,8 +1149,6 @@ impl ChordboardView {
             self.arp_ui.page_from = self.arp_ui.edit_page;
             self.arp_ui.edit_page = page;
             self.arp_ui.page_elapsed = 0.0;
-            self.arp_ui.selected_tap = 0;
-            self.arp_ui.pending_tap_remove = None;
             self.arp_ui.drag = None;
         }
     }
@@ -1114,21 +1183,18 @@ impl ChordboardView {
             None => return,
         }
         self.set_arp_chooser(None);
+        if index == 7 {
+            self.set_panel(Some(Panel::Custom));
+        }
         cx.needs_redraw();
     }
     pub(in crate::ui) fn cancel_arp_editor(&mut self) {
         self.arp_ui.drag = None;
         self.arp_ui.dropdown = None;
         self.arp_ui.pending_tap_remove = None;
-    }
-    fn set_delay_editor(&mut self, open: bool) {
-        let u = &mut self.arp_ui;
-        u.delay_open = open;
-        u.pending_tap_remove = None;
-        u.delay_start = u.delay_position;
-        u.delay_elapsed = 0.0;
-        u.drag = None;
-        u.dropdown = None;
+        self.arp_ui.chooser = None;
+        self.arp_ui.chooser_position = 0.0;
+        self.arp_ui.chooser_elapsed = pleasant_ui::page_slide::DURATION;
     }
     fn start_arp_drag(
         &mut self,
@@ -1161,7 +1227,7 @@ impl ChordboardView {
         };
         if matches!(
             drag.kind,
-            DragKind::Step(_) | DragKind::Timing | DragKind::Gate
+            DragKind::Step(_) | DragKind::Timing
         ) && drag.pass_len != self.arp_pass_len_for_page(drag.page)
         {
             self.arp_ui.drag = None;
@@ -1171,21 +1237,6 @@ impl ChordboardView {
         let ramp = cx.modifiers().shift();
         let reset = drag.reset;
         match drag.kind {
-            DragKind::Gate => {
-                let value = if reset {
-                    Step::default().gate as f32
-                } else {
-                    (drag.value + (x - drag.x) * 99.0 / 200.0)
-                        .round()
-                        .clamp(1.0, 100.0)
-                };
-                self.params.arpeggiator.edit(|s| {
-                    s.rows[drag.page]
-                        .page
-                        .step_mut(drag.origin, drag.pass_len)
-                        .gate = value as u8
-                });
-            }
             DragKind::Step(lane) => {
                 let (_, len) = self.arp_cycle_for_editor();
                 if len == 0 {
@@ -1222,15 +1273,12 @@ impl ChordboardView {
                             * 100.0
                 };
                 self.params.arpeggiator.edit(|s| {
-                    Lane::Timing.set(
-                        s.rows[drag.page].page.step_mut(drag.origin, drag.pass_len),
-                        v,
-                    )
+                    s.rows[drag.page].page.step_mut(drag.origin, drag.pass_len).micro = v.clamp(-49.0, 49.0).round() as i16
                 });
             }
             DragKind::Tap(lane) => {
                 let state = self.params.arpeggiator.snapshot();
-                let delay = &state.rows[drag.page].page.delay;
+                let delay = &state.midi_fx.delay;
                 let domain = time_domain(delay);
                 let g = tap_graph();
                 let next = (0..delay.count as usize)
@@ -1266,10 +1314,7 @@ impl ChordboardView {
                             } else {
                                 (xx - a) / (b - a)
                             };
-                            lane.set(
-                                &mut s.rows[drag.page].page.delay.taps[i],
-                                start + (v - start) * f,
-                            );
+                            lane.set(&mut s.midi_fx.delay.taps[i], start + (v - start) * f);
                         }
                     }
                 });
@@ -1278,10 +1323,7 @@ impl ChordboardView {
                 self.arp_ui.selected_tap = next;
             }
             DragKind::TapTime => {
-                let sync = self.params.arpeggiator.snapshot().rows[drag.page]
-                    .page
-                    .delay
-                    .sync;
+                let sync = self.params.arpeggiator.snapshot().midi_fx.delay.sync;
                 let (lo, hi) = time_range(sync);
                 let value = if reset {
                     if sync {
@@ -1292,17 +1334,14 @@ impl ChordboardView {
                 } else {
                     drag.value + (x - drag.x) / tap_graph().2 * drag.last_value
                 };
-                self.params.arpeggiator.edit(|s| {
-                    s.rows[drag.page].page.delay.taps[drag.origin].time = value.clamp(lo, hi)
-                });
+                self.params
+                    .arpeggiator
+                    .edit(|s| s.midi_fx.delay.taps[drag.origin].time = value.clamp(lo, hi));
             }
             DragKind::BasicTime | DragKind::BasicGain | DragKind::BasicFeedback => {
-                let sync = self.params.arpeggiator.snapshot().rows[drag.page]
-                    .page
-                    .delay
-                    .sync;
+                let sync = self.params.arpeggiator.snapshot().midi_fx.delay.sync;
                 self.params.arpeggiator.edit(|s| {
-                    let t = &mut s.rows[drag.page].page.delay.taps[drag.origin];
+                    let t = &mut s.midi_fx.delay.taps[drag.origin];
                     match drag.kind {
                         DragKind::BasicTime => {
                             let (lo, hi) = time_range(sync);
@@ -1396,12 +1435,9 @@ impl ChordboardView {
             cx.needs_redraw();
             return true;
         }
-        if matches!(event, WindowEvent::KeyDown(Code::Escape, _))
-            && (self.arp_ui.dropdown.is_some() || self.arp_ui.delay_open)
+        if matches!(event, WindowEvent::KeyDown(Code::Escape, _)) && self.arp_ui.dropdown.is_some()
         {
-            if self.arp_ui.dropdown.take().is_none() {
-                self.set_delay_editor(false)
-            }
+            self.arp_ui.dropdown = None;
             cx.needs_redraw();
             return true;
         }
@@ -1414,7 +1450,7 @@ impl ChordboardView {
         if press {
             if let Some(index) = self.arp_ui.pending_tap_remove {
                 let state = self.params.arpeggiator.snapshot();
-                let delay = &state.rows[self.arp_ui.edit_page].page.delay;
+                let delay = &state.midi_fx.delay;
                 if index >= delay.count as usize
                     || !hit(
                         tap_remove_rect(&delay.taps[index], time_domain(delay)),
@@ -1453,17 +1489,12 @@ impl ChordboardView {
                     }
                 }
                 let count = match which {
-                    Dropdown::Mode => 4,
-                    Dropdown::TapLane => 6,
+                                Dropdown::TapLane => 6,
                     Dropdown::Pages => 8,
                     Dropdown::Paste(_) => 2,
                 };
                 if let Some(i) = (0..count).find(|&i| hit(dropdown_rect(which, i), x, y)) {
                     match which {
-                        Dropdown::Mode => {
-                            let p = &self.arp_params().arp_mode;
-                            Self::emit(cx, p.as_ptr(), p.preview_normalized(i as i32));
-                        }
                         Dropdown::TapLane => self.arp_ui.tap_lane = TAP_LANES[i],
                         Dropdown::Paste(page) => self.paste_arp_page(cx, page, i == 1),
                         Dropdown::Pages => {}
@@ -1475,7 +1506,7 @@ impl ChordboardView {
             }
             return hit(
                 if which == Dropdown::TapLane {
-                    PIANO_SURFACE
+                    DELAY_SURFACE
                 } else {
                     ARP_SURFACE
                 },
@@ -1488,31 +1519,15 @@ impl ChordboardView {
                     | WindowEvent::MouseUp(_)
             );
         }
-        if press && hit(delay_rect(), x, y) {
-            self.set_delay_editor(!self.arp_ui.delay_open);
-            cx.needs_redraw();
-            return true;
-        }
-        if press && hit(delay_power_rect(), x, y) {
-            let page = self.arp_ui.edit_page;
-            self.params
-                .arpeggiator
-                .edit(|s| s.rows[page].page.delay.enabled = !s.rows[page].page.delay.enabled);
-            cx.needs_redraw();
-            return true;
-        }
-        if self.arp_editor_overlay_visible() && hit(PIANO_SURFACE, x, y) {
-            if self.arp_ui.delay_elapsed < pleasant_ui::page_slide::DURATION {
-                return matches!(
-                    event,
-                    WindowEvent::MouseDown(_)
-                        | WindowEvent::MouseUp(_)
-                        | WindowEvent::MouseScroll(_, _)
-                );
+        if self.fx_ui.open {
+            if press && hit(delay_power_rect(), x, y) {
+                self.params
+                    .arpeggiator
+                    .edit(|s| s.midi_fx.delay.enabled = !s.midi_fx.delay.enabled);
+                cx.needs_redraw();
+                return true;
             }
-            if self.arp_ui.delay_open {
-                return self.delay_editor_event(cx, event, x, y, press);
-            }
+            return hit(DELAY_SURFACE, x, y) && self.delay_editor_event(cx, event, x, y, press);
         }
         if !hit(ARP_SURFACE, x, y) {
             return false;
@@ -1536,6 +1551,12 @@ impl ChordboardView {
         {
             return true;
         }
+        // Consume disabled controls before click, reset, or wheel handling.
+        if !self.params.arpeggiator.snapshot().rows[self.arp_ui.edit_page].settings.lock_length
+            && (hit(fixed_steps_rect(), x, y) || hit(fill_rect(), x, y))
+        {
+            return true;
+        }
         self.initialize_arp_loops();
         let reset = cx.modifiers().intersects(Modifiers::CTRL | Modifiers::LOGO)
             || matches!(event, WindowEvent::MouseDoubleClick(MouseButton::Left))
@@ -1544,7 +1565,12 @@ impl ChordboardView {
             if *dy == 0.0 {
                 return true;
             }
-            if hit(octaves_rect(), x, y) {
+            if hit(fixed_steps_rect(), x, y) {
+                self.edit_fixed_steps(dy.signum() as i8, reset);
+                cx.needs_redraw();
+                return true;
+            }
+            if hit(loop_add_rect(), x, y) {
                 let p = &self.arp_params().arp_octaves;
                 Self::emit(
                     cx,
@@ -1557,7 +1583,15 @@ impl ChordboardView {
             if let Some(i) =
                 (0..self.visible_loops()).find(|&i| hit(loop_rect(i, self.visible_loops()), x, y))
             {
-                self.edit_loop_octave(i, dy.signum() as i8, reset);
+                let r = loop_rect(i, self.visible_loops());
+                if self.visible_loops() > 1 && hit(loop_header_button(r, 2), x, y) {
+                    return true;
+                }
+                if hit(loop_header_button(r, 3), x, y) || hit(loop_header_button(r, 4), x, y) {
+                    self.edit_loop_inversion(i, dy.signum() as i8, reset);
+                } else {
+                    self.edit_loop_octave(i, dy.signum() as i8, reset);
+                }
                 cx.needs_redraw();
                 return true;
             }
@@ -1590,20 +1624,33 @@ impl ChordboardView {
         }
         cx.focus();
         self.focused = true;
-        if hit(power_rect(), x, y) {
+        if hit(lock_length_rect(), x, y) {
+            let page = self.arp_ui.edit_page;
+            self.params.arpeggiator.edit(|s| {
+                let settings = &mut s.rows[page].settings;
+                settings.lock_length = !reset && !settings.lock_length;
+            });
+        } else if hit(fixed_steps_rect(), x, y) {
+            let r = fixed_steps_rect();
+            self.edit_fixed_steps(if x < r.0 + r.2 * 0.5 { -1 } else { 1 }, reset);
+        } else if hit(fill_rect(), x, y) {
+            let page = self.arp_ui.edit_page;
+            self.params.arpeggiator.edit(|s| {
+                let fill = &mut s.rows[page].settings.fill;
+                *fill = if reset || *fill == Fill::Evolve {
+                    Fill::Repeat
+                } else {
+                    Fill::Evolve
+                };
+            });
+        } else if hit(custom_edit_rect(), x, y) && self.arp_params().arp_pattern.value() == 7 {
+            self.set_panel(Some(Panel::Custom));
+        } else if hit(power_rect(), x, y) {
             let p = &self.params.arp_enabled;
-            let bypassing = p.value();
             Self::emit(cx, p.as_ptr(), p.preview_normalized(!p.value()));
-            if bypassing {
-                self.close_tracker(cx);
-            }
         } else if hit(mode_rect(), x, y) {
-            if reset {
-                let p = &self.arp_params().arp_mode;
-                Self::emit(cx, p.as_ptr(), p.preview_normalized(2));
-            } else {
-                self.arp_ui.dropdown = Some(Dropdown::Mode)
-            }
+            let p = &self.arp_params().arp_mode;
+            Self::emit(cx, p.as_ptr(), p.preview_normalized(if reset || p.value() == 0 { 2 } else { 0 }));
         } else if hit(order_rect(), x, y) {
             if reset {
                 let p = &self.arp_params().arp_pattern;
@@ -1620,6 +1667,7 @@ impl ChordboardView {
             }
         } else if hit(loop_add_rect(), x, y) {
             self.add_arp_loop(cx);
+
         } else if hit(sync_rect(), x, y) {
             let p = &self.arp_params().arp_sync;
             Self::emit(
@@ -1645,8 +1693,12 @@ impl ChordboardView {
                 self.edit_loop_octave(i, -1, reset);
             } else if hit(loop_header_button(r, 1), x, y) {
                 self.edit_loop_octave(i, 1, reset);
-            } else if hit(loop_header_button(r, 2), x, y) {
+            } else if self.visible_loops() > 1 && hit(loop_header_button(r, 2), x, y) {
                 self.remove_arp_loop(cx, i);
+            } else if hit(loop_header_button(r, 3), x, y) {
+                self.edit_loop_inversion(i, -1, reset);
+            } else if hit(loop_header_button(r, 4), x, y) {
+                self.edit_loop_inversion(i, 1, reset);
             }
         } else if let Some(i) = (0..LANES.len()).find(|&i| hit(lane_rect(i), x, y)) {
             self.arp_ui.lane = LANES[i];
@@ -1660,13 +1712,17 @@ impl ChordboardView {
             if !hit(content_rect(), x, y) {
                 return false;
             }
-            if self.arp_ui.lane == Lane::Velocity && hit(gate_rect(), x, y) {
-                let i = layout.at(x);
-                let value = self.params.arpeggiator.snapshot().rows[page]
+            if hit(gate_rect(), x, y) {
+                let state = self.params.arpeggiator.snapshot();
+                let i = (0..len).min_by(|&a, &b| {
+                    let position = |i| layout.x[i] + state.rows[page].page.step(i, self.arp_pass_len_for_page(page)).micro as f32 * layout.interval[i] / 100.0;
+                    (position(a) - x).abs().total_cmp(&(position(b) - x).abs())
+                }).unwrap_or(0);
+                let value = state.rows[page]
                     .page
                     .step(i, self.arp_pass_len_for_page(page))
-                    .gate as f32;
-                self.start_arp_drag(cx, DragKind::Gate, i, value, (x, y), reset);
+                    .micro as f32;
+                self.start_arp_drag(cx, DragKind::Timing, i, value, (x, y), reset);
                 if reset {
                     self.apply_arp_drag(cx, x, y);
                 }
@@ -1683,24 +1739,7 @@ impl ChordboardView {
             } else if hit(graph_rect(), x, y) {
                 let state = self.params.arpeggiator.snapshot();
                 let lane = self.arp_ui.lane;
-                let i = if lane == Lane::Timing {
-                    (0..len)
-                        .min_by(|a, b| {
-                            let xx = |i: usize| {
-                                layout.x[i]
-                                    + state.rows[page]
-                                        .page
-                                        .step(i, self.arp_pass_len_for_page(page))
-                                        .micro as f32
-                                        * layout.interval[i]
-                                        / 100.0
-                            };
-                            (xx(*a) - x).abs().total_cmp(&(xx(*b) - x).abs())
-                        })
-                        .unwrap_or(0)
-                } else {
-                    layout.at(x)
-                };
+                let i = layout.at(x);
                 let value = lane.get(
                     state.rows[page]
                         .page
@@ -1708,11 +1747,7 @@ impl ChordboardView {
                 );
                 self.start_arp_drag(
                     cx,
-                    if lane == Lane::Timing {
-                        DragKind::Timing
-                    } else {
-                        DragKind::Step(lane)
-                    },
+                    DragKind::Step(lane),
                     i,
                     value,
                     (x, y),
@@ -1737,19 +1772,24 @@ impl ChordboardView {
         y: f32,
         press: bool,
     ) -> bool {
-        let page = self.arp_ui.edit_page;
         let state = self.params.arpeggiator.snapshot();
-        let delay = &state.rows[page].page.delay;
+        let delay = &state.midi_fx.delay;
         let selected = self.arp_ui.selected_tap.min(delay.count as usize - 1);
         let tap = delay.taps[selected];
         let reset = cx.modifiers().intersects(Modifiers::CTRL | Modifiers::LOGO)
             || matches!(event, WindowEvent::MouseDoubleClick(MouseButton::Left));
         if let WindowEvent::MouseScroll(_, dy) = event {
+            if ![delay_time_rect(), delay_gain_rect(), delay_feedback_rect()]
+                .iter()
+                .any(|r| hit(*r, x, y))
+            {
+                return false;
+            }
             if *dy == 0.0 {
                 return true;
             }
             self.params.arpeggiator.edit(|s| {
-                let t = &mut s.rows[page].page.delay.taps[selected];
+                let t = &mut s.midi_fx.delay.taps[selected];
                 if hit(delay_time_rect(), x, y) {
                     if delay.sync {
                         let divisions = [
@@ -1808,7 +1848,7 @@ impl ChordboardView {
             {
                 if self.arp_ui.pending_tap_remove == Some(index) {
                     self.params.arpeggiator.edit(|s| {
-                        let d = &mut s.rows[page].page.delay;
+                        let d = &mut s.midi_fx.delay;
                         // These are independent times, not gaps: copy each survivor intact.
                         d.taps.copy_within(index + 1..d.count as usize, index);
                         d.count -= 1;
@@ -1827,12 +1867,10 @@ impl ChordboardView {
             }
         }
         self.arp_ui.pending_tap_remove = None;
-        if hit(delay_close_rect(), x, y) {
-            self.set_delay_editor(false)
-        } else if hit(delay_sync_rect(), x, y) {
+        if hit(delay_sync_rect(), x, y) {
             let beat_ms = 60_000.0 / self.snapshot.tempo.max(1.0);
             self.params.arpeggiator.edit(|s| {
-                let d = &mut s.rows[page].page.delay;
+                let d = &mut s.midi_fx.delay;
                 d.sync = !delay.sync;
                 for t in &mut d.taps {
                     t.time = if d.sync {
@@ -1876,15 +1914,15 @@ impl ChordboardView {
         } else if hit(delay_leading_rect(), x, y) {
             self.params
                 .arpeggiator
-                .edit(|s| s.rows[page].page.delay.voice_leading = !delay.voice_leading)
+                .edit(|s| s.midi_fx.delay.voice_leading = !delay.voice_leading)
         } else if hit(delay_follow_rect(), x, y) {
             self.params
                 .arpeggiator
-                .edit(|s| s.rows[page].page.delay.follow_chords = !delay.follow_chords)
+                .edit(|s| s.midi_fx.delay.follow_chords = !delay.follow_chords)
         } else if hit(ping_rect(), x, y) {
             self.params
                 .arpeggiator
-                .edit(|s| s.rows[page].page.delay.ping_pong = !delay.ping_pong)
+                .edit(|s| s.midi_fx.delay.ping_pong = !delay.ping_pong)
         } else if (delay.count as usize) < TAPS && hit(add_rect(delay, domain), x, y) {
             if (delay.count as usize) < TAPS {
                 let index = delay.count as usize;
@@ -1893,7 +1931,7 @@ impl ChordboardView {
                     ..Default::default()
                 };
                 self.params.arpeggiator.edit(|s| {
-                    let d = &mut s.rows[page].page.delay;
+                    let d = &mut s.midi_fx.delay;
                     d.taps[index] = t;
                     d.count += 1;
                 });
@@ -1903,7 +1941,7 @@ impl ChordboardView {
             let i = (0..5).find(|&i| hit(source_rect(i), x, y)).unwrap_or(0);
             self.params
                 .arpeggiator
-                .edit(|s| s.rows[page].page.delay.sources ^= 1 << i)
+                .edit(|s| s.midi_fx.delay.sources ^= 1 << i)
         } else {
             let g = tap_graph();
             let domain = time_domain(delay);
@@ -1916,7 +1954,7 @@ impl ChordboardView {
                 })
                 .unwrap_or(0);
             let tx = tap_x(&delay.taps[nearest], domain);
-            if (x - tx).abs() < 22.0 && y >= g.1 - 26.0 && y < g.1 {
+            if (x - tx).abs() < 22.0 && y >= g.1 - 18.0 && y < g.1 {
                 self.arp_ui.selected_tap = nearest;
                 self.start_arp_drag(
                     cx,
@@ -1954,12 +1992,17 @@ impl ChordboardView {
 
     pub(super) fn arp_button(&self, d: &mut Draw, r: Rect, label: &str, on: bool, color: Color) {
         self.button_surface(d, r, on, color);
-        let label = self.fit_text(d, label, r.2 - 8.0, 13.0);
+        let (r, label) = self.button_content(d, r, label);
+        if self.draw_add_label(d, r, label, 13.0, if on { color } else { TEXT }) {
+            return;
+        }
+        let size = if matches!(label, "+" | "−" | "-") { 20.0 } else { 13.0 };
+        let label = self.fit_text(d, label, r.2 - 8.0, size);
         d.text_centered(
             r.0 + r.2 * 0.5,
-            r.1 + r.3 * 0.5 + 4.5,
+            r.1 + r.3 * 0.5 + size * 0.35,
             &label,
-            13.0,
+            size,
             if on { color } else { TEXT },
         );
     }
@@ -1973,6 +2016,7 @@ impl ChordboardView {
         icon: style::Icon,
     ) {
         self.button_surface(d, r, on, color);
+        let (r, label) = self.button_content(d, r, label);
         let label = self.fit_text(d, label, r.2 - 31.0, 13.0);
         let width = d.text_width(&label, 13.0);
         let left = r.0 + (r.2 - width - 23.0) * 0.5;
@@ -1980,6 +2024,36 @@ impl ChordboardView {
         icon.draw(d, left + 9.0, r.1 + r.3 * 0.5, color);
         d.text_middle(left + 23.0, r.1 + r.3 * 0.5, &label, 13.0, color);
     }
+    fn arp_toggle(&self, d: &mut Draw, r: Rect, label: &str, on: bool, color: Color) {
+        self.button_surface(d, r, on, color);
+        d.circle(r.0 + 11.0, r.1 + r.3 * 0.5, 3.0, if on { color } else { MUTED }, on);
+        let label = self.fit_text(d, label, r.2 - 26.0, 13.0);
+        d.text_centered(r.0 + r.2 * 0.5 + 7.0, r.1 + r.3 * 0.5 + 4.5,
+            &label, 13.0, if on { color } else { TEXT });
+    }
+
+    pub(super) fn draw_adjustment_knob(&self, d: &mut Draw, control: &Control, rect: Rect) {
+        let routed = self.routed_control(control);
+        let c = routed.as_ref().unwrap_or(control);
+        let color = if routed.is_some() { TEAL } else { GOLD };
+        let label = if c.id == "swing" { "Swing" } else { "Humanize" };
+        let layout = adjustment_knob_layout(rect);
+        let value = self.display_value(c);
+        if c.id == "swing" {
+            d.knob_with_layout_bipolar(&layout, label, &value, c.norm, color, false);
+        } else {
+            d.knob_with_layout(&layout, label, &value, c.norm, color, false);
+        }
+        if routed.is_some() { self.live_highlight(d, rect); }
+    }
+
+    fn arp_value(&self, d: &mut Draw, r: Rect, label: &str, value: f32) {
+        self.arp_button(d, r, label, false, GOLD);
+        let rail = (r.0 + 8.0, r.1 + r.3 - 4.0, r.2 - 16.0);
+        d.line(rail.0, rail.1, rail.0 + rail.2, rail.1, LINE, 2.0);
+        d.line(rail.0, rail.1, rail.0 + rail.2 * value.clamp(0.0, 1.0), rail.1, GOLD, 2.0);
+    }
+
     fn draw_arp_lane_button(&self, d: &mut Draw, r: Rect, lane: Lane) {
         use nih_plug_vizia::vizia::vg::{Align, Baseline, Paint};
         let on = self.arp_ui.lane == lane;
@@ -1998,11 +2072,7 @@ impl ChordboardView {
                 &paint,
             );
         }
-        let lines: &[&str] = if lane == Lane::Velocity {
-            &["Vel /", "Gate"]
-        } else {
-            &[lane.label()]
-        };
+        let lines = &[lane.label()];
         let center_y = r.1 + (r.3 + 24.0) * 0.5;
         for (i, line) in lines.iter().enumerate() {
             let y = center_y + (i as f32 - (lines.len() - 1) as f32 * 0.5) * 14.0;
@@ -2032,9 +2102,13 @@ impl ChordboardView {
     }
     fn string_readout(&self, d: &mut Draw, x: f32, y: f32, g: Rect, label: &str, color: Color) {
         let width = d.text_width(label, 14.0);
-        // Put three quarters of the readout to the left of its handle.
-        let left = (x - width * 0.75).clamp(g.0, g.0 + g.2 - width);
-        d.text(left, (y - 10.0).max(g.1 + 14.0), label, 14.0, color);
+        // Keep the value beside the bar, including at the top of its range.
+        let left = if x + 18.0 + width <= g.0 + g.2 {
+            x + 18.0
+        } else {
+            x - 18.0 - width
+        };
+        d.text(left, (y + 5.0).clamp(g.1 + 14.0, g.1 + g.3), label, 14.0, color);
     }
 
     pub(in crate::ui) fn draw_arp_editor(&self, d: &mut Draw) {
@@ -2042,7 +2116,8 @@ impl ChordboardView {
         d.scissor(s.0, s.1, s.2, s.3);
         let saved_offset = d.offset_x;
         let saved_disabled = d.disabled;
-        d.disabled = !self.params.arp_enabled.value();
+        // Bypass stops playback; settings remain editable. Only the pattern dims.
+        d.disabled = false;
         self.draw_arp_strings(d);
         if self.arp_ui.chooser_position > 0.0 {
             let r = chooser_area();
@@ -2054,7 +2129,7 @@ impl ChordboardView {
             d.scissor(s.0, s.1, s.2, s.3);
         }
         d.offset_x = saved_offset;
-        if let Some(which @ (Dropdown::Mode | Dropdown::Pages | Dropdown::Paste(_))) =
+        if let Some(which @ (Dropdown::Pages | Dropdown::Paste(_))) =
             self.arp_ui.dropdown
         {
             self.draw_arp_dropdown(d, which);
@@ -2073,7 +2148,7 @@ impl ChordboardView {
             !self.params.arp_enabled.value(),
             TEAL,
             self.hover_amount(power) > 0.01,
-            0.0,
+            self.button_press_amount(power),
         );
         d.disabled = disabled;
         d.text(
@@ -2087,44 +2162,32 @@ impl ChordboardView {
                 MUTED
             },
         );
-        self.arp_icon_button(
-            d,
-            mode_rect(),
-            &format!("{} ▾", MODE_NAMES[p.arp_mode.value().clamp(0, 3) as usize]),
-            self.arp_ui.dropdown == Some(Dropdown::Mode),
-            GOLD,
-            repeat_icon(p.arp_mode.value().clamp(0, 3) as usize),
-        );
+        let repeat = p.arp_mode.value() != 0;
+        let r = mode_rect();
+        self.button_surface(d, r, repeat, GOLD);
+        let color = if repeat { GOLD } else { MUTED };
+        // Compact repeat barline shares the header's button height.
+        let x = r.0 + 18.0;
+        let y = r.1 + r.3 * 0.5;
+        d.rect(x, y - 8.0, 1.5, 16.0, color);
+        d.rect(x + 4.0, y - 8.0, 3.0, 16.0, color);
+        for dy in [-3.5, 3.5] { d.circle(x - 5.0, y + dy, 1.5, color, true); }
+        d.text_middle(x + 13.0, y, "Repeat", 11.0, color);
         self.arp_button(
             d,
             order_rect(),
             &format!(
                 "{} ▾",
-                ARP_PATTERN_NAMES[p.arp_pattern.value().clamp(0, 6) as usize]
+                ARP_PATTERN_NAMES[p.arp_pattern.value().clamp(0, 7) as usize]
             ),
             self.arp_ui.chooser == Some(Chooser::Order),
             GOLD,
         );
-        let loops = octaves_rect();
-        let label = self.fit_text(
-            d,
-            &format!("Loop Length: {}", self.visible_loops()),
-            loops.2 - 36.0,
-            13.0,
-        );
-        d.text_middle(loops.0 + 6.0, loops.1 + loops.3 * 0.5, &label, 13.0, TEXT);
-        self.arp_button(d, loop_add_rect(), "+", false, TEAL);
-        self.arp_button(
-            d,
-            sync_rect(),
-            if p.arp_sync.value() {
-                "Tempo sync"
-            } else {
-                "Free · ms"
-            },
-            p.arp_sync.value(),
-            TEAL,
-        );
+        let saved_disabled = d.disabled;
+        d.disabled |= self.visible_loops() >= LOOPS;
+        self.arp_button(d, loop_add_rect(), "+ Loop", false, TEAL);
+        d.disabled = saved_disabled;
+        self.arp_icon_button(d, sync_rect(), "Sync", p.arp_sync.value(), TEAL, style::Icon::Host);
         if p.arp_sync.value() {
             self.arp_button(
                 d,
@@ -2149,32 +2212,69 @@ impl ChordboardView {
             LINE,
             1.0,
         );
-        let page_button = page_block();
-        d.text(
-            page_button.0 + 8.0,
-            page_button.1 + 19.0,
-            &format!("ROW {}", self.arp_ui.edit_page + 1),
-            12.0,
+        let settings = self.params.arpeggiator.snapshot().rows[self.arp_ui.edit_page].settings;
+        let lock = lock_length_rect();
+        self.button_surface(d, lock, settings.lock_length, GOLD);
+        let (lock, _) = self.button_content(d, lock, "");
+        let icon = if settings.lock_length { style::Icon::Lock } else { style::Icon::Unlock };
+        icon.draw(d, lock.0 + lock.2 * 0.5, lock.1 + lock.3 * 0.5,
+            if settings.lock_length { GOLD } else { MUTED });
+        let disabled = d.disabled;
+        d.disabled |= !settings.lock_length;
+        self.arp_button(
+            d,
+            fixed_steps_rect(),
+            &format!("Steps: {}", settings.steps),
+            false,
+            GOLD,
+        );
+        let steps = fixed_steps_rect();
+        for (x, symbol) in [(steps.0 + 12.0, "−"), (steps.0 + steps.2 - 12.0, "+")] {
+            d.text_centered(x, steps.1 + steps.3 * 0.5 + 7.0, symbol, 20.0, TEXT);
+        }
+        self.arp_button(
+            d,
+            fill_rect(),
+            if settings.fill == Fill::Evolve {
+                "Fill: Evolve"
+            } else {
+                "Fill: Repeat"
+            },
+            settings.fill == Fill::Evolve,
             TEAL,
         );
+        d.disabled = disabled;
+        if settings.pattern == 7 {
+            self.arp_button(
+                d,
+                custom_edit_rect(),
+                "Edit Custom",
+                self.panel == Some(Panel::Custom),
+                TEAL,
+            );
+        }
+        let row = &self.params.arpeggiator.snapshot().rows[self.arp_ui.edit_page];
+        let context = format!("Row {} · {}{}", self.arp_ui.edit_page + 1,
+            row.chord.map(harmony::chord_name).unwrap_or_else(|| "Choose chord".into()),
+            if self.params.arp_enabled.value() { "" } else { " · Bypassed" });
+        let context_left = mode_rect().0 + mode_rect().2 + 16.0;
+        let context = self.fit_text(d, &context, sync_rect().0 - context_left - 16.0, 12.0);
+        d.text_middle(context_left, module_header_mid(s.1) + 2.0, &context, 12.0, MUTED);
         for (i, lane) in LANES.iter().enumerate() {
             self.draw_arp_lane_button(d, lane_rect(i), *lane);
         }
-        let status = if p.arp_mode.value() == 3 && !self.snapshot.arp_aligned {
-            "Aligned Loop · using Sync Loop"
+        let status = if self.params.daw_alignment.value() && !self.snapshot.arp_aligned {
+            "DAW alignment · using local clock"
         } else if self.snapshot.arp_pending < 8 {
-            "Page queued for next boundary"
-        } else if matches!(self.arp_ui.lane, Lane::Mod1 | Lane::Mod2) {
-            "Bipolar additive modulation · −100% to +100%"
-        } else if self.arp_ui.lane == Lane::Velocity {
-            "Cmd/Ctrl: reset"
-        } else {
-            "Drag to adjust · Shift: straight ramp · Cmd/Ctrl: reset"
-        };
+            "Row queued for next boundary"
+        } else { "" };
         let status_left = graph_rect().0;
         let status = self.fit_text(d, status, graph_rect().2, 12.0);
         d.text(status_left, s.1 + s.3 - 7.0, &status, 12.0, MUTED);
+        let disabled = d.disabled;
+        d.disabled = !self.params.arp_enabled.value();
         self.draw_arp_page_slide(d, content_rect(), Self::draw_arp_pattern);
+        d.disabled = disabled;
     }
     fn draw_arp_page_slide(&self, d: &mut Draw, r: Rect, draw: impl Fn(&Self, &mut Draw, usize)) {
         d.scissor(r.0, r.1, r.2, r.3);
@@ -2192,8 +2292,8 @@ impl ChordboardView {
         d.offset_x = offset + direction * (1.0 - progress) * r.2;
         draw(self, d, self.arp_ui.edit_page);
         d.offset_x = offset;
-        let surface = if r.1 >= PIANO_SURFACE.1 {
-            PIANO_SURFACE
+        let surface = if self.fx_ui.open {
+            DELAY_SURFACE
         } else {
             ARP_SURFACE
         };
@@ -2222,18 +2322,28 @@ impl ChordboardView {
             let r = loop_rect(i, count);
             let color = if i < active_loops { TEAL } else { MUTED };
             d.rounded_rect(r.0, r.1, r.2, r.3, 4.0, alpha(color, 0.08));
-            let label = self.fit_text(d, &format!("Loop {}", i + 1), r.2 - 194.0, 14.0);
-            d.text_middle(r.0 + 8.0, r.1 + r.3 * 0.5, &label, 14.0, TEXT);
-            for (button, label) in ["OCT -1", "OCT +1", "×"].into_iter().enumerate() {
-                if button < 2 || active_loops > 1 {
+            let label = self.fit_text(d, &format!("Loop {}", i + 1), 48.0, 12.0);
+            d.text_middle(r.0 + 8.0, r.1 + r.3 * 0.5, &label, 12.0, TEXT);
+            let start = r.0 + 60.0;
+            for (center, label) in [
+                (59.0, format!("Inv {:+}", page.loops[i].inversion)),
+                (180.0, format!("Oct {:+}", page.loops[i].octave)),
+            ] {
+                d.text_centered(start + center, r.1 + r.3 * 0.5 + 4.0, &label, 12.0, TEXT);
+            }
+            for (button, label) in ["−", "+", "×", "−", "+"]
+                .into_iter()
+                .enumerate()
+            {
+                if button != 2 || self.loop_remove_visible(i, count) {
                     let button = loop_header_button(r, button);
                     self.button_surface(d, button, false, color);
-                    let label = self.fit_text(d, label, button.2 - 8.0, 14.0);
+                    let label = self.fit_text(d, label, button.2 - 6.0, 20.0);
                     d.text_middle(
-                        button.0 + (button.2 - d.text_width(&label, 14.0)) * 0.5,
+                        button.0 + (button.2 - d.text_width(&label, 20.0)) * 0.5,
                         button.1 + button.3 * 0.5,
                         &label,
-                        14.0,
+                        20.0,
                         TEXT,
                     );
                 }
@@ -2273,11 +2383,7 @@ impl ChordboardView {
                 continue;
             }
             let nominal = layout.x[i];
-            let x = if lane == Lane::Timing {
-                nominal + step.micro as f32 * layout.interval[i] / 100.0
-            } else {
-                nominal
-            };
+            let x = nominal + step.micro as f32 * layout.interval[i] / 100.0;
             let active = self.snapshot.arp_row_index as usize == page_index
                 && self.snapshot.arp_running
                 && self.snapshot.arp_step as usize == i;
@@ -2305,36 +2411,13 @@ impl ChordboardView {
             } else {
                 0.38
             } * mute_opacity;
-            if lane == Lane::Timing {
-                dotted(d, nominal, g.1, g.3, alpha(MUTED, 0.6 * mute_opacity));
-                d.line(
-                    x,
-                    g.1,
-                    x,
-                    g.1 + g.3,
-                    alpha(color, strength),
-                    if active { 6.0 } else { 4.0 },
-                );
-                d.circle(x, g.1 + g.3 * 0.5, 6.0, alpha(color, mute_opacity), true)
-            } else {
-                let y = value_y(lane.get(step), range, g);
-                d.line(x, g.1, x, g.1 + g.3, alpha(color, 0.25 * strength), 1.0);
-                d.line(
-                    x,
-                    baseline,
-                    x,
-                    y,
-                    alpha(color, strength),
-                    if active { 8.0 } else { 6.0 },
-                );
-                d.circle(
-                    x,
-                    y,
-                    if active { 7.0 } else { 6.0 },
-                    alpha(color, strength),
-                    true,
-                )
-            }
+            let bar_width = (layout.spacing * 0.48).clamp(10.0, 26.0);
+            dotted(d, nominal, g.1, g.3, alpha(MUTED, 0.25 * mute_opacity));
+            let y = value_y(lane.get(step), range, g);
+            let height = (baseline - y).abs().max(5.0);
+            let top = baseline.min(y).min(g.1 + g.3 - height);
+            d.rounded_rect(x - bar_width * 0.5, top, bar_width, height,
+                5.0_f32.min(height * 0.5), alpha(color, strength));
             // Hover or drag reveals exact values; note labels remain stable while timing moves.
             let hovered = self
                 .pointer
@@ -2344,66 +2427,18 @@ impl ChordboardView {
                     matches!(drag.kind, DragKind::Step(_) | DragKind::Timing) && drag.last == i
                 })
             {
-                let y = if lane == Lane::Timing {
-                    g.1 + g.3 * 0.5
-                } else {
-                    value_y(lane.get(step), range, g)
-                };
-                self.string_readout(d, x, y, g, &lane.format(lane.get(step)), TEXT)
+                let label = lane.format(lane.get(step));
+                let width = d.text_width(&label, 14.0);
+                let left = (x - width * 0.5).clamp(g.0, g.0 + g.2 - width);
+                d.text(left, g.1 - 9.0, &label, 14.0, TEXT);
             }
-            if lane == Lane::Velocity {
-                let strip = gate_rect();
-                // Hit testing uses the fixed note slot, independently of the live bar.
-                let left = nominal - layout.spacing * 0.42;
-                let width = layout.spacing * 0.84;
-                let saved_x = left + width * step.gate as f32 / 100.0;
-                let live = if self.snapshot.arp_row_index as usize == page_index {
-                    self.snapshot.arp_gates[i]
-                } else {
-                    step.gate as f32 / 100.0
-                };
-                d.rounded_rect(
-                    left,
-                    strip.1 + 5.0,
-                    width,
-                    12.0,
-                    2.0,
-                    alpha(MUTED, 0.15 * mute_opacity),
-                );
-                d.rounded_rect(
-                    left,
-                    strip.1 + 6.0,
-                    (width * live).max(1.0),
-                    10.0,
-                    2.0,
-                    alpha(color, strength * 0.65),
-                );
-                d.outline_rounded(
-                    saved_x - 2.5,
-                    strip.1 + 2.0,
-                    5.0,
-                    18.0,
-                    2.0,
-                    alpha(TEXT, strength),
-                    1.0,
-                );
-                if self
-                    .pointer
-                    .is_some_and(|(px, py)| hit(strip, px, py) && layout.at(px) == i)
-                    || self
-                        .arp_ui
-                        .drag
-                        .is_some_and(|drag| matches!(drag.kind, DragKind::Gate) && drag.origin == i)
-                {
-                    self.string_readout(
-                        d,
-                        nominal,
-                        strip.1,
-                        strip,
-                        &format!("{}%", step.gate),
-                        TEXT,
-                    );
-                }
+            let strip = gate_rect();
+            let handle_width = (layout.spacing - 2.0).clamp(8.0, 40.0);
+            d.line(nominal, strip.1, nominal, strip.1 + strip.3, alpha(MUTED, 0.35), 1.0);
+            d.rounded_rect(x - handle_width * 0.5, strip.1 + 2.0, handle_width, 18.0, 4.0, alpha(color, 0.18));
+            d.text_centered(x, strip.1 + 15.0, "↔", 13.0, color);
+            if self.arp_ui.drag.is_some_and(|drag| matches!(drag.kind, DragKind::Timing) && drag.origin == i) {
+                self.string_readout(d, x, strip.1, strip, &format!("{:+}%", step.micro), TEXT);
             }
             let pitch = note + step.octave as i16 * 12;
             let label = if (0..=127).contains(&pitch) {
@@ -2420,9 +2455,9 @@ impl ChordboardView {
             );
             let r = layout.status(i);
             let mark = match step.state {
-                StepState::Play => "•",
-                StepState::Mute => "–",
-                StepState::Skip => "×",
+                StepState::Play => "Play",
+                StepState::Mute => "Mute",
+                StepState::Skip => "Skip",
             };
             self.arp_button(
                 d,
@@ -2438,70 +2473,47 @@ impl ChordboardView {
         }
     }
     pub(super) fn draw_keyboard_pages(&self, d: &mut Draw) {
-        let s = PIANO_SURFACE;
-        self.surface(d, s);
-        d.scissor(s.0, s.1, s.2, s.3);
-        let saved_offset = d.offset_x;
-        let progress = self.arp_ui.delay_position;
-        if progress < 1.0 {
-            d.offset_x = saved_offset - progress * s.2;
-            self.draw_piano(d);
-        }
-        if progress > 0.0 {
-            d.offset_x = saved_offset + (1.0 - progress) * s.2;
-            self.draw_delay_strings(d);
-        }
-        d.offset_x = saved_offset;
-        if self.arp_ui.dropdown == Some(Dropdown::TapLane) {
-            self.draw_arp_dropdown(d, Dropdown::TapLane);
-        }
+        self.surface(d, PIANO_SURFACE);
+        d.scissor(
+            PIANO_SURFACE.0,
+            PIANO_SURFACE.1,
+            PIANO_SURFACE.2,
+            PIANO_SURFACE.3,
+        );
+        self.draw_piano(d);
         d.reset_scissor();
     }
-    pub(super) fn draw_delay_header(&self, d: &mut Draw) {
+    pub(super) fn draw_delay_strings(&self, d: &mut Draw) {
+        let s = DELAY_SURFACE;
         let state = self.params.arpeggiator.snapshot();
-        let enabled = state.rows[self.arp_ui.edit_page].page.delay.enabled;
-        d.bypass_button(
-            delay_power_rect(),
-            !enabled,
-            TEAL,
-            self.hover_amount(delay_power_rect()) > 0.01,
-            0.0,
-        );
-        self.arp_button(
-            d,
-            delay_rect(),
-            "MIDI Delay ›",
-            self.arp_ui.delay_open,
-            TEAL,
-        );
-    }
-    fn draw_delay_strings(&self, d: &mut Draw) {
-        let s = PIANO_SURFACE;
-        let state = self.params.arpeggiator.snapshot();
-        let delay = &state.rows[self.arp_ui.edit_page].page.delay;
+        let delay = &state.midi_fx.delay;
         let selected = self.arp_ui.selected_tap.min(delay.count as usize - 1);
         let tap = &delay.taps[selected];
         let u = &self.arp_ui;
         d.text(
-            s.0 + 18.0,
+            s.0 + 48.0,
             s.1 + 29.0,
             "MIDI DELAY",
             16.0,
             if delay.enabled { TEXT } else { MUTED },
         );
+        if !delay.enabled {
+            d.text(s.0 + 340.0, s.1 + 28.0, "Bypassed", 13.0, MUTED);
+        }
         d.text(
             s.0 + 210.0,
             s.1 + 28.0,
-            &format!(
-                "Page {} · Tap {} of {}",
-                u.edit_page + 1,
-                selected + 1,
-                delay.count
-            ),
+            &format!("Tap {} of {}", selected + 1, delay.count),
             13.0,
             MUTED,
         );
-        self.arp_button(d, delay_close_rect(), "‹ Keyboard", true, TEAL);
+        d.bypass_button(
+            delay_power_rect(),
+            !delay.enabled,
+            TEAL,
+            self.hover_amount(self.fx_delay_screen_rect(delay_power_rect())) > 0.01,
+            self.button_press_amount(self.fx_delay_screen_rect(delay_power_rect())),
+        );
         d.line(
             s.0 + 12.0,
             s.1 + 43.0,
@@ -2510,7 +2522,7 @@ impl ChordboardView {
             LINE,
             1.0,
         );
-        self.arp_button(
+        self.arp_toggle(
             d,
             delay_sync_rect(),
             if delay.sync {
@@ -2521,26 +2533,23 @@ impl ChordboardView {
             delay.sync,
             TEAL,
         );
-        self.arp_button(
+        self.arp_value(
             d,
             delay_time_rect(),
             &format!("Time: {}", time_label(tap.time, delay.sync)),
-            false,
-            GOLD,
+            tap.time / time_range(delay.sync).1,
         );
-        self.arp_button(
+        self.arp_value(
             d,
             delay_gain_rect(),
             &format!("Velocity: {:.0}%", tap.velocity * 100.0),
-            false,
-            GOLD,
+            tap.velocity,
         );
-        self.arp_button(
+        self.arp_value(
             d,
             delay_feedback_rect(),
             &format!("Feedback: {:.0}%", tap.feedback * 100.0),
-            false,
-            GOLD,
+            tap.feedback,
         );
         self.arp_button(
             d,
@@ -2549,15 +2558,15 @@ impl ChordboardView {
             u.dropdown == Some(Dropdown::TapLane),
             GOLD,
         );
-        self.arp_button(d, ping_rect(), "Ping pong", delay.ping_pong, TEAL);
-        self.arp_button(
+        self.arp_toggle(d, ping_rect(), "Ping pong", delay.ping_pong, TEAL);
+        self.arp_toggle(
             d,
             delay_leading_rect(),
             "Voice leading",
             delay.voice_leading,
             COLORS[1],
         );
-        self.arp_button(
+        self.arp_toggle(
             d,
             delay_follow_rect(),
             "Follow chords",
@@ -2566,16 +2575,17 @@ impl ChordboardView {
         );
         d.text(s.0 + 440.0, s.1 + 27.0, "Input", 13.0, MUTED);
         for (i, name) in SOURCE_NAMES.iter().enumerate() {
-            self.arp_button(d, source_rect(i), name, delay.sources & (1 << i) != 0, TEAL)
+            self.arp_toggle(d, source_rect(i), name, delay.sources & (1 << i) != 0, TEAL)
         }
-        let g = tap_graph();
-        let area = (s.0 + 8.0, g.1 - 28.0, s.2 - 16.0, s.3 - (g.1 - s.1) + 28.0);
-        self.draw_arp_page_slide(d, area, Self::draw_delay_pattern);
+        self.draw_delay_pattern(d);
+        if self.arp_ui.dropdown == Some(Dropdown::TapLane) {
+            self.draw_arp_dropdown(d, Dropdown::TapLane);
+        }
     }
-    fn draw_delay_pattern(&self, d: &mut Draw, page_index: usize) {
-        let s = PIANO_SURFACE;
+    fn draw_delay_pattern(&self, d: &mut Draw) {
+        let s = DELAY_SURFACE;
         let state = self.params.arpeggiator.snapshot();
-        let delay = &state.rows[page_index].page.delay;
+        let delay = &state.midi_fx.delay;
         let u = &self.arp_ui;
         let selected = u.selected_tap.min(delay.count as usize - 1);
         let g = tap_graph();
@@ -2599,6 +2609,31 @@ impl ChordboardView {
             }
         }
         d.line(g.0, baseline, g.0 + g.2, baseline, LINE, 1.0);
+        // Paint echo trains first so their faint lines never cover tap handles.
+        for (i, t) in delay.taps[..delay.count as usize].iter().enumerate() {
+            if !t.enabled || t.velocity < 1.0 / 127.0 || t.time <= 0.0 {
+                continue;
+            }
+            let color = if i == selected { GOLD } else { TEAL };
+            let y = value_y(u.tap_lane.get(t), range, g);
+            let mut decay = 1.0;
+            for generation in 2..=64 {
+                decay *= t.feedback;
+                let time = t.time * generation as f32;
+                if time > domain || t.velocity * decay < 1.0 / 127.0 {
+                    break;
+                }
+                let x = g.0 + time / domain * g.2;
+                // Only velocity falls with feedback; pitch, pan and channel
+                // retain their lane values while the lines fade in opacity.
+                let echo_y = if matches!(u.tap_lane, TapLane::Velocity) {
+                    baseline + (y - baseline) * decay
+                } else {
+                    y
+                };
+                d.line(x, baseline, x, echo_y, alpha(color, decay * 0.65), 2.0);
+            }
+        }
         for i in 0..delay.count as usize {
             let t = &delay.taps[i];
             let x = tap_x(t, domain);
@@ -2614,8 +2649,8 @@ impl ChordboardView {
                 if i == selected { 8.0 } else { 6.0 },
             );
             d.circle(x, y, 6.0, color, true);
-            d.rounded_rect(x - 20.0, g.1 - 26.0, 40.0, 22.0, 4.0, alpha(color, 0.18));
-            d.text_centered(x, g.1 - 10.0, &format!("{} ↔", i + 1), 13.0, color);
+            d.rounded_rect(x - 20.0, g.1 - 18.0, 40.0, 16.0, 4.0, alpha(color, 0.18));
+            d.text_centered(x, g.1 - 6.0, &format!("{} ↔", i + 1), 13.0, color);
             self.string_readout(
                 d,
                 x,
@@ -2662,7 +2697,7 @@ impl ChordboardView {
                 self.arp_button(
                     d,
                     r,
-                    &format!("Page {}", page + 1),
+                    &format!("Row {}", page + 1),
                     self.arp_ui.edit_page == page,
                     TEAL,
                 );
@@ -2679,8 +2714,7 @@ impl ChordboardView {
             self.draw_arp_dropdown(d, Dropdown::Pages);
         }
         let count = match which {
-            Dropdown::Mode => 4,
-            Dropdown::TapLane => 6,
+                Dropdown::TapLane => 6,
             Dropdown::Pages => 8,
             Dropdown::Paste(_) => 2,
         };
@@ -2688,19 +2722,11 @@ impl ChordboardView {
             let r = dropdown_rect(which, i);
             d.rect(r.0, r.1, r.2, r.3, PANEL);
             let (label, on) = match which {
-                Dropdown::Mode => (
-                    MODE_NAMES[i],
-                    self.arp_params().arp_mode.value() as usize == i,
-                ),
                 Dropdown::TapLane => (TAP_LANES[i].label(), self.arp_ui.tap_lane == TAP_LANES[i]),
-                Dropdown::Paste(_) => (["Complete page", "Pattern only"][i], false),
+                Dropdown::Paste(_) => (["Complete row", "Pattern only"][i], false),
                 Dropdown::Pages => unreachable!(),
             };
-            if which == Dropdown::Mode {
-                self.arp_icon_button(d, r, label, on, GOLD, repeat_icon(i));
-            } else {
-                self.arp_button(d, r, label, on, GOLD);
-            }
+            self.arp_button(d, r, label, on, GOLD);
         }
     }
     fn draw_arp_chooser(&self, d: &mut Draw) {
@@ -2769,6 +2795,45 @@ mod tests {
     }
     use super::*;
     #[test]
+    fn preset_restore_reconciles_selected_tracker_row_before_layout() {
+        use self::support::*;
+        // Selection, animation source, and a pending reorder can each reference
+        // a row that disappears, even when the other two references are valid.
+        for (selected, from, drag) in [(3, 0, None), (0, 3, None), (0, 0, Some((3, 3)))] {
+            let mut view = view(2, false);
+            let saved = view.params.serialize_fields();
+            view.params.arpeggiator.edit(|state| {
+                for i in 0..3 {
+                    state.add_row_after(i);
+                }
+            });
+            view.arp_ui.edit_page = selected;
+            view.arp_ui.page_from = from;
+            view.arp_ui.page_elapsed = 0.0;
+            view.tracker_drag = drag;
+            view.tracker_symbol_edit = true;
+            view.tracker_symbol = "Cm7".into();
+            // Host preset restore replaces persisted rows, but keeps this editor alive.
+            view.params.deserialize_fields(&saved);
+            let (mut cx, target, _) = context();
+            view.event(
+                &mut EventContext::new_with_current(&mut cx, target),
+                &mut Event::new(RawParamEvent::ParametersChanged),
+            );
+            // Parameter notification must repair state even before the next UI tick.
+            view.arp_string_layout(view.arp_ui.edit_page, 1);
+            view.arp_string_layout(view.arp_ui.page_from, 1);
+            view.tick_arp_editor(0.016);
+            assert_eq!(view.arp_ui.edit_page, 0);
+            assert_eq!(view.arp_ui.page_from, 0);
+            assert_eq!(view.arp_ui.page_elapsed, pleasant_ui::page_slide::DURATION);
+            assert!(view.tracker_drag.is_none());
+            assert!(!view.tracker_symbol_edit);
+            assert!(view.tracker_symbol.is_empty());
+        }
+    }
+
+    #[test]
     fn explicit_loop_controls_add_remove_and_preserve_other_variations() {
         use self::support::*;
         let mut view = view(2, false);
@@ -2799,17 +2864,152 @@ mod tests {
             &mut view,
             &mut cx,
             target,
-            (header.0, header.1, header.2 - 100.0, header.3),
+            // Click the loop label; the old broad rectangle's center lands on OCT +.
+            (header.0 + 4.0, header.1, 40.0, header.3),
         );
         assert_eq!(
             view.params.arpeggiator.snapshot().rows[0].page.loops[0].octave,
             -1
         );
+        view.pointer = None;
+        assert!(!view.loop_remove_visible(0, 2));
         let r = view.loop_button_rect(0, 2);
+        view.pointer = Some((r.0 + r.2 * 0.5, r.1 + r.3 * 0.5));
+        assert!(view.loop_remove_visible(0, 2));
+        assert!(!view.loop_remove_visible(1, 2));
         click(&mut view, &mut cx, target, r);
         let state = view.params.arpeggiator.snapshot();
         assert_eq!(state.rows[0].settings.octaves, 1);
         assert_eq!(state.rows[0].page.loops[0].octave, 1);
+        let r = view.loop_button_rect(0, 2);
+        click(&mut view, &mut cx, target, r);
+        assert_eq!(view.params.arpeggiator.snapshot().rows[0].settings.octaves, 1);
+        assert!(!view.loop_remove_visible(0, 1));
+    }
+
+    #[test]
+    fn unlocked_length_controls_ignore_clicks_and_scrolling() {
+        use self::support::*;
+        let mut view = view(2, false);
+        let (mut cx, target, _) = context();
+        let before = view.params.arpeggiator.snapshot().rows[0].settings;
+        assert!(!before.lock_length);
+        for r in [fixed_steps_rect(), fill_rect()] {
+            click(&mut view, &mut cx, target, r);
+            event(&mut view, &mut cx, target, r.0 + r.2 * 0.5, r.1 + r.3 * 0.5,
+                WindowEvent::MouseScroll(0.0, 1.0));
+        }
+        let after = view.params.arpeggiator.snapshot().rows[0].settings;
+        assert_eq!(after.steps, before.steps);
+        assert_eq!(after.fill, before.fill);
+        click(&mut view, &mut cx, target, lock_length_rect());
+        click(&mut view, &mut cx, target, fixed_steps_rect());
+        click(&mut view, &mut cx, target, fill_rect());
+        let locked = view.params.arpeggiator.snapshot().rows[0].settings;
+        assert_eq!(locked.steps, before.steps + 1);
+        assert_eq!(locked.fill, Fill::Evolve);
+        click(&mut view, &mut cx, target, lock_length_rect());
+        click(&mut view, &mut cx, target, fixed_steps_rect());
+        click(&mut view, &mut cx, target, fill_rect());
+        let unlocked = view.params.arpeggiator.snapshot().rows[0].settings;
+        assert_eq!(unlocked.steps, locked.steps);
+        assert_eq!(unlocked.fill, locked.fill);
+    }
+
+    #[test]
+    fn fixed_length_controls_and_loop_inversion_edit_separate_state() {
+        use self::support::*;
+        let mut view = view(2, false);
+        let (mut cx, target, _) = context();
+        click(&mut view, &mut cx, target, lock_length_rect());
+        click(&mut view, &mut cx, target, fixed_steps_rect());
+        click(&mut view, &mut cx, target, fill_rect());
+        let plus = view.loop_button_rect(0, 4);
+        click(&mut view, &mut cx, target, plus);
+        let state = view.params.arpeggiator.snapshot();
+        assert!(state.rows[0].settings.lock_length);
+        assert_eq!(state.rows[0].settings.steps, 5);
+        assert_eq!(state.rows[0].settings.fill, Fill::Evolve);
+        assert_eq!(state.rows[0].page.loops[0].inversion, 1);
+        assert_eq!(state.rows[0].page.loops[0].octave, 0);
+        for _ in 0..30 {
+            view.edit_loop_inversion(0, -1, false);
+        }
+        assert_eq!(
+            view.params.arpeggiator.snapshot().rows[0].page.loops[0].inversion,
+            -12
+        );
+        view.edit_loop_inversion(0, 0, true);
+        assert_eq!(
+            view.params.arpeggiator.snapshot().rows[0].page.loops[0].inversion,
+            0
+        );
+        view.edit_fixed_steps(-24, false);
+        assert_eq!(view.params.arpeggiator.snapshot().rows[0].settings.steps, 1);
+        view.edit_fixed_steps(24, false);
+        assert_eq!(
+            view.params.arpeggiator.snapshot().rows[0].settings.steps,
+            24
+        );
+    }
+
+    #[test]
+    fn loop_header_actions_fit_four_loops_and_custom_opens_its_editor() {
+        use self::support::*;
+        for count in 1..=4 {
+            for index in 0..count {
+                let header = loop_rect(index, count);
+                let buttons: Vec<_> = [0, 1, 2, 3, 4].into_iter().map(|i| loop_header_button(header, i)).collect();
+                for (i, button) in buttons.iter().enumerate() {
+                    assert!(button.0 >= header.0 && button.0 + button.2 <= header.0 + header.2);
+                    for other in &buttons[..i] {
+                        assert!(button.0 >= other.0 + other.2 || other.0 >= button.0 + button.2);
+                    }
+                }
+            }
+        }
+        let mut view = view(2, false);
+        let (mut cx, target, _) = context();
+        view.set_arp_chooser(Some(Chooser::Order));
+        view.choose_arp_option(&mut EventContext::new_with_current(&mut cx, target), 7);
+        assert_eq!(view.panel, Some(Panel::Custom));
+        assert!(view.arp_ui.chooser.is_none());
+    }
+
+    #[test]
+    fn locked_skip_preview_excludes_swing_clock_and_pattern_paste_keeps_program() {
+        use self::support::*;
+        let mut view = view(2, false);
+        view.params.arpeggiator.edit(|s| {
+            let row = &mut s.rows[0];
+            row.settings.lock_length = true;
+            row.settings.steps = 4;
+            row.settings.swing = 0.5;
+            row.settings.pattern = 7;
+            row.settings.custom[0].degree = 5;
+            row.page.loops[0].steps[1].state = StepState::Skip;
+        });
+        let layout = view.arp_string_layout(0, 4);
+        assert_eq!(layout.interval[1], layout.interval[2]);
+        view.copy_arp_page(0);
+        view.params.arpeggiator.edit(|s| {
+            s.add_row_after(0);
+            s.rows[1].settings = Default::default();
+        });
+        let (mut cx, target, _) = context();
+        view.paste_arp_page(
+            &mut EventContext::new_with_current(&mut cx, target),
+            1,
+            true,
+        );
+        let state = view.params.arpeggiator.snapshot();
+        assert!(state.rows[1].settings.lock_length);
+        assert_eq!(state.rows[1].settings.pattern, 7);
+        assert_eq!(state.rows[1].settings.custom[0].degree, 5);
+        assert_eq!(
+            state.rows[1].settings.swing, 0.0,
+            "pattern-only paste keeps timing rate controls"
+        );
     }
 
     #[test]
@@ -2846,7 +3046,7 @@ mod tests {
     #[test]
     fn chooser_cards_fill_the_string_area_with_separate_large_targets() {
         let area = chooser_area();
-        for i in 0..7 {
+        for i in 0..8 {
             let r = chooser_card(i);
             assert!(r.2 > 140.0 && r.3 > 100.0);
             assert_eq!(r.1, area.1);
@@ -2856,7 +3056,7 @@ mod tests {
                 assert!((r.0 - previous.0 - previous.2 - 8.0).abs() < 0.001);
             }
         }
-        let last = chooser_card(6);
+        let last = chooser_card(7);
         assert!((last.0 + last.2 - area.0 - area.2).abs() < 0.001);
     }
     #[test]
@@ -2919,22 +3119,6 @@ mod tests {
         assert_eq!(view.arp_ui.edit_page, 2);
     }
     #[test]
-    fn delay_slide_reverses_from_its_current_position() {
-        let mut view = ChordboardView::new(
-            Arc::new(ChordboardParams::default()),
-            Arc::new(Bridge::default()),
-            Arc::new(PreviewContext),
-        );
-        view.set_delay_editor(true);
-        view.tick_arp_editor(pleasant_ui::page_slide::DURATION * 0.5);
-        assert_eq!(view.arp_ui.delay_position, 0.5);
-        view.set_delay_editor(false);
-        view.tick_arp_editor(pleasant_ui::page_slide::DURATION * 0.5);
-        assert_eq!(view.arp_ui.delay_position, 0.25);
-        view.tick_arp_editor(pleasant_ui::page_slide::DURATION);
-        assert_eq!(view.arp_ui.delay_position, 0.0);
-    }
-    #[test]
     fn full_cycles_stay_even_and_inside_the_module() {
         for len in [1, 4, 32, 48, 94, 96, STEPS] {
             let layout = StringLayout::new(&[Step::default(); STEPS], len, 0.0, 0);
@@ -2949,7 +3133,7 @@ mod tests {
         }
     }
     #[test]
-    fn modulated_loop_length_keeps_every_edit_position_fixed() {
+    fn tracker_loop_geometry_ignores_obsolete_modulation_and_live_playhead() {
         use crate::engine::routing::TARGETS;
         let mut view = ChordboardView::new(
             Arc::new(ChordboardParams::default()),
@@ -2975,17 +3159,15 @@ mod tests {
                 max: TARGETS.len() as i32 - 1,
             },
         );
+        assert!(!TARGETS[target].available());
+        view.params.arpeggiator.edit(|state| {
+            state.rows[0].settings.octaves = 4;
+            state.rows[0].settings.swing = 0.5;
+            state.rows[0].page.ensure_loops(4);
+        });
         let (_, count) = view.arp_cycle_for_editor();
         assert_eq!(count, 12);
         assert_eq!(view.visible_loops(), 4);
-        Arc::get_mut(&mut view.params).unwrap().arp_pages[0].swing = FloatParam::new(
-            "Swing",
-            0.5,
-            FloatRange::Linear {
-                min: -0.75,
-                max: 0.75,
-            },
-        );
         view.snapshot.arp_running = true;
         view.snapshot.arp_phase = 0;
         let before = view.arp_string_layout(0, count);
@@ -3015,8 +3197,8 @@ mod tests {
         let mut s = Step::default();
         assert_eq!(Lane::Velocity.get(&s), 100.0);
         assert_eq!(s.gate, 65);
-        Lane::Timing.set(&mut s, 500.0);
-        assert_eq!(s.micro, 49);
+        Lane::Gate.set(&mut s, 500.0);
+        assert_eq!(s.gate, 100);
         Lane::Mod2.set(&mut s, -200.0);
         assert_eq!(s.mods[1], -100);
         let mut t = DelayTap::default();
@@ -3066,7 +3248,7 @@ mod tests {
                     lane.get(&Step::default()),
                     "{lane:?}, double={double}"
                 );
-                if lane == Lane::Velocity {
+                {
                     let gate = gate_rect();
                     event(
                         &mut view,
@@ -3077,8 +3259,8 @@ mod tests {
                         press(),
                     );
                     assert_eq!(
-                        view.params.arpeggiator.snapshot().rows[0].page.loops[0].steps[0].gate,
-                        Step::default().gate
+                        view.params.arpeggiator.snapshot().rows[0].page.loops[0].steps[0].micro,
+                        Step::default().micro
                     );
                 }
             }
@@ -3092,10 +3274,9 @@ mod tests {
         for double in [false, true] {
             for sync in [false, true] {
                 let mut view = view(2, false);
-                view.arp_ui.delay_open = true;
-                view.arp_ui.delay_position = 1.0;
+                view.fx_ui.open = true;
                 view.params.arpeggiator.edit(|s| {
-                    let delay = &mut s.rows[0].page.delay;
+                    let delay = &mut s.midi_fx.delay;
                     delay.sync = sync;
                     delay.taps[0].time = if sync { 1.5 } else { 750.0 };
                     delay.taps[0].velocity = 1.5;
@@ -3132,7 +3313,7 @@ mod tests {
                         WindowEvent::MouseUp(MouseButton::Left),
                     );
                 }
-                let tap = view.params.arpeggiator.snapshot().rows[0].page.delay.taps[0];
+                let tap = view.params.arpeggiator.snapshot().midi_fx.delay.taps[0];
                 assert_eq!(tap.time, if sync { 0.5 } else { 250.0 });
                 assert_eq!(tap.velocity, DelayTap::default().velocity);
                 assert_eq!(tap.feedback, DelayTap::default().feedback);
@@ -3159,18 +3340,21 @@ mod tests {
     #[test]
     fn page_menu_and_direct_adjustments_have_separate_targets() {
         let mut controls = vec![
-            page_block(),
             mode_rect(),
             order_rect(),
-            octaves_rect(),
+            loop_add_rect(),
             sync_rect(),
             rate_rect(),
             humanize_rect(),
             swing_rect(),
+            lock_length_rect(),
+            fixed_steps_rect(),
+            fill_rect(),
+            custom_edit_rect(),
         ];
         controls.extend((0..LANES.len()).map(lane_rect));
         for (i, r) in controls.iter().enumerate() {
-            assert!(r.1 + r.3 <= content_rect().1 || r.0 + r.2 < content_rect().0);
+            assert!(r.1 + r.3 <= content_rect().1 || r.0 + r.2 < content_rect().0 || r.0 >= content_rect().0 + content_rect().2);
             for other in &controls[..i] {
                 assert!(
                     r.0 >= other.0 + other.2
@@ -3193,13 +3377,12 @@ mod tests {
         let remove = tap_remove_rect(&DelayTap::default(), 2.5);
         assert_eq!((remove.2, remove.3), (18.0, 18.0));
         assert!(remove.1 > g.1 + g.3 + 14.0);
-        assert!(remove.1 + remove.3 <= PIANO_SURFACE.1 + PIANO_SURFACE.3);
+        assert!(remove.1 + remove.3 <= DELAY_SURFACE.1 + DELAY_SURFACE.3);
     }
 
     #[test]
     fn dropdowns_and_delay_graph_fit_and_handles_are_separate() {
         for (which, n) in [
-            (Dropdown::Mode, 4),
             (Dropdown::TapLane, 6),
             (Dropdown::Paste(0), 2),
             (Dropdown::Paste(7), 2),
@@ -3207,7 +3390,7 @@ mod tests {
             for i in 0..n {
                 let r = dropdown_rect(which, i);
                 let surface = if which == Dropdown::TapLane {
-                    PIANO_SURFACE
+                    DELAY_SURFACE
                 } else {
                     ARP_SURFACE
                 };
@@ -3217,6 +3400,6 @@ mod tests {
         }
         let g = tap_graph();
         assert!(g.1 > delay_time_rect().1 + delay_time_rect().3);
-        assert!(g.1 + g.3 < PIANO_SURFACE.1 + PIANO_SURFACE.3 - 27.0);
+        assert!(g.1 + g.3 < DELAY_SURFACE.1 + DELAY_SURFACE.3 - 27.0);
     }
 }

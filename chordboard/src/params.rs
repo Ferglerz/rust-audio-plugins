@@ -43,6 +43,8 @@ pub struct ChordboardParams {
     pub arp_enabled: BoolParam,
     #[persist = "editor-state"]
     pub editor_state: Arc<ViziaState>,
+    #[persist = "global-controls-version"]
+    pub global_controls_version: AtomicU32,
     #[persist = "schema-version"]
     pub schema_version: AtomicU32,
     #[persist = "selected-quality-v1"]
@@ -79,6 +81,16 @@ pub struct ChordboardParams {
     pub voice_leading: IntParam,
     #[id = "inversion"]
     pub inversion: IntParam,
+    #[id = "base_inversion"]
+    pub base_inversion: IntParam,
+    #[id = "complexity"]
+    pub complexity: IntParam,
+    #[id = "voicing_override"]
+    pub voicing_override: IntParam,
+    #[id = "velocity_scale"]
+    pub velocity_scale: FloatParam,
+    #[id = "gate_scale"]
+    pub gate_scale: FloatParam,
     #[id = "transpose"]
     pub transpose: IntParam,
     #[id = "spread"]
@@ -106,6 +118,8 @@ pub struct ChordboardParams {
     pub strum_hold: BoolParam,
     #[id = "tempo_sync"]
     pub tempo_sync: BoolParam,
+    #[id = "daw_alignment"]
+    pub daw_alignment: BoolParam,
     #[id = "tempo"]
     pub tempo: FloatParam,
     #[id = "meter_num"]
@@ -205,7 +219,7 @@ impl Default for ChordboardParams {
         Self {
             always_bass: BoolParam::new("Always play bass", false),
             affect_chords: BoolParam::new("Melody affects chords", false),
-            always_chord: BoolParam::new("Always play full chord", false),
+            always_chord: BoolParam::new("Always play full chord", true),
             key_split: BoolParam::new("Key split", false),
             bass_enabled: BoolParam::new("Bass enabled", true),
             bass_split: IntParam::new("Bass below", -1, IntRange::Linear { min: -1, max: 127 })
@@ -258,6 +272,7 @@ impl Default for ChordboardParams {
                 crate::ui::initial_editor_size,
             ),
             schema_version: AtomicU32::new(2),
+            global_controls_version: AtomicU32::new(1),
             selected_quality: AtomicU32::new(0),
             control_base: AtomicI32::new(12),
             map_x: AtomicU32::new(Mapping::cc(1, 16).encode()),
@@ -286,6 +301,63 @@ impl Default for ChordboardParams {
                         .to_string()
                 })),
             inversion: IntParam::new("Inversion", 0, IntRange::Linear { min: 0, max: 11 }),
+            base_inversion: IntParam::new(
+                "Base Inversion",
+                0,
+                IntRange::Linear { min: -12, max: 12 },
+            )
+            .with_value_to_string(Arc::new(|v| format!("{v:+}"))),
+            complexity: IntParam::new("Complexity", 0, IntRange::Linear { min: 0, max: 5 })
+                .with_value_to_string(Arc::new(|v| {
+                    ["Original", "Triad", "7th", "9th", "11th", "13th"][v as usize].into()
+                }))
+                .with_string_to_value(Arc::new(|text| {
+                    ["Original", "Triad", "7th", "9th", "11th", "13th"]
+                        .iter()
+                        .position(|label| label.eq_ignore_ascii_case(text.trim()))
+                        .map(|i| i as i32)
+                        .or_else(|| {
+                            text.trim()
+                                .parse::<i32>()
+                                .ok()
+                                .filter(|v| (0..=5).contains(v))
+                        })
+                })),
+            voicing_override: IntParam::new("Voicing", 0, IntRange::Linear { min: 0, max: 5 })
+                .with_value_to_string(Arc::new(|v| {
+                    ["Saved", "Close", "Open", "Wide", "Drop 2", "Drop 3"][v as usize].into()
+                })),
+            velocity_scale: FloatParam::new(
+                "Velocity scale",
+                1.0,
+                FloatRange::Linear { min: 0.0, max: 2.0 },
+            )
+            .with_value_to_string(Arc::new(|v| format!("{:.0}%", v * 100.0)))
+            .with_string_to_value(Arc::new(|s| {
+                s.trim()
+                    .trim_end_matches('%')
+                    .trim()
+                    .parse::<f32>()
+                    .ok()
+                    .map(|v| v / 100.0)
+            })),
+            gate_scale: FloatParam::new(
+                "Gate",
+                1.0,
+                FloatRange::Linear {
+                    min: 0.01,
+                    max: 2.0,
+                },
+            )
+            .with_value_to_string(Arc::new(|v| format!("{:.0}%", v * 100.0)))
+            .with_string_to_value(Arc::new(|s| {
+                s.trim()
+                    .trim_end_matches('%')
+                    .trim()
+                    .parse::<f32>()
+                    .ok()
+                    .map(|v| v / 100.0)
+            })),
             transpose: IntParam::new("Transpose", 0, IntRange::Linear { min: -24, max: 24 }),
             spread: IntParam::new(
                 "Voicing",
@@ -351,6 +423,7 @@ impl Default for ChordboardParams {
                 IntRange::Linear { min: 0, max: 5 },
             ),
             tempo_sync: BoolParam::new("Host sync", true),
+            daw_alignment: BoolParam::new("DAW alignment", false),
             tempo: FloatParam::new(
                 "Tempo BPM",
                 120.0,
@@ -489,7 +562,7 @@ impl Default for ChordboardParams {
                 .hide()
                 .hide_in_generic_ui(),
             fifths: BoolParam::new("Fifths layout", false),
-            scale_layout: IntParam::new("Scale layout", 0, IntRange::Linear { min: 0, max: 2 })
+            scale_layout: IntParam::new("Scale layout", 1, IntRange::Linear { min: 0, max: 2 })
                 .with_value_to_string(Arc::new(|v| {
                     ["Off", "Degrees", "Passing"][v as usize].into()
                 })),
@@ -575,19 +648,30 @@ impl ChordboardParams {
         }
         route
     }
+    pub fn global_harmony(&self) -> harmony::GlobalHarmony {
+        use crate::midi_learn::{self as midi, BASE_INVERSION, COMPLEXITY, VOICING_OVERRIDE};
+        harmony::GlobalHarmony {
+            inversion: midi::value(self, BASE_INVERSION) as i8,
+            complexity: midi::value(self, COMPLEXITY) as u8,
+            transpose: midi::value(self, 3) as i8,
+            voicing: midi::value(self, VOICING_OVERRIDE) as u8,
+            key: self.key.value() as u8,
+            scale: self.scale.value() as u8,
+        }
+    }
     pub fn config(&self) -> Config {
         let quick = |i| crate::midi_learn::value(self, i);
         let arp_page = 0usize;
         Config {
-            always_bass: self.always_bass.value(),
-            always_chord: self.always_chord.value(),
-            affect_chords: self.affect_chords.value(),
-            key_split: self.key_split.value(),
-            split_note: self.split_note.value() as u8,
-            bass_split: self.bass_split.value() as i16,
-            bass_enabled: self.bass_enabled.value(),
-            strum_enabled: self.strum_enabled.value(),
-            root_on_select: self.root_on_select.value(),
+            always_bass: quick(crate::midi_learn::ALWAYS_BASS) != 0,
+            always_chord: quick(crate::midi_learn::ALWAYS_CHORD) != 0,
+            affect_chords: quick(crate::midi_learn::AFFECT_CHORDS) != 0,
+            key_split: quick(crate::midi_learn::KEY_SPLIT) != 0,
+            split_note: quick(crate::midi_learn::SPLIT_NOTE) as u8,
+            bass_split: quick(crate::midi_learn::BASS_SPLIT) as i16,
+            bass_enabled: quick(crate::midi_learn::BASS_ENABLED) != 0,
+            strum_enabled: quick(crate::midi_learn::STRUM_ENABLED) != 0,
+            root_on_select: quick(crate::midi_learn::ROOT_ON_SELECT) != 0,
             routes: std::array::from_fn(|i| self.effective_route(self.routes[i].route())),
             mode: crate::engine::MANUAL,
             arp_enabled: quick(6) != 0,
@@ -601,10 +685,15 @@ impl ChordboardParams {
             scale_layout: self.scale_layout.value() as u8,
             voice_leading: quick(1) as u8,
             inversion: quick(2) as u8,
+            base_inversion: quick(crate::midi_learn::BASE_INVERSION) as i8,
+            complexity: quick(crate::midi_learn::COMPLEXITY) as u8,
+            voicing_override: quick(crate::midi_learn::VOICING_OVERRIDE) as u8,
+            velocity_scale: crate::midi_learn::float_value(self, crate::midi_learn::VELOCITY_SCALE),
+            gate_scale: crate::midi_learn::float_value(self, crate::midi_learn::GATE_SCALE),
             transpose: quick(3) as i8,
             spread: quick(0) as u8,
             latch: quick(5) != 0,
-            velocity: self.velocity.value(),
+            velocity: crate::midi_learn::float_value(self, crate::midi_learn::VELOCITY),
             length_ms: self.length_ms.value(),
             strings: self.strings.value() as u8,
             strings_played: self.strings_played.value() as u8,
@@ -626,14 +715,15 @@ impl ChordboardParams {
             arp_sync: self.arp_pages[arp_page].arp_sync.value(),
             arp_free_ms: self.arp_pages[arp_page].arp_free_ms.value(),
             host_sync: self.tempo_sync.value(),
-            octaves: self.octaves.value() as u8,
+            daw_alignment: quick(crate::midi_learn::DAW_ALIGNMENT) != 0,
+            octaves: quick(crate::midi_learn::OCTAVES) as u8,
             humanize: self.arp_pages[arp_page].humanize.value(),
             mpe: self.mpe_enabled(),
             upper: self.upper.value(),
             members: self.members.value() as u8,
             bend_range: self.bend_range.value(),
             master_range: self.master_range.value(),
-            output_channel: (self.output_channel.value() - 1) as u8,
+            output_channel: (quick(crate::midi_learn::OUTPUT_CHANNEL) - 1) as u8,
             y_target: self.y_target.value() as u8,
             y_cc: self.y_cc.value() as u8,
             x_reverse: self.x_reverse.value(),
@@ -643,8 +733,8 @@ impl ChordboardParams {
             y_min: self.y_min.value(),
             y_max: self.y_max.value(),
             filter: self.filter.value() as u8,
-            bass_channel: (self.bass_channel.value() - 1) as u8,
-            upper_channel: (self.upper_channel.value() - 1) as u8,
+            bass_channel: (quick(crate::midi_learn::BASS_CHANNEL) - 1) as u8,
+            upper_channel: (quick(crate::midi_learn::UPPER_CHANNEL) - 1) as u8,
             control_base: self.control_base.load(Ordering::Relaxed).clamp(-1, 116) as i16,
             mappings: [
                 Mapping::decode(self.map_x.load(Ordering::Relaxed)),
@@ -741,6 +831,11 @@ control_catalog! {
     toggle(arp_enabled, 0),
     control(quality, 0),
     control(inversion, 0),
+    control(base_inversion, 0),
+    control(complexity, 0),
+    control(voicing_override, 0),
+    control(gate_scale, 0),
+    control(velocity_scale, 0),
     control(voice_leading, 0),
     control(transpose, 0),
     control(spread, 0),
@@ -757,6 +852,7 @@ control_catalog! {
     control(strum_beats, 1),
     toggle(strum_hold, 1),
     toggle(tempo_sync, 1),
+    toggle(daw_alignment, 1),
     control(tempo, 1),
     control(direction, 1),
     control(contour, 1),
@@ -1258,7 +1354,7 @@ impl ArpPageParams {
             arp_pattern: IntParam::new(
                 "Ordering",
                 settings.pattern as i32,
-                IntRange::Linear { min: 0, max: 6 },
+                IntRange::Linear { min: 0, max: 7 },
             )
             .with_value_to_string(Arc::new(|v| {
                 [
@@ -1269,11 +1365,12 @@ impl ArpPageParams {
                     "Down in 3rds",
                     "Played order",
                     "Random",
+                    "Custom",
                 ][v as usize]
                     .into()
             })),
             arp_octaves: IntParam::new(
-                "Loop Length",
+                "Loops",
                 settings.octaves as i32,
                 IntRange::Linear { min: 1, max: 4 },
             ),
@@ -1295,7 +1392,7 @@ impl ArpPageParams {
                 },
             ),
             swing: FloatParam::new(
-                "Arp swing",
+                "Swing",
                 settings.swing,
                 FloatRange::Linear {
                     min: -0.75,
@@ -1312,7 +1409,7 @@ impl ArpPageParams {
                     .map(|v| v * 0.75 / 100.0)
             })),
             humanize: FloatParam::new(
-                "Arp humanize",
+                "Humanize",
                 settings.humanize,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             ),
@@ -1328,6 +1425,7 @@ impl ArpPageParams {
             free_ms: self.arp_free_ms.value(),
             swing: self.swing.value(),
             humanize: self.humanize.value(),
+            ..Default::default()
         }
     }
 }
@@ -1452,5 +1550,66 @@ mod signature_tests {
         );
         assert_eq!(storage, signature.as_ptr());
         assert!(!params.update_control_signature(&mut signature));
+    }
+}
+
+#[cfg(test)]
+mod global_control_tests {
+    use super::*;
+
+    #[test]
+    fn global_control_defaults_and_custom_ordering_preserve_legacy_ranges() {
+        let params = ChordboardParams::default();
+        assert_eq!(params.base_inversion.value(), 0);
+        assert_eq!(params.complexity.value(), 0);
+        assert_eq!(params.voicing_override.value(), 0);
+        assert_eq!(params.gate_scale.value(), 1.0);
+        assert_eq!(params.velocity_scale.value(), 1.0);
+        assert_eq!(params.velocity_scale.preview_plain(0.0), 0.0);
+        assert_eq!(params.velocity_scale.preview_plain(1.0), 2.0);
+        assert_eq!(params.velocity.preview_plain(0.0), 0.01);
+        assert_eq!(params.velocity.preview_plain(1.0), 1.0);
+        assert_eq!(params.inversion.preview_plain(0.0), 0);
+        assert_eq!(params.inversion.preview_plain(1.0), 11);
+        assert_eq!(params.spread.preview_plain(1.0), 4);
+        assert_eq!(params.base_inversion.preview_plain(0.0), -12);
+        assert_eq!(params.base_inversion.preview_plain(1.0), 12);
+        for id in [
+            "base_inversion",
+            "complexity",
+            "voicing_override",
+            "gate_scale",
+            "velocity_scale",
+        ] {
+            assert!(params.control(id).is_some(), "missing control {id}");
+        }
+        let adapter = ArpPageParams::from_settings(crate::arpeggiator::Settings {
+            pattern: 7,
+            ..Default::default()
+        });
+        assert_eq!(adapter.settings().pattern, 7);
+        assert_eq!(
+            adapter.arp_pattern.normalized_value_to_string(1.0, false),
+            "Custom"
+        );
+    }
+}
+
+#[cfg(test)]
+mod global_value_tests {
+    use super::*;
+    #[test]
+    fn complexity_readout_round_trips_every_label() {
+        let params = ChordboardParams::default();
+        for value in 0..=5 {
+            let normalized = params.complexity.preview_normalized(value);
+            let label = params
+                .complexity
+                .normalized_value_to_string(normalized, true);
+            assert_eq!(
+                params.complexity.string_to_normalized_value(&label),
+                Some(normalized)
+            );
+        }
     }
 }

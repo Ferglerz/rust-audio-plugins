@@ -29,11 +29,17 @@ pub struct Config {
     pub arp_sync: bool,
     pub arp_free_ms: f32,
     pub host_sync: bool,
+    pub daw_alignment: bool,
     pub quality: u8,
     pub key: u8,
     pub scale: u8,
     pub scale_layout: u8,
     pub voice_leading: u8,
+    pub base_inversion: i8,
+    pub complexity: u8,
+    pub voicing_override: u8,
+    pub gate_scale: f32,
+    pub velocity_scale: f32,
     pub inversion: u8,
     pub transpose: i8,
     pub spread: u8,
@@ -83,6 +89,16 @@ pub struct Config {
     pub mappings: [Mapping; 2],
 }
 impl Config {
+    pub fn global_harmony(&self) -> crate::harmony::GlobalHarmony {
+        crate::harmony::GlobalHarmony {
+            inversion: self.base_inversion,
+            complexity: self.complexity,
+            transpose: self.transpose,
+            voicing: self.voicing_override,
+            key: self.key,
+            scale: self.scale,
+        }
+    }
     pub fn bass_boundary(&self) -> i16 {
         if !self.bass_enabled {
             return -1;
@@ -114,11 +130,17 @@ impl Default for Config {
             arp_sync: true,
             arp_free_ms: 125.0,
             host_sync: true,
+            daw_alignment: false,
             quality: 0,
             key: 0,
             scale: 0,
             scale_layout: 0,
             voice_leading: 2,
+            base_inversion: 0,
+            complexity: 0,
+            voicing_override: 0,
+            gate_scale: 1.0,
+            velocity_scale: 1.0,
             inversion: 0,
             transpose: 0,
             spread: 0,
@@ -272,6 +294,7 @@ pub struct Snapshot {
     pub input_velocity: f32,
     pub routed: [Option<f32>; TARGET_COUNT],
     pub captured: u64,
+    pub global_harmony: crate::harmony::GlobalHarmony,
     pub full_notes: Notes,
     pub leading_from: Notes,
     pub leading_to: Notes,
@@ -320,6 +343,7 @@ impl Default for Snapshot {
             input_velocity: 0.8,
             routed: [None; TARGET_COUNT],
             captured: 0,
+            global_harmony: crate::harmony::GlobalHarmony::default(),
             full_notes: Notes::default(),
             leading_from: Notes::default(),
             leading_to: Notes::default(),

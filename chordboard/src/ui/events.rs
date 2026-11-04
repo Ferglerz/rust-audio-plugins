@@ -172,7 +172,13 @@ impl ChordboardView {
                 Self::emit(cx, c.ptr, if c.norm >= 0.5 { 0.0 } else { 1.0 });
             } else {
                 self.restore_shift_latch(cx);
-                let value = pleasant_ui::slider_value_rect(r);
+                let value = if globals::is_global(c.id) {
+                    globals::value_rect(c.id)
+                } else if matches!(c.id, "humanize" | "swing") {
+                    arpeggiator::adjustment_value_rect(r)
+                } else {
+                    pleasant_ui::slider_value_rect(r)
+                };
                 self.drag = Some(Drag::Control(ControlDrag {
                     press: pleasant_ui::pointer::ValuePress::new(c.id, value, (x, y)),
                     ptr: c.ptr,
@@ -217,10 +223,31 @@ impl ChordboardView {
         cx.needs_redraw();
     }
     pub(super) fn window_event(&mut self, cx: &mut EventContext, event: &WindowEvent) -> bool {
+        let selected = self.arp_ui.edit_page;
+        let handled = self.handle_window_event(cx, event);
+        if self.arp_ui.edit_page != selected {
+            self.end_pad_hover(cx);
+            self.end_drag(cx);
+        }
+        self.refresh_arp_editor_params();
+        handled
+    }
+
+    fn handle_window_event(&mut self, cx: &mut EventContext, event: &WindowEvent) -> bool {
+        if matches!(
+            event,
+            WindowEvent::MouseUp(MouseButton::Left)
+                | WindowEvent::MouseLeave
+                | WindowEvent::FocusOut
+        ) {
+            self.button_press_origin = None;
+            cx.needs_redraw();
+        }
         if matches!(event, WindowEvent::FocusOut) {
             self.bridge.quick_learn.store(0, Ordering::Release);
             self.restore_shift_latch(cx);
             self.cancel_arp_editor();
+            self.fx_ui.drag = None;
             self.tracker_drag = None;
             self.tracker_symbol_edit = false;
             cx.release();
@@ -242,17 +269,38 @@ impl ChordboardView {
         let Some((x, y)) = pleasant_ui::local_xy(
             bounds.x,
             bounds.y,
-            bounds.w,
-            W,
+            editor_scale(bounds.w, bounds.h) * EDITOR_W,
+            EDITOR_W,
             cx.mouse().cursorx,
             cx.mouse().cursory,
         ) else {
             return false;
         };
+        let x = x - CONTENT_X;
+        if !self.quick_midi.show && self.midi_fx_event(cx, event, x, y) {
+            return true;
+        }
+        // Tracker navigation remains available while moving controls cannot be
+        // edited at their destination coordinates. Releases still end gestures.
+        if !self.fx_ui.open
+            && self.row_slide.active()
+            && x >= 0.0
+            && y >= HEADER_H
+            && matches!(
+                event,
+                WindowEvent::MouseDown(_)
+                    | WindowEvent::MouseDoubleClick(_)
+                    | WindowEvent::MouseTripleClick(_)
+                    | WindowEvent::MouseScroll(_, _)
+            )
+        {
+            return true;
+        }
         let reset_press = matches!(event, WindowEvent::MouseDoubleClick(MouseButton::Left))
             || matches!(event, WindowEvent::MouseDown(MouseButton::Left))
                 && cx.modifiers().intersects(Modifiers::CTRL | Modifiers::LOGO);
         if reset_press
+            && !self.quick_midi.show
             && self.menu.is_none()
             && !self.arp_chooser_open()
             && !self.arp_controls_covered(x, y)
@@ -272,6 +320,7 @@ impl ChordboardView {
         // Vizia substitutes double/triple clicks for mouse-down. Every press
         // uses the same drag threshold and opens text only on value release.
         if self.edit.is_none()
+            && !self.quick_midi.show
             && matches!(
                 event,
                 WindowEvent::MouseDoubleClick(MouseButton::Left)
@@ -284,6 +333,7 @@ impl ChordboardView {
             if self.menu.is_none()
                 && self.edit.is_none()
                 && self.drag.is_none()
+                && !self.fx_ui.open
                 && self.arp_editor_event(cx, event, x, y)
             {
                 return true;
@@ -294,7 +344,7 @@ impl ChordboardView {
         if self.fine_adjustment_active() && self.latch_shift.is_some() {
             self.restore_shift_latch(cx);
         }
-        if self.shift_latch_event(cx, event) {
+        if !self.quick_midi.show && self.shift_latch_event(cx, event) {
             return true;
         }
         if matches!(event, WindowEvent::MouseLeave) {
@@ -312,9 +362,35 @@ impl ChordboardView {
             self.pointer = Some((x, y));
             self.update_route_hover(x, y);
             if matches!(event, WindowEvent::MouseDown(MouseButton::Left)) {
+                self.button_press_origin = Some((x, y));
                 self.flash_press(x, y);
             }
             cx.needs_redraw();
+        }
+        if self.quick_midi.show {
+            match event {
+                WindowEvent::MouseDown(MouseButton::Left)
+                | WindowEvent::MouseDoubleClick(MouseButton::Left)
+                | WindowEvent::MouseTripleClick(MouseButton::Left) => {
+                    self.button_press_origin = Some((x, y));
+                    self.press_surface_midi_target(cx, x, y, false);
+                    self.press_global(cx, x, y, false);
+                    self.press_quick_midi(cx, x, y, false);
+                }
+                WindowEvent::MouseDown(MouseButton::Right) => {
+                    self.press_surface_midi_target(cx, x, y, true);
+                    self.press_global(cx, x, y, true);
+                    self.press_quick_midi(cx, x, y, true);
+                }
+                WindowEvent::KeyDown(Code::Escape, _) => {
+                    if self.bridge.quick_learn.swap(0, Ordering::AcqRel) == 0 {
+                        self.toggle_quick_midi(cx);
+                    }
+                    cx.needs_redraw();
+                }
+                _ => {}
+            }
+            return true;
         }
         if self.tracker_event(cx, event, x, y) {
             return true;
@@ -322,6 +398,7 @@ impl ChordboardView {
         if self.menu.is_none()
             && self.edit.is_none()
             && self.drag.is_none()
+            && !self.fx_ui.open
             && self.arp_editor_event(cx, event, x, y)
         {
             return true;
@@ -488,6 +565,30 @@ impl ChordboardView {
         {
             return true;
         }
+        if self.panel == Some(Panel::Custom) && hit(CHORDS_SURFACE, x, y) {
+            match event {
+                WindowEvent::MouseDown(MouseButton::Left) => {
+                    if hit(self.panel_close_rect(Panel::Custom), x, y) {
+                        self.set_panel(None);
+                    } else {
+                        self.press_custom(
+                            cx,
+                            x,
+                            y,
+                            cx.modifiers().intersects(Modifiers::CTRL | Modifiers::LOGO),
+                        );
+                    }
+                    return true;
+                }
+                WindowEvent::MouseScroll(_, dy) => {
+                    self.scroll_custom(x, y, *dy);
+                    cx.needs_redraw();
+                    return true;
+                }
+                WindowEvent::MouseDown(_) | WindowEvent::MouseDoubleClick(_) => return true,
+                _ => {}
+            }
+        }
         match event {
             WindowEvent::KeyDown(code, _) if self.focused && !cx.modifiers().command() => {
                 if let Some(slot) = MEMORY_CODES.iter().position(|c| c == code) {
@@ -549,10 +650,14 @@ impl ChordboardView {
             WindowEvent::MouseDown(MouseButton::Left) => {
                 cx.focus();
                 self.focused = true;
-                if self.press_quick_midi(cx, x, y, false) {
+                if self.press_global(cx, x, y, false) || self.press_quick_midi(cx, x, y, false) {
                     return true;
                 }
-                if self.tracker_selection && hit(CHORDS_SURFACE, x, y) {
+                if self.tracker_selection
+                    && self.panel.is_none()
+                    && self.expand_t() == 0.0
+                    && hit(CHORDS_SURFACE, x, y)
+                {
                     if let Some(chord) = (0..KEY_COUNT)
                         .find(|&i| {
                             hit(self.keyboard_key_rect(i), x, y) && self.keyboard_chord(i).is_some()
@@ -560,8 +665,8 @@ impl ChordboardView {
                         .and_then(|i| self.keyboard_chord(i))
                     {
                         self.assign_tracker_chord(chord);
+                        return true;
                     }
-                    return true;
                 }
                 if self.strum_bound_at(x, y).is_some()
                     || !(self.manual_playing() && hit(self.play_pad(), x, y))
@@ -630,15 +735,14 @@ impl ChordboardView {
                         return true;
                     }
                 }
-                if (0..TRANSPOSE_STEPS.len())
-                    .any(|i| hit(transpose_control_rect(self.params.mpe_enabled(), i), x, y))
-                {
-                    return self.press_piano(cx, x, y);
-                }
                 if !(self.params.tempo_sync.value() && self.snapshot.time_sig_host)
                     && (hit(METER_NUM, x, y) || hit(METER_DEN, x, y))
                 {
                     self.open_menu(Menu::Meter(hit(METER_DEN, x, y)));
+                    return true;
+                }
+                if hit(DAW_ALIGNMENT, x, y) {
+                    self.set(cx, "daw_alignment", if self.params.daw_alignment.value() { 0.0 } else { 1.0 });
                     return true;
                 }
                 if (pleasant_ui::tempo::Header {
@@ -749,7 +853,7 @@ impl ChordboardView {
                 return true;
             }
             WindowEvent::MouseDown(MouseButton::Right) => {
-                if self.press_quick_midi(cx, x, y, true) {
+                if self.press_global(cx, x, y, true) || self.press_quick_midi(cx, x, y, true) {
                     return true;
                 }
                 if hit(PIANO_SURFACE, x, y)
@@ -839,11 +943,15 @@ impl ChordboardView {
                             cx.emit(RawParamEvent::BeginSetParameter(drag.ptr));
                             drag.started = true;
                         }
-                        let delta = pleasant_ui::pointer::readout_drag_delta(
+                        let mut delta = pleasant_ui::pointer::readout_drag_delta(
                             x - drag.press.origin.0,
                             y - drag.press.origin.1,
                             cx.modifiers().shift(),
                         );
+                        if drag.ptr == self.params.tempo.as_ptr() {
+                            // Match the wider tempo control with finer relative adjustment.
+                            delta /= 3.0;
+                        }
                         cx.emit(RawParamEvent::SetParameterNormalized(
                             drag.ptr,
                             (drag.norm + delta).clamp(0.0, 1.0),

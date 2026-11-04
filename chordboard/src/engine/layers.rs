@@ -170,7 +170,7 @@ impl Engine {
             let mut expression = self.channels[channel as usize];
             expression.bend = self.melody_bend(channel);
             self.capture_delay_source(
-                crate::arpeggiator::source::MELODY,
+                crate::midi_fx::source::MELODY,
                 Self::melody_delay_token(channel, note),
                 note,
                 velocity,

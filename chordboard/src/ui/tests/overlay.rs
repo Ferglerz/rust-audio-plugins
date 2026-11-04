@@ -29,7 +29,7 @@ fn wires_face_destinations_and_sliding_route_page_blocks_hidden_controls() {
     let mut view = view(1, false);
     let (mut cx, target, changes) = context();
     view.set_panel(Some(Panel::Routes));
-    let r = transpose_rect(3);
+    let r = ORDER;
     event(
         &mut view,
         &mut cx,
@@ -43,21 +43,73 @@ fn wires_face_destinations_and_sliding_route_page_blocks_hidden_controls() {
     assert_eq!(MAIN_W, 1621.0); // Preserve the width of the performance surfaces.
 }
 #[test]
-fn transpose_reset_emits_zero_from_a_nonzero_saved_value() {
-    let mut view = view(1, false);
-    view.params = Arc::new(ChordboardParams {
-        transpose: IntParam::new("Transpose", 19, IntRange::Linear { min: -24, max: 24 }),
-        ..ChordboardParams::default()
-    });
-    let (mut cx, target, changes) = context();
-    click(&mut view, &mut cx, target, transpose_rect(2));
-    assert_eq!(
-        changes.borrow().last().copied(),
-        Some((
-            view.params.transpose.as_ptr(),
-            view.params.transpose.preview_normalized(0)
-        ))
+fn global_transpose_reset_closes_editing_and_emits_zero() {
+    for double in [false, true] {
+        let mut view = view(1, false);
+        let (mut cx, target, changes) = context();
+        let r = globals::value_rect("transpose");
+        click(&mut view, &mut cx, target, r);
+        assert_eq!(
+            view.edit.as_ref().map(|edit| edit.target),
+            Some("transpose")
+        );
+        view.edit.as_mut().unwrap().text = "19".into();
+        BackendContext::new(&mut cx)
+            .modifiers()
+            .set(Modifiers::LOGO, !double);
+        event(
+            &mut view,
+            &mut cx,
+            target,
+            r.0 + r.2 * 0.5,
+            r.1 + r.3 * 0.5,
+            if double {
+                WindowEvent::MouseDoubleClick(MouseButton::Left)
+            } else {
+                WindowEvent::MouseDown(MouseButton::Left)
+            },
+        );
+        assert_eq!(
+            changes.borrow().last().copied(),
+            Some((
+                view.params.transpose.as_ptr(),
+                view.params.transpose.preview_normalized(0)
+            ))
+        );
+        assert!(view.edit.is_none());
+        assert!(view.drag.is_none());
+    }
+}
+
+#[test]
+fn modulated_global_transpose_explains_ownership_without_editing() {
+    let mut view = view(3, false);
+    let destination = crate::engine::routing::TARGETS
+        .iter()
+        .position(|target| target.id == "transpose")
+        .unwrap();
+    let params = Arc::get_mut(&mut view.params).unwrap();
+    params.routes[1].source = IntParam::new("Source", 6, IntRange::Linear { min: 0, max: 12 });
+    params.routes[1].target = IntParam::new(
+        "Destination",
+        destination as i32,
+        IntRange::Linear {
+            min: 0,
+            max: crate::engine::routing::TARGETS.len() as i32 - 1,
+        },
     );
+    let (mut cx, target, changes) = context();
+    click(
+        &mut view,
+        &mut cx,
+        target,
+        globals::global_rect("transpose"),
+    );
+    assert!(changes.borrow().is_empty());
+    assert!(view.status.contains("Transpose is controlled by Timbre"));
+    assert_eq!(view.route_hover, Some(5));
+    assert!(view.drag.is_none());
+    assert!(view.edit.is_none());
 }
 #[test]
 fn modulator_selection_toggles_and_xy_tiles_open_routes() {
@@ -99,11 +151,11 @@ fn route_overlay_removal_requires_the_confirmation_check() {
     );
 }
 #[test]
-fn modulated_rate_clicks_explain_ownership_without_editing() {
+fn modulated_global_velocity_clicks_explain_ownership_without_editing() {
     let mut view = view(3, false);
     let destination = crate::engine::routing::TARGETS
         .iter()
-        .position(|t| t.id == "rate")
+        .position(|t| t.id == "velocity_scale")
         .unwrap();
     let mut params = ChordboardParams::default();
     params.routes[1].source = IntParam::new("Source", 6, IntRange::Linear { min: 0, max: 9 });
@@ -115,16 +167,18 @@ fn modulated_rate_clicks_explain_ownership_without_editing() {
             max: crate::engine::routing::TARGETS.len() as i32 - 1,
         },
     );
-    params.arp_pages[0].arp_mode =
-        IntParam::new("Arp repeat", 2, IntRange::Linear { min: 0, max: 3 });
     view.params = Arc::new(params);
-    open_arp(&mut view);
     let (mut cx, target, changes) = context();
-    click(&mut view, &mut cx, target, arp_rate_rect());
+    click(
+        &mut view,
+        &mut cx,
+        target,
+        globals::global_rect("velocity_scale"),
+    );
     assert!(changes.borrow().is_empty());
     assert!(view
         .status
-        .contains("Rate (synced) is controlled by Timbre"));
+        .contains("Velocity scale is controlled by Timbre"));
     assert_eq!(view.route_hover, Some(5));
     assert!(view.drag.is_none());
 }
@@ -248,14 +302,21 @@ fn output_controls_follow_the_arp_editor_page_and_keep_strumfield_velocity_free(
     for mode in [1, 2, 3] {
         let v = view(mode, false);
         let ids: Vec<_> = v.base_controls().into_iter().map(|(c, _)| c.id).collect();
-        assert!(!ids.contains(&"velocity"));
+        assert!(ids.contains(&"velocity_scale"));
         assert!(ids.contains(&"length_ms"));
         assert!(!ids.contains(&"strings"));
         let controls = v.base_controls();
-        assert!(!controls.iter().any(|(c, _)| c.id == "velocity"));
-        assert!(!controls
+        let velocity: Vec<_> = controls
             .iter()
-            .any(|(c, r)| c.id == "velocity" && hit(PAD, r.0, r.1)));
+            .filter(|(c, _)| c.id == "velocity_scale")
+            .collect();
+        assert_eq!(velocity.len(), 1);
+        assert_eq!(velocity[0].1, globals::global_rect("velocity_scale"));
+        let r = velocity[0].1;
+        assert!(r.1 >= GLOBAL_SURFACE.1);
+        assert!(r.1 + r.3 <= GLOBAL_SURFACE.1 + GLOBAL_SURFACE.3);
+        assert!(!hit(PAD, r.0, r.1));
+        assert!(!hit(PERF_SURFACE, r.0, r.1));
     }
 }
 #[test]
@@ -370,7 +431,7 @@ fn keyboard_module_sits_below_the_arpeggiator() {
     let mut view = view(1, false);
     assert!(view.arp_editor_open());
     assert!(ARP_SURFACE.1 + ARP_SURFACE.3 <= PIANO_SURFACE.1);
-    assert!(arp_direction_rect().1 < ARP_SURFACE.1 + ARP_SETTINGS_H);
+    assert!(arp_direction_rect().1 + arp_direction_rect().3 < arpeggiator::lane_rect(0).1);
     assert!(arp_power_rect().1 < arp_direction_rect().1 + arp_direction_rect().3);
     let (mut cx, target, changes) = context();
     click(&mut view, &mut cx, target, arp_power_rect());

@@ -4,9 +4,9 @@ use super::*;
 #[derive(Clone, Copy)]
 pub(super) enum Icon {
     Lock,
+    Unlock,
     Once,
     Loop,
-    SyncLoop,
     AlignedLoop,
     Host,
     Learn,
@@ -52,22 +52,15 @@ impl Icon {
                 d.c.fill_path(&path, &paint);
                 d.c.restore();
             }
-            Self::SyncLoop | Self::AlignedLoop => {
+            Self::AlignedLoop => {
                 Self::Loop.draw(d, x, y, color);
-                if matches!(self, Self::SyncLoop) {
-                    // A clock inside the repeat arrows: retain rhythmic phase.
-                    d.circle(x, y, 2.8, color, false);
-                    line(d, (0.0, -1.8), (0.0, 0.0));
-                    line(d, (0.0, 0.0), (1.5, 0.8));
-                } else {
-                    // Beat-grid ticks inside the same repeat arrows.
-                    for dx in [-3.0, 0.0, 3.0] {
-                        line(d, (dx, -2.5), (dx, 2.5));
-                    }
-                    line(d, (-3.0, 0.0), (3.0, 0.0));
+                for dx in [-3.0, 0.0, 3.0] {
+                    line(d, (dx, -2.5), (dx, 2.5));
                 }
+                line(d, (-3.0, 0.0), (3.0, 0.0));
             }
-            Self::Once | Self::Loop | Self::Lock | Self::Reset | Self::Host | Self::Glyph(_) => {
+
+            Self::Once | Self::Loop | Self::Lock | Self::Unlock | Self::Reset | Self::Host | Self::Glyph(_) => {
                 use nih_plug_vizia::vizia::vg::{Align, Baseline, Paint};
                 // Verified against the cmap and glyph names in Vizia's bundled
                 // Tabler font; this Vizia version exports only some codepoints.
@@ -75,6 +68,7 @@ impl Icon {
                     Self::Once => nih_plug_vizia::vizia::icons::ICON_PLAYER_SKIP_FORWARD,
                     Self::Loop => nih_plug_vizia::vizia::icons::ICON_REPEAT,
                     Self::Lock => "\u{eae2}",  // lock
+                    Self::Unlock => "\u{eae1}", // lock-open
                     Self::Reset => "\u{eb16}", // rotate
                     Self::Host => "\u{eade}",  // link
                     Self::Glyph(glyph) => glyph,
@@ -179,6 +173,22 @@ impl ChordboardView {
     }
 
     fn motion_targets(&self) -> Vec<(Rect, bool)> {
+        if self.fx_ui.open && !self.quick_midi.show {
+            let mut targets = self.arp_editor_button_rects();
+            targets.extend([
+                (midi_fx::PERFORMANCE_TAB, false),
+                (midi_fx::FX_TAB, true),
+                (APPEARANCE, false),
+                (TEMPO_SYNC, false),
+            ]);
+            targets.extend(
+                self.base_controls()
+                    .into_iter()
+                    .filter(|(_, r)| r.1 < HEADER_H)
+                    .map(|(c, r)| (r, c.toggle && c.norm >= 0.5)),
+            );
+            return targets;
+        }
         if let Some(menu) = self.menu {
             return (0..menu.items().len())
                 .map(|i| {
@@ -191,8 +201,10 @@ impl ChordboardView {
         }
         let mut targets = Vec::new();
         targets.extend(self.route_chips().into_iter().map(|(_, r)| (r, false)));
-        targets.push((midi_learn::switch_rect(), self.quick_midi.show));
+        targets.push((if self.quick_midi.show { midi_learn::exit_rect() } else { midi_learn::switch_rect() }, self.quick_midi.show));
         if self.quick_midi.show {
+            targets.extend(self.surface_midi_targets().into_iter().map(|(i, r)|
+                (r, self.bridge.quick_learn.load(Ordering::Acquire) == i as u32 + 1)));
             for i in 0..crate::midi_learn::COUNT {
                 targets.push((
                     midi_learn::chip_rect(i),
@@ -275,8 +287,13 @@ impl ChordboardView {
         ));
         targets
             .extend((0..2).map(|i| (inversion_control_rect(self.params.mpe_enabled(), i), false)));
-        targets
-            .extend((0..5).map(|i| (transpose_control_rect(self.params.mpe_enabled(), i), false)));
+        if self.panel == Some(Panel::Custom) {
+            targets.extend(
+                custom::custom_button_rects()
+                    .into_iter()
+                    .map(|r| (r, false)),
+            );
+        }
         if self.arp_editor_open() {
             targets.push((arp_rate_sync_rect(), self.sweep_synced()));
             if self.sweep_synced() {
@@ -360,17 +377,19 @@ impl ChordboardView {
     }
 
     pub(super) fn hover_pointer(&self) -> Option<(f32, f32)> {
-        pleasant_ui::idle_hover(self.pointer, self.drag.is_some())
+        pleasant_ui::idle_hover(self.pointer, self.drag.is_some()).filter(|&(x, y)| {
+            self.fx_ui.open || !self.row_slide.active() || x < 0.0 || y < HEADER_H
+        })
     }
 
     pub(super) fn hover_amount(&self, r: Rect) -> f32 {
         if self.drag.is_some() {
             return 0.0;
         }
-        self.motion
-            .iter()
-            .find(|m| m.rect == r)
-            .map_or(0.0, |m| m.hover)
+        self.motion.iter().find(|m| m.rect == r).map_or_else(
+            || self.hover_pointer().is_some_and(|(x, y)| hit(r, x, y)) as u8 as f32,
+            |m| m.hover,
+        )
     }
 
     pub(super) fn surface(&self, d: &mut Draw, r: Rect) {
@@ -403,17 +422,69 @@ impl ChordboardView {
     }
 
     pub(super) fn button_surface(&self, d: &mut Draw, r: Rect, on: bool, color: Color) {
-        let hover = self.hover_amount(r);
+        let motion_rect = if self.fx_ui.open
+            && !self.quick_midi.show
+            && self.menu.is_none()
+            && hit(midi_fx::DELAY_SURFACE, r.0, r.1)
+        {
+            self.fx_delay_screen_rect(r)
+        } else {
+            r
+        };
+        let hover = self.hover_amount(motion_rect);
         let selected = self
             .motion
             .iter()
-            .find(|m| m.rect == r)
+            .find(|m| m.rect == motion_rect)
             .map_or(on as u8 as f32, |m| m.selection);
         let flash = self
             .action_flash
-            .filter(|(rect, _)| *rect == r)
+            .filter(|(rect, _)| *rect == motion_rect)
             .map_or(0.0, |(_, v)| v);
-        d.button_surface(r, color, selected, hover, flash);
+        let press = self.button_press_amount(motion_rect).max(flash * 0.35);
+        d.button_surface(r, color, selected, hover, press);
+        // Distinguish idle, hover, held, selected and selected-hover at a glance.
+        let tint = selected * 0.12 + hover * (0.10 + selected * 0.12) + press * 0.22;
+        d.rect(r.0, r.1, r.2, r.3 - 2.0, alpha(color, tint));
+        if hover > 0.0 || press > 0.0 {
+            d.outline(
+                r,
+                alpha(
+                    if press > 0.0 { TEXT } else { color },
+                    (hover * 0.55 + press * 0.4).min(0.9),
+                ),
+            );
+        }
+    }
+
+    pub(super) fn button_press_amount(&self, r: Rect) -> f32 {
+        (self.button_press_origin.is_some_and(|(x, y)| hit(r, x, y))
+            && self.pointer.is_some_and(|(x, y)| hit(r, x, y))) as u8 as f32
+    }
+
+    // Give menus a fixed disclosure area independent of the label length.
+    pub(super) fn button_content<'a>(&self, d: &mut Draw, r: Rect, label: &'a str) -> (Rect, &'a str) {
+        if let Some(label) = label.strip_suffix(" ▾") {
+            let x = r.0 + r.2 - 11.0;
+            let y = r.1 + r.3 * 0.5;
+            d.line(x - 3.0, y - 1.5, x, y + 1.5, MUTED, 1.3);
+            d.line(x, y + 1.5, x + 3.0, y - 1.5, MUTED, 1.3);
+            d.line(x - 10.0, r.1 + 6.0, x - 10.0, r.1 + r.3 - 6.0, LINE, 1.0);
+            ((r.0, r.1, r.2 - 22.0, r.3), label)
+        } else {
+            (r, label)
+        }
+    }
+
+    pub(super) fn draw_add_label(&self, d: &mut Draw, r: Rect, label: &str, size: f32, color: Color) -> bool {
+        let Some(label) = label.strip_prefix("+ ") else { return false; };
+        let label = self.fit_text(d, label, r.2 - 30.0, size);
+        let width = d.text_width(&label, size);
+        let left = r.0 + (r.2 - width - 22.0) * 0.5;
+        let middle = r.1 + r.3 * 0.5;
+        d.text_middle(left, middle, "+", 20.0, color);
+        d.text_middle(left + 22.0, middle, &label, size, color);
+        true
     }
 
     fn paint_button(
@@ -426,9 +497,20 @@ impl ChordboardView {
         icon: Option<Icon>,
     ) {
         self.button_surface(d, r, on, color);
+        let (r, label) = self.button_content(d, r, label);
         let old = d.font;
         d.font = self.font.get();
-        let label_color = if on { color } else { MUTED };
+        let label_color = if on {
+            color
+        } else if self.hover_amount(r) > 0.0 {
+            TEXT
+        } else {
+            MUTED
+        };
+        if icon.is_none() && self.draw_add_label(d, r, label, 11.0, label_color) {
+            d.font = old;
+            return;
+        }
         let padding = if r.2 < 90.0 { 6.0 } else { 12.0 };
         let reserved = if icon.is_some() { 23.0 } else { 0.0 };
         let text = self.fit_text(d, label, (r.2 - padding - reserved).max(0.0), 11.0);

@@ -189,6 +189,10 @@ impl Engine {
         owner: u8,
         out: &mut impl FnMut(Out),
     ) {
+        let scaled_velocity = self.scaled_velocity(velocity);
+        if scaled_velocity <= 0.0 {
+            return;
+        }
         self.setup(out);
         let off = self.now.saturating_add(duration);
         if let Some(voice) = self
@@ -203,13 +207,13 @@ impl Engine {
             let channel = voice.channel;
             self.emit_expression(channel, out);
             out(Out::Off(channel, note, 0.0));
-            out(Out::On(channel, note, velocity));
+            out(Out::On(channel, note, scaled_velocity));
             let token = self.new_note_token();
             self.capture_delay_source(
-                crate::arpeggiator::source::STRUM,
+                crate::midi_fx::source::STRUM,
                 token,
                 note,
-                velocity,
+                scaled_velocity,
                 self.attack_expression(),
                 (off != u64::MAX).then_some(off),
             );
@@ -245,6 +249,10 @@ impl Engine {
         attack_expression: Option<Expression>,
         out: &mut impl FnMut(Out),
     ) {
+        let velocity = self.scaled_velocity(velocity);
+        if velocity <= 0.0 {
+            return;
+        }
         if self.config.affect_chords && self.melody.iter().any(|notes| notes[note as usize]) {
             return;
         }
@@ -315,23 +323,23 @@ impl Engine {
             token,
         });
         let source = if owner == arpeggiator::ARP_OWNER {
-            crate::arpeggiator::source::ARP
+            crate::midi_fx::source::ARP
         } else if layer {
             let bass = self.config.always_bass && self.selected_root() == Some(note);
             let chord = self.config.always_chord || self.config.mode == CHORD;
             (if bass {
-                crate::arpeggiator::source::BASS
+                crate::midi_fx::source::BASS
             } else {
                 0
             }) | (if chord || !bass {
-                crate::arpeggiator::source::CHORDS
+                crate::midi_fx::source::CHORDS
             } else {
                 0
             })
         } else if owner == SELECT_ROOT_OWNER || self.config.mode == CHORD {
-            crate::arpeggiator::source::CHORDS
+            crate::midi_fx::source::CHORDS
         } else {
-            crate::arpeggiator::source::STRUM
+            crate::midi_fx::source::STRUM
         };
         self.capture_delay_source(
             source,
@@ -370,6 +378,11 @@ impl Engine {
         } else {
             base
         }
+    }
+    // Scale after cell/custom dynamics so quiet steps can use the full MIDI range.
+    // Delay captures receive this final velocity and do not scale it again.
+    fn scaled_velocity(&self, velocity: f32) -> f32 {
+        (velocity * self.config.velocity_scale).clamp(0.0, 1.0)
     }
     pub(super) fn base_strike_velocity(&self) -> f32 {
         if self
@@ -486,7 +499,7 @@ impl Engine {
             let selected = (self.memory, self.notes, self.full_notes, self.expression);
             let retain = discontinuity
                 && playing
-                && self.config.arp_mode == crate::arpeggiator::ArpMode::AlignedLoop;
+                && self.config.daw_alignment;
             self.panic(out);
             if retain {
                 self.memory = selected.0;
@@ -500,6 +513,7 @@ impl Engine {
     // Only a newly played/recalled chord establishes a new rhythmic origin.
     pub(super) fn restart_arp(&mut self) {
         if !self.promoting
+            && !self.arp_live_settings().lock_length
             && matches!(
                 self.config.arp_mode,
                 crate::arpeggiator::ArpMode::Once | crate::arpeggiator::ArpMode::Loop

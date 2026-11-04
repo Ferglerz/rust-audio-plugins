@@ -290,6 +290,7 @@ fn defaults_use_auto_strum_zero_sweep_and_unassigned_y_controller() {
             crate::engine::Mapping::default()
         ]
     );
+    assert_eq!(arp_power_rect().1, arp_direction_rect().1);
     assert!(arp_power_rect().0 + arp_power_rect().2 < arp_direction_rect().0);
     assert!(METER_NUM.0 + METER_NUM.2 < TEMPO_SYNC.0);
 }
@@ -411,7 +412,7 @@ fn left_performance_targets_do_not_overlap() {
     targets.extend((0..KEY_COUNT).map(key_rect));
     targets.extend((0..MEMORY_COUNT).map(memory_rect));
     targets.extend((0..2).map(inversion_rect));
-    targets.extend((0..TRANSPOSE_STEPS.len()).map(transpose_rect));
+    targets.push(ROW_CONTEXT);
     for (i, a) in targets.iter().enumerate() {
         assert!(a.0 >= 0.0 && a.1 >= 0.0 && a.0 + a.2 <= W && a.1 + a.3 <= H);
         for (j, b) in targets.iter().enumerate().skip(i + 1) {

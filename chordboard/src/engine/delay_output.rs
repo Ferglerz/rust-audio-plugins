@@ -1,6 +1,6 @@
 //! Echo allocation never steals a dry voice or changes an occupied dry channel.
 use super::*;
-use crate::arpeggiator::source;
+use crate::midi_fx::source;
 pub(super) const DELAY_OWNER: u8 = 6;
 impl Engine {
     pub(super) fn new_note_token(&mut self) -> u64 {
@@ -20,20 +20,25 @@ impl Engine {
         if self.resetting {
             return;
         }
-        let settings = self.active_arp_page().delay;
-        self.delay.capture(
-            settings,
-            source,
-            token,
-            note,
-            velocity,
-            expression,
-            off,
-            self.now,
-            self.beat,
-            self.sample_rate as f64,
-            self.tempo,
-        );
+        // The persisted module sequence is also the processing sequence. New effect
+        // types must be dispatched here in that order; echo feedback stays internal.
+        for index in 0..self.arp.data.midi_fx.order.len() {
+            match self.arp.data.midi_fx.order[index] {
+                crate::midi_fx::MidiFxId::Delay => self.delay.capture(
+                    self.arp.data.midi_fx.delay,
+                    source,
+                    token,
+                    note,
+                    velocity,
+                    expression,
+                    off,
+                    self.now,
+                    self.beat,
+                    self.sample_rate as f64,
+                    self.tempo,
+                ),
+            }
+        }
     }
     pub(super) fn release_delay_source(&mut self, token: u64) {
         if !self.resetting {
@@ -41,11 +46,10 @@ impl Engine {
         }
     }
     pub(super) fn update_delay_power(&mut self, out: &mut impl FnMut(Out)) {
-        let power = self.active_arp_page().delay.enabled;
-        if self.delay_page == self.arp.active && self.delay_power && !power {
+        let power = self.arp.data.midi_fx.delay.enabled;
+        if self.delay_power && !power {
             self.reset_delay(out);
         }
-        self.delay_page = self.arp.active;
         self.delay_power = power;
     }
     pub(super) fn reset_delay(&mut self, out: &mut impl FnMut(Out)) {
@@ -71,7 +75,7 @@ impl Engine {
     /// Resolve only new attacks. Existing echo tokens retain their actual pitch
     /// until release, so a harmony change cannot misdirect a pending note-off.
     fn delay_note(&self, mut note: u8) -> u8 {
-        let settings = self.active_arp_page().delay;
+        let settings = self.arp.data.midi_fx.delay;
         let chord_notes = if self.config.tracker_enabled {
             self.arp_cycle_chord()
         } else {

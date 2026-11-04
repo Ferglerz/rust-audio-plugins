@@ -23,19 +23,19 @@ impl ChordboardView {
         let mut d = Draw::new(
             canvas,
             prefs().light(),
-            bounds.w / W,
-            bounds.x,
+            editor_scale(bounds.w, bounds.h),
+            bounds.x + CONTENT_X * editor_scale(bounds.w, bounds.h),
             bounds.y,
             self.ui_font.get(),
         )
         .with_hover(self.hover_pointer());
         d.fallback_font = self.music_font.get();
         d.icon_font = self.icon_font.get();
-        d.rounded_rect(0.0, 0.0, W, H, 0.0, BG);
-        d.rounded_rect(0.0, 0.0, W, 76.0, 0.0, PANEL);
-        d.line(0.0, 75.0, W, 75.0, LINE, 1.0);
+        d.rounded_rect(-CONTENT_X, 0.0, EDITOR_W, H, 0.0, BG);
+        d.rounded_rect(-CONTENT_X, 0.0, EDITOR_W, 76.0, 0.0, PANEL);
+        d.line(-CONTENT_X, 75.0, W, 75.0, LINE, 1.0);
         d.font = self.font.get();
-        d.text(32.0, 44.0, "CHORDBOARD", 24.0, GOLD);
+        d.text(32.0 - CONTENT_X, 44.0, "CHORDBOARD", 24.0, GOLD);
         let readout = chord_readout_rect();
         d.font = self.bold_font.get();
         let name = music::label(&self.chord_readout());
@@ -51,95 +51,20 @@ impl ChordboardView {
         d.appearance_button(APPEARANCE, prefs().label());
         d.font = self.ui_font.get();
         self.draw_tempo_header(&mut d);
-        self.draw_delay_header(&mut d);
-        let expand = self.expand_t();
-        let chords = shrink_width(CHORDS_SURFACE, expand);
-        let modulation = MOD_SURFACE;
-        let performance = perf_surface_rect(expand);
-        if chords.2 > 1.0 {
-            self.surface(&mut d, chords);
-        }
-        if modulation.2 > 1.0 {
-            self.surface(&mut d, modulation);
-        }
-        d.disabled = !self.params.strum_enabled.value();
-        self.surface(&mut d, performance);
-        d.disabled = false;
-        if expand < 1.0 {
-            d.scissor(chords.0, chords.1, chords.2.max(0.0), CHORDS_SURFACE.3);
-            d.offset_x = -self.route_progress * CHORDS_SURFACE.2;
-            if self.route_progress < 1.0 {
-                self.draw_chords(&mut d);
-            }
-            if self.route_progress > 0.0 {
-                d.offset_x = (1.0 - self.route_progress) * CHORDS_SURFACE.2;
-                self.draw_routes(&mut d);
-                self.close_icon(&mut d, self.panel_close_rect(Panel::Routes), TEAL, false);
-                for (c, rect) in self.panel_controls() {
-                    self.draw_control(&mut d, &c, rect, TEAL);
-                }
-            }
-            d.offset_x = 0.0;
-            d.reset_scissor();
-        }
-        self.draw_modulator_pages(&mut d);
-        let pad = self.pad();
-        d.scissor(pad.0, pad.1, pad.2, pad.3);
-        d.font = self.font.get();
-        d.disabled = !self.params.strum_enabled.value();
-        d.offset_x = -self.tracker_progress * PERF_SURFACE.2;
-        self.draw_pad(&mut d);
-        d.font = self.ui_font.get();
-        if expand == 0.0 {
-            for (c, r) in self.base_controls() {
-                if r.0 >= PAD.0 && r.1 >= PAD.1 && r.1 < PAD.1 + PAD.3 {
-                    self.draw_control(&mut d, &c, r, GOLD);
-                }
+        self.draw_page_navigation(&mut d);
+        for (control, rect) in self.base_controls() {
+            if rect.1 < HEADER_H {
+                self.draw_control(&mut d, &control, rect, GOLD);
             }
         }
-        d.offset_x = 0.0;
-        d.reset_scissor();
-        d.disabled = false;
+        if self.fx_ui.open {
+            self.draw_midi_fx(&mut d);
+        } else {
+            self.draw_row_modules(&mut d);
+        }
+        self.draw_tracker(&mut d);
         let base_controls = self.base_controls();
         let panel_controls = self.panel_controls();
-        for (c, r) in &base_controls {
-            if c.id == "root_on_select" {
-                continue;
-            }
-            if hit(ARP_SURFACE, r.0, r.1) || hit(ARP_PAD, r.0, r.1) {
-                continue;
-            }
-            if r.1 >= PIANO_SURFACE.1 {
-                continue;
-            }
-            if expand > 0.0 && r.1 >= HEADER_H {
-                continue;
-            }
-            if r.0 >= PAD.0 && r.1 >= PAD.1 && r.1 < PAD.1 + PAD.3 {
-                continue;
-            }
-            self.draw_control(&mut d, c, *r, GOLD);
-        }
-        d.scissor(performance.0, performance.1, performance.2, performance.3);
-        d.offset_x = -self.tracker_progress * PERF_SURFACE.2;
-        self.draw_strumfield_header(&mut d);
-        d.offset_x = 0.0;
-        d.reset_scissor();
-        d.disabled = !self.params.arp_enabled.value();
-        self.surface(&mut d, ARP_SURFACE);
-        d.disabled = false;
-        self.draw_arp_editor(&mut d);
-        self.draw_tracker(&mut d);
-        self.draw_keyboard_pages(&mut d);
-
-        self.draw_memory_drag(&mut d);
-        self.draw_route_drag(&mut d);
-        self.draw_route_chips(&mut d);
-        if let Some(edit) = &self.edit {
-            d.font = self.font.get();
-            d.value_edit(edit, GOLD);
-            d.font = self.ui_font.get();
-        }
         let hint = self.hover_hint(if self.panel.is_some() {
             &panel_controls
         } else {
@@ -166,6 +91,42 @@ impl ChordboardView {
             11.0,
             if feedback { GOLD } else { MUTED },
         );
+        if self.quick_midi.show {
+            let light = d.light;
+            d.light = false;
+            let mut regions: Vec<Rect> = vec![(-CONTENT_X, 0.0, EDITOR_W, H)];
+            for (_, hole) in self.surface_midi_targets() {
+                let mut next = Vec::new();
+                for r in regions {
+                    let left = r.0.max(hole.0);
+                    let top = r.1.max(hole.1);
+                    let right = (r.0 + r.2).min(hole.0 + hole.2);
+                    let bottom = (r.1 + r.3).min(hole.1 + hole.3);
+                    if left >= right || top >= bottom { next.push(r); continue; }
+                    next.extend([
+                        (r.0, r.1, r.2, top - r.1),
+                        (r.0, bottom, r.2, r.1 + r.3 - bottom),
+                        (r.0, top, left - r.0, bottom - top),
+                        (right, top, r.0 + r.2 - right, bottom - top),
+                    ].into_iter().filter(|r| r.2 > 0.0 && r.3 > 0.0));
+                }
+                regions = next;
+            }
+            for r in regions {
+                d.rect(r.0, r.1, r.2, r.3, alpha(pleasant_ui::theme::rgb(0, 0, 0), 0.55));
+            }
+            d.light = light;
+            self.surface(&mut d, MOD_SURFACE);
+            self.draw_modulator_pages(&mut d);
+            // The scrim is dark in either theme; keep foreground labels readable.
+            d.light = false;
+            self.draw_global_targets(&mut d);
+            self.draw_surface_midi_targets(&mut d);
+            d.font = self.ui_font.get();
+            d.text(GLOBAL_SURFACE.0 + 14.0, module_title_y(GLOBAL_SURFACE.1, MODULE_TITLE_SIZE),
+                &self.midi_learn_status(), MODULE_TITLE_SIZE, GOLD);
+            return;
+        }
         if let Some(menu) = self.menu {
             if matches!(menu, Menu::Key | Menu::Scale) {
                 self.draw_root_menu(&mut d, menu);
@@ -216,11 +177,115 @@ impl ChordboardView {
         }
     }
 
+    // A complete row page: nested module slides keep their own local offsets.
+    pub(super) fn draw_modules(&self, d: &mut Draw) {
+        let expand = self.expand_t();
+        let chords = shrink_width(CHORDS_SURFACE, expand);
+        let modulation = MOD_SURFACE;
+        let performance = perf_surface_rect(expand);
+        if chords.2 > 1.0 {
+            self.surface(d, chords);
+        }
+        if modulation.2 > 1.0 {
+            self.surface(d, modulation);
+        }
+        // Bypassed modules retain readable headers and editable settings.
+        self.surface(d, performance);
+        if expand < 1.0 {
+            d.scissor(chords.0, chords.1, chords.2.max(0.0), CHORDS_SURFACE.3);
+            d.offset_x = -self.route_progress * CHORDS_SURFACE.2;
+            if self.route_progress < 1.0 {
+                self.draw_chords(d);
+            }
+            if self.route_progress > 0.0 {
+                d.offset_x = (1.0 - self.route_progress) * CHORDS_SURFACE.2;
+                match self.slide_panel {
+                    Panel::Routes => self.draw_routes(d),
+                    Panel::Custom => self.draw_custom(d),
+                }
+                self.close_icon(d, self.panel_close_rect(self.slide_panel), TEAL, false);
+                for (c, rect) in self.panel_controls() {
+                    self.draw_control(d, &c, rect, TEAL);
+                }
+            }
+            d.offset_x = 0.0;
+            d.reset_scissor();
+        }
+        self.draw_modulator_pages(d);
+        let pad = self.pad();
+        d.scissor(pad.0, pad.1, pad.2, pad.3);
+        d.font = self.font.get();
+        d.disabled = !self.params.strum_enabled.value();
+        self.draw_pad(d);
+        d.font = self.ui_font.get();
+        if expand == 0.0 {
+            for (c, r) in self.base_controls() {
+                if r.0 >= PAD.0 && r.1 >= PAD.1 && r.1 < PAD.1 + PAD.3 {
+                    self.draw_control(d, &c, r, GOLD);
+                }
+            }
+        }
+        d.offset_x = 0.0;
+        d.reset_scissor();
+        d.disabled = false;
+        let base_controls = self.base_controls();
+        for (c, r) in &base_controls {
+            if r.1 < HEADER_H || hit(GLOBAL_SURFACE, r.0, r.1) {
+                continue;
+            }
+            if c.id == "root_on_select" {
+                continue;
+            }
+            if hit(ARP_SURFACE, r.0, r.1) || hit(ARP_PAD, r.0, r.1) {
+                continue;
+            }
+            if r.1 >= PIANO_SURFACE.1 {
+                continue;
+            }
+            if expand > 0.0 && r.1 >= HEADER_H {
+                continue;
+            }
+            if r.0 >= PAD.0 && r.1 >= PAD.1 && r.1 < PAD.1 + PAD.3 {
+                continue;
+            }
+            self.draw_control(d, c, *r, GOLD);
+        }
+        d.scissor(performance.0, performance.1, performance.2, performance.3);
+        self.draw_strumfield_header(d);
+        d.offset_x = 0.0;
+        d.reset_scissor();
+        self.surface(d, ARP_SURFACE);
+        self.draw_arp_editor(d);
+        self.draw_keyboard_pages(d);
+        self.draw_globals(d);
+
+        self.draw_memory_drag(d);
+        self.draw_route_drag(d);
+        self.draw_route_chips(d);
+        if let Some(edit) = &self.edit {
+            d.font = self.font.get();
+            d.value_edit(edit, GOLD);
+            d.font = self.ui_font.get();
+        }
+    }
+
     pub(super) fn hover_hint(&self, controls: &[(Control, Rect)]) -> Option<String> {
         if let Some(hint) = self.route_drag_hint() {
             return Some(hint);
         }
         let (x, y) = self.hover_pointer()?;
+        if hit(midi_fx::FX_TAB, x, y) {
+            return Some("Global MIDI effects · Shared by every tracker row".into());
+        }
+        if hit(midi_fx::PERFORMANCE_TAB, x, y) {
+            return Some("Return to performance controls".into());
+        }
+        if self.fx_ui.open && x >= 0.0 && y >= HEADER_H {
+            if x < midi_fx::DELAY_SURFACE.0 {
+                return Some("Drag the dots to reorder MIDI effects".into());
+            }
+            return self.arp_editor_hint(x, y);
+        }
         if self.menu.is_some() {
             return None;
         }
@@ -373,12 +438,6 @@ impl ChordboardView {
                 )
             });
         }
-        if (0..5).any(|i| hit(transpose_control_rect(self.params.mpe_enabled(), i), x, y)) {
-            return Some(format!(
-                "Transpose: {:+} semitones · Reset returns to 0",
-                self.params.transpose.value()
-            ));
-        }
         if hit(self.control_octave_bounds(), x, y) && piano_note_at(x, y).is_none() {
             return Some(if self.learning() == 4 {
                 "Play C to set the control octave…".into()
@@ -473,6 +532,9 @@ impl ChordboardView {
                 "Click to cycle Strum Only / Root on Select / Chord on Select · Selecting a chord can sound its root or the whole chord, including Manual Strum".into(),
             );
         }
+        if hit(DAW_ALIGNMENT, x, y) {
+            return Some("DAW alignment · Align synced playback across all rows to the host beat grid · Requires host tempo and position; otherwise use the local clock".into());
+        }
         if hit(strum_octaves_rect(self.expand_t()), x, y) {
             return Some(
                 "Octaves: spread the chord over 1–4 octaves · Strings = chord tones × octaves, 3 to 12"
@@ -511,9 +573,6 @@ impl ChordboardView {
                 |chord| format!("{} · Third and later notes add extensions · Chord latch retains the complete recipe", self.named_chord(chord)),
             ));
         }
-        if hit(transpose_control_rect(self.params.mpe_enabled(), 2), x, y) {
-            return Some("Transpose in semitones · Click to reset to zero".into());
-        }
 
         None
     }
@@ -539,6 +598,10 @@ impl ChordboardView {
         }
     }
     pub(super) fn draw_control(&self, d: &mut Draw, c: &Control, rect: Rect, color: Color) {
+        if matches!(c.id, "humanize" | "swing") {
+            self.draw_adjustment_knob(d, c, rect);
+            return;
+        }
         if c.id == "tempo" {
             return;
         } // Shared header owns BPM drawing; local controls retain editing.
@@ -595,7 +658,7 @@ impl ChordboardView {
             return;
         }
         let name = match c.id {
-            "velocity" => "Velocity",
+            "velocity" | "velocity_scale" => "Velocity",
             "length_ms" => "Length",
             "strings_played" => "Played",
             "output_channel" => "MIDI channel",
@@ -769,19 +832,23 @@ mod tests {
         }
     }
     #[test]
-    fn arp_settings_fit_one_row_above_the_strings() {
+    fn arp_header_and_right_stack_fit_without_overlap() {
         let row = [
             arp_power_rect(),
             arpeggiator::mode_rect(),
-            arpeggiator::octaves_rect(),
+            arpeggiator::loop_add_rect(),
             arp_direction_rect(),
+            arpeggiator::lock_length_rect(),
+            arpeggiator::fixed_steps_rect(),
+            arpeggiator::fill_rect(),
+            arpeggiator::custom_edit_rect(),
             arp_controls()[0].1,
             arp_controls()[1].1,
             arp_rate_sync_rect(),
             arp_rate_rect(),
         ];
         let top = ARP_SURFACE.1;
-        let bottom = ARP_SURFACE.1 + ARP_LANE_TOP;
+        let bottom = ARP_SURFACE.1 + ARP_SURFACE.3;
         for r in row {
             assert!(
                 r.1 >= top && r.1 + r.3 <= bottom,
@@ -794,8 +861,9 @@ mod tests {
         }
         assert_disjoint(&row);
         let [(_, humanize), (_, swing)] = arp_controls();
-        assert_eq!(humanize.1, swing.1);
-        assert!(humanize.0 + humanize.2 < swing.0);
+        assert_eq!(humanize.0, swing.0);
+        assert!(humanize.1 + humanize.3 < swing.1);
+        assert!(swing.1 + swing.3 < arpeggiator::loop_add_rect().1);
         assert!(arp_direction_rect().2 > 0.0);
         assert!(ARP_LANE_TOP > ARP_SETTINGS_H);
         assert!(ARP_SURFACE.1 + ARP_SURFACE.3 <= PIANO_SURFACE.1);
@@ -813,8 +881,8 @@ mod tests {
             assert!(r.1 + r.3 <= ARP_SURFACE.1 + ARP_SURFACE.3 - 12.0);
         }
         let [(_, humanize), (_, swing)] = arp_controls();
-        assert_eq!((swing.1, swing.3), (humanize.1, humanize.3));
-        assert!(swing.0 > humanize.0 + humanize.2);
+        assert_eq!((swing.0, swing.2, swing.3), (humanize.0, humanize.2, humanize.3));
+        assert!(swing.1 > humanize.1 + humanize.3);
         assert_eq!(output_controls().map(|(id, _)| id), ["length_ms"]);
     }
     #[test]
@@ -834,19 +902,18 @@ mod tests {
         assert!(output_controls().iter().all(|(id, _)| *id != "strings"));
     }
     #[test]
-    fn chords_header_selection_button_sits_between_order_and_transpose() {
-        let row = [Menu::Key.trigger_rect(), ORDER, ROOT_ON_SELECT, TRANSPOSE];
+    fn chords_header_selection_button_sits_between_order_and_row_context() {
+        let row = [Menu::Key.trigger_rect(), ORDER, ROOT_ON_SELECT, ROW_CONTEXT];
         for pair in row.windows(2) {
             assert_eq!(pair[0].1, pair[1].1);
             assert_eq!(pair[0].0 + pair[0].2 + 8.0, pair[1].0, "{pair:?}");
         }
         assert_disjoint(&row);
         assert_eq!(
-            TRANSPOSE.0 + TRANSPOSE.2,
+            ROW_CONTEXT.0 + ROW_CONTEXT.2,
             CHORDS_SURFACE.0 + CHORDS_SURFACE.2 - 16.0
         );
-        let last = transpose_control_rect(false, TRANSPOSE_STEPS.len() - 1);
-        assert_eq!(last.0 + last.2, TRANSPOSE.0 + TRANSPOSE.2);
+
     }
     #[test]
     fn keyboard_is_staggered_and_hit_boxes_do_not_overlap() {

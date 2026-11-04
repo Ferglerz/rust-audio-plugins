@@ -4,9 +4,31 @@ use nih_plug::prelude::*;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 pub const CONTROL_COUNT: usize = 8;
+// Existing persisted binding indices (including root at 8) never move.
 pub const ROOT: usize = CONTROL_COUNT;
-pub const COUNT: usize = CONTROL_COUNT + 1;
-pub const IDS: [&str; CONTROL_COUNT] = [
+pub const BASE_INVERSION: usize = 9;
+pub const COMPLEXITY: usize = 10;
+pub const VELOCITY: usize = 11;
+pub const GATE_SCALE: usize = 12;
+pub const VOICING_OVERRIDE: usize = 13;
+pub const VELOCITY_SCALE: usize = 14;
+pub const ALWAYS_BASS: usize = 15;
+pub const ALWAYS_CHORD: usize = 16;
+pub const AFFECT_CHORDS: usize = 17;
+pub const KEY_SPLIT: usize = 18;
+pub const BASS_ENABLED: usize = 19;
+pub const STRUM_ENABLED: usize = 20;
+pub const ROOT_ON_SELECT: usize = 21;
+pub const OUTPUT_CHANNEL: usize = 22;
+pub const BASS_CHANNEL: usize = 23;
+pub const UPPER_CHANNEL: usize = 24;
+pub const OCTAVES: usize = 25;
+pub const BASS_SPLIT: usize = 26;
+pub const SPLIT_NOTE: usize = 27;
+pub const TEMPO: usize = 28;
+pub const DAW_ALIGNMENT: usize = 29;
+pub const COUNT: usize = 30;
+pub const IDS: [&str; COUNT] = [
     "spread",
     "voice_leading",
     "inversion",
@@ -15,6 +37,28 @@ pub const IDS: [&str; CONTROL_COUNT] = [
     "latch",
     "arp_enabled",
     "arp_page",
+    "", // Root selection is a modifier, not a parameter.
+    "base_inversion",
+    "complexity",
+    "velocity",
+    "gate_scale",
+    "voicing_override",
+    "velocity_scale",
+    "always_bass",
+    "always_chord",
+    "affect_chords",
+    "key_split",
+    "bass_enabled",
+    "strum_enabled",
+    "root_on_select",
+    "output_channel",
+    "bass_channel",
+    "upper_channel",
+    "octaves",
+    "bass_split",
+    "split_note",
+    "tempo",
+    "daw_alignment",
 ];
 pub const LABELS: [&str; COUNT] = [
     "Voicing",
@@ -26,8 +70,29 @@ pub const LABELS: [&str; COUNT] = [
     "Arp On/Off",
     "Arp Page",
     "Change Root",
+    "Base Inversion",
+    "Complexity",
+    "Velocity",
+    "Gate",
+    "Voicing",
+    "Velocity scale",
+    "Bass sustain",
+    "Full chord",
+    "Melody affects chords",
+    "Melody split",
+    "Bass on/off",
+    "Strum on/off",
+    "Root on select",
+    "Chord channel",
+    "Bass channel",
+    "Melody channel",
+    "Strum octaves",
+    "Bass split",
+    "Melody split note",
+    "Manual tempo",
+    "DAW alignment",
 ];
-const RANGES: [(i32, i32); CONTROL_COUNT] = [
+const RANGES: [(i32, i32); COUNT] = [
     (0, crate::harmony::VOICING_NAMES.len() as i32 - 1),
     (0, 2),
     (0, 11),
@@ -36,6 +101,28 @@ const RANGES: [(i32, i32); CONTROL_COUNT] = [
     (0, 1),
     (0, 1),
     (0, 7),
+    (0, 1), // Root has no scalar value.
+    (-12, 12),
+    (0, 5),
+    (0, 127),
+    (0, 127),
+    (0, 5),
+    (0, 127),
+    (0, 1),
+    (0, 1),
+    (0, 1),
+    (0, 1),
+    (0, 1),
+    (0, 1),
+    (0, 1),
+    (1, 16),
+    (1, 16),
+    (1, 16),
+    (1, 4),
+    (-1, 127),
+    (0, 127),
+    (0, 127),
+    (0, 1),
 ];
 pub const NOTE: u8 = 3;
 
@@ -87,7 +174,29 @@ pub fn base(params: &ChordboardParams, target: usize) -> i32 {
         4 => params.quality.value(),
         5 => params.latch.value() as i32,
         6 => params.arp_enabled.value() as i32,
-        _ => params.arp_page.value(),
+        7 => params.arp_page.value(),
+        BASE_INVERSION => params.base_inversion.value(),
+        COMPLEXITY => params.complexity.value(),
+        VELOCITY => float_base(&params.velocity),
+        VELOCITY_SCALE => float_base(&params.velocity_scale),
+        GATE_SCALE => float_base(&params.gate_scale),
+        VOICING_OVERRIDE => params.voicing_override.value(),
+        ALWAYS_BASS => params.always_bass.value() as i32,
+        ALWAYS_CHORD => params.always_chord.value() as i32,
+        AFFECT_CHORDS => params.affect_chords.value() as i32,
+        KEY_SPLIT => params.key_split.value() as i32,
+        BASS_ENABLED => params.bass_enabled.value() as i32,
+        STRUM_ENABLED => params.strum_enabled.value() as i32,
+        ROOT_ON_SELECT => params.root_on_select.value() as i32,
+        OUTPUT_CHANNEL => params.output_channel.value(),
+        BASS_CHANNEL => params.bass_channel.value(),
+        UPPER_CHANNEL => params.upper_channel.value(),
+        OCTAVES => params.octaves.value(),
+        BASS_SPLIT => params.bass_split.value(),
+        SPLIT_NOTE => params.split_note.value(),
+        TEMPO => float_base(&params.tempo),
+        DAW_ALIGNMENT => params.daw_alignment.value() as i32,
+        _ => 0,
     }
 }
 
@@ -101,6 +210,31 @@ pub fn value(params: &ChordboardParams, target: usize) -> i32 {
 pub fn normalized(target: usize, value: i32) -> f32 {
     let (min, max) = RANGES[target];
     (value.clamp(min, max) - min) as f32 / (max - min) as f32
+}
+
+fn float_base(param: &FloatParam) -> i32 {
+    (param.preview_normalized(param.value()) * 127.0)
+        .round()
+        .clamp(0.0, 127.0) as i32
+}
+
+/// Preserve exact host values until a learned 7-bit controller actually overrides them.
+/// This also acknowledges a host edit through the binding's ordinary pending protocol.
+pub fn float_value(params: &ChordboardParams, target: usize) -> f32 {
+    let param = match target {
+        TEMPO => &params.tempo,
+        VELOCITY => &params.velocity,
+        GATE_SCALE => &params.gate_scale,
+        VELOCITY_SCALE => &params.velocity_scale,
+        _ => return 0.0,
+    };
+    let base = float_base(param);
+    let desired = params.quick_midi[target].value(base).clamp(0, 127);
+    if desired == base {
+        param.value()
+    } else {
+        param.preview_plain(desired as f32 / 127.0)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -292,9 +426,14 @@ impl Input {
             self.selection = self.recipe;
             return true;
         }
-        let Some(target) = params.quick_midi[..CONTROL_COUNT]
+        let Some(target) = params
+            .quick_midi
             .iter()
-            .position(|binding| binding.mapping.load(Ordering::Acquire) == mapping.encode())
+            .enumerate()
+            .find_map(|(target, binding)| {
+                (target != ROOT && binding.mapping.load(Ordering::Acquire) == mapping.encode())
+                    .then_some(target)
+            })
         else {
             return false;
         };
@@ -356,6 +495,119 @@ mod tests {
         let mut output = Vec::new();
         plugin.input(event, &mut |e| output.push(e));
         output
+    }
+
+    #[test]
+    fn keyboard_and_performance_bindings_apply_without_editor_and_persist() {
+        let params = ChordboardParams::default();
+        let armed = AtomicU32::new(0);
+        let mut input = Input::default();
+        for target in ALWAYS_BASS..COUNT {
+            armed.store(target as u32 + 1, Ordering::Release);
+            assert!(input.consume(cc(9, target as u8, 0.0), &params, &armed, [0; 2]));
+            assert!(input.consume(cc(9, target as u8, 1.0), &params, &armed, [0; 2]));
+            assert_eq!(value(&params, target), RANGES[target].1);
+        }
+        assert_eq!(float_value(&params, TEMPO), 400.0);
+        let config = params.config();
+        assert!(config.always_bass && config.always_chord && config.affect_chords);
+        assert!(config.key_split && config.bass_enabled && config.strum_enabled && config.root_on_select);
+        assert_eq!((config.output_channel, config.bass_channel, config.upper_channel), (15, 15, 15));
+        assert_eq!((config.bass_split, config.split_note, config.octaves), (127, 127, 4));
+        let restored = ChordboardParams::default();
+        restored.deserialize_fields(&params.serialize_fields());
+        for target in ALWAYS_BASS..COUNT {
+            assert_eq!(value(&restored, target), RANGES[target].1);
+            assert_eq!(restored.quick_midi[target].mapping.load(Ordering::Acquire),
+                params.quick_midi[target].mapping.load(Ordering::Acquire));
+        }
+    }
+
+    #[test]
+    fn global_midi_learn_preserves_neutral_float_values_and_accepts_editor_closed_cc() {
+        let params = ChordboardParams::default();
+        let armed = AtomicU32::new(0);
+        let mut input = Input::default();
+        assert_eq!(float_value(&params, VELOCITY), 0.8);
+        assert_eq!(float_value(&params, GATE_SCALE), 1.0);
+        assert_eq!(float_value(&params, VELOCITY_SCALE), 1.0);
+        for target in BASE_INVERSION..COUNT {
+            let number = 30 + target as u8;
+            armed.store(target as u32 + 1, Ordering::Release);
+            assert!(input.consume(cc(9, number, 0.25), &params, &armed, [0; 2]));
+            for amount in [0.0, 0.5, 1.0] {
+                assert!(input.consume(cc(9, number, amount), &params, &armed, [0; 2]));
+                let (min, max) = RANGES[target];
+                assert_eq!(
+                    value(&params, target),
+                    min + (amount * (max - min) as f32).round() as i32
+                );
+            }
+        }
+        let config = params.config();
+        assert_eq!(config.base_inversion, 12);
+        assert_eq!(config.complexity, 5);
+        assert_eq!(config.voicing_override, 5);
+        assert_eq!(config.velocity, 1.0);
+        assert_eq!(config.gate_scale, 2.0);
+        assert_eq!(config.velocity_scale, 2.0);
+        let restored = ChordboardParams::default();
+        restored.deserialize_fields(&params.serialize_fields());
+        assert_eq!(restored.config().gate_scale, 2.0);
+        assert_eq!(restored.config().velocity_scale, 2.0);
+        assert_eq!(restored.config().base_inversion, 12);
+        assert_eq!(ROOT, 8);
+        assert_eq!(
+            &IDS[..8],
+            &[
+                "spread",
+                "voice_leading",
+                "inversion",
+                "transpose",
+                "quality",
+                "latch",
+                "arp_enabled",
+                "arp_page"
+            ]
+        );
+    }
+
+    #[test]
+    fn global_midi_learn_float_host_edits_supersede_pending_and_notes_step() {
+        let mut params = ChordboardParams::default();
+        let armed = AtomicU32::new(GATE_SCALE as u32 + 1);
+        let mut input = Input::default();
+        assert!(input.consume(cc(9, 21, 0.0), &params, &armed, [0; 2]));
+        assert!(input.consume(cc(9, 21, 1.0), &params, &armed, [0; 2]));
+        assert_eq!(params.config().gate_scale, 2.0);
+        params.gate_scale = FloatParam::new(
+            "Gate",
+            0.4321,
+            FloatRange::Linear {
+                min: 0.01,
+                max: 2.0,
+            },
+        );
+        assert_eq!(params.config().gate_scale, 0.4321);
+        assert_eq!(
+            params.quick_midi[GATE_SCALE]
+                .pending
+                .load(Ordering::Acquire),
+            0
+        );
+        for target in BASE_INVERSION..COUNT {
+            let original = value(&params, target);
+            armed.store(target as u32 + 1, Ordering::Release);
+            assert!(input.consume(note(9, 40, true), &params, &armed, [0; 2]));
+            assert!(input.consume(note(9, 40, false), &params, &armed, [0; 2]));
+            assert!(input.consume(note(9, 40, true), &params, &armed, [0; 2]));
+            let (min, max) = RANGES[target];
+            assert_eq!(
+                value(&params, target),
+                if original >= max { min } else { original + 1 }
+            );
+            assert!(input.consume(note(9, 40, false), &params, &armed, [0; 2]));
+        }
     }
 
     #[test]
@@ -427,7 +679,19 @@ mod tests {
         assert_eq!(plugin.engine.config.transpose, 24);
         assert_eq!(plugin.engine.config.quality, 11);
         assert!(plugin.engine.config.arp_enabled);
-        assert_eq!(plugin.engine.config.arp_page, 7);
+        // The historical page binding remains readable/persisted, but dynamic
+        // tracker rows own playback selection; it must not select legacy page 7.
+        assert_eq!(value(&plugin.params, 7), 7);
+        assert!(plugin.engine.config.tracker_enabled);
+        assert_eq!(plugin.engine.config.arp_page, 0);
+        assert_eq!(plugin.engine.arp.row_index, 0);
+        let restored = ChordboardParams::default();
+        restored.deserialize_fields(&plugin.params.serialize_fields());
+        assert_eq!(value(&restored, 7), 7);
+        assert_eq!(
+            restored.quick_midi[7].mapping.load(Ordering::Acquire),
+            Mapping::cc(27, 9).encode()
+        );
         plugin.params.quick_midi[0]
             .step_cc
             .store(true, Ordering::Relaxed);

@@ -85,7 +85,7 @@ fn slider_reset_gestures_close_text_editing_and_restore_original_defaults() {
                 .into_iter()
                 .find(|(c, _)| c.id == id)
                 .unwrap();
-            let value = pleasant_ui::slider_value_rect(rect);
+            let value = if matches!(id, "swing" | "humanize") { arpeggiator::adjustment_value_rect(rect) } else { pleasant_ui::slider_value_rect(rect) };
             click(&mut view, &mut cx, target, value);
             assert!(view.edit.is_some());
             changes.borrow_mut().clear();
@@ -156,7 +156,7 @@ fn invalid_value_edit_blocks_outside_click_and_focus_loss_cancels() {
 fn rhythm_controls_and_pointer_targets_follow_active_mode() {
     for mode in 1..4 {
         let mut view = view(mode, false);
-        for id in ["spread"] {
+        for id in ["velocity_scale", "base_inversion", "transpose"] {
             assert!(
                 view.route_targets()
                     .iter()
@@ -184,29 +184,38 @@ fn rhythm_controls_and_pointer_targets_follow_active_mode() {
     }
 }
 #[test]
-fn arp_modes_and_octaves_edit_the_selected_page_independently() {
+fn arp_modes_and_octaves_edit_the_selected_tracker_row_independently() {
     let mut view = view(0, false);
+    ensure_tracker_rows(&view, 4);
     view.arp_ui.edit_page = 3;
+    view.refresh_arp_editor_params();
+    let untouched = view.params.arpeggiator.snapshot().rows[..3].to_vec();
     let (mut cx, target, changes) = context();
-    for mode in 0..4 {
+    for mode in [0, 2] {
         let r = arpeggiator::mode_rect();
         click(&mut view, &mut cx, target, r);
-        click(
-            &mut view,
-            &mut cx,
-            target,
-            (r.0, r.1 + r.3 + 4.0 + mode as f32 * 22.0, r.2, 22.0),
+        let p = &view.arp_params().arp_mode;
+        let expected = (p.as_ptr(), p.preview_normalized(mode));
+        assert_eq!(changes.borrow().last().copied(), Some(expected));
+        assert!(
+            view.arp_row_param_event(&RawParamEvent::SetParameterNormalized(
+                expected.0, expected.1
+            ))
         );
-        let p = &view.params.arp_pages[3].arp_mode;
         assert_eq!(
-            changes.borrow().last().copied(),
-            Some((p.as_ptr(), p.preview_normalized(mode)))
+            view.params.arpeggiator.snapshot().rows[3].settings.mode,
+            crate::arpeggiator::ArpMode::from_index(mode as u8)
         );
     }
     changes.borrow_mut().clear();
-    click(&mut view, &mut cx, target, arpeggiator::octaves_rect());
-    let p = &view.params.arp_pages[3].arp_octaves;
+    click(&mut view, &mut cx, target, arpeggiator::loop_add_rect());
+    let p = &view.arp_params().arp_octaves;
     assert_eq!(&*changes.borrow(), &[(p.as_ptr(), p.preview_normalized(2))]);
+    assert_eq!(
+        view.params.arpeggiator.snapshot().rows[3].settings.octaves,
+        2
+    );
+    assert_eq!(view.params.arpeggiator.snapshot().rows[..3], untouched);
     assert!(!changes
         .borrow()
         .iter()
@@ -350,7 +359,7 @@ fn chord_clicks_hold_until_release() {
     ));
 }
 #[test]
-fn direct_learn_and_transpose_buttons() {
+fn direct_learn_and_global_transpose_knob() {
     let mut view = view(0, false);
     let (mut cx, target, changes) = context();
     {
@@ -362,24 +371,98 @@ fn direct_learn_and_transpose_buttons() {
         view.bridge.commands.pop(),
         Some(Command::Learn(4))
     ));
-    for (i, step) in TRANSPOSE_STEPS.iter().enumerate() {
-        click(&mut view, &mut cx, target, transpose_rect(i));
-        assert_eq!(
-            changes.borrow().last().copied(),
-            Some((
-                view.params.transpose.as_ptr(),
-                view.params.transpose.preview_normalized(*step)
-            ))
-        );
-    }
+    let r = globals::global_rect("transpose");
+    let (x, y) = (r.0 + r.2 * 0.5, r.1 + r.3 * 0.5);
+    event(
+        &mut view,
+        &mut cx,
+        target,
+        x,
+        y,
+        WindowEvent::MouseDown(MouseButton::Left),
+    );
+    assert!(changes.borrow().is_empty(), "knob press must not jump");
+    event(
+        &mut view,
+        &mut cx,
+        target,
+        x,
+        y - 36.0,
+        WindowEvent::MouseMove(x, y - 36.0),
+    );
+    let (ptr, norm) = changes.borrow().last().copied().unwrap();
+    assert_eq!(ptr, view.params.transpose.as_ptr());
+    assert!(view.params.transpose.preview_plain(norm) > 0);
+    event(
+        &mut view,
+        &mut cx,
+        target,
+        x,
+        y - 36.0,
+        WindowEvent::MouseUp(MouseButton::Left),
+    );
+    assert!(view.drag.is_none());
+    assert!(view.edit.is_none());
+    click(&mut view, &mut cx, target, globals::value_rect("transpose"));
+    assert_eq!(
+        view.edit.as_ref().map(|edit| edit.target),
+        Some("transpose")
+    );
+}
+
+#[test]
+fn global_learn_mode_uses_whole_knob_and_blocks_value_edits() {
+    let mut view = view(0, false);
+    let (mut cx, target, changes) = context();
+    click(&mut view, &mut cx, target, midi_learn::switch_rect());
+    view.tick_quick_midi(
+        &mut EventContext::new_with_current(&mut cx, target),
+        pleasant_ui::page_slide::DURATION,
+    );
+    let r = globals::global_rect("transpose");
+    click(&mut view, &mut cx, target, r);
+    assert_eq!(view.bridge.quick_learn.load(Ordering::Acquire), 4);
+    assert!(view.drag.is_none());
+    event(
+        &mut view,
+        &mut cx,
+        target,
+        r.0 + 20.0,
+        r.1 + 20.0,
+        WindowEvent::MouseScroll(0.0, 1.0),
+    );
+    click(&mut view, &mut cx, target, ORDER);
+    click(&mut view, &mut cx, target, arpeggiator::sync_rect());
+    assert!(
+        changes.borrow().is_empty(),
+        "dimmed controls must not change parameters"
+    );
+    click(&mut view, &mut cx, target, globals::value_rect("transpose"));
+    assert!(view.edit.is_none());
+    assert_eq!(view.bridge.quick_learn.load(Ordering::Acquire), 0);
+    event(
+        &mut view,
+        &mut cx,
+        target,
+        r.0,
+        r.1,
+        WindowEvent::KeyDown(Code::Escape, None),
+    );
+    assert!(!view.quick_midi.show);
+    click(&mut view, &mut cx, target, globals::value_rect("transpose"));
+    assert_eq!(
+        view.edit.as_ref().map(|edit| edit.target),
+        Some("transpose")
+    );
 }
 
 #[test]
 fn native_repeated_clicks_reach_all_chord_and_parameter_buttons() {
     for button in 0..69 {
-        // Arp rate and ordering use dropdowns; obsolete slots are archived.
+        // Transpose now uses a knob tested above; arp rate and ordering use dropdowns.
         // 47..=53 were the direction buttons; direction is a dropdown now.
-        if (42..=44).contains(&button)
+        if (36..=40).contains(&button)
+            || (42..=44).contains(&button)
             || (47..=53).contains(&button)
             || (54..=61).contains(&button)
             || button == 66
@@ -387,7 +470,10 @@ fn native_repeated_clicks_reach_all_chord_and_parameter_buttons() {
             continue;
         }
         let mut cx = Context::default();
-        let params = Arc::new(ChordboardParams::default());
+        let params = Arc::new(ChordboardParams {
+            scale_layout: IntParam::new("Layout", 0, IntRange::Linear { min: 0, max: 2 }),
+            ..ChordboardParams::default()
+        });
         let bridge = Arc::new(Bridge::default());
         let mut view =
             ChordboardView::new(params.clone(), bridge.clone(), Arc::new(PreviewContext));
@@ -397,7 +483,7 @@ fn native_repeated_clicks_reach_all_chord_and_parameter_buttons() {
         let target = view.build(&mut cx, |_| {}).focusable(true).entity();
         BackendContext::new(&mut cx)
             .cache()
-            .set_bounds(target, BoundingBox::from_min_max(0.0, 0.0, W, H));
+            .set_bounds(target, BoundingBox::from_min_max(0.0, 0.0, EDITOR_W, H));
         let changes: Changes = Rc::new(RefCell::new(Vec::new()));
         let observed = changes.clone();
         cx.add_global_listener(move |_, event| {
@@ -409,7 +495,6 @@ fn native_repeated_clicks_reach_all_chord_and_parameter_buttons() {
         });
         let (r, expected) = match button {
             0..=35 => (key_rect(button), None),
-            36..=40 => (transpose_rect(button - 36), Some(params.transpose.as_ptr())),
             41 => (arp_power_rect(), Some(params.arp_enabled.as_ptr())),
             45..=46 => (inversion_rect(button - 45), Some(params.inversion.as_ptr())),
             62..=65 => (octave_rect(button - 62), Some(params.octaves.as_ptr())),
@@ -420,7 +505,10 @@ fn native_repeated_clicks_reach_all_chord_and_parameter_buttons() {
         for press in 1..=3 {
             EventContext::new_with_current(&mut cx, target).capture();
             let mut backend = BackendContext::new_with_event_manager(&mut cx);
-            backend.emit_origin(WindowEvent::MouseMove(r.0 + r.2 / 2.0, r.1 + r.3 / 2.0));
+            backend.emit_origin(WindowEvent::MouseMove(
+                CONTENT_X + r.0 + r.2 / 2.0,
+                r.1 + r.3 / 2.0,
+            ));
             backend.emit_origin(WindowEvent::MouseDown(MouseButton::Left));
             backend.process_events();
             if expected.is_none() {
@@ -451,8 +539,10 @@ fn slider_drags_from_title_track_and_value_without_jumping() {
     for origin in [(20.0, 12.0), (20.0, 28.0), (130.0, 12.0)] {
         let mut view = view(1, false);
         open_arp(&mut view);
-        Arc::get_mut(&mut view.params).unwrap().arp_pages[0].arp_sync =
-            BoolParam::new("Sync", false);
+        view.params
+            .arpeggiator
+            .edit(|s| s.rows[0].settings.sync = false);
+        view.refresh_arp_editor_params();
         let (mut cx, target, changes) = context();
         let r = arp_rate_rect();
         let (x, y) = (r.0 + origin.0, r.1 + origin.1);
@@ -492,7 +582,10 @@ fn slider_drags_from_title_track_and_value_without_jumping() {
 fn clicking_a_slider_value_edits_but_clicking_its_title_does_not() {
     let mut view = view(1, false);
     open_arp(&mut view);
-    Arc::get_mut(&mut view.params).unwrap().arp_pages[0].arp_sync = BoolParam::new("Sync", false);
+    view.params
+        .arpeggiator
+        .edit(|s| s.rows[0].settings.sync = false);
+    view.refresh_arp_editor_params();
     let (mut cx, target, changes) = context();
     let r = arp_rate_rect();
     click(&mut view, &mut cx, target, (r.0, r.1, 60.0, 20.0));
@@ -550,6 +643,7 @@ fn selected_key_transposes_all_chord_rows_and_pointer_notes() {
     let mut view = view(0, false);
     view.params = Arc::new(ChordboardParams {
         key: IntParam::new("Key", 2, IntRange::Linear { min: 0, max: 11 }),
+        scale_layout: IntParam::new("Layout", 0, IntRange::Linear { min: 0, max: 2 }),
         ..ChordboardParams::default()
     });
     let (mut cx, target, _) = context();
@@ -584,8 +678,10 @@ fn tempo_is_global_and_arp_rate_sync_is_page_specific() {
             changes.borrow().last().copied(),
             Some((view.arp_params().rate.as_ptr(), 1.0))
         );
-        Arc::get_mut(&mut view.params).unwrap().arp_pages[0].arp_sync =
-            BoolParam::new("Sync", false);
+        view.params
+            .arpeggiator
+            .edit(|s| s.rows[0].settings.sync = false);
+        view.refresh_arp_editor_params();
         assert!(view
             .base_controls()
             .iter()
@@ -691,9 +787,25 @@ fn select_adjustment(view: &mut ChordboardView, cx: &mut Context, target: Entity
     assert!(!view.arp_chooser_open());
 }
 
-fn select_arp_page(view: &mut ChordboardView, cx: &mut Context, target: Entity, page: usize) {
-    click(view, cx, target, arpeggiator::page_block());
-    click(view, cx, target, arpeggiator::page_rect(page));
+fn ensure_tracker_rows(view: &ChordboardView, count: usize) {
+    view.params.arpeggiator.edit(|state| {
+        while state.rows.len() < count {
+            state.rows.push(crate::arpeggiator::TrackerRow {
+                id: state.rows.len() as u64 + 1,
+                ..crate::arpeggiator::TrackerRow::default()
+            });
+        }
+    });
+}
+
+fn select_tracker_row(view: &mut ChordboardView, cx: &mut Context, target: Entity, row: usize) {
+    ensure_tracker_rows(view, row + 1);
+    let r = tracker::row_rect(row, view.tracker_scroll);
+    click(view, cx, target, (r.0 + 36.0, r.1, 80.0, r.3));
+    assert_eq!(view.arp_ui.edit_page, row);
+    click(view, cx, target, tracker::action_rect(4));
+    assert!(!view.tracker_selection);
+    view.refresh_arp_editor_params();
 }
 
 fn release_string(view: &mut ChordboardView, cx: &mut Context, target: Entity, x: f32, y: f32) {
@@ -712,6 +824,7 @@ fn release_string(view: &mut ChordboardView, cx: &mut Context, target: Entity, x
 fn arp_defaults_to_velocity_and_fast_paint_interpolates_every_string() {
     let mut view = string_editor_view();
     let (mut cx, target, changes) = context();
+    let velocity_rise = arpeggiator::graph_rect().3 * 0.4;
     let (x, y) = string_point(0);
     let (end, _) = string_point(3);
     event(
@@ -727,12 +840,12 @@ fn arp_defaults_to_velocity_and_fast_paint_interpolates_every_string() {
         &mut cx,
         target,
         end,
-        y - 32.4,
-        WindowEvent::MouseMove(end, y - 32.4),
+        y - velocity_rise,
+        WindowEvent::MouseMove(end, y - velocity_rise),
     );
-    release_string(&mut view, &mut cx, target, end, y - 32.4);
+    release_string(&mut view, &mut cx, target, end, y - velocity_rise);
     let state = view.params.arpeggiator.snapshot();
-    let steps = &state.pages[0].loops[0].steps[..4];
+    let steps = &state.rows[0].page.loops[0].steps[..4];
     assert_eq!(
         steps.iter().map(|s| s.velocity).collect::<Vec<_>>(),
         [100, 127, 153, 180]
@@ -753,7 +866,7 @@ fn every_lane_keeps_left_click_play_mute_skip_buttons_and_modifier_reset() {
         for expected in [StepState::Mute, StepState::Skip, StepState::Play] {
             click(&mut view, &mut cx, target, button);
             assert_eq!(
-                view.params.arpeggiator.snapshot().pages[0].loops[0].steps[0].state,
+                view.params.arpeggiator.snapshot().rows[0].page.loops[0].steps[0].state,
                 expected
             );
         }
@@ -766,7 +879,7 @@ fn every_lane_keeps_left_click_play_mute_skip_buttons_and_modifier_reset() {
             .modifiers()
             .set(Modifiers::CTRL, false);
         assert_eq!(
-            view.params.arpeggiator.snapshot().pages[0].loops[0].steps[0].state,
+            view.params.arpeggiator.snapshot().rows[0].page.loops[0].steps[0].state,
             StepState::Play
         );
     }
@@ -776,7 +889,7 @@ fn every_lane_keeps_left_click_play_mute_skip_buttons_and_modifier_reset() {
 fn modifier_drag_resets_every_crossed_adjustment_to_its_default() {
     let mut view = string_editor_view();
     view.params.arpeggiator.edit(|s| {
-        for step in &mut s.pages[0].loops[0].steps[..4] {
+        for step in &mut s.rows[0].page.loops[0].steps[..4] {
             step.velocity = 14;
             step.gate = 90;
         }
@@ -808,7 +921,7 @@ fn modifier_drag_resets_every_crossed_adjustment_to_its_default() {
         .modifiers()
         .set(Modifiers::LOGO, false);
     let state = view.params.arpeggiator.snapshot();
-    assert!(state.pages[0].loops[0].steps[..4]
+    assert!(state.rows[0].page.loops[0].steps[..4]
         .iter()
         .all(|s| s.velocity == 100 && s.gate == 90));
     assert!(changes.borrow().is_empty());
@@ -818,6 +931,7 @@ fn modifier_drag_resets_every_crossed_adjustment_to_its_default() {
 fn shift_paints_a_straight_origin_ramp_without_toggling_latch() {
     let mut view = string_editor_view();
     let (mut cx, target, changes) = context();
+    let velocity_rise = arpeggiator::graph_rect().3 * 0.2;
     let (x, y) = string_point(0);
     let (middle, _) = string_point(1);
     let (end, _) = string_point(3);
@@ -853,10 +967,10 @@ fn shift_paints_a_straight_origin_ramp_without_toggling_latch() {
         &mut cx,
         target,
         end,
-        y - 16.2,
-        WindowEvent::MouseMove(end, y - 16.2),
+        y - velocity_rise,
+        WindowEvent::MouseMove(end, y - velocity_rise),
     );
-    release_string(&mut view, &mut cx, target, end, y - 16.2);
+    release_string(&mut view, &mut cx, target, end, y - velocity_rise);
     BackendContext::new(&mut cx)
         .modifiers()
         .set(Modifiers::SHIFT, false);
@@ -865,12 +979,12 @@ fn shift_paints_a_straight_origin_ramp_without_toggling_latch() {
         &mut cx,
         target,
         end,
-        y - 16.2,
+        y - velocity_rise,
         WindowEvent::KeyUp(Code::ShiftLeft, None),
     );
     let state = view.params.arpeggiator.snapshot();
     assert_eq!(
-        state.pages[0].loops[0].steps[..4]
+        state.rows[0].page.loops[0].steps[..4]
             .iter()
             .map(|s| s.velocity)
             .collect::<Vec<_>>(),
@@ -885,10 +999,13 @@ fn shift_paints_a_straight_origin_ramp_without_toggling_latch() {
 
 #[test]
 fn timing_drag_is_horizontal_and_never_paints_neighboring_steps() {
+    for lane in 0..6 {
     let mut view = string_editor_view();
     let (mut cx, target, _) = context();
-    select_adjustment(&mut view, &mut cx, target, 3);
-    let (x, y) = string_point(0);
+    select_adjustment(&mut view, &mut cx, target, lane);
+    let (x, _) = string_point(0);
+    let strip = arpeggiator::gate_rect();
+    let y = strip.1 + strip.3 * 0.5;
     event(
         &mut view,
         &mut cx,
@@ -906,7 +1023,7 @@ fn timing_drag_is_horizontal_and_never_paints_neighboring_steps() {
         WindowEvent::MouseMove(x, y - 45.0),
     );
     assert_eq!(
-        view.params.arpeggiator.snapshot().pages[0].loops[0].steps[0].micro,
+        view.params.arpeggiator.snapshot().rows[0].page.loops[0].steps[0].micro,
         0
     );
     let (end, _) = string_point(3);
@@ -920,107 +1037,71 @@ fn timing_drag_is_horizontal_and_never_paints_neighboring_steps() {
     );
     release_string(&mut view, &mut cx, target, end, y);
     let state = view.params.arpeggiator.snapshot();
-    assert_eq!(state.pages[0].loops[0].steps[0].micro, 49);
-    assert!(state.pages[0].loops[0].steps[1..4]
+    assert_eq!(state.rows[0].page.loops[0].steps[0].micro, 49);
+    assert!(state.rows[0].page.loops[0].steps[1..4]
         .iter()
         .all(|s| s.micro == 0));
 }
+}
 
 #[test]
-fn delay_harmony_switches_edit_independently_and_recall_per_page() {
+fn delay_harmony_switches_are_shared_by_all_tracker_rows() {
     let mut view = string_editor_view();
     let (mut cx, target, _) = context();
-    click(&mut view, &mut cx, target, arpeggiator::delay_rect());
-    view.tick_arp_editor(pleasant_ui::page_slide::DURATION);
+    click(&mut view, &mut cx, target, midi_fx::FX_TAB);
     click(
         &mut view,
         &mut cx,
         target,
         arpeggiator::delay_leading_rect(),
     );
-    let state = view.params.arpeggiator.snapshot();
-    assert!(state.pages[0].delay.voice_leading);
-    assert!(!state.pages[0].delay.follow_chords);
     click(&mut view, &mut cx, target, arpeggiator::delay_follow_rect());
-    assert!(
-        view.params.arpeggiator.snapshot().pages[0]
-            .delay
-            .follow_chords
-    );
-    select_arp_page(&mut view, &mut cx, target, 1);
-    view.tick_arp_editor(pleasant_ui::page_slide::DURATION);
-    let state = view.params.arpeggiator.snapshot();
-    assert!(!state.pages[1].delay.voice_leading && !state.pages[1].delay.follow_chords);
+    select_tracker_row(&mut view, &mut cx, target, 1);
+    let delay = view.params.arpeggiator.snapshot().midi_fx.delay;
+    assert!(delay.voice_leading && delay.follow_chords);
     click(&mut view, &mut cx, target, arpeggiator::delay_follow_rect());
-    select_arp_page(&mut view, &mut cx, target, 0);
-    view.tick_arp_editor(pleasant_ui::page_slide::DURATION);
-    let state = view.params.arpeggiator.snapshot();
-    assert!(state.pages[0].delay.voice_leading && state.pages[0].delay.follow_chords);
-    assert!(!state.pages[1].delay.voice_leading && state.pages[1].delay.follow_chords);
+    select_tracker_row(&mut view, &mut cx, target, 0);
+    let delay = view.params.arpeggiator.snapshot().midi_fx.delay;
+    assert!(delay.voice_leading && !delay.follow_chords);
+    assert!(view.fx_ui.open);
 }
 
 #[test]
-fn delay_replaces_keyboard_keeps_arp_editable_and_has_header_power() {
+fn delay_fx_page_blocks_hidden_controls_and_has_module_power() {
     let mut view = string_editor_view();
     let (mut cx, target, changes) = context();
-    click(&mut view, &mut cx, target, arpeggiator::delay_rect());
-    view.tick_arp_editor(pleasant_ui::page_slide::DURATION * 0.5);
-    assert!(view.arp_editor_overlay_visible());
-    // Covered keyboard controls cannot receive presses during or after the slide.
+    assert!(!view.fx_ui.open);
+    click(&mut view, &mut cx, target, midi_fx::FX_TAB);
     click(&mut view, &mut cx, target, ALWAYS_BASS);
     assert!(changes.borrow().is_empty());
-    view.tick_arp_editor(pleasant_ui::page_slide::DURATION);
-    click(&mut view, &mut cx, target, ALWAYS_BASS);
-    assert!(changes.borrow().is_empty());
-    click(&mut view, &mut cx, target, DELAY_POWER);
-    assert!(view.params.arpeggiator.snapshot().pages[0].delay.enabled);
+    click(&mut view, &mut cx, target, arpeggiator::delay_power_rect());
+    assert!(view.params.arpeggiator.snapshot().midi_fx.delay.enabled);
     assert!(!view.params.arp_enabled.value());
     click(&mut view, &mut cx, target, arpeggiator::order_rect());
+    assert!(!view.arp_chooser_open());
+    assert!(changes.borrow().is_empty());
+    click(&mut view, &mut cx, target, midi_fx::PERFORMANCE_TAB);
+    assert!(!view.fx_ui.open);
+    assert!(view.params.arpeggiator.snapshot().midi_fx.delay.enabled);
+    click(&mut view, &mut cx, target, arpeggiator::order_rect());
     assert!(view.arp_chooser_open());
-    view.tick_arp_editor(pleasant_ui::page_slide::DURATION);
-    click(&mut view, &mut cx, target, arpeggiator::chooser_card(2));
-    assert!(changes
-        .borrow()
-        .iter()
-        .any(|(ptr, _)| *ptr == view.arp_params().arp_pattern.as_ptr()));
-    click(&mut view, &mut cx, target, arpeggiator::delay_rect());
-    view.tick_arp_editor(pleasant_ui::page_slide::DURATION);
-    assert!(!view.arp_editor_overlay_visible());
-    assert!(view.params.arpeggiator.snapshot().pages[0].delay.enabled);
 }
 
 #[test]
-fn pages_recall_independent_adjustments_and_delay_sources() {
-    use crate::arpeggiator::source;
+fn tracker_rows_recall_independent_adjustments_but_share_delay_sources() {
+    use crate::midi_fx::source;
     let mut view = string_editor_view();
     let (mut cx, target, changes) = context();
-    click(&mut view, &mut cx, target, arpeggiator::delay_rect());
-    view.tick_arp_editor(pleasant_ui::page_slide::DURATION);
-    let inputs: Vec<_> = view
-        .arp_editor_button_rects()
-        .into_iter()
-        .map(|(r, _)| r)
-        .filter(|r| r.1 == PIANO_SURFACE.1 + 10.0 && r.2 == 116.0)
-        .collect();
-    assert_eq!(inputs.len(), 5);
-    click(&mut view, &mut cx, target, inputs[1]); // Manual Strum input
-    click(&mut view, &mut cx, target, inputs[2]); // Chords input
+    click(&mut view, &mut cx, target, midi_fx::FX_TAB);
+    click(&mut view, &mut cx, target, arpeggiator::source_rect(1));
+    click(&mut view, &mut cx, target, arpeggiator::source_rect(2));
     let sources = source::ARP | source::STRUM | source::CHORDS;
-    assert_eq!(
-        view.params.arpeggiator.snapshot().pages[0].delay.sources,
-        sources
-    );
-    // Closing and selecting another Page preserves the first Page's complete variation.
-    click(&mut view, &mut cx, target, arpeggiator::delay_rect());
-    view.tick_arp_editor(pleasant_ui::page_slide::DURATION);
-    select_arp_page(&mut view, &mut cx, target, 1);
+    click(&mut view, &mut cx, target, midi_fx::PERFORMANCE_TAB);
+    select_tracker_row(&mut view, &mut cx, target, 1);
     assert_eq!(view.arp_ui.edit_page, 1);
     view.tick_arp_editor(pleasant_ui::page_slide::DURATION);
-    let p = &view.params.arp_page;
-    assert!(changes
-        .borrow()
-        .contains(&(p.as_ptr(), p.preview_normalized(1))));
     let (x, y) = string_point(2);
+    let velocity_rise = arpeggiator::graph_rect().3 * 0.2;
     event(
         &mut view,
         &mut cx,
@@ -1034,20 +1115,23 @@ fn pages_recall_independent_adjustments_and_delay_sources() {
         &mut cx,
         target,
         x,
-        y - 16.2,
-        WindowEvent::MouseMove(x, y - 16.2),
+        y - velocity_rise,
+        WindowEvent::MouseMove(x, y - velocity_rise),
     );
-    release_string(&mut view, &mut cx, target, x, y - 16.2);
+    release_string(&mut view, &mut cx, target, x, y - velocity_rise);
     let state = view.params.arpeggiator.snapshot();
-    assert_eq!(state.pages[1].loops[0].steps[2].velocity, 140);
-    assert_eq!(state.pages[0].loops[0].steps[2].velocity, 100);
-    assert_eq!(state.pages[1].delay.sources, source::ARP);
-    select_arp_page(&mut view, &mut cx, target, 0);
-    assert_eq!(view.arp_ui.edit_page, 0);
+    assert_eq!(state.rows[1].page.loops[0].steps[2].velocity, 140);
+    assert_eq!(state.rows[0].page.loops[0].steps[2].velocity, 100);
+    assert_eq!(state.midi_fx.delay.sources, sources);
+    select_tracker_row(&mut view, &mut cx, target, 0);
     assert_eq!(
-        view.params.arpeggiator.snapshot().pages[0].delay.sources,
+        view.params.arpeggiator.snapshot().midi_fx.delay.sources,
         sources
     );
+    assert!(!changes
+        .borrow()
+        .iter()
+        .any(|(ptr, _)| *ptr == view.params.arp_page.as_ptr()));
 }
 
 #[test]
@@ -1113,88 +1197,71 @@ fn ordering_chooser_captures_strings_and_shift_without_changing_latch() {
 }
 
 #[test]
-fn arp_copy_paste_clones_complete_page_and_emits_all_destination_parameters() {
+fn tracker_copy_paste_clones_complete_row_without_host_parameters() {
     let mut view = string_editor_view();
-    let params = Arc::get_mut(&mut view.params).unwrap();
-    params.arp_pages[0].arp_pattern =
-        IntParam::new("Ordering", 4, IntRange::Linear { min: 0, max: 6 });
-    params.arp_pages[0].arp_octaves =
-        IntParam::new("Loop Length", 4, IntRange::Linear { min: 1, max: 4 });
-    params.arp_pages[0].rate = FloatParam::new(
-        "Rate",
-        0.5,
-        FloatRange::Linear {
-            min: 0.0625,
-            max: 2.0,
-        },
-    );
+    ensure_tracker_rows(&view, 6);
     view.params.arpeggiator.edit(|s| {
-        s.pages[0].loops[3].steps[23].velocity = 31;
-        s.pages[0].loops[0].steps[4].state = crate::arpeggiator::StepState::Skip;
-        s.pages[0].ensure_loops(4);
-        for (l, octave) in s.pages[0].loops.iter_mut().zip([1, 0, -1, 2]) {
-            l.octave = octave;
+        let row = &mut s.rows[0];
+        row.settings.pattern = 4;
+        row.settings.octaves = 4;
+        row.settings.rate = 0.5;
+        row.duration = 3;
+        row.chord = Some(harmony::parse_chord_symbol("Dm9").unwrap());
+        row.page.ensure_loops(4);
+        row.page.loops[3].steps[23].velocity = 31;
+        row.page.loops[0].steps[4].state = crate::arpeggiator::StepState::Skip;
+        for (variation, octave) in row.page.loops.iter_mut().zip([1, 0, -1, 2]) {
+            variation.octave = octave;
         }
-        s.pages[0].delay.enabled = true;
-        s.pages[0].delay.taps[4].pitch = 7;
+        s.midi_fx.delay.enabled = true;
+        s.midi_fx.delay.taps[4].pitch = 7;
     });
-    let expected = view.params.arpeggiator.snapshot().pages[0].clone();
-    view.arp_ui.edit_page = 2;
+    let expected = view.params.arpeggiator.snapshot().rows[0].clone();
+    let destination_id = view.params.arpeggiator.snapshot().rows[5].id;
     let (mut cx, target, changes) = context();
-    click(&mut view, &mut cx, target, arpeggiator::page_block());
-    click(&mut view, &mut cx, target, arpeggiator::page_copy_rect(0));
-    click(&mut view, &mut cx, target, arpeggiator::page_paste_rect(5));
-    click(
-        &mut view,
-        &mut cx,
-        target,
-        arpeggiator::page_paste_option_rect(5, 0),
-    );
-    assert_eq!(view.arp_ui.edit_page, 2);
+    select_tracker_row(&mut view, &mut cx, target, 0);
+    click(&mut view, &mut cx, target, tracker::action_rect(1));
+    select_tracker_row(&mut view, &mut cx, target, 5);
+    click(&mut view, &mut cx, target, tracker::action_rect(2));
+    assert_eq!(view.arp_ui.edit_page, 5);
+    let copied = view.params.arpeggiator.snapshot().rows[5].clone();
+    assert_eq!(copied.id, destination_id);
     assert_eq!(
-        view.params.arpeggiator.snapshot().pages[5].loops,
-        expected.loops
+        (copied.chord, copied.duration),
+        (expected.chord, expected.duration)
     );
-    assert_eq!(
-        view.params.arpeggiator.snapshot().pages[5].delay,
-        expected.delay
+    assert_eq!(copied.settings, expected.settings);
+    assert_eq!(copied.page, expected.page);
+    assert!(
+        changes.borrow().is_empty(),
+        "row paste persists directly, without host parameter automation"
     );
-    let p = &view.params.arp_pages[5];
-    let edits = changes.borrow();
-    assert_eq!(edits.len(), 8);
-    assert!(edits.contains(&(p.arp_pattern.as_ptr(), p.arp_pattern.preview_normalized(4))));
-    assert!(edits.contains(&(p.arp_octaves.as_ptr(), p.arp_octaves.preview_normalized(4))));
-    assert!(edits.contains(&(p.rate.as_ptr(), p.rate.preview_normalized(0.5))));
-    drop(edits);
     view.params
         .arpeggiator
-        .edit(|s| s.pages[5].loops[3].steps[23].velocity = 90);
-    assert_eq!(view.params.arpeggiator.snapshot().pages[0], expected);
+        .edit(|s| s.rows[5].page.loops[3].steps[23].velocity = 90);
+    assert_eq!(view.params.arpeggiator.snapshot().rows[0], expected);
 }
 
 #[test]
 fn arp_loop_octave_controls_edit_each_pass_without_touching_step_adjustments() {
     let mut view = string_editor_view();
-    Arc::get_mut(&mut view.params).unwrap().arp_pages[0].arp_octaves =
-        IntParam::new("Loop Length", 4, IntRange::Linear { min: 1, max: 4 });
+    view.params.arpeggiator.edit(|s| {
+        s.rows[0].settings.octaves = 4;
+        s.rows[0].page.ensure_loops(4);
+    });
+    view.refresh_arp_editor_params();
     let (mut cx, target, _) = context();
-    let width = (ARP_SURFACE.2 - 44.0) / 4.0;
     view.tick_arp_editor(0.0);
     for i in 0..4 {
-        let r = (
-            ARP_SURFACE.0 + 22.0 + i as f32 * width + width * 0.75,
-            ARP_SURFACE.1 + 82.0,
-            2.0,
-            20.0,
-        );
+        let r = view.loop_button_rect(i, 1);
         click(&mut view, &mut cx, target, r);
     }
     let state = view.params.arpeggiator.snapshot();
-    assert_eq!(state.pages[0].octaves(), [1; 4]);
-    assert!(state.pages[0].loops[0]
+    assert_eq!(state.rows[0].page.octaves(), [1; 4]);
+    assert!(state.rows[0].page.loops.iter().all(|variation| variation
         .steps
         .iter()
-        .all(|s| *s == crate::arpeggiator::Step::default()));
+        .all(|step| *step == crate::arpeggiator::Step::default())));
 }
 
 #[test]
@@ -1284,7 +1351,7 @@ fn delay_middle_tap_removal_requires_confirmation_and_preserves_survivors() {
     for sync in [true, false] {
         let mut view = string_editor_view();
         view.params.arpeggiator.edit(|s| {
-            let d = &mut s.pages[0].delay;
+            let d = &mut s.midi_fx.delay;
             d.sync = sync;
             d.count = 4;
             for (i, t) in d.taps[..4].iter_mut().enumerate() {
@@ -1297,14 +1364,14 @@ fn delay_middle_tap_removal_requires_confirmation_and_preserves_survivors() {
         let (mut cx, target, _) = context();
         click(&mut view, &mut cx, target, arpeggiator::delay_rect());
         view.tick_arp_editor(pleasant_ui::page_slide::DURATION);
-        let before = view.params.arpeggiator.snapshot().pages[0].delay;
+        let before = view.params.arpeggiator.snapshot().midi_fx.delay;
         let domain = arpeggiator::time_domain(&before);
         let remove = arpeggiator::tap_remove_rect(&before.taps[1], domain);
         click(&mut view, &mut cx, target, remove);
-        assert_eq!(view.params.arpeggiator.snapshot().pages[0].delay, before);
+        assert_eq!(view.params.arpeggiator.snapshot().midi_fx.delay, before);
         assert!(view.arp_editor_button_rects().contains(&(remove, true)));
         click(&mut view, &mut cx, target, remove);
-        let after = view.params.arpeggiator.snapshot().pages[0].delay;
+        let after = view.params.arpeggiator.snapshot().midi_fx.delay;
         assert_eq!(after.count, 3);
         assert_eq!(
             &after.taps[..3],
@@ -1318,13 +1385,13 @@ fn delay_middle_tap_removal_requires_confirmation_and_preserves_survivors() {
 fn delay_remove_confirmation_cancels_on_escape_and_other_controls() {
     let mut view = string_editor_view();
     view.params.arpeggiator.edit(|s| {
-        s.pages[0].delay.count = 2;
-        s.pages[0].delay.taps[1].time = 1.0;
+        s.midi_fx.delay.count = 2;
+        s.midi_fx.delay.taps[1].time = 1.0;
     });
     let (mut cx, target, _) = context();
     click(&mut view, &mut cx, target, arpeggiator::delay_rect());
     view.tick_arp_editor(pleasant_ui::page_slide::DURATION);
-    let before = view.params.arpeggiator.snapshot().pages[0].delay;
+    let before = view.params.arpeggiator.snapshot().midi_fx.delay;
     let remove = arpeggiator::tap_remove_rect(&before.taps[0], arpeggiator::time_domain(&before));
     click(&mut view, &mut cx, target, remove);
     event(
@@ -1335,14 +1402,14 @@ fn delay_remove_confirmation_cancels_on_escape_and_other_controls() {
         remove.1,
         WindowEvent::KeyDown(Code::Escape, Some(Key::Escape)),
     );
-    assert!(view.arp_editor_overlay_visible());
+    assert!(view.fx_ui.open);
     assert!(view.arp_editor_button_rects().contains(&(remove, false)));
     click(&mut view, &mut cx, target, remove);
-    assert_eq!(view.params.arpeggiator.snapshot().pages[0].delay.count, 2);
+    assert_eq!(view.params.arpeggiator.snapshot().midi_fx.delay.count, 2);
     click(&mut view, &mut cx, target, arpeggiator::source_rect(1));
     assert!(view.arp_editor_button_rects().contains(&(remove, false)));
     click(&mut view, &mut cx, target, remove);
-    assert_eq!(view.params.arpeggiator.snapshot().pages[0].delay.count, 2);
+    assert_eq!(view.params.arpeggiator.snapshot().midi_fx.delay.count, 2);
 }
 
 #[test]
@@ -1350,7 +1417,7 @@ fn delay_timeline_add_uses_latest_time_and_stops_at_eight_taps() {
     for sync in [true, false] {
         let mut view = string_editor_view();
         view.params.arpeggiator.edit(|s| {
-            let d = &mut s.pages[0].delay;
+            let d = &mut s.midi_fx.delay;
             d.sync = sync;
             d.count = 2;
             d.taps[0].time = if sync { 2.0 } else { 1000.0 };
@@ -1360,13 +1427,13 @@ fn delay_timeline_add_uses_latest_time_and_stops_at_eight_taps() {
         click(&mut view, &mut cx, target, arpeggiator::delay_rect());
         view.tick_arp_editor(pleasant_ui::page_slide::DURATION);
         for count in 2..8 {
-            let before = view.params.arpeggiator.snapshot().pages[0].delay;
+            let before = view.params.arpeggiator.snapshot().midi_fx.delay;
             let add = arpeggiator::add_rect(&before, arpeggiator::time_domain(&before));
             assert!(view.arp_editor_button_rects().contains(&(add, false)));
-            assert!(hit(PIANO_SURFACE, add.0, add.1));
-            assert!(hit(PIANO_SURFACE, add.0 + add.2, add.1 + add.3));
+            assert!(hit(midi_fx::DELAY_SURFACE, add.0, add.1));
+            assert!(hit(midi_fx::DELAY_SURFACE, add.0 + add.2, add.1 + add.3));
             click(&mut view, &mut cx, target, add);
-            let after = view.params.arpeggiator.snapshot().pages[0].delay;
+            let after = view.params.arpeggiator.snapshot().midi_fx.delay;
             assert_eq!(after.count as usize, count + 1);
             assert_eq!(&after.taps[..count], &before.taps[..count]);
             let latest = before.taps[..count]
@@ -1378,16 +1445,16 @@ fn delay_timeline_add_uses_latest_time_and_stops_at_eight_taps() {
                 latest + if sync { 0.5 } else { 250.0 }
             );
         }
-        let full = view.params.arpeggiator.snapshot().pages[0].delay;
+        let full = view.params.arpeggiator.snapshot().midi_fx.delay;
         let add = arpeggiator::add_rect(&full, arpeggiator::time_domain(&full));
         assert!(!view.arp_editor_button_rects().contains(&(add, false)));
         click(&mut view, &mut cx, target, add);
-        assert_eq!(view.params.arpeggiator.snapshot().pages[0].delay, full);
+        assert_eq!(view.params.arpeggiator.snapshot().midi_fx.delay, full);
     }
 }
 
 #[test]
-fn arp_gate_drag_captures_one_occurrence_across_other_notes_and_resets() {
+fn arp_timing_drag_captures_one_occurrence_across_other_notes_and_resets() {
     let mut view = string_editor_view();
     let (mut cx, target, _) = context();
     let (x, _) = string_point(0);
@@ -1412,8 +1479,8 @@ fn arp_gate_drag_captures_one_occurrence_across_other_notes_and_resets() {
     );
     release_string(&mut view, &mut cx, target, other, y - 100.0);
     let page = view.params.arpeggiator.snapshot().rows[0].page;
-    assert_eq!(page.loops[0].steps[0].gate, 100);
-    assert!(page.loops[0].steps[1..4].iter().all(|s| s.gate == 65));
+    assert_eq!(page.loops[0].steps[0].micro, 49);
+    assert!(page.loops[0].steps[1..4].iter().all(|s| s.micro == 0));
     assert!(page.loops[0].steps.iter().all(|s| s.velocity == 100));
     event(
         &mut view,
@@ -1427,78 +1494,82 @@ fn arp_gate_drag_captures_one_occurrence_across_other_notes_and_resets() {
         &mut view,
         &mut cx,
         target,
-        x - 200.0,
+        x - 1000.0,
         y,
-        WindowEvent::MouseMove(x - 200.0, y),
+        WindowEvent::MouseMove(x - 1000.0, y),
     );
-    release_string(&mut view, &mut cx, target, x - 200.0, y);
+    release_string(&mut view, &mut cx, target, x - 1000.0, y);
     assert_eq!(
-        view.params.arpeggiator.snapshot().rows[0].page.loops[0].steps[0].gate,
-        1
+        view.params.arpeggiator.snapshot().rows[0].page.loops[0].steps[0].micro,
+        -49
     );
     BackendContext::new(&mut cx)
         .modifiers()
         .set(Modifiers::CTRL, true);
     click(&mut view, &mut cx, target, (x - 2.0, y - 2.0, 4.0, 4.0));
     assert_eq!(
-        view.params.arpeggiator.snapshot().rows[0].page.loops[0].steps[0].gate,
-        65
+        view.params.arpeggiator.snapshot().rows[0].page.loops[0].steps[0].micro,
+        0
     );
 }
 
 #[test]
 fn arp_pattern_paste_keeps_destination_timing_delay_and_global_routes() {
     let mut view = string_editor_view();
-    let params = Arc::get_mut(&mut view.params).unwrap();
-    params.arp_pages[0].arp_pattern =
-        IntParam::new("Ordering", 2, IntRange::Linear { min: 0, max: 6 });
-    params.arp_pages[0].arp_octaves =
-        IntParam::new("Length", 3, IntRange::Linear { min: 1, max: 4 });
-    params.arp_pages[5].rate = FloatParam::new(
-        "Rate",
-        0.5,
-        FloatRange::Linear {
-            min: 0.0625,
-            max: 2.0,
-        },
-    );
+    ensure_tracker_rows(&view, 6);
     view.params.arpeggiator.edit(|s| {
-        s.pages[0].ensure_loops(3);
-        s.pages[0].loops[1].steps[2].velocity = 31;
-        s.pages[0].loops[2].octave = -2;
-        s.pages[5].delay.enabled = true;
-        s.pages[5].delay.taps[0].pitch = 7;
+        s.rows[0].settings.pattern = 2;
+        s.rows[0].settings.octaves = 3;
+        s.rows[0].settings.custom[0].degree = 5;
+        s.rows[0].page.ensure_loops(3);
+        s.rows[0].page.loops[1].steps[2].velocity = 31;
+        s.rows[0].page.loops[2].octave = -2;
+        s.rows[5].settings.rate = 0.5;
+        s.rows[5].settings.swing = 0.2;
+        s.midi_fx.delay.enabled = true;
+        s.midi_fx.delay.taps[0].pitch = 7;
     });
-    let source = view.params.arpeggiator.snapshot().pages[0];
-    let destination = view.params.arpeggiator.snapshot().pages[5];
+    let source = view.params.arpeggiator.snapshot().rows[0].clone();
+    let destination = view.params.arpeggiator.snapshot().rows[5].clone();
     let routes = view.params.config().routes;
     let (mut cx, target, changes) = context();
-    click(&mut view, &mut cx, target, arpeggiator::page_block());
-    click(&mut view, &mut cx, target, arpeggiator::page_copy_rect(0));
+    view.copy_arp_page(0);
     view.params
         .arpeggiator
-        .edit(|s| s.pages[0].loops[1].steps[2].velocity = 177);
-    click(&mut view, &mut cx, target, arpeggiator::page_paste_rect(5));
-    // Opening the menu alone must not replace the destination.
-    assert_eq!(view.params.arpeggiator.snapshot().pages[5], destination);
-    click(
-        &mut view,
-        &mut cx,
-        target,
-        arpeggiator::page_paste_option_rect(5, 1),
+        .edit(|s| s.rows[0].page.loops[1].steps[2].velocity = 177);
+    assert_eq!(view.params.arpeggiator.snapshot().rows[5], destination);
+    view.paste_arp_page(
+        &mut EventContext::new_with_current(&mut cx, target),
+        5,
+        true,
     );
     assert_eq!(view.arp_ui.edit_page, 0);
-    let result = view.params.arpeggiator.snapshot().pages[5];
-    assert_eq!(result.loops, source.loops);
-    assert_eq!(result.delay, destination.delay);
-    let staged = result.replacement.unwrap().settings;
-    assert_eq!((staged.pattern, staged.octaves, staged.rate), (2, 3, 0.5));
-    assert_eq!(changes.borrow().len(), 2);
+    let result = view.params.arpeggiator.snapshot().rows[5].clone();
+    assert_eq!(result.page.loops, source.page.loops);
+    assert_eq!(
+        view.params.arpeggiator.snapshot().midi_fx.delay.taps[0].pitch,
+        7
+    );
+    let expected_settings = crate::arpeggiator::Settings {
+        pattern: source.settings.pattern,
+        octaves: source.settings.octaves,
+        lock_length: source.settings.lock_length,
+        steps: source.settings.steps,
+        fill: source.settings.fill,
+        custom: source.settings.custom,
+        ..destination.settings
+    };
+    assert_eq!(result.settings, expected_settings);
+    assert_eq!(
+        (result.id, result.chord, result.duration),
+        (destination.id, destination.chord, destination.duration)
+    );
+    assert!(changes.borrow().is_empty());
     assert_eq!(view.params.config().routes, routes);
 }
 
 #[test]
-fn arp_horizontal_scroll_keeps_the_whole_row_fitted_and_gate_targets_aligned() {
+fn arp_horizontal_scroll_keeps_the_whole_row_fitted_and_timing_targets_aligned() {
     let mut view = string_editor_view();
     let (mut cx, target, _) = context();
     let (x, y) = string_point(3);
@@ -1532,6 +1603,6 @@ fn arp_horizontal_scroll_keeps_the_whole_row_fitted_and_gate_targets_aligned() {
     );
     release_string(&mut view, &mut cx, target, x + 200.0, y);
     let page = view.params.arpeggiator.snapshot().rows[0].page;
-    assert_eq!(page.loops[0].steps[3].gate, 100);
-    assert!(page.loops[0].steps[..3].iter().all(|s| s.gate == 65));
+    assert_eq!(page.loops[0].steps[3].micro, 49);
+    assert!(page.loops[0].steps[..3].iter().all(|s| s.micro == 0));
 }

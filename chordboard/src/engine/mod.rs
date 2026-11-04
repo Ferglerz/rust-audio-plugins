@@ -20,7 +20,6 @@ pub struct Engine {
     resetting: bool,
     promoting: bool,
     delay_power: bool,
-    delay_page: u8,
     delay_bend_ranges: [f32; 16],
     pub sources: [f32; routing::SOURCE_COUNT],
     route_smoothers: [routing::RouteSmoother; routing::ROUTE_COUNT],
@@ -100,7 +99,6 @@ impl Default for Engine {
             resetting: false,
             promoting: false,
             delay_power: false,
-            delay_page: 0,
             delay_bend_ranges: [0.0; 16],
             sources: routing::SOURCE_DEFAULTS,
             route_smoothers: [routing::RouteSmoother::default(); routing::ROUTE_COUNT],
@@ -230,12 +228,21 @@ impl Engine {
             let page = self.arp.active.min(7) as usize;
             (config.arp_settings[page], self.arp.data.pages[page])
         };
+        let settings = self
+            .arp
+            .timing
+            .map_or(settings, |timing| timing.apply(settings));
         config.arp_loop_octaves = page.octaves();
         // Host automation may expose a loop before its background initialization completes.
         // Play only initialized data until that control-thread publication arrives.
         config.arp_octaves = config.arp_octaves.min(page.initialized);
         if config.arp_enabled {
-            config.arp_mode = settings.mode;
+            config.arp_mode = match settings.mode {
+                crate::arpeggiator::ArpMode::Once => crate::arpeggiator::ArpMode::Once,
+                _ if config.daw_alignment => crate::arpeggiator::ArpMode::AlignedLoop,
+                crate::arpeggiator::ArpMode::AlignedLoop => crate::arpeggiator::ArpMode::SyncLoop,
+                mode => mode,
+            };
             config.arp_pattern = settings.pattern;
             config.arp_octaves = settings.octaves.min(page.initialized);
             config.arp_sync = settings.sync;
@@ -288,7 +295,11 @@ impl Engine {
         self.config = config;
         let page_changed = self.arp.applied_page != self.arp.active;
         self.arp.applied_page = self.arp.active;
-        if old.arp_mode != config.arp_mode && !page_changed && !self.arp.preserve_paste_clock {
+        if old.arp_mode != config.arp_mode
+            && !page_changed
+            && !self.arp.preserve_paste_clock
+            && !self.arp.timing_commit
+        {
             self.restart_automatic_arp();
         }
         self.update_delay_power(out);
@@ -362,7 +373,16 @@ impl Engine {
             self.leading_from = Notes::default();
             self.leading_to = Notes::default();
         }
-        let revoice = old.affect_chords != config.affect_chords
+        let global_change = old.base_inversion != config.base_inversion
+            || old.complexity != config.complexity
+            || old.voicing_override != config.voicing_override
+            || old.key != config.key
+            || old.scale != config.scale;
+        if global_change {
+            self.leading_history = None;
+        }
+        let revoice = global_change
+            || old.affect_chords != config.affect_chords
             || old.voice_leading != config.voice_leading
             || old.quality != config.quality
             || old.inversion != config.inversion
@@ -864,10 +884,13 @@ impl Engine {
         } else {
             recipe.spread
         };
-        let base = harmony::voice_recipe(recipe, spread);
+        let mut globals = self.config.global_harmony();
+        // The live recipe already carries its transpose; tracker recipes do not.
+        globals.transpose = 0;
+        let base = harmony::resolve_chord(harmony::SavedChord { spread, ..recipe }, globals);
         let mut echoes = [0; 48];
         let mut echo_count = 0;
-        if self.active_arp_page().delay.voice_leading {
+        if self.arp.data.midi_fx.delay.voice_leading {
             for voice in self
                 .voices
                 .iter()
@@ -883,7 +906,7 @@ impl Engine {
                 if previous == recipe {
                     notes
                 } else {
-                    harmony::lead(
+                    harmony::lead_with_globals(
                         recipe,
                         spread,
                         previous,
@@ -891,6 +914,7 @@ impl Engine {
                         base,
                         self.config.voice_leading == 1,
                         &echoes[..echo_count],
+                        globals,
                     )
                 }
             }
@@ -1114,12 +1138,7 @@ impl Engine {
                 sounding_notes[note] |= sounding;
             }
         }
-        let (arp_notes, arp_len) = arpeggiator::loop_cycle_notes(
-            self.arp_cycle_chord(),
-            self.arp_live_settings(),
-            self.config.arp_loop_octaves,
-            self.arp.seed,
-        );
+        let (arp_notes, arp_len) = self.resolved_arp_cycle(self.arp.display_phase, self.arp.seed);
         Snapshot {
             held_notes,
             sounding_notes,
@@ -1130,6 +1149,7 @@ impl Engine {
             input_velocity: self.input_velocity,
             routed: self.routed_values(),
             captured: self.memory.map_or(0, |m| m.encode()),
+            global_harmony: self.config.global_harmony(),
             full_notes: self.full_notes,
             leading_from: self.leading_from,
             leading_to: self.leading_to,
@@ -1161,7 +1181,20 @@ impl Engine {
                     return 0.65;
                 }
                 let step = self.active_arp_page().step(i, self.arp_pass_len());
-                self.effective_arp_gate(step.gate)
+                let settings = self.arp_live_settings();
+                let custom = if settings.pattern == 7 {
+                    settings.custom[arpeggiator::program_index(
+                        settings,
+                        i,
+                        self.arp.display_phase,
+                        self.arp_pass_len(),
+                    ) % 7]
+                        .gate as f32
+                        / 100.0
+                } else {
+                    1.0
+                };
+                self.effective_arp_gate_scaled(step.gate, custom)
             }),
             arp_page: self.arp.active,
             arp_row_index: self.arp.row_index.min(u32::MAX as usize) as u32,
@@ -1255,3 +1288,6 @@ mod tests;
 
 #[cfg(test)]
 mod arpeggiator_tests;
+
+#[cfg(test)]
+mod global_arp_tests;

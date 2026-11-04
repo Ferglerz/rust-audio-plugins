@@ -210,21 +210,6 @@ impl ChordboardView {
             self.inversion(cx, 1);
             return true;
         }
-        for (i, step) in TRANSPOSE_STEPS.iter().enumerate() {
-            if hit(transpose_control_rect(self.params.mpe_enabled(), i), x, y) {
-                let value = if *step == 0 {
-                    0
-                } else {
-                    (self.params.transpose.value() + step).clamp(-24, 24)
-                };
-                Self::emit(
-                    cx,
-                    self.params.transpose.as_ptr(),
-                    self.params.transpose.preview_normalized(value),
-                );
-                return true;
-            }
-        }
         if matches!(self.learning(), 5 | 6) {
             if let Some(note) = piano_note_at(x, y) {
                 self.learn_split_at(cx, self.learning(), note);
@@ -565,7 +550,7 @@ impl ChordboardView {
             !self.params.bass_enabled.value(),
             GOLD,
             self.hover_amount(BASS_BYPASS) > 0.01,
-            0.0,
+            self.button_press_amount(BASS_BYPASS),
         );
         if !self.params.key_split.value() {
             let r = melody_container(self.params.mpe_enabled());
@@ -576,7 +561,7 @@ impl ChordboardView {
             !self.params.key_split.value(),
             TEAL,
             self.hover_amount(key_split_rect(self.params.mpe_enabled())) > 0.01,
-            0.0,
+            self.button_press_amount(key_split_rect(self.params.mpe_enabled())),
         );
         let voicing = self.spread_preview_notes();
         let theory_pitch = self.theory_changed_pitch();

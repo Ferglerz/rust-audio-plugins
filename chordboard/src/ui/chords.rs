@@ -19,7 +19,11 @@ impl ChordboardView {
         let Some(chord) = SavedChord::decode(self.snapshot.captured) else {
             return "—".into();
         };
-        let mut name = self.named_chord(chord);
+        let mut name = harmony::resolved_chord_name_in_key(
+            chord,
+            self.snapshot.global_harmony,
+            self.params.key_spelling.value(),
+        );
         let root = (chord.root as i16 + chord.transpose as i16).rem_euclid(12) as u8;
         let bass = self
             .snapshot
@@ -50,49 +54,6 @@ impl ChordboardView {
     pub(super) fn draw_chords(&self, d: &mut Draw) {
         d.font = self.ui_font.get();
         self.draw_chord_page_title(d, "CHORDS");
-        d.rect(TRANSPOSE.0, TRANSPOSE.1, TRANSPOSE.2, TRANSPOSE.3, LINE);
-        let transpose = self
-            .routed_plain("transpose")
-            .unwrap_or(self.params.transpose.value() as f32) as i32;
-        for (i, label) in ["−12", "−1", &format!("{transpose:+}"), "+1", "+12"]
-            .iter()
-            .enumerate()
-        {
-            let r = transpose_control_rect(self.params.mpe_enabled(), i);
-            let flash = self
-                .action_flash
-                .filter(|(rect, _)| *rect == r)
-                .map_or(0.0, |(_, amount)| amount);
-            d.rounded_rect(
-                r.0 + 1.0,
-                r.1 + 1.0,
-                r.2 - 2.0,
-                r.3 - 2.0,
-                3.0,
-                alpha(TEXT, self.hover_amount(r) * 0.08 + flash * 0.07),
-            );
-            if i > 0 {
-                d.line(r.0, r.1 + 6.0, r.0, r.1 + r.3 - 6.0, alpha(MUTED, 0.3), 1.0);
-            }
-            if i == 2 {
-                style::Icon::Reset.draw(
-                    d,
-                    r.0 + 13.0,
-                    r.1 + r.3 * 0.5,
-                    if transpose != 0 { GOLD } else { TEXT },
-                );
-            }
-            d.text_centered(
-                r.0 + r.2 * 0.5 + if i == 2 { 8.0 } else { 0.0 },
-                r.1 + r.3 * 0.5 + 4.0,
-                label,
-                11.0,
-                if i == 2 && transpose != 0 { GOLD } else { TEXT },
-            );
-            if i == 2 && self.routed_plain("transpose").is_some() {
-                self.live_highlight(d, r);
-            }
-        }
         let live_latch = self.routed_plain("latch");
         let latched = live_latch.map_or(self.params.latch.value(), |value| value >= 0.5);
         let latch_color = if latched { GOLD } else { MUTED };
@@ -158,6 +119,13 @@ impl ChordboardView {
             self.draw_control(d, &control, ROOT_ON_SELECT, GOLD);
         }
 
+        let row_chord = self.params.arpeggiator.snapshot().rows[self.arp_ui.edit_page].chord;
+        let context = format!("Row {} · {}", self.arp_ui.edit_page + 1,
+            row_chord.map(harmony::chord_name).unwrap_or_else(|| "Choose chord".into()));
+        let context = self.fit_text(d, &context, ROW_CONTEXT.2 - 16.0, 11.0);
+        d.text_middle(ROW_CONTEXT.0 + 8.0, ROW_CONTEXT.1 + ROW_CONTEXT.3 * 0.5,
+            &context, 11.0, if self.tracker_selection { TEAL } else { MUTED });
+
         let current_key = self.current_chord_key();
         for i in 0..KEY_COUNT {
             let r = self.keyboard_key_rect(i);
@@ -173,7 +141,7 @@ impl ChordboardView {
             y += 2.0 * amt;
             let color = [TEAL, COLORS[1], GOLD][i / KEY_COLUMNS];
             let chord = self.keyboard_chord(i);
-            let consonance = if self.tracker_selection {
+            let (out_of_scale, chord_tones) = if self.tracker_selection {
                 chord
                     .map(|c| {
                         let recipe = SavedChord {
@@ -197,11 +165,11 @@ impl ChordboardView {
                                 )
                             })
                             .count();
-                        shared as f32 / tones.len.max(1) as f32
+                        (tones.len - shared, tones.len)
                     })
-                    .unwrap_or(0.0)
+                    .unwrap_or((0, 0))
             } else {
-                0.0
+                (0, 0)
             };
             let compatible = chord.is_some_and(|chord| {
                 harmony::in_key(
@@ -220,16 +188,13 @@ impl ChordboardView {
                 w,
                 h,
                 7.0,
-                alpha(color, (if compatible { 0.08 } else { 0.0 }) + hover * 0.07),
+                alpha(
+                    color,
+                    (if compatible { 0.08 } else { 0.0 })
+                        + hover * 0.16
+                        + self.button_press_amount(r) * 0.20,
+                ),
             );
-            if self.tracker_selection {
-                let tint = Color::rgb(
-                    (220.0 * (1.0 - consonance)) as u8,
-                    (55.0 + 165.0 * consonance) as u8,
-                    65,
-                );
-                d.rounded_rect(x, y, w, h, 7.0, alpha(tint, 0.23));
-            }
             let current = current_key == Some(i);
             if current {
                 let pulse = 0.5 + 0.5 * self.voicing_pulse.sin();
@@ -278,7 +243,17 @@ impl ChordboardView {
                 alpha(color, (hover * 0.4 + amt * 0.7).min(1.0)),
                 1.0,
             );
-            if compatible {
+            if self.tracker_selection && out_of_scale > 0 {
+                let outside = (out_of_scale - 1) as f32 / chord_tones.saturating_sub(1).max(1) as f32;
+                let tint = Color::rgb(244, (200.0 - 145.0 * outside) as u8, 65);
+                d.rounded_rect(x, y, w, h, 7.0, alpha(tint, 0.035));
+                d.outline_rounded(x, y, w, h, 7.0, alpha(tint, 0.35), 1.5);
+            }
+            if self.tracker_selection && row_chord.zip(chord).is_some_and(|(row, key)|
+                row.root % 12 == key.root % 12 && row.quality == key.quality) {
+                d.outline_rounded(x, y, w, h, 7.0, TEAL, 2.0);
+            }
+            if compatible && !self.tracker_selection {
                 d.rounded_rect(x + 8.0, y, w - 16.0, 2.0, 1.0, alpha(color, 0.65));
             }
             if let Some(recipe) = chord {

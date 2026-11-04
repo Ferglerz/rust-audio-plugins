@@ -524,6 +524,41 @@ pub const TARGETS: &[Target] = &[
         max: 4.0,
         discrete: true,
     },
+    Target {
+        name: "Base inversion",
+        id: "base_inversion",
+        min: -12.0,
+        max: 12.0,
+        discrete: true,
+    },
+    Target {
+        name: "Complexity",
+        id: "complexity",
+        min: 0.0,
+        max: 5.0,
+        discrete: true,
+    },
+    Target {
+        name: "Global voicing",
+        id: "voicing_override",
+        min: 0.0,
+        max: 5.0,
+        discrete: true,
+    },
+    Target {
+        name: "Gate scale",
+        id: "gate_scale",
+        min: 0.01,
+        max: 2.0,
+        discrete: false,
+    },
+    Target {
+        name: "Velocity scale",
+        id: "velocity_scale",
+        min: 0.0,
+        max: 2.0,
+        discrete: false,
+    },
 ];
 pub fn maximum_for_routes(id: &str, base: f32, routes: &[Route]) -> f32 {
     let Some((index, target)) = TARGETS.iter().enumerate().find(|(_, t)| t.id == id) else {
@@ -562,6 +597,11 @@ impl Target {
             "spread" => c.spread as f32,
             "quality" => c.quality as f32,
             "inversion" => c.inversion as f32,
+            "base_inversion" => c.base_inversion as f32,
+            "complexity" => c.complexity as f32,
+            "voicing_override" => c.voicing_override as f32,
+            "gate_scale" => c.gate_scale,
+            "velocity_scale" => c.velocity_scale,
             "transpose" => c.transpose as f32,
             "velocity" => c.velocity,
             "length_ms" => c.length_ms,
@@ -695,7 +735,9 @@ impl Target {
             "arp_page" => format!("{:.0}", v + 1.0),
             "output_channel" | "bass_channel" | "upper_channel" => format!("{:.0}", v + 1.0),
             "swing" => format!("{:+.0}%", v / 0.75 * 100.0),
-            "velocity" | "humanize" | "gate" | "contour" => format!("{:.0}%", v * 100.0),
+            "velocity" | "velocity_scale" | "gate_scale" | "humanize" | "gate" | "contour" => {
+                format!("{:.0}%", v * 100.0)
+            }
             _ if self.discrete => format!("{v:.0}"),
             _ => format!("{v:.2}"),
         }
@@ -718,6 +760,11 @@ impl Target {
             "spread" => c.spread = v as u8,
             "quality" => c.quality = v as u8,
             "inversion" => c.inversion = v as u8,
+            "base_inversion" => c.base_inversion = v as i8,
+            "complexity" => c.complexity = v as u8,
+            "voicing_override" => c.voicing_override = v as u8,
+            "gate_scale" => c.gate_scale = v,
+            "velocity_scale" => c.velocity_scale = v,
             "transpose" => c.transpose = v as i8,
             "velocity" => c.velocity = v,
             "length_ms" => c.length_ms = v,

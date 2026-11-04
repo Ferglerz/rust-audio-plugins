@@ -266,6 +266,9 @@ impl ChordboardView {
     // Share visible control geometry with painting. Covered controls cannot
     // receive a drop, and routing never changes a parameter on mouse-down.
     pub(super) fn route_targets(&self) -> Vec<(usize, Rect)> {
+        if self.fx_ui.open {
+            return Vec::new();
+        }
         if self.menu.is_some() || self.edit.is_some() {
             return Vec::new();
         }
@@ -284,17 +287,6 @@ impl ChordboardView {
         targets.extend([
             ("latch", LATCH),
             ("voice_leading", self.voice_leading_rect()),
-            ("spread", PIANO_KEYS),
-            (
-                "inversion",
-                (
-                    inversion_control_rect(self.params.mpe_enabled(), 0).0,
-                    ALWAYS_BASS.1,
-                    64.0,
-                    28.0,
-                ),
-            ),
-            ("transpose", TRANSPOSE),
             ("strum_enabled", strum_bypass_rect(self.expand_t())),
             ("octaves", strum_octaves_rect(self.expand_t())),
         ]);
@@ -311,9 +303,6 @@ impl ChordboardView {
                 r.0 + r.2 <= p.0 || r.0 >= p.0 + p.2 || r.1 + r.3 <= p.1 || r.1 >= p.1 + p.3
             });
             targets.extend(self.panel_controls().into_iter().map(|(c, r)| (c.id, r)));
-        }
-        if self.arp_editor_overlay_visible() {
-            targets.retain(|(_, r)| !hit(PIANO_SURFACE, r.0 + r.2 / 2.0, r.1 + r.3 / 2.0));
         }
         let mut mapped: Vec<_> = targets
             .into_iter()

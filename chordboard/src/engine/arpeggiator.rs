@@ -17,13 +17,45 @@ struct Event {
     interval: f64,
     position: f32,
     audible: bool,
+    velocity_scale: f32,
+    gate_scale: f32,
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Timing {
+    mode: ArpMode,
+    pattern: u8,
+    locked: bool,
+    steps: u8,
+    fill: crate::arpeggiator::Fill,
+}
+impl Timing {
+    fn from(settings: Settings) -> Self {
+        Self {
+            mode: settings.mode,
+            pattern: settings.pattern,
+            locked: settings.lock_length,
+            steps: settings.steps,
+            fill: settings.fill,
+        }
+    }
+    pub(super) fn apply(self, mut settings: Settings) -> Settings {
+        settings.mode = self.mode;
+        settings.pattern = self.pattern;
+        settings.lock_length = self.locked;
+        settings.steps = self.steps;
+        settings.fill = self.fill;
+        settings
+    }
 }
 pub struct Runtime {
+    pub(super) timing: Option<Timing>,
+    pub(super) timing_commit: bool,
     pub data: Box<Prepared>,
     pub active: u8,
     pub row_index: usize,
     pub row_id: u64,
     pub loops_in_row: u32,
+    counted_phase: i64,
     pub step: u8,
     pub display_phase: i64,
     pub running: bool,
@@ -37,6 +69,7 @@ pub struct Runtime {
     cached_settings: Settings,
     cached_request: u8,
     pub(super) phase: i64,
+    clock_phase: i64,
     pub(super) next: f64,
     early: Option<i64>,
     events: [Option<Event>; 8],
@@ -50,11 +83,14 @@ pub struct Runtime {
 impl Default for Runtime {
     fn default() -> Self {
         Self {
+            timing: None,
+            timing_commit: false,
             data: Store::new().initial_prepared(),
             active: 0,
             row_index: 0,
             row_id: 1,
             loops_in_row: 0,
+            counted_phase: 0,
             step: 0,
             display_phase: 0,
             running: false,
@@ -68,6 +104,7 @@ impl Default for Runtime {
             cached_settings: Settings::default(),
             cached_request: 0,
             phase: 0,
+            clock_phase: 0,
             next: 0.0,
             early: None,
             events: [None; 8],
@@ -121,6 +158,80 @@ pub fn loop_cycle_notes(
     (result, len)
 }
 
+/// A locked loop measures clock slots, independently of harmony or ordering.
+pub fn settings_pass_length(notes: usize, settings: Settings) -> usize {
+    if settings.lock_length {
+        settings.steps.clamp(1, 24) as usize
+    } else if settings.pattern == 7 {
+        7
+    } else {
+        pass_length(notes, settings.pattern).max(1)
+    }
+}
+/// Absolute sequence position, shared by the scheduler and editor.
+pub fn program_index(settings: Settings, slot: usize, phase: i64, pass_len: usize) -> usize {
+    if settings.lock_length && settings.fill == crate::arpeggiator::Fill::Evolve {
+        let group = pass_len * settings.octaves.clamp(1, LOOPS as u8) as usize;
+        phase.max(0) as usize / group * group + slot
+    } else {
+        slot % pass_len
+    }
+}
+pub fn program_cycle(
+    notes: Notes,
+    recipe: Option<crate::harmony::SavedChord>,
+    globals: crate::harmony::GlobalHarmony,
+    settings: Settings,
+    page: &crate::arpeggiator::Page,
+    mut seed: u32,
+    phase: i64,
+) -> ([i16; STEPS], usize) {
+    let mut result = [i16::MIN; STEPS];
+    // An inaudible voicing must not stop a locked row's clock.
+    if notes.len == 0 && (recipe.is_none() || (!settings.lock_length && settings.pattern != 7)) {
+        return (result, 0);
+    }
+    let pass_len = settings_pass_length(notes.len, settings);
+    let len = pass_len * settings.octaves.clamp(1, LOOPS as u8) as usize;
+    for loop_index in 0..settings.octaves.clamp(1, LOOPS as u8) as usize {
+        let variation = &page.loops[loop_index];
+        let voiced = if variation.inversion == 0 {
+            notes
+        } else {
+            recipe.map_or_else(
+                || crate::harmony::rotate_voicing(notes, variation.inversion),
+                |chord| crate::harmony::resolve_loop_chord(chord, globals, variation.inversion),
+            )
+        };
+        for local in 0..pass_len {
+            let slot = loop_index * pass_len + local;
+            let sequence = program_index(settings, slot, phase, pass_len);
+            let note = if settings.pattern == 7 {
+                let custom = settings.custom[sequence % 7];
+                recipe
+                    .and_then(|chord| {
+                        crate::harmony::custom_degree_pitch(
+                            chord,
+                            globals,
+                            variation.inversion,
+                            custom.degree,
+                        )
+                    })
+                    .map(|n| n + custom.octave as i16 * 12)
+            } else if voiced.len > 0 {
+                let index = ordering::index(settings.pattern, sequence, voiced.len, &mut seed);
+                Some(voiced.values[index] as i16)
+            } else {
+                None
+            };
+            if let Some(note) = note {
+                result[slot] = note + variation.octave as i16 * 12;
+            }
+        }
+    }
+    (result, len)
+}
+
 impl Engine {
     pub(super) fn active_arp_page(&self) -> &crate::arpeggiator::Page {
         if self.config.tracker_enabled {
@@ -142,13 +253,15 @@ impl Engine {
         self.arp.row_id = self.arp.data.rows[self.arp.row_index].id;
         self.arp.active = self.arp.row_index.min(u8::MAX as usize) as u8;
         self.arp.loops_in_row = 0;
+        self.arp.counted_phase = 0;
+        self.arp.timing = None;
         self.arp.events.fill(None);
         self.arp.early = None;
         self.arp.phase = 0;
         self.arp.done = false;
         self.arp.finished = false;
         self.configure(self.host_config, out);
-        self.arp.next = self.now as f64 + self.arp_interval(0);
+        self.arp.next = self.now as f64;
     }
     pub(super) fn retime_arp(&mut self, old_tempo: f64, new_tempo: f64) {
         if !self.config.arp_sync || old_tempo == new_tempo {
@@ -210,11 +323,10 @@ impl Engine {
                     self.arp.paste_settings[page] = Some(replacement.settings);
                     if page == self.arp.active as usize {
                         self.arp.preserve_paste_clock = true;
+                        self.arp.timing = Some(Timing::from(replacement.settings));
                         if !self.arp.finished {
                             self.arp.done = false;
                         }
-                        self.delay_power = self.arp.data.pages[page].delay.enabled;
-                        self.delay_page = self.arp.active;
                     }
                 }
             }
@@ -222,6 +334,12 @@ impl Engine {
         self.update_delay_power(out);
     }
     pub(super) fn arp_live_settings(&self) -> Settings {
+        let settings = self.arp_requested_settings();
+        self.arp
+            .timing
+            .map_or(settings, |timing| timing.apply(settings))
+    }
+    fn arp_requested_settings(&self) -> Settings {
         if self.config.tracker_enabled {
             return self
                 .arp
@@ -230,19 +348,22 @@ impl Engine {
                 .get(self.arp.row_index)
                 .map_or(Settings::default(), |row| row.settings);
         }
+        let requested = self.arp.paste_settings[self.arp.active.min(7) as usize]
+            .unwrap_or(self.host_config.arp_settings[self.arp.active.min(7) as usize]);
         Settings {
-            mode: self.config.arp_mode,
-            pattern: self.config.arp_pattern,
+            mode: requested.mode,
+            pattern: requested.pattern,
             octaves: self.config.arp_octaves,
             sync: self.config.arp_sync,
             rate: self.config.rate,
             free_ms: self.config.arp_free_ms,
             swing: self.config.swing,
             humanize: self.config.humanize,
+            ..requested
         }
     }
     pub(super) fn arp_alignment_available(&self) -> bool {
-        self.config.arp_mode == ArpMode::AlignedLoop
+        self.config.daw_alignment
             && self.config.arp_sync
             && self.config.host_sync
             && self.playing
@@ -270,6 +391,9 @@ impl Engine {
     }
     pub(super) fn restart_automatic_arp(&mut self) {
         self.arp.phase = 0;
+        self.arp.clock_phase = 0;
+        self.arp.counted_phase = 0;
+        self.arp.timing = None;
         self.arp.next = self.now as f64;
         self.arp.done = false;
         self.arp.finished = false;
@@ -293,7 +417,7 @@ impl Engine {
                 .rows
                 .get(self.arp.row_index)
                 .and_then(|row| row.chord)
-                .map(|chord| crate::harmony::voice_recipe(chord, chord.spread))
+                .map(|chord| crate::harmony::resolve_chord(chord, self.config.global_harmony()))
                 .unwrap_or_default()
         } else {
             self.notes
@@ -309,31 +433,61 @@ impl Engine {
         notes
     }
     pub(super) fn arp_pass_len(&self) -> usize {
-        Self::pattern_length(self.config.arp_pattern, self.arp_cycle_chord().len).max(1)
+        settings_pass_length(self.arp_cycle_chord().len, self.arp_live_settings())
     }
+    #[cfg(test)]
     pub(super) fn effective_arp_gate(&self, gate: u8) -> f32 {
+        self.effective_arp_gate_scaled(gate, 1.0)
+    }
+    pub(super) fn effective_arp_gate_scaled(&self, gate: u8, custom: f32) -> f32 {
         let mut config = self.config;
         config.gate = gate as f32 / 100.0;
         self.apply_routes(&mut config);
-        config.gate
+        (config.gate * self.config.gate_scale * custom).clamp(0.01, 1.0)
+    }
+    pub(super) fn arp_recipe(&self) -> Option<crate::harmony::SavedChord> {
+        if self.config.tracker_enabled {
+            self.arp
+                .data
+                .rows
+                .get(self.arp.row_index)
+                .and_then(|r| r.chord)
+        } else {
+            self.memory.map(|mut recipe| {
+                recipe.transpose = 0;
+                recipe
+            })
+        }
+    }
+    fn effective_arp_page(&self) -> crate::arpeggiator::Page {
+        let mut page = *self.active_arp_page();
+        for (i, variation) in page.loops.iter_mut().enumerate() {
+            variation.octave = self.config.arp_loop_octaves[i];
+        }
+        page
+    }
+    pub(super) fn resolved_arp_cycle(&self, phase: i64, seed: u32) -> ([i16; STEPS], usize) {
+        program_cycle(
+            self.arp_cycle_chord(),
+            self.arp_recipe(),
+            self.config.global_harmony(),
+            self.arp_live_settings(),
+            &self.effective_arp_page(),
+            seed,
+            phase,
+        )
     }
     pub(super) fn arp_slots(&self) -> ([usize; STEPS], usize, [i16; STEPS]) {
-        let (notes, len) = loop_cycle_notes(
-            self.arp_cycle_chord(),
-            self.arp_live_settings(),
-            self.config.arp_loop_octaves,
-            self.arp.plan_seed,
-        );
+        self.arp_slots_at(self.arp.phase)
+    }
+    fn arp_slots_at(&self, phase: i64) -> ([usize; STEPS], usize, [i16; STEPS]) {
+        let (notes, len) = self.resolved_arp_cycle(phase, self.arp.plan_seed);
         let mut slots = [0; STEPS];
         let mut count = 0;
         let pass_len = self.arp_pass_len();
-        let row_page = if self.config.tracker_enabled {
-            &self.arp.data.rows[self.arp.row_index].page
-        } else {
-            &self.arp.data.pages[self.arp.active as usize]
-        };
         for i in 0..len {
-            if row_page.step(i, pass_len).state != StepState::Skip {
+            if self.active_arp_page().step(i, pass_len).state != StepState::Skip
+            {
                 slots[count] = i;
                 count += 1;
             }
@@ -399,13 +553,14 @@ impl Engine {
             phase += 1;
         }
         self.arp.phase = phase;
+        self.arp.clock_phase = phase;
         self.arp.next = self.now as f64
             + (boundary - self.beat).max(0.0) * self.sample_rate as f64 * 60.0 / self.tempo;
         self.arp.early = None;
         self.arp.events.fill(None);
     }
     fn prepare_arp_event(&mut self, phase: i64, boundary: f64, floor: u64) -> Option<Event> {
-        let (slots, count, notes) = self.arp_slots();
+        let (slots, count, notes) = self.arp_slots_at(phase);
         if count == 0 {
             return None;
         }
@@ -418,12 +573,19 @@ impl Engine {
         } else {
             *self.arp.data.pages[self.arp.active as usize].step(index, self.arp_pass_len())
         };
-        let interval = self.arp_interval(phase);
+        let interval = self.arp_interval(self.arp.clock_phase + phase - self.arp.phase);
         let jitter = self.humanize_timing(interval);
         let at = (boundary + interval * step.micro as f64 / 100.0 + jitter)
             .round()
             .max(floor as f64) as u64;
-        let audible = step.state == StepState::Play
+        let settings = self.arp_live_settings();
+        let custom = if settings.pattern == 7 {
+            settings.custom[program_index(settings, index, phase, self.arp_pass_len()) % 7]
+        } else {
+            crate::arpeggiator::CustomStep::default()
+        };
+        let audible = !custom.rest
+            && step.state == StepState::Play
             && step.velocity > 0
             && (step.probability == 100 || (self.random() % 100) < step.probability as u32);
         Some(Event {
@@ -441,7 +603,37 @@ impl Engine {
                 0.0
             },
             audible,
+            velocity_scale: custom.velocity as f32 / 100.0,
+            gate_scale: custom.gate as f32 / 100.0,
         })
+    }
+    fn timing_pending(&self) -> bool {
+        self.arp
+            .timing
+            .is_some_and(|t| t != Timing::from(self.arp_requested_settings()))
+    }
+    fn commit_arp_timing(&mut self, out: &mut impl FnMut(Out)) {
+        let requested = self.arp_requested_settings();
+        if self.arp.timing.is_none() {
+            self.arp.timing = Some(Timing::from(requested));
+            return;
+        }
+        let old_len = self.arp_pass_len() as i64;
+        if self.timing_pending()
+            && self.arp.phase.rem_euclid(old_len) == 0
+            && self.now >= self.arp.next.round().max(0.0) as u64
+        {
+            self.arp.timing = Some(Timing::from(requested));
+            let new_len = self.arp_pass_len() as i64;
+            self.arp.phase = self.arp.phase.div_euclid(old_len) * new_len;
+            self.arp.events.fill(None);
+            self.arp.early = None;
+            self.arp.done = false;
+            self.arp.finished = false;
+            self.arp.timing_commit = true;
+            self.configure(self.host_config, out);
+            self.arp.timing_commit = false;
+        }
     }
     pub(super) fn refresh_arp_events(&mut self) {
         let settings = self.arp_live_settings();
@@ -495,6 +687,7 @@ impl Engine {
             }
             return;
         }
+        self.commit_arp_timing(out);
         let aligned = self.arp_alignment_available();
         let settings = self.arp_live_settings();
         if self.arp.preserve_paste_clock {
@@ -520,21 +713,30 @@ impl Engine {
             }
         }
         if self.now >= self.arp.next.round().max(0.0) as u64 {
-            if self.config.tracker_enabled && self.arp.done && self.arp.finished {
+            let completed_count = self.arp_slots().1.max(1) as i64;
+            if self.config.tracker_enabled
+                && self.arp.phase != self.arp.counted_phase
+                && self.arp.phase.rem_euclid(completed_count) == 0
+            {
+                self.arp.counted_phase = self.arp.phase;
                 self.arp.loops_in_row = self.arp.loops_in_row.saturating_add(1);
-                let duration = self
-                    .arp
-                    .data
-                    .rows
-                    .get(self.arp.row_index)
-                    .map_or(1, |row| row.duration);
+                let duration = self.arp.data.rows[self.arp.row_index].duration;
                 if self.arp.loops_in_row >= duration {
+                    let legacy_once = self.arp.done && !self.arp_live_settings().lock_length;
                     self.advance_tracker_row(out);
-                } else {
-                    let count = self.arp_slots().1.max(1);
-                    self.arp.next += (0..count)
-                        .map(|i| self.arp_interval(self.arp.phase + i as i64))
+                    if legacy_once {
+                        self.arp.next += self.arp_interval(self.arp.clock_phase);
+                        return;
+                    }
+                } else if self.arp.done {
+                    self.arp.finished = true;
+                    self.sources[9..].fill(0.0);
+                    self.arp.next += (0..completed_count)
+                        .map(|i| self.arp_interval(self.arp.clock_phase + i))
                         .sum::<f64>();
+                    self.arp.phase += completed_count;
+                    self.arp.clock_phase += completed_count;
+                    self.configure(self.host_config, out);
                 }
             }
             let requested = if self.config.tracker_enabled {
@@ -560,6 +762,8 @@ impl Engine {
                         == ArpMode::Once
                 {
                     self.arp.phase = 0;
+                    self.arp.clock_phase = 0;
+                    self.arp.timing = None;
                     self.arp.next = self.now as f64;
                     self.arp.done = false;
                     self.arp.finished = false;
@@ -579,12 +783,6 @@ impl Engine {
             if self.arp.done && !self.arp.finished {
                 self.arp.finished = true;
                 self.sources[9..].fill(0.0);
-                if self.config.tracker_enabled {
-                    let count = self.arp_slots().1.max(1);
-                    self.arp.next += (0..count)
-                        .map(|i| self.arp_interval(self.arp.phase + i as i64))
-                        .sum::<f64>();
-                }
                 self.configure(self.host_config, out);
             }
             if !self.arp.done {
@@ -595,14 +793,22 @@ impl Engine {
                     }
                 }
                 self.arp.early = None;
-                self.arp.next += self.arp_interval(phase);
+                self.arp.next += self.arp_interval(self.arp.clock_phase);
+                self.arp.clock_phase = self.arp.clock_phase.wrapping_add(1);
                 self.arp.phase = self.arp.phase.wrapping_add(1);
                 self.arp.done = self.config.arp_mode == ArpMode::Once
                     && self.arp.phase.rem_euclid(count as i64) == 0;
                 if self.config.arp_pattern == 6 && self.arp.phase.rem_euclid(count as i64) == 0 {
                     self.arp.plan_seed = self.random();
                 }
-                if !self.arp.done {
+                let row_ends = self.config.tracker_enabled
+                    && self.arp.phase.rem_euclid(count as i64) == 0
+                    && self.arp.loops_in_row + 1 >= self.arp.data.rows[self.arp.row_index].duration;
+                if !self.arp.done
+                    && !row_ends
+                    && !(self.timing_pending()
+                        && self.arp.phase.rem_euclid(self.arp_pass_len() as i64) == 0)
+                {
                     // Prepare the next event once, retaining it even if it is late. This makes
                     // negative microtiming and humanize independent of callback boundaries.
                     if let Some(event) =
@@ -637,45 +843,30 @@ impl Engine {
             self.sources[11] = event.position;
             self.configure(self.host_config, out);
             if event.audible {
-                let (notes, len) = loop_cycle_notes(
-                    self.arp_cycle_chord(),
-                    self.arp_live_settings(),
-                    self.config.arp_loop_octaves,
-                    event.seed,
-                );
+                let (notes, len) = self.resolved_arp_cycle(event.phase, event.seed);
                 let note = if len > 0 {
                     notes[event.step % len]
                 } else {
                     event.note
                 };
+                if note == i16::MIN {
+                    continue;
+                }
                 let pitch = note + event.adjustment.octave as i16 * 12;
                 if (0..=127).contains(&pitch) {
                     let velocity = self.base_strike_velocity() * event.adjustment.velocity as f32
                         / 100.0
+                        * event.velocity_scale
                         * self.humanize_velocity_factor();
                     // Gate is the cell's absolute percentage, with routed Gate replacing or
                     // offsetting that base through the existing modulation matrix.
                     let duration = (event.interval
-                        * self.effective_arp_gate(event.adjustment.gate) as f64)
+                        * self.effective_arp_gate_scaled(event.adjustment.gate, event.gate_scale)
+                            as f64)
                         .round()
                         .max(1.0) as u64;
                     if velocity > 0.0 {
                         self.strike_prepared(pitch as u8, velocity, duration, ARP_OWNER, out);
-                    }
-                }
-            }
-            if self.config.tracker_enabled {
-                let count = self.arp_slots().1.max(1);
-                if event.phase.rem_euclid(count as i64) == count as i64 - 1 {
-                    self.arp.loops_in_row = self.arp.loops_in_row.saturating_add(1);
-                    let duration = self
-                        .arp
-                        .data
-                        .rows
-                        .get(self.arp.row_index)
-                        .map_or(1, |row| row.duration);
-                    if self.arp.loops_in_row >= duration {
-                        self.advance_tracker_row(out);
                     }
                 }
             }

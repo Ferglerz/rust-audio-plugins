@@ -5,7 +5,7 @@
 //! emitted On reserves an echo slot until its Off is returned; capacity pressure
 //! can therefore drop attacks, but never loses a note-off that is already owed.
 use super::types::Expression;
-use crate::arpeggiator::DelaySettings;
+use crate::midi_fx::DelaySettings;
 
 pub const MAX_TRAINS: usize = 256;
 pub const MAX_ECHOES: usize = 512;

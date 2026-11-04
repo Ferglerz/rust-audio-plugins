@@ -2,18 +2,10 @@ use super::*;
 use nih_plug_vizia::vizia::vg::{Paint, Path};
 
 const ROW_H: f32 = 40.0;
-const ROW_TOP: f32 = 116.0;
+const ROW_TOP: f32 = 140.0;
 const FADE_H: f32 = 22.0;
-pub(super) fn toggle_rect() -> Rect {
-    (
-        ARP_SURFACE.0 + ARP_SURFACE.2 - 104.0,
-        ARP_SURFACE.1 + 10.0,
-        92.0,
-        31.0,
-    )
-}
 pub(super) fn row_rect(index: usize, scroll: f32) -> Rect {
-    let r = PERF_SURFACE;
+    let r = TRACKER_SURFACE;
     (
         r.0 + 12.0,
         r.1 + ROW_TOP + index as f32 * ROW_H - scroll,
@@ -26,7 +18,7 @@ fn rows_viewport(r: Rect) -> Rect {
         r.0 + 12.0,
         r.1 + ROW_TOP,
         r.2 - 24.0,
-        (r.3 - ROW_TOP - 28.0).max(0.0),
+        (r.3 - ROW_TOP - 64.0).max(0.0),
     )
 }
 fn max_scroll(r: Rect, count: usize) -> f32 {
@@ -54,44 +46,41 @@ fn edge_fade(d: &mut Draw, viewport: Rect, bottom: bool, strength: f32) {
     d.c.fill_path(&path, &paint);
 }
 pub(super) fn action_rect(index: usize) -> Rect {
-    let r = PERF_SURFACE;
-    let widths = [100.0, 90.0, 90.0, 90.0, 92.0];
+    let r = TRACKER_SURFACE;
+    let width = (r.2 - 48.0) / 3.0;
     (
-        r.0 + 16.0 + widths[..index].iter().sum::<f32>() + index as f32 * 8.0,
-        r.1 + 48.0,
-        widths[index],
+        r.0 + 16.0 + (index % 3) as f32 * (width + 8.0),
+        r.1 + 52.0 + (index / 3) as f32 * 34.0,
+        width,
         28.0,
     )
 }
-fn duration_button(r: Rect, plus: bool) -> Rect {
+
+pub(super) fn add_row_rect(count: usize, scroll: f32) -> Rect {
+    let r = TRACKER_SURFACE;
+    let viewport = rows_viewport(r);
+    let bottom = (viewport.1 + count as f32 * ROW_H - scroll.min(max_scroll(r, count)))
+        .min(viewport.1 + viewport.3);
+    (r.0 + (r.2 - 122.0) * 0.5, bottom + 4.0, 122.0, 28.0)
+}
+
+pub(super) fn delete_button(r: Rect) -> Rect {
+    (r.0 + r.2 - 40.0, r.1 + 4.0, 28.0, 28.0)
+}
+
+pub(super) fn duration_button(r: Rect, plus: bool) -> Rect {
     (
-        r.0 + r.2 - if plus { 40.0 } else { 120.0 },
+        r.0 + r.2 - if plus { 80.0 } else { 144.0 },
         r.1 + 4.0,
         28.0,
         28.0,
     )
 }
 impl ChordboardView {
-    pub(super) fn close_tracker(&mut self, cx: &mut EventContext) {
-        if !self.tracker_open {
-            return;
-        }
-        self.tracker_start = self.tracker_progress;
-        self.tracker_elapsed = 0.0;
-        self.tracker_open = false;
-        self.tracker_selection = false;
-        self.tracker_symbol_edit = false;
-        self.tracker_symbol.clear();
-        if self.tracker_drag.take().is_some() {
-            cx.release();
-        }
-        cx.needs_redraw();
-    }
-
     pub(super) fn scroll_tracker(&mut self, x: f32, y: f32, dy: f32, precise: bool) -> bool {
-        let r = perf_surface_rect(self.expand_t());
-        let panel_x = x - (1.0 - self.tracker_progress) * r.2;
-        if !self.tracker_open || !hit(r, panel_x, y) || self.tracker_drag.is_some() {
+        let r = TRACKER_SURFACE;
+        let panel_x = x;
+        if !hit(r, panel_x, y) || self.tracker_drag.is_some() {
             return false;
         }
         let limit = max_scroll(r, self.params.arpeggiator.snapshot().rows.len());
@@ -104,7 +93,7 @@ impl ChordboardView {
     }
 
     pub(super) fn tick_tracker_scroll(&mut self, dt: f32) -> bool {
-        let r = perf_surface_rect(self.expand_t());
+        let r = TRACKER_SURFACE;
         let limit = max_scroll(r, self.params.arpeggiator.snapshot().rows.len());
         let previous = self.tracker_scroll;
         self.tracker_scroll_target = self.tracker_scroll_target.clamp(0.0, limit);
@@ -120,19 +109,26 @@ impl ChordboardView {
 
     pub(super) fn draw_tracker(&self, d: &mut Draw) {
         let saved_disabled = d.disabled;
-        d.disabled = !self.params.arp_enabled.value();
-        if self.tracker_progress > 0.001 {
-            let r = perf_surface_rect(self.expand_t());
+        d.disabled = false;
+        {
+            let r = TRACKER_SURFACE;
             let saved_offset = d.offset_x;
-            d.offset_x += (1.0 - self.tracker_progress) * r.2;
+            self.surface(d, r);
             d.scissor(r.0, r.1, r.2, r.3);
-            d.rounded_rect(r.0, r.1, r.2, r.3, 8.0, PANEL);
             d.text(
                 r.0 + 18.0,
                 module_title_y(r.1, MODULE_TITLE_SIZE),
-                "COMPOSITION TRACKER",
+                "TRACKER",
                 MODULE_TITLE_SIZE,
-                TEXT,
+                TEAL,
+            );
+            d.line(
+                r.0 + 18.0,
+                r.1 + 42.0,
+                r.0 + r.2 - 18.0,
+                r.1 + 42.0,
+                TEAL,
+                2.0,
             );
             let rows = self.params.arpeggiator.snapshot().rows;
             d.text_middle(
@@ -142,7 +138,7 @@ impl ChordboardView {
                 13.0,
                 MUTED,
             );
-            for (i, label) in ["+ Add row", "Copy", "Paste", "Remove"].iter().enumerate() {
+            for (i, label) in ["Duplicate", "Copy", "Paste"].iter().enumerate() {
                 self.arp_button(d, action_rect(i), label, false, TEAL);
             }
             if self.tracker_selection || self.tracker_symbol_edit {
@@ -167,13 +163,26 @@ impl ChordboardView {
                 );
                 d.text_middle(done.0 + 34.0, middle, "Done", 13.0, TEXT);
             }
-            d.text(r.0 + 62.0, r.1 + 103.0, "CHORD", 12.0, MUTED);
-            d.text_centered(r.0 + r.2 - 80.0, r.1 + 103.0, "LOOPS", 12.0, MUTED);
+            d.text(r.0 + 62.0, r.1 + ROW_TOP - 13.0, "CHORD", 12.0, MUTED);
+            d.text_centered(
+                r.0 + r.2 - 110.0,
+                r.1 + ROW_TOP - 13.0,
+                "LOOPS",
+                12.0,
+                MUTED,
+            );
+            d.text_centered(
+                r.0 + r.2 - 38.0,
+                r.1 + ROW_TOP - 13.0,
+                "DELETE",
+                12.0,
+                MUTED,
+            );
             let viewport = rows_viewport(r);
             let scroll = self.tracker_scroll.min(max_scroll(r, rows.len()));
             let first = (scroll / ROW_H).floor() as usize;
             let visible = (viewport.3 / ROW_H).ceil() as usize + 1;
-            // Intersect with the panel clip while it slides in.
+            // Keep partially visible rows inside the list viewport.
             let clip_x = (viewport.0 + d.offset_x).max(r.0);
             let clip_right = (viewport.0 + d.offset_x + viewport.2).min(r.0 + r.2);
             d.scissor(
@@ -222,7 +231,7 @@ impl ChordboardView {
                         .map(harmony::chord_name)
                         .unwrap_or_else(|| "Choose chord…".into())
                 };
-                let chord = self.fit_text(d, &chord, rr.2 - 198.0, 14.0);
+                let chord = self.fit_text(d, &chord, rr.2 - 202.0, 14.0);
                 d.text_middle(
                     rr.0 + 50.0,
                     rr.1 + rr.3 * 0.5,
@@ -240,14 +249,20 @@ impl ChordboardView {
                     self.arp_button(d, duration_button(rr, plus), label, false, TEAL);
                 }
                 d.text_centered(
-                    rr.0 + rr.2 - 66.0,
+                    rr.0 + rr.2 - 98.0,
                     rr.1 + rr.3 * 0.5 + 4.5,
                     &row.duration.to_string(),
                     13.0,
                     TEXT,
                 );
+                let delete = delete_button(rr);
+                let red = pleasant_ui::theme::rgb(244, 100, 106);
+                self.button_surface(d, delete, false, red);
+                self.close_icon(d, delete, red, false);
                 if self.snapshot.arp_running && self.snapshot.arp_row_index as usize == i {
-                    d.circle(rr.0 + rr.2 - 6.0, rr.1 + rr.3 * 0.5, 3.0, GOLD, true);
+                    let pulse = 0.5 + 0.5 * self.voicing_pulse.sin();
+                    d.outline_rounded(rr.0 + 1.0, rr.1 + 1.0, rr.2 - 2.0, rr.3 - 2.0,
+                        5.0, alpha(GOLD, 0.55 + pulse * 0.45), 2.5);
                 }
             }
             if let Some((from, target)) = self.tracker_drag {
@@ -267,11 +282,18 @@ impl ChordboardView {
                 ((max_scroll(r, rows.len()) - scroll) / FADE_H).min(1.0),
             );
             d.scissor(r.0, r.1, r.2, r.3);
+            self.arp_button(
+                d,
+                add_row_rect(rows.len(), scroll),
+                "+ Add row",
+                false,
+                TEAL,
+            );
             if self.tracker_selection {
                 d.text(
                     r.0 + 18.0,
                     r.1 + r.3 - 10.0,
-                    "Choose a chord above · Double-click to type",
+                    "Choose a chord · Double-click a row to type",
                     12.0,
                     TEAL,
                 );
@@ -279,7 +301,6 @@ impl ChordboardView {
             d.reset_scissor();
             d.offset_x = saved_offset;
         }
-        self.arp_button(d, toggle_rect(), "Tracker", self.tracker_open, TEAL);
         d.disabled = saved_disabled;
     }
 
@@ -315,7 +336,7 @@ impl ChordboardView {
             match event {
                 WindowEvent::MouseMove(_, _) => {
                     let count = self.params.arpeggiator.snapshot().rows.len();
-                    let r = perf_surface_rect(self.expand_t());
+                    let r = TRACKER_SURFACE;
                     let viewport = rows_viewport(r);
                     if y < viewport.1 {
                         self.tracker_scroll -= 8.0;
@@ -361,10 +382,9 @@ impl ChordboardView {
                 | WindowEvent::MouseDoubleClick(MouseButton::Left)
                 | WindowEvent::MouseTripleClick(MouseButton::Left)
         );
-        let r = perf_surface_rect(self.expand_t());
-        let panel_x = x - (1.0 - self.tracker_progress) * r.2;
+        let r = TRACKER_SURFACE;
+        let panel_x = x;
         if press
-            && self.tracker_open
             && (self.tracker_selection || self.tracker_symbol_edit)
             && hit(action_rect(4), panel_x, y)
         {
@@ -411,31 +431,21 @@ impl ChordboardView {
         if !press {
             return false;
         }
-        if hit(toggle_rect(), x, y) {
-            if !self.tracker_open {
-                if !self.params.arp_enabled.value() {
-                    return true;
-                }
-                self.tracker_restore_expand = self.expand_target >= 0.5;
-                self.tracker_start = self.tracker_progress;
-                self.tracker_elapsed = 0.0;
-                self.tracker_open = true;
-                if self.expand_target >= 0.5 {
-                    self.toggle_expand();
-                }
-            } else {
-                self.close_tracker(cx);
-            }
-            cx.needs_redraw();
-            return true;
-        }
-        if !self.tracker_open || !hit(r, panel_x, y) {
+        if !hit(r, panel_x, y) {
             return false;
         }
         cx.focus();
         self.focused = true;
         let rows = self.params.arpeggiator.snapshot().rows;
-        if let Some(action) = (0..4).find(|&i| hit(action_rect(i), panel_x, y)) {
+        if hit(add_row_rect(rows.len(), self.tracker_scroll), panel_x, y) {
+            self.params
+                .arpeggiator
+                .edit(|s| self.arp_ui.edit_page = s.add_row_after(rows.len() - 1));
+            self.reveal_tracker_selection();
+            cx.needs_redraw();
+            return true;
+        }
+        if let Some(action) = (0..3).find(|&i| hit(action_rect(i), panel_x, y)) {
             let selected = self.arp_ui.edit_page.min(rows.len() - 1);
             match action {
                 0 => self
@@ -450,21 +460,9 @@ impl ChordboardView {
                             .edit(|s| s.paste_row(selected, &row));
                     }
                 }
-                3 => self
-                    .params
-                    .arpeggiator
-                    .edit(|s| self.arp_ui.edit_page = s.delete_row(selected)),
                 _ => {}
             }
-            let count = self.params.arpeggiator.snapshot().rows.len();
-            let top = self.arp_ui.edit_page as f32 * ROW_H;
-            let bottom = top + ROW_H - 4.0;
-            self.tracker_scroll_target = self
-                .tracker_scroll_target
-                .max(bottom - rows_viewport(r).3)
-                .min(top)
-                .clamp(0.0, max_scroll(r, count));
-            self.tracker_proxy_row = usize::MAX;
+            self.reveal_tracker_selection();
             cx.needs_redraw();
             return true;
         }
@@ -472,7 +470,23 @@ impl ChordboardView {
             hit(rows_viewport(r), panel_x, y) && hit(row_rect(i, self.tracker_scroll), panel_x, y)
         }) {
             let rr = row_rect(index, self.tracker_scroll);
-            if panel_x < rr.0 + 26.0 {
+            if hit(delete_button(rr), panel_x, y) {
+                let selected = self.arp_ui.edit_page.min(rows.len() - 1);
+                self.params.arpeggiator.edit(|s| {
+                    let next = s.delete_row(index);
+                    self.arp_ui.edit_page = if selected == index {
+                        next
+                    } else if selected > index {
+                        selected - 1
+                    } else {
+                        selected
+                    };
+                });
+                let limit = max_scroll(r, self.params.arpeggiator.snapshot().rows.len());
+                self.tracker_scroll = self.tracker_scroll.min(limit);
+                self.tracker_scroll_target = self.tracker_scroll_target.min(limit);
+                self.tracker_proxy_row = usize::MAX;
+            } else if panel_x < rr.0 + 26.0 {
                 self.tracker_drag = Some((index, index));
                 cx.capture();
             } else if let Some(plus) = [false, true]
@@ -503,6 +517,20 @@ impl ChordboardView {
         }
         true
     }
+
+    fn reveal_tracker_selection(&mut self) {
+        let r = TRACKER_SURFACE;
+        let count = self.params.arpeggiator.snapshot().rows.len();
+        let top = self.arp_ui.edit_page as f32 * ROW_H;
+        let bottom = top + ROW_H - 4.0;
+        self.tracker_scroll_target = self
+            .tracker_scroll_target
+            .max(bottom - rows_viewport(r).3)
+            .min(top)
+            .clamp(0.0, max_scroll(r, count));
+        self.tracker_proxy_row = usize::MAX;
+    }
+
     pub(super) fn assign_tracker_chord(&mut self, chord: harmony::KeyboardChord) {
         if !self.tracker_selection {
             return;

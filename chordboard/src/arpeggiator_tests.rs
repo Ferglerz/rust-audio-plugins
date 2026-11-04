@@ -1,4 +1,5 @@
 use super::*;
+use crate::midi_fx::{DelaySettings, DelayTap, TAPS};
 
 #[test]
 fn tracker_row_actions_preserve_selection_payload_and_minimum_row() {
@@ -8,7 +9,7 @@ fn tracker_row_actions_preserve_selection_payload_and_minimum_row() {
     state.rows[0].page.loops[0].steps[2].velocity = 73;
     let second = state.add_row_after(0);
     assert_eq!(second, 1);
-    assert_eq!(state.rows[1].duration, 1);
+    assert_eq!(state.rows[1].duration, 4);
     assert_eq!(state.rows[1].chord, state.rows[0].chord);
     assert_eq!(state.rows[1].page.loops[0].steps[2].velocity, 73);
     let copied = state.rows[0].clone();
@@ -57,7 +58,7 @@ fn tracker_state_round_trip_preserves_dynamic_rows_and_every_tap_field() {
                 mods: [index as i16, -(index as i16)],
             };
         }
-        page.delay = DelaySettings {
+        state.midi_fx.delay = DelaySettings {
             enabled: page_index % 2 == 0,
             sync: page_index % 2 == 1,
             ping_pong: page_index % 3 == 0,
@@ -84,8 +85,12 @@ fn tracker_state_round_trip_preserves_dynamic_rows_and_every_tap_field() {
     for row in value["rows"].as_array().unwrap() {
         let page = &row["page"];
         assert_eq!(page["loops"].as_array().unwrap().len(), LOOPS);
-        assert_eq!(page["delay"]["taps"].as_array().unwrap().len(), TAPS);
+        assert!(page.get("delay").is_none());
     }
+    assert_eq!(
+        value["midi_fx"]["delay"]["taps"].as_array().unwrap().len(),
+        TAPS
+    );
     assert_eq!(serde_json::from_str::<State>(&json).unwrap(), state);
 }
 
@@ -120,7 +125,7 @@ fn arp_store_sanitizes_control_state_before_publishing() {
             micro: 999,
             mods: [-999, 999],
         };
-        let delay = &mut state.pages[7].delay;
+        let delay = &mut state.midi_fx.delay;
         delay.sources = 255;
         delay.count = 255;
         delay.taps[7] = DelayTap {
@@ -147,7 +152,7 @@ fn arp_store_sanitizes_control_state_before_publishing() {
             mods: [-100, 100]
         }
     );
-    let delay = snapshot.pages[7].delay;
+    let delay = snapshot.midi_fx.delay;
     assert_eq!((delay.sources, delay.count), (31, 8));
     assert_eq!(
         delay.taps[7],
@@ -164,7 +169,7 @@ fn arp_store_sanitizes_control_state_before_publishing() {
     );
     assert!(store.apply_pending(&mut current));
     assert_eq!(current.pages[7].loops, snapshot.pages[7].loops);
-    assert_eq!(current.pages[7].delay, snapshot.pages[7].delay);
+    assert_eq!(current.midi_fx.delay, snapshot.midi_fx.delay);
     assert_eq!((current.generation, current.restore_epoch), (1, 0));
 }
 
@@ -215,7 +220,7 @@ fn arp_preset_restoration_advances_epoch_but_ordinary_edits_do_not() {
     assert!(store.apply_pending(&mut current));
     assert_eq!((current.generation, current.restore_epoch), (2, 1));
     assert_eq!(current.pages[1].loops[0].steps[3].velocity, 175);
-    store.edit(|state| state.pages[2].delay.enabled = true);
+    store.edit(|state| state.midi_fx.delay.enabled = true);
     assert!(store.apply_pending(&mut current));
     assert_eq!((current.generation, current.restore_epoch), (3, 1));
     PersistentField::set(&store, restored);
@@ -315,18 +320,26 @@ fn arp_loop_octaves_round_trip_and_publish_sanitized_values() {
     let store = Store::new();
     let mut prepared = store.initial_prepared();
     store.edit(|state| {
-        for (l, octave) in state.pages[2].loops.iter_mut().zip([-100, -3, 2, 100]) {
+        state.add_row_after(0);
+        state.add_row_after(1);
+        let row = &mut state.rows[2];
+        row.settings.octaves = 4;
+        row.page.ensure_loops(4);
+        for (l, octave) in row.page.loops.iter_mut().zip([-100, -3, 2, 100]) {
             l.octave = octave;
         }
     });
     let state = store.snapshot();
-    assert_eq!(state.pages[2].octaves(), [-4, -3, 2, 4]);
-    assert_eq!(
-        serde_json::from_str::<State>(&serde_json::to_string(&state).unwrap()).unwrap(),
-        state
-    );
+    assert_eq!(state.rows[2].page.octaves(), [-4, -3, 2, 4]);
+    let restored: State = serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+    assert_eq!(restored, state);
     assert!(store.apply_pending(&mut prepared));
-    assert_eq!(prepared.pages[2].loops, state.pages[2].loops);
+    assert_eq!(prepared.rows[2].page.loops, state.rows[2].page.loops);
+    let destination = Store::new();
+    let mut restored_prepared = destination.initial_prepared();
+    PersistentField::set(&destination, restored);
+    assert!(destination.apply_pending(&mut restored_prepared));
+    assert_eq!(restored_prepared.rows, prepared.rows);
 }
 
 #[test]
@@ -367,4 +380,162 @@ fn arp_loop_occurrence_identity_survives_pass_length_changes() {
     page.step_mut(7, 4).probability = 17;
     assert_eq!(page.step(3, 3).velocity, 21);
     assert_eq!(page.step(7, 4).probability, 17);
+}
+
+#[test]
+fn legacy_tracker_json_defaults_new_program_fields_without_changing_chord_or_timing() {
+    let mut original = State::default();
+    original.rows[0].chord = Some(crate::harmony::parse_chord_symbol("Cmaj9/E").unwrap());
+    original.rows[0].duration = 3;
+    original.rows[0].settings.pattern = 2;
+    original.rows[0].settings.rate = 0.5;
+    original.rows[0].settings.swing = 0.25;
+    original.rows[0].settings.octaves = 2;
+    original.rows[0].page.ensure_loops(2);
+    original.rows[0].page.loops[1].octave = -1;
+    original.rows[0].page.loops[1].steps[2].state = StepState::Skip;
+    let mut legacy = serde_json::to_value(&original).unwrap();
+    let row = &mut legacy["rows"][0];
+    let settings = row["settings"].as_object_mut().unwrap();
+    for field in ["lock_length", "steps", "fill", "custom"] {
+        settings.remove(field);
+    }
+    for variation in row["page"]["loops"].as_array_mut().unwrap() {
+        variation.as_object_mut().unwrap().remove("inversion");
+    }
+    let restored: State = serde_json::from_value(legacy).unwrap();
+    assert_eq!(restored, original);
+    let row = &restored.rows[0];
+    assert!(!row.settings.lock_length);
+    assert_eq!(row.settings.steps, 4);
+    assert_eq!(row.settings.fill, Fill::Repeat);
+    assert_eq!(row.settings.custom, default_custom());
+    assert!(row
+        .page
+        .loops
+        .iter()
+        .all(|variation| variation.inversion == 0));
+    let store = Store::new();
+    PersistentField::set(&store, restored);
+    assert_eq!(store.snapshot(), original);
+}
+
+#[test]
+fn programmable_tracker_round_trip_preserves_custom_controls_and_loop_inversions() {
+    let store = Store::new();
+    store.edit(|state| {
+        let row = &mut state.rows[0];
+        row.chord = Some(crate::harmony::parse_chord_symbol("Dm9").unwrap());
+        row.settings.pattern = 7;
+        row.settings.lock_length = true;
+        row.settings.steps = 5;
+        row.settings.fill = Fill::Evolve;
+        row.settings.octaves = 4;
+        row.page.ensure_loops(4);
+        row.settings.custom = std::array::from_fn(|i| CustomStep {
+            degree: 7 - i as u8,
+            octave: i as i8 - 3,
+            rest: i % 2 == 1,
+            velocity: 40 + i as u8 * 20,
+            gate: 25 + i as u8 * 25,
+        });
+        for (index, variation) in row.page.loops.iter_mut().enumerate() {
+            variation.inversion = [-12, -1, 1, 12][index];
+            variation.octave = index as i8 - 2;
+        }
+    });
+    let saved = store.snapshot();
+    let restored: State = serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+    assert_eq!(restored, saved);
+    let destination = Store::new();
+    let mut prepared = destination.initial_prepared();
+    PersistentField::set(&destination, restored);
+    assert!(destination.apply_pending(&mut prepared));
+    assert_eq!(prepared.rows, saved.rows);
+    assert_eq!(destination.snapshot(), saved);
+}
+
+#[test]
+fn programmable_tracker_restore_sanitizes_bounds_and_retains_valid_custom_ordering() {
+    let mut state = State::default();
+    let row = &mut state.rows[0];
+    row.settings.pattern = 7;
+    row.settings.lock_length = true;
+    row.settings.steps = 255;
+    row.settings.fill = Fill::Evolve;
+    row.settings.custom[0] = CustomStep {
+        degree: 0,
+        octave: -127,
+        rest: true,
+        velocity: 255,
+        gate: 0,
+    };
+    row.settings.custom[1] = CustomStep {
+        degree: 255,
+        octave: 127,
+        gate: 255,
+        ..CustomStep::default()
+    };
+    row.page.loops[0].inversion = -127;
+    row.page.loops[1].inversion = 127;
+    let store = Store::new();
+    let restored = serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+    PersistentField::set(&store, restored);
+    let sanitized = store.snapshot();
+    let row = &sanitized.rows[0];
+    assert_eq!(row.settings.pattern, 7);
+    assert_eq!(row.settings.steps, 24);
+    assert!(row.settings.lock_length);
+    assert_eq!(row.settings.fill, Fill::Evolve);
+    assert_eq!(
+        row.settings.custom[0],
+        CustomStep {
+            degree: 1,
+            octave: -4,
+            rest: true,
+            velocity: 200,
+            gate: 1,
+        }
+    );
+    assert_eq!(row.settings.custom[1].degree, 7);
+    assert_eq!(row.settings.custom[1].octave, 4);
+    assert_eq!(row.settings.custom[1].gate, 200);
+    assert_eq!(row.page.loops[0].inversion, -12);
+    assert_eq!(row.page.loops[1].inversion, 12);
+    store.edit(|state| state.rows[0].settings.steps = 0);
+    assert_eq!(store.snapshot().rows[0].settings.steps, 1);
+}
+
+#[test]
+fn global_midi_fx_survives_all_row_operations_and_state_restore() {
+    use crate::midi_fx::MidiFxId;
+    let store = Store::new();
+    store.edit(|s| {
+        s.midi_fx.delay.enabled = true;
+        s.midi_fx.delay.sources = 31;
+        s.midi_fx.delay.taps[0].time = 1.5;
+        s.midi_fx.order = vec![MidiFxId::Delay, MidiFxId::Delay];
+    });
+    let expected = store.snapshot().midi_fx;
+    assert_eq!(expected.order, vec![MidiFxId::Delay]);
+    store.edit(|s| {
+        s.add_row_after(0);
+        let copied = s.rows[0].clone();
+        s.move_row(1, -1);
+        s.paste_row(1, &copied);
+        s.delete_row(0);
+        s.delete_row(0);
+    });
+    assert_eq!(store.snapshot().midi_fx, expected);
+    let restored: State =
+        serde_json::from_str(&serde_json::to_string(&store.snapshot()).unwrap()).unwrap();
+    let mut prepared = store.initial_prepared();
+    PersistentField::set(&store, restored);
+    assert!(store.apply_pending(&mut prepared));
+    assert_eq!(prepared.midi_fx, expected);
+    let old: State =
+        serde_json::from_str(r#"{"rows":[{"page":{"delay":{"enabled":true}}}]}"#).unwrap();
+    assert_eq!(old.midi_fx, crate::midi_fx::MidiFxState::default());
+    store.edit(|s| s.midi_fx.order.clear());
+    assert_eq!(store.snapshot().midi_fx.order, vec![MidiFxId::Delay]);
 }

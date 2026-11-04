@@ -28,6 +28,7 @@ pub(super) fn configure(e: &mut Engine, mut c: Config) {
             free_ms: c.strum_ms,
             swing: c.swing,
             humanize: c.humanize,
+            ..crate::arpeggiator::Settings::default()
         }; 8];
     }
     e.configure(c, &mut |_| {});

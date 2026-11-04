@@ -1,5 +1,5 @@
 use super::*;
-use crate::arpeggiator::{source, DelayTap};
+use crate::midi_fx::{source, DelayTap};
 
 fn free(time: f32, feedback: f32) -> DelaySettings {
     let mut config = DelaySettings {
