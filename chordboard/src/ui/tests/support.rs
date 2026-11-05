@@ -19,6 +19,10 @@ pub(super) fn view(mode: i32, mpe: bool) -> ChordboardView {
         Arc::new(PreviewContext),
     );
     view.params.arpeggiator.edit(|state| {
+        // Existing Delay interaction tests use canonical module coordinates.
+        // New rack tests explicitly restore and exercise the fresh rack order.
+        let delay = state.midi_fx.order.iter().position(|id| *id == crate::midi_fx::MidiFxId::Delay).unwrap();
+        state.midi_fx.move_effect(delay, 0);
         state.rows[0].settings.mode = if mode == 1 {
             crate::arpeggiator::ArpMode::Once
         } else {
@@ -29,7 +33,11 @@ pub(super) fn view(mode: i32, mpe: bool) -> ChordboardView {
     view
 }
 /// The arpeggiator module stays open below the keyboard. Chords stay on their page.
-pub(super) fn open_arp(_view: &mut ChordboardView) {}
+pub(super) fn open_arp(view: &mut ChordboardView) {
+    view.programming = true;
+    view.refresh_arp_editor_params();
+    view.row_slide.tick(pleasant_ui::page_slide::DURATION);
+}
 pub(super) fn context() -> (Context, Entity, Changes) {
     let mut cx = Context::default();
     let target = Element::new(&mut cx).entity();
@@ -65,6 +73,7 @@ pub(super) fn click(view: &mut ChordboardView, cx: &mut Context, target: Entity,
     // Ordinary interaction tests operate after the quarter-second page slide.
     view.refresh_arp_editor_params();
     view.row_slide.tick(pleasant_ui::page_slide::DURATION);
+    view.top_slide.tick(pleasant_ui::page_slide::DURATION);
     view.route_elapsed = pleasant_ui::page_slide::DURATION;
     view.route_progress = if view.panel.is_some() { 1.0 } else { 0.0 };
     let x = r.0 + r.2 / 2.0;
@@ -110,4 +119,13 @@ pub(super) fn click_menu_option(
     if menu == Menu::ArpPattern {
         view.tick_arp_editor(pleasant_ui::page_slide::DURATION);
     }
+}
+
+/// Geometry follows the actual saved chord and all preceding loop durations.
+pub(super) fn tracker_row_rect(view: &ChordboardView, index: usize) -> Rect {
+    tracker::row_rect(
+        &view.params.arpeggiator.snapshot().rows,
+        index,
+        view.tracker_scroll,
+    )
 }

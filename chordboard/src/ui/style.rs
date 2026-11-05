@@ -32,6 +32,8 @@ pub(super) const MODULATOR_ICONS: [Icon; crate::engine::routing::SOURCE_COUNT] =
     Icon::Glyph("\u{ecd4}"), // Mod 1
     Icon::Glyph("\u{ecd4}"), // Mod 2
     Icon::Loop,              // Arp position
+    Icon::Glyph("\u{ecd4}"), // Perf Mod 1
+    Icon::Glyph("\u{ecd4}"), // Perf Mod 2
 ];
 
 impl Icon {
@@ -176,8 +178,11 @@ impl ChordboardView {
         if self.fx_ui.open && !self.quick_midi.show {
             let mut targets = self.arp_editor_button_rects();
             targets.extend([
+                (midi_fx::PROGRAMMING_TAB, false),
+                (midi_fx::PROGRAMMING_TRANSPORT, self.snapshot.arp_running),
                 (midi_fx::PERFORMANCE_TAB, false),
                 (midi_fx::FX_TAB, true),
+                (midi_fx::FX_LEARN, false),
                 (APPEARANCE, false),
                 (TEMPO_SYNC, false),
             ]);
@@ -201,22 +206,26 @@ impl ChordboardView {
         }
         let mut targets = Vec::new();
         targets.extend(self.route_chips().into_iter().map(|(_, r)| (r, false)));
-        targets.push((if self.quick_midi.show { midi_learn::exit_rect() } else { midi_learn::switch_rect() }, self.quick_midi.show));
+        let learn_switch = if self.fx_ui.open {
+            midi_fx::FX_LEARN
+        } else if self.quick_midi.show {
+            midi_learn::exit_rect()
+        } else {
+            midi_learn::switch_rect()
+        };
+        targets.push((learn_switch, self.quick_midi.show));
         if self.quick_midi.show {
             targets.extend(self.surface_midi_targets().into_iter().map(|(i, r)|
                 (r, self.bridge.quick_learn.load(Ordering::Acquire) == i as u32 + 1)));
-            for i in 0..crate::midi_learn::COUNT {
+            for i in midi_learn::VISIBLE_TARGETS.into_iter().filter(|_| !self.fx_ui.open) {
                 targets.push((
                     midi_learn::chip_rect(i),
                     self.bridge.quick_learn.load(Ordering::Acquire) == i as u32 + 1,
                 ));
             }
         }
-        if self.expand_t() == 0.0 {
+        if !self.quick_midi.show {
             for i in 0..crate::engine::routing::SOURCE_COUNT {
-                if self.quick_midi.show {
-                    break;
-                }
                 targets.push((
                     modulator_bypass_rect(i),
                     self.params.modulators[i].bypass.value(),
@@ -268,7 +277,10 @@ impl ChordboardView {
         targets.extend((0..KEY_COUNT).map(|i| (self.keyboard_key_rect(i), false)));
         targets.extend((0..8).map(|i| (memory_rect(i), self.memory_ui.armed)));
         targets.push((BASS_BYPASS, !self.params.bass_enabled.value()));
-        targets.push((arp_power_rect(), self.params.arp_enabled.value()));
+        let inherits_arp = self.editor_arp_inherits();
+        if !inherits_arp {
+            targets.push((arp_power_rect(), self.params.arp_enabled.value()));
+        }
         targets.push((
             self.voice_leading_rect(),
             self.params.voice_leading.value() != 2,
@@ -295,9 +307,11 @@ impl ChordboardView {
             );
         }
         if self.arp_editor_open() {
-            targets.push((arp_rate_sync_rect(), self.sweep_synced()));
-            if self.sweep_synced() {
-                targets.push((arp_rate_rect(), self.menu == Some(Menu::ArpRate)));
+            if !inherits_arp {
+                targets.push((arp_rate_sync_rect(), self.sweep_synced()));
+                if self.sweep_synced() {
+                    targets.push((arp_rate_rect(), self.menu == Some(Menu::ArpRate)));
+                }
             }
             targets.extend(self.arp_editor_button_rects());
         }
@@ -327,6 +341,18 @@ impl ChordboardView {
             strum_latch_rect(self.expand_t()),
             self.params.strum_latch.value(),
         ));
+        if self.programming && self.panel.is_none() && !self.quick_midi.show {
+            targets.retain(|(r, _)| !hit(TRACKER_SURFACE, r.0 + r.2 * 0.5, r.1 + r.3 * 0.5));
+        }
+        if self.tracker_visible() {
+            targets.push((tracker::transport_rect(), self.snapshot.arp_running));
+        }
+        targets.extend([
+            (midi_fx::PROGRAMMING_TRANSPORT, self.snapshot.arp_running),
+            (midi_fx::PROGRAMMING_TAB, self.programming),
+            (midi_fx::PERFORMANCE_TAB, !self.programming),
+            (midi_fx::FX_TAB, false),
+        ]);
         targets
     }
 
@@ -378,7 +404,9 @@ impl ChordboardView {
 
     pub(super) fn hover_pointer(&self) -> Option<(f32, f32)> {
         pleasant_ui::idle_hover(self.pointer, self.drag.is_some()).filter(|&(x, y)| {
-            self.fx_ui.open || !self.row_slide.active() || (x < 0.0 && !hit(PIANO_SURFACE, x, y)) || y < HEADER_H
+            y < HEADER_H || self.fx_ui.open || if hit(TRACKER_SURFACE, x, y) {
+                !self.top_slide.active()
+            } else { !hit(ARP_SURFACE, x, y) || globals::global_controls().iter().any(|(_, r)| hit(*r, x, y)) || !self.row_slide.active() }
         })
     }
 
@@ -442,9 +470,14 @@ impl ChordboardView {
             .filter(|(rect, _)| *rect == motion_rect)
             .map_or(0.0, |(_, v)| v);
         let press = self.button_press_amount(motion_rect).max(flash * 0.35);
-        d.button_surface(r, color, selected, hover, press);
         // Distinguish idle, hover, held, selected and selected-hover at a glance.
         let tint = selected * 0.12 + hover * (0.10 + selected * 0.12) + press * 0.22;
+        if self.quick_midi.show {
+            d.rounded_rect(r.0, r.1, r.2, r.3, 5.0, PANEL);
+            d.rounded_rect(r.0, r.1, r.2, r.3, 5.0, alpha(color, tint));
+            return;
+        }
+        d.button_surface(r, color, selected, hover, press);
         d.rect(r.0, r.1, r.2, r.3 - 2.0, alpha(color, tint));
         if hover > 0.0 || press > 0.0 {
             d.outline(
@@ -507,13 +540,13 @@ impl ChordboardView {
         } else {
             MUTED
         };
-        if icon.is_none() && self.draw_add_label(d, r, label, 11.0, label_color) {
+        if icon.is_none() && self.draw_add_label(d, r, label, TEXT_LABEL, label_color) {
             d.font = old;
             return;
         }
         let padding = if r.2 < 90.0 { 6.0 } else { 12.0 };
         let reserved = if icon.is_some() { 23.0 } else { 0.0 };
-        let text = self.fit_text(d, label, (r.2 - padding - reserved).max(0.0), 11.0);
+        let text = self.fit_text(d, label, (r.2 - padding - reserved).max(0.0), TEXT_LABEL);
         if let Some(icon) = icon {
             if label.is_empty() {
                 icon.draw(d, r.0 + r.2 * 0.5, r.1 + r.3 * 0.5, label_color);
@@ -522,17 +555,17 @@ impl ChordboardView {
             }
             const ICON_WIDTH: f32 = 18.0;
             const GAP: f32 = 5.0;
-            let text_w = self.text_width(d, &text, 11.0);
+            let text_w = self.text_width(d, &text, TEXT_LABEL);
             let left = r.0 + (r.2 - ICON_WIDTH - GAP - text_w) * 0.5;
             let center_y = r.1 + r.3 * 0.5;
             icon.draw(d, left + ICON_WIDTH * 0.5, center_y, label_color);
-            d.text_middle(left + ICON_WIDTH + GAP, center_y, &text, 11.0, label_color);
+            d.text_middle(left + ICON_WIDTH + GAP, center_y, &text, TEXT_LABEL, label_color);
         } else {
             d.text_centered(
                 r.0 + r.2 / 2.0,
                 r.1 + r.3 / 2.0 + 4.0,
                 &text,
-                11.0,
+                TEXT_LABEL,
                 label_color,
             );
         }
@@ -569,7 +602,7 @@ impl ChordboardView {
         }
         match c.id {
             "velocity" => format!("{:.0}%", self.params.velocity.value() * 100.0),
-            "humanize" => format!("{:.0}%", self.arp_params().humanize.value() * 100.0),
+            "humanize" => format!("{:.0}%", self.params.humanize.value() * 100.0),
             "contour" => format!("{:+.0}%", self.params.contour.value() * 100.0),
             "y" => format!("{:.0}%", self.params.y.value() * 100.0),
             "length_ms" => format!("{:.0} ms", self.params.length_ms.value()),
@@ -627,7 +660,7 @@ impl ChordboardView {
         };
         match c.id {
             "velocity" => percent().map(|v| self.params.velocity.preview_normalized(v)),
-            "humanize" => percent().map(|v| self.arp_params().humanize.preview_normalized(v)),
+            "humanize" => percent().map(|v| self.params.humanize.preview_normalized(v)),
             "contour" => percent().map(|v| self.params.contour.preview_normalized(v)),
             "y" => percent().map(|v| self.params.y.preview_normalized(v)),
             _ => {

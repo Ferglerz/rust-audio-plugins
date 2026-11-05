@@ -67,6 +67,10 @@ pub struct TapeStopParams {
     #[id = "midi_assign"]
     pub midi_assign: EnumParam<MidiAssign>,
 
+    /// Apply the tape speed to outgoing MIDI pitch and event timing.
+    #[id = "affect_midi"]
+    pub affect_midi: BoolParam,
+
     /// Continuous Speed MIDI CC # [0 to 127]; CC 0-31 support 14-bit pairs
     #[id = "override_cc"]
     pub override_cc: IntParam,
@@ -163,6 +167,7 @@ impl Default for TapeStopParams {
             .with_value_to_string(formatters::v2s_f32_rounded(1)),
 
             midi_assign: EnumParam::new("MIDI Assign", MidiAssign::Cc),
+            affect_midi: BoolParam::new("Affect MIDI", true),
 
             override_cc: IntParam::new("CC #", 3, IntRange::Linear { min: 0, max: 127 }),
 

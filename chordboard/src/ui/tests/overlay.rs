@@ -435,10 +435,8 @@ fn keyboard_module_sits_below_the_arpeggiator() {
     assert!(arp_power_rect().1 < arp_direction_rect().1 + arp_direction_rect().3);
     let (mut cx, target, changes) = context();
     click(&mut view, &mut cx, target, arp_power_rect());
-    assert_eq!(
-        changes.borrow().last().copied(),
-        Some((view.params.arp_enabled.as_ptr(), 1.0))
-    );
+    assert!(view.params.arpeggiator.snapshot().performance.enabled);
+    assert!(changes.borrow().is_empty());
 }
 #[test]
 fn arp_repeat_exposes_four_modes_and_sync_loop_default() {
@@ -631,7 +629,9 @@ fn grouped_menu_arrows_follow_visual_rows_and_stop_at_edges() {
     assert_eq!(view.menu_neighbor(menu, 8, Code::ArrowRight), 8);
     assert_eq!(view.menu_neighbor(menu, 9, Code::ArrowDown), 10);
     assert_eq!(view.menu_neighbor(menu, 10, Code::ArrowDown), 12);
-    assert_eq!(view.menu_neighbor(menu, 12, Code::ArrowDown), 12);
+    assert_eq!(view.menu_neighbor(menu, 12, Code::ArrowDown), 13);
+    assert_eq!(view.menu_neighbor(menu, 13, Code::ArrowRight), 14);
+    assert_eq!(view.menu_neighbor(menu, 14, Code::ArrowDown), 14);
     for menu in [Menu::RouteSource, Menu::RouteTarget] {
         for i in 0..menu.items().len() {
             for code in [
@@ -756,7 +756,8 @@ fn moving_from_performance_shift_to_value_gesture_restores_latch_immediately() {
 
 #[test]
 fn dedicated_modulator_meters_fill_from_center_in_both_directions() {
-    for source in [9, 10] {
+    use crate::engine::routing::{ARP_MOD_SOURCES, PERF_MOD_SOURCES};
+    for source in ARP_MOD_SOURCES.chain(PERF_MOD_SOURCES) {
         assert_eq!(
             super::super::performance::meter_fill(source, 0.0),
             (0.5, 0.5)
@@ -779,10 +780,8 @@ fn arpeggiator_settings_work_while_strumfield_is_expanded() {
     view.expand_target = 1.0;
     let (mut cx, target, changes) = context();
     click(&mut view, &mut cx, target, arp_power_rect());
-    assert_eq!(
-        changes.borrow().last().copied(),
-        Some((view.params.arp_enabled.as_ptr(), 1.0))
-    );
+    assert!(view.params.arpeggiator.snapshot().performance.enabled);
+    assert!(changes.borrow().is_empty());
     click(&mut view, &mut cx, target, arp_direction_rect());
     assert_eq!(view.menu, Some(Menu::ArpPattern));
     view.menu = None;
@@ -804,12 +803,16 @@ fn every_modulator_bypass_button_emits_its_toggle_without_opening_routes() {
     for source in 0..crate::engine::routing::SOURCE_COUNT {
         for bypassed in [false, true] {
             let mut view = view(3, false);
+            if source == 0 {
+                view.expand_progress = 1.0;
+            }
             Arc::get_mut(&mut view.params).unwrap().modulators[source].bypass =
                 BoolParam::new("Bypass", bypassed);
             let rect = modulator_bypass_rect(source);
             let meter = meter_rect(source);
             assert!(hit(meter, rect.0, rect.1));
             assert!(hit(meter, rect.0 + rect.2, rect.1 + rect.3));
+            assert!(rect.0 + rect.2 < meter.0 + meter.2 * 0.5);
             click(&mut view, &mut cx, target, rect);
             assert_eq!(
                 changes.borrow().last().copied(),

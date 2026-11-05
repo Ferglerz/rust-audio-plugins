@@ -60,13 +60,13 @@ const R10: f64 = 56_000.0; // node_c6 to fb (feedback tapped at the collector)
 
 /// Output load at OUT.
 ///
-/// The drawn netlist leaves `out` with only R-9 attached, which is a singular
-/// node for a nodal solve — a load is structurally required. 100K is the value
-/// the re-baselined `tb_preamp_ac` bench measures into, so the Rust and SPICE
-/// gain figures are like-for-like. The real chain here is the R-11 25K trimmer
-/// into the 10K volume pot; modelling that properly is a separate task (the
+/// Not structurally required (R-9 alone gives `out` a nonzero diagonal); it is
+/// here so the Rust and SPICE gain figures are like-for-like — 100K is the load
+/// the re-baselined `tb_preamp_ac` bench measures into. The real load is the
+/// R-11 25K trimmer into the 10K volume pot (10–35 kΩ, ≈−1.7 dB vs 100K at
+/// mid-trim); it is flat, so level calibration absorbs the difference. The
 /// volume path is deliberately decoupled from drive — see the 2026-04-26
-/// drive/volume decoupling).
+/// drive/volume decoupling.
 const RLOAD: f64 = 100_000.0;
 
 // Input two-port reduction (see module docs): Thévenin as seen from base1.
@@ -102,7 +102,11 @@ const C6: f64 = 4.7e-6; // Output coupling (coll2 ↔ node_c6)
 // need the full GP card (VAF/VAR via q1, RE/RB/RC parasitics); that is the
 // melange-generated solver's job (`--features melange-preamp`), not this one.
 const IS: f64 = 3.03e-14; // Saturation current
-const VT: f64 = 0.026; // Thermal voltage (25°C)
+// Thermal voltage. ngspice/melange use kT/q at 27 °C = 0.025852 and 25 °C
+// would be 0.02569; this card (IS/BF/NF) was fitted against the deck WITH
+// 0.026, and moving VT alone shifts TR-1's collector 6 mV off the
+// tb_preamp_dc anchor (±5 mV test). Change them together or not at all.
+const VT: f64 = 0.026;
 const NF: f64 = 1.005; // Forward emission coefficient
 const BF: f64 = 1434.0; // Ideal forward beta
 const ISE: f64 = 2.88e-15; // B-E leakage saturation current
@@ -344,16 +348,6 @@ struct DkState {
     i_c: [f64; 2],  // Absolute collector currents
     i_b: [f64; 2],  // Absolute base currents
     v_nl: [f64; 2], // Full Vbe (for NR warm start)
-    // Exact cache, invalidated on reset and any accepted LDR conductance change.
-    sm_kernel: Option<SmKernel>,
-}
-
-#[derive(Clone, Copy)]
-struct SmKernel {
-    conductance: f64,
-    scale: f64,
-    collector: [[f64; 2]; 2],
-    base: [[f64; 2]; 2],
 }
 
 impl DkState {
@@ -368,7 +362,6 @@ impl DkState {
             i_c: [d0.0, d1.0],
             i_b: [d0.1, d1.1],
             v_nl: v_nl_dc,
-            sm_kernel: None,
         }
     }
 }
@@ -600,7 +593,7 @@ fn compute_k(s: &MatN, ni: &[[(usize, f64); 2]; 2]) -> [[f64; 2]; 2] {
 ///
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
-fn dk_step<const REUSE_FINAL_CURRENTS: bool>(
+fn dk_step(
     a_neg_base: &MatN,
     two_w: &VecN,
     s_base: &MatN,
@@ -652,32 +645,7 @@ fn dk_step<const REUSE_FINAL_CURRENTS: bool>(
     let v_pred_base = mat_vec_mul(s_base, &rhs);
 
     // 3. SM correction for current R_ldr
-    // Reusing these values is exact: the fixed projection matrices never
-    // change, and set_ldr_resistance already controls accepted conductance.
-    // In particular depth=0 previously recomputed all of this every sample.
-    let kernel = match state.sm_kernel {
-        Some(cached) if cached.conductance == g_ldr => cached,
-        _ => {
-            let scale = g_ldr / (1.0 + s_fb_fb * g_ldr);
-            let mut collector = [[0.0; 2]; 2];
-            let mut base = [[0.0; 2]; 2];
-            for i in 0..2 {
-                for j in 0..2 {
-                    collector[i][j] = k_c[i][j] - scale * nv_sfb[i] * sfb_nic[j];
-                    base[i][j] = k_b[i][j] - scale * nv_sfb[i] * sfb_nib[j];
-                }
-            }
-            let cached = SmKernel {
-                conductance: g_ldr,
-                scale,
-                collector,
-                base,
-            };
-            state.sm_kernel = Some(cached);
-            cached
-        }
-    };
-    let sm_k = kernel.scale;
+    let sm_k = g_ldr / (1.0 + s_fb_fb * g_ldr);
     let sm_vpred = sm_k * v_pred_base[FB];
     let mut v_pred = vec_zero();
     for i in 0..N {
@@ -688,11 +656,16 @@ fn dk_step<const REUSE_FINAL_CURRENTS: bool>(
     let p = [v_pred[BASE1] - v_pred[EMIT1], v_pred[COLL1] - v_pred[EMIT2]];
 
     // 5. NR solve on 2x2 system with R_ldr-corrected kernels
-    let kc = kernel.collector;
-    let kb = kernel.base;
+    let mut kc = [[0.0f64; 2]; 2];
+    let mut kb = [[0.0f64; 2]; 2];
+    for i in 0..2 {
+        for j in 0..2 {
+            kc[i][j] = k_c[i][j] - sm_k * nv_sfb[i] * sfb_nic[j];
+            kb[i][j] = k_b[i][j] - sm_k * nv_sfb[i] * sfb_nib[j];
+        }
+    }
 
     let mut v_nl = state.v_nl;
-    let mut final_currents = None;
 
     for _iter in 0..6 {
         let (ic0, ib0, gc0, gb0) = bjt(v_nl[0]);
@@ -702,9 +675,6 @@ fn dk_step<const REUSE_FINAL_CURRENTS: bool>(
         let f1 = v_nl[1] - p[1] - kc[1][0] * ic0 - kc[1][1] * ic1 - kb[1][0] * ib0 - kb[1][1] * ib1;
 
         if f0.abs() < 1e-9 && f1.abs() < 1e-9 {
-            if REUSE_FINAL_CURRENTS {
-                final_currents = Some(([ic0, ic1], [ib0, ib1]));
-            }
             break;
         }
 
@@ -715,9 +685,6 @@ fn dk_step<const REUSE_FINAL_CURRENTS: bool>(
 
         let det = j00 * j11 - j01 * j10;
         if det.abs() < 1e-30 {
-            if REUSE_FINAL_CURRENTS {
-                final_currents = Some(([ic0, ic1], [ib0, ib1]));
-            }
             break;
         }
         let inv_det = 1.0 / det;
@@ -726,15 +693,11 @@ fn dk_step<const REUSE_FINAL_CURRENTS: bool>(
         v_nl[1] -= inv_det * (j00 * f1 - j10 * f0);
     }
 
-    // 6. Final NL currents at the converged Vbe. On either early exit above,
-    // these exact currents were just evaluated and v_nl has not changed. If all
-    // six iterations update v_nl, evaluate again at that final voltage.
-    // `REUSE_FINAL_CURRENTS = false` keeps the re-evaluating path for proofs.
-    let (ic_new, ib_new) = final_currents.unwrap_or_else(|| {
-        let (ic0, ib0, _, _) = bjt(v_nl[0]);
-        let (ic1, ib1, _, _) = bjt(v_nl[1]);
-        ([ic0, ic1], [ib0, ib1])
-    });
+    // 6. Final NL currents at the converged Vbe
+    let (ic0, ib0, _, _) = bjt(v_nl[0]);
+    let (ic1, ib1, _, _) = bjt(v_nl[1]);
+    let ic_new = [ic0, ic1];
+    let ib_new = [ib0, ib1];
 
     // 7. Node voltage update
     let sfb_dot = sfb_nic[0] * ic_new[0]
@@ -763,11 +726,15 @@ fn dk_step<const REUSE_FINAL_CURRENTS: bool>(
 }
 
 impl PreampModel for DkPreamp {
+    fn open_circuit_output_factor(&self) -> f64 {
+        (R9 + RLOAD) / RLOAD
+    }
+
     fn process_sample(&mut self, input: f64) -> f64 {
         // Run main solver with audio input.
         // Field-level borrow splitting: config fields (&self.xxx) are immutable,
         // state field (&mut self.main) is mutable — different fields, no conflict.
-        let main_out = dk_step::<true>(
+        let main_out = dk_step(
             &self.a_neg_base,
             &self.two_w,
             &self.s_base,
@@ -865,24 +832,8 @@ fn stamp_capacitor_to_gnd(c: &mut MatN, i: usize, cap: f64) {
 /// arbiter tolerance without it (worst node 2.70 mV).
 #[inline]
 fn bjt(vbe: f64) -> (f64, f64, f64, f64) {
-    // Perturbing this solver's transistor curve failed the full-engine audio
-    // gate under high-drive controls. Keep native evaluation in every build.
-    bjt_analytical(vbe)
-}
-
-/// Original analytical BJT kernel, retained for comparisons in every build.
-/// Returns collector current, base current, and both voltage derivatives.
-#[inline]
-pub fn bjt_analytical(vbe: f64) -> (f64, f64, f64, f64) {
-    bjt_with_exp(vbe, crate::circuit_math::exp)
-}
-
-/// One physical model. Only the exponential evaluator changes; generics let the
-/// compiler specialize both paths without function-pointer dispatch per sample.
-#[inline]
-fn bjt_with_exp(vbe: f64, exp: impl Fn(f64) -> (f64, f64)) -> (f64, f64, f64, f64) {
     let v = vbe.clamp(-1.0, VBE_MAX);
-    let (ef, def) = exp(v / VTF);
+    let ef = (v / VTF).exp();
     let icc = IS * (ef - 1.0);
 
     // High injection (Gummel-Poon qb)
@@ -892,17 +843,15 @@ fn bjt_with_exp(vbe: f64, exp: impl Fn(f64) -> (f64, f64)) -> (f64, f64, f64, f6
     let ic = icc / qb;
 
     // Base current: ideal + low-current recombination
-    let (ee, dee) = exp(v / NE_VT);
+    let ee = (v / NE_VT).exp();
     let ib = icc / BF + ISE * (ee - 1.0);
 
     // Derivatives
-    // Native exp returns def=ef, preserving the original arithmetic. The table
-    // returns its polynomial derivative so Newton differentiates that same curve.
-    let dicc = IS * def / VTF;
-    let dq2 = (IS_OVER_IKF * def) / VTF;
+    let dicc = IS * ef / VTF;
+    let dq2 = q2 / VTF;
     let dqb = dq2 / root;
     let gic = (dicc * qb - icc * dqb) / (qb * qb);
-    let gib = dicc / BF + ISE * dee / NE_VT;
+    let gib = dicc / BF + ISE * ee / NE_VT;
 
     (ic, ib, gic, gib)
 }
@@ -1149,66 +1098,6 @@ mod tests {
         }
 
         peak / amplitude
-    }
-
-    #[test]
-    fn final_current_reuse_matches_original_solver_trajectory() {
-        fn step<const REUSE: bool>(p: &mut DkPreamp, input: f64) -> f64 {
-            let result = dk_step::<REUSE>(
-                &p.a_neg_base,
-                &p.two_w,
-                &p.s_base,
-                &p.s_nic,
-                &p.s_nib,
-                &p.s_fb_col,
-                p.s_fb_fb,
-                p.g_ldr,
-                p.g_ldr_prev,
-                &p.k_c,
-                &p.k_b,
-                &p.nv_sfb,
-                &p.sfb_nic,
-                &p.sfb_nib,
-                p.g_cin,
-                p.gc_1pc,
-                p.c_cin,
-                &mut p.main,
-                input,
-            );
-            p.g_ldr_prev = p.g_ldr;
-            result
-        }
-        for sample_rate in [44_100.0, 88_200.0, 96_000.0] {
-            let mut reference = DkPreamp::new(sample_rate);
-            let mut candidate = DkPreamp::new(sample_rate);
-            for i in 0..4096 {
-                if i == 2048 {
-                    reference.reset();
-                    candidate.reset();
-                }
-                let resistance = [1_000_000.0, 19_000.0, 50_000.0, 1_000.0][i / 1024];
-                reference.set_ldr_resistance(resistance);
-                candidate.set_ldr_resistance(resistance);
-                // Include settled silence, small-signal audio and overdrive to
-                // exercise both convergence exits and exhausted NR iterations.
-                let amplitude = [0.0, 0.001, 0.5, 5.0][i / 1024];
-                let input = amplitude * (i as f64 * 0.03125).sin();
-                let a = step::<false>(&mut reference, input);
-                let b = step::<true>(&mut candidate, input);
-                assert_eq!(
-                    a.to_bits(),
-                    b.to_bits(),
-                    "output sample {i} at {sample_rate}"
-                );
-                for (x, y) in reference.main.v.iter().zip(candidate.main.v.iter()) {
-                    assert_eq!(
-                        x.to_bits(),
-                        y.to_bits(),
-                        "state sample {i} at {sample_rate}"
-                    );
-                }
-            }
-        }
     }
 
     #[test]

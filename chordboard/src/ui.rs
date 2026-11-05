@@ -158,6 +158,9 @@ struct ChordboardView {
     custom_drag: Option<custom::NoteDrag>,
     custom_bottom: i16,
     fx_ui: midi_fx::FxUi,
+    programming: bool,
+    top_slide: row_slide::RowSlide,
+    top_frames: std::cell::RefCell<Option<row_slide::RowFrames>>,
     row_slide: row_slide::RowSlide,
     row_frames: std::cell::RefCell<Option<row_slide::RowFrames>>,
     mpe_pulse: f32,
@@ -198,7 +201,7 @@ struct ChordboardView {
     tracker_scroll: f32,
     tracker_scroll_target: f32,
     tracker_skip_line_scroll: bool,
-    tracker_drag: Option<(usize, usize)>,
+    tracker_drag: Option<tracker::TrackerDrag>,
     controls_signature: Vec<f32>,
     slot_signature: [u64; MEMORY_COUNT],
     route_slot: usize,
@@ -245,6 +248,9 @@ impl ChordboardView {
             custom_drag: None,
             custom_bottom: -7,
             fx_ui: midi_fx::FxUi::default(),
+            programming: false,
+            top_slide: row_slide::RowSlide::default(),
+            top_frames: std::cell::RefCell::new(None),
             row_slide: row_slide::RowSlide::default(),
             row_frames: std::cell::RefCell::new(None),
             mpe_pulse: 0.0,
@@ -278,7 +284,7 @@ impl ChordboardView {
             expand_elapsed: pleasant_ui::page_slide::DURATION,
             tracker_selection: false,
             arp_editor_params: Box::new(crate::params::ArpPageParams::from_settings(
-                params.arpeggiator.snapshot().rows[0].settings,
+                params.arpeggiator.snapshot().performance.settings,
             )),
             tracker_proxy_row: usize::MAX,
             tracker_proxy_settings: crate::arpeggiator::Settings::default(),
@@ -305,6 +311,9 @@ impl ChordboardView {
         }
     }
     fn control(&self, id: &str) -> Option<Control> {
+        if matches!(id, "swing" | "humanize") {
+            return self.params.control(id);
+        }
         if let Some(control) = self.arp_params().control(id) {
             return Some(control);
         }
@@ -363,6 +372,13 @@ impl ChordboardView {
         self.edit = None;
     }
     fn set_panel(&mut self, panel: Option<Panel>) {
+        if panel == Some(Panel::Routes) && self.programming {
+            self.top_slide.select(1, 0);
+            self.top_slide.select(0, 1);
+            self.programming = false;
+            self.tracker_drag = None;
+            if self.tracker_symbol_edit { self.finish_tracker_symbol(); }
+        }
         self.pending_route_remove = None;
         self.release_keys();
         self.memory_held.fill(false);
@@ -417,11 +433,11 @@ impl ChordboardView {
         positions.push(("root_on_select", ROOT_ON_SELECT));
         positions.extend(output_controls());
         positions.extend(arp_controls());
-        if !self.arp_params().arp_sync.value() {
+        if !self.arp_params().arp_sync.value() && !self.editor_arp_inherits() {
             positions.push(("arp_free_ms", arp_rate_rect()));
         }
         positions.extend(self.keyboard_controls().into_iter().map(|(c, r)| (c.id, r)));
-        if !self.params.tempo_sync.value() {
+        if self.programming && !self.fx_ui.open && !self.params.tempo_sync.value() {
             positions.push(("tempo", TEMPO_CONTROL));
         }
         positions
@@ -487,11 +503,15 @@ impl ChordboardView {
     // Popovers own their pointer targets; covered controls cannot react underneath.
     fn placed_controls(&self) -> Vec<(Control, Rect)> {
         let mut controls = self.base_controls();
+        if self.programming {
+            controls.retain(|(c, r)| c.id == "tempo" || !hit(TRACKER_SURFACE, r.0 + r.2 / 2.0, r.1 + r.3 / 2.0));
+        }
         if let Some(panel) = self.panel {
             let p = self.panel_rect(panel);
             controls.retain(|(_, r)| !hit(p, r.0 + r.2 / 2.0, r.1 + r.3 / 2.0));
             controls.extend(self.panel_controls());
         }
+        if self.performance_arp_enabled() { controls.retain(|(c, _)| c.id != "gliss_ms"); }
         controls
     }
 
@@ -796,7 +816,8 @@ impl ChordboardView {
     fn can_pad_hover(&self) -> bool {
         self.manual_playing()
             && !self.fx_ui.open
-            && !self.row_slide.active()
+            && !self.programming
+            && !self.top_slide.active()
             && !self.arp_editor_editing()
             && self.params.strum_latch.value()
             && self.menu.is_none()
@@ -909,7 +930,14 @@ impl ChordboardView {
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
+        let was_tracker_dragging = self.tracker_drag.is_some();
         self.refresh_arp_editor_params();
+        if was_tracker_dragging && self.tracker_drag.is_none() {
+            cx.release();
+        }
+        if self.top_slide.tick(dt) {
+            cx.needs_redraw();
+        }
         if self.row_slide.tick(dt) {
             cx.needs_redraw();
         }
@@ -1087,7 +1115,7 @@ impl View for ChordboardView {
                 self.tracker_skip_line_scroll = self.scroll_tracker(
                     x - CONTENT_X,
                     y,
-                    scroll.y / editor_scale(bounds.w, bounds.h),
+                    tracker::scroll_delta(scroll.x, scroll.y) / editor_scale(bounds.w, bounds.h),
                     true,
                 );
                 if self.tracker_skip_line_scroll {
@@ -1098,7 +1126,17 @@ impl View for ChordboardView {
         });
         event.map(|param: &RawParamEvent, meta| {
             if matches!(param, RawParamEvent::ParametersChanged) {
+                let was_tracker_dragging = self.tracker_drag.is_some();
                 self.refresh_arp_editor_params();
+                if was_tracker_dragging {
+                    cx.release();
+                }
+                // A host restore may reuse row IDs; never finish a gesture into a new preset.
+                if self.tracker_drag.take().is_some() {
+                    self.tracker_symbol_edit = false;
+                    self.tracker_symbol.clear();
+                    self.tracker_selection = false;
+                }
                 cx.needs_redraw();
                 return;
             }

@@ -26,10 +26,10 @@ fn slot_rect(index: usize) -> Rect {
         1 => (x + 74.0, PIANO_SURFACE.1 + 8.0, 160.0, 170.0),
         2 => (x + 234.0, PIANO_SURFACE.1 + 46.0, 74.0, 112.0),
         _ => (
-            ARP_SURFACE.0 + 12.0,
-            ARP_SURFACE.1 + 80.0 + (index - 3) as f32 * 180.0,
-            arpeggiator::OUTPUT_COLUMN_W - 24.0,
-            118.0,
+            GLOBAL_SURFACE.0 + 12.0,
+            GLOBAL_SURFACE.1 + 48.0 + (4 - index) as f32 * 148.0,
+            120.0,
+            100.0,
         ),
     }
 }
@@ -58,7 +58,7 @@ fn knob_layout(rect: Rect) -> KnobLayout {
     layout.cy = rect.1 + if complexity { 86.0 } else { 52.0 };
     layout.label_y = rect.1 + 12.0;
     layout.value_y = rect.1 + rect.3 - 10.0;
-    layout.with_text_sizes(11.0, 13.0)
+    layout.with_text_sizes(TEXT_LABEL, TEXT_LABEL)
 }
 
 /// Resolve the very same recipe as playback, in a safe middle register. This
@@ -510,7 +510,7 @@ mod tests {
             let surface = if index < 3 {
                 PIANO_SURFACE
             } else {
-                ARP_SURFACE
+                GLOBAL_SURFACE
             };
             assert!(hit(surface, learn.0, learn.1));
             assert!(hit(surface, learn.0 + learn.2, learn.1 + learn.3));

@@ -7,6 +7,7 @@ use nih_plug::wrapper::state::ParamValue;
 use std::sync::Arc;
 
 pub mod dsp;
+mod midi;
 pub mod params;
 pub mod telemetry;
 pub mod ui;
@@ -18,6 +19,7 @@ use telemetry::TapeStopTelemetry;
 pub struct TapeStop {
     params: Arc<TapeStopParams>,
     engine: TapeStopEngine,
+    midi: midi::MidiTape,
     pub telemetry: Arc<TapeStopTelemetry>,
     last_midi_assign: MidiAssign,
 }
@@ -27,6 +29,7 @@ impl Default for TapeStop {
         Self {
             params: Arc::new(TapeStopParams::default()),
             engine: TapeStopEngine::new(),
+            midi: midi::MidiTape::new(),
             telemetry: TapeStopTelemetry::new(),
             last_midi_assign: MidiAssign::Cc,
         }
@@ -81,7 +84,7 @@ impl Plugin for TapeStop {
     ];
 
     const MIDI_INPUT: MidiConfig = MidiConfig::MidiCCs;
-    const MIDI_OUTPUT: MidiConfig = MidiConfig::None;
+    const MIDI_OUTPUT: MidiConfig = MidiConfig::MidiCCs;
 
     const SAMPLE_ACCURATE_AUTOMATION: bool = true;
 
@@ -94,8 +97,9 @@ impl Plugin for TapeStop {
 
     fn filter_state(state: &mut PluginState) {
         // NIH-plug leaves absent parameters unchanged when loading into an
-        // existing instance. Explicit defaults make older presets recall Free.
+        // existing instance. Explicit defaults also apply when recalling old presets.
         for (id, value) in [
+            ("affect_midi", ParamValue::Bool(true)),
             ("time_sync", ParamValue::Bool(false)),
             ("tempo_sync", ParamValue::Bool(true)),
             ("tempo", ParamValue::F32(120.0)),
@@ -121,11 +125,13 @@ impl Plugin for TapeStop {
         _context: &mut impl InitContext<Self>,
     ) -> bool {
         self.engine.set_sample_rate(buffer_config.sample_rate);
+        self.midi.set_sample_rate(buffer_config.sample_rate);
         true
     }
 
     fn reset(&mut self) {
         self.engine.reset();
+        self.midi.reset();
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
@@ -172,6 +178,10 @@ impl Plugin for TapeStop {
         let auto_restart = self.params.auto_restart.value();
         let auto_restart_thresh = self.params.auto_restart_thresh.value();
         let power = self.params.power.value();
+        self.midi.begin_block(
+            self.params.affect_midi.value() && power && !self.params.bypass.value(),
+            &mut |event| context.send_event(event),
+        );
         let prepared_tape_settings = self
             .engine
             .prepare_block(drop_time, stereo_div, auto_restart_thresh)
@@ -200,6 +210,7 @@ impl Plugin for TapeStop {
                 }
 
                 self.handle_midi_event(event, midi_assign, override_note, override_cc);
+                self.midi.push(event, &mut |event| context.send_event(event));
 
                 next_event = context.next_event();
             }
@@ -218,6 +229,15 @@ impl Plugin for TapeStop {
             let (out_l, out_r) = self
                 .engine
                 .process_sample_prepared([in_l, in_r], prepared_tape_settings);
+
+            // MIDI has one tape head: use the mean of the stereo tape speeds.
+            self.midi.sample(
+                sample_idx as u32,
+                (self.engine.speed_left() + self.engine.speed_right()) * 0.5,
+                self.engine.is_braking(),
+                !self.engine.is_braking() && !self.engine.is_returning(),
+                &mut |event| context.send_event(event),
+            );
 
             max_out_peak = max_out_peak.max(out_l.abs()).max(out_r.abs());
 
@@ -255,6 +275,7 @@ impl ClapPlugin for TapeStop {
     const CLAP_SUPPORT_URL: Option<&'static str> = None;
     const CLAP_FEATURES: &'static [ClapFeature] = &[
         ClapFeature::AudioEffect,
+        ClapFeature::NoteEffect,
         ClapFeature::Custom("tape-stop"),
         ClapFeature::Stereo,
     ];
@@ -284,6 +305,8 @@ mod tests {
         TapeStop::filter_state(&mut state);
         assert!(matches!(state.params["time_sync"], ParamValue::Bool(false)));
         assert!(matches!(state.params["tempo_sync"], ParamValue::Bool(true)));
+        assert!(matches!(state.params["affect_midi"], ParamValue::Bool(true)));
+        state.params.insert("affect_midi".into(), ParamValue::Bool(false));
         assert!(
             matches!(state.params["drop_time"], ParamValue::F32(v) if (v - 0.1374).abs() < 1e-6)
         );
@@ -295,6 +318,7 @@ mod tests {
         let json = serde_json::to_vec(&state).unwrap();
         let mut restored: PluginState = serde_json::from_slice(&json).unwrap();
         TapeStop::filter_state(&mut restored);
+        assert!(matches!(restored.params["affect_midi"], ParamValue::Bool(false)));
         assert!(matches!(restored.params["xy_x_axis"], ParamValue::I32(1)));
         assert!(matches!(restored.params["xy_mode"], ParamValue::I32(1)));
         assert!(matches!(

@@ -1,0 +1,8 @@
+---
+description: Use the bottom tooltip area for plugin UI guidance
+alwaysApply: true
+---
+
+# Plugin UI copy
+
+Follow the Plugin UI copy guidance in `AGENTS.md`. Put interaction hints such as “Drag vertically to adjust” in the bottom tooltip area. Keep functional labels, current values, and actionable status visible in the UI.

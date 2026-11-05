@@ -44,8 +44,6 @@
 #![allow(unused_mut)]
 #![allow(clippy::manual_memcpy)]
 
-use crate::bjt_lockstep::{BjtArgs, bjt_with_parasitics_lockstep};
-
 // =============================================================================
 // CONSTANTS: Compile-time circuit topology (Nodal solver)
 // =============================================================================
@@ -3452,9 +3450,6 @@ fn bjt_with_parasitics(
     // Initial guess: internal = external
     let mut vbe_int = vbe_ext;
     let mut vbc_int = vbc_ext;
-    // bjt_evaluate is pure: an early break leaves the internal voltages
-    // untouched, so its evaluation is bit-identical to a final re-evaluation.
-    let mut final_eval = None;
 
     for _iter in 0..INNER_MAX_ITER {
         let (ic, ib, jac_int) = bjt_evaluate(
@@ -3471,7 +3466,6 @@ fn bjt_with_parasitics(
         let f2 = vbc_int - vbc_ext + ib * rb - ic * rc;
 
         if f1.abs() < INNER_TOL && f2.abs() < INNER_TOL {
-            final_eval = Some((ic, ib, jac_int));
             break;
         }
 
@@ -3484,7 +3478,6 @@ fn bjt_with_parasitics(
         // Solve 2x2 via Cramer's rule
         let det = j11 * j22 - j12 * j21;
         if det.abs() < 1e-30 {
-            final_eval = Some((ic, ib, jac_int));
             break;
         }
         let inv_det = 1.0 / det;
@@ -3501,13 +3494,10 @@ fn bjt_with_parasitics(
     }
 
     // Final evaluation at converged internal voltages
-    let (ic, ib, jac_int) = match final_eval {
-        Some(eval) => eval,
-        None => bjt_evaluate(
-            vbe_int, vbc_int, is, vt, nf, nr, beta_f, beta_r, sign, use_gp, vaf, var, ikf, ikr,
-            ise, ne, isc, nc,
-        ),
-    };
+    let (ic, ib, jac_int) = bjt_evaluate(
+        vbe_int, vbc_int, is, vt, nf, nr, beta_f, beta_r, sign, use_gp, vaf, var, ikf, ikr, ise,
+        ne, isc, nc,
+    );
 
     // External Jacobian: J_ext = J_device * J_F^{-1}
     // J_F = [[j11, j12], [j21, j22]] (recompute at converged point)
@@ -4110,12 +4100,6 @@ impl CircuitState {
     /// Also recomputes the Schur matrices S, K, S_NI (and BE variants),
     /// which includes O(N^3) matrix inversion.
     pub fn rebuild_matrices(&mut self, internal_rate: f64) {
-        self.rebuild_matrices_checked(internal_rate);
-    }
-
-    /// `rebuild_matrices`, returning whether every inverse was refreshed.
-    /// A failed inversion leaves that inverse and its products unchanged.
-    fn rebuild_matrices_checked(&mut self, internal_rate: f64) -> bool {
         let alpha = internal_rate; // backward Euler: alpha = 1/T
         let alpha_be = internal_rate;
         let alpha_sub = 4.0 * internal_rate; // trap at 2× rate
@@ -4146,67 +4130,56 @@ impl CircuitState {
         }
 
         // Recompute S = A^{-1} (trapezoidal)
-        let trap_inverted = if let Some(inv) = invert_n(&self.a) {
+        if let Some(inv) = invert_n(&self.a) {
             self.s = inv;
-            schur_products(&self.s, &mut self.s_ni, &mut self.k);
-            true
-        } else {
-            false
-        };
-        // Recompute S_be = A_be^{-1} (backward Euler). With alpha_be == alpha
-        // the matrices are bit-identical, and so is every derived product.
-        let be_inverted = if same_bits(&self.a_be, &self.a) {
-            if trap_inverted {
-                self.s_be = self.s;
-                self.s_ni_be = self.s_ni;
-                self.k_be = self.k;
+            // S_NI = S * N_i
+            for i in 0..N {
+                for j in 0..M {
+                    let mut sum = 0.0;
+                    for a in 0..N {
+                        sum += self.s[i][a] * N_I[a][j];
+                    }
+                    self.s_ni[i][j] = sum;
+                }
             }
-            trap_inverted
-        } else if let Some(inv) = invert_n(&self.a_be) {
+            // K = N_v * S_NI
+            for i in 0..M {
+                for j in 0..M {
+                    let mut sum = 0.0;
+                    for a in 0..N {
+                        sum += N_V[i][a] * self.s_ni[a][j];
+                    }
+                    self.k[i][j] = sum;
+                }
+            }
+        }
+        // Recompute S_be = A_be^{-1} (backward Euler)
+        if let Some(inv) = invert_n(&self.a_be) {
             self.s_be = inv;
-            schur_products(&self.s_be, &mut self.s_ni_be, &mut self.k_be);
-            true
-        } else {
-            false
-        };
+            // S_NI = S * N_i
+            for i in 0..N {
+                for j in 0..M {
+                    let mut sum = 0.0;
+                    for a in 0..N {
+                        sum += self.s_be[i][a] * N_I[a][j];
+                    }
+                    self.s_ni_be[i][j] = sum;
+                }
+            }
+            // K = N_v * S_NI
+            for i in 0..M {
+                for j in 0..M {
+                    let mut sum = 0.0;
+                    for a in 0..N {
+                        sum += N_V[i][a] * self.s_ni_be[a][j];
+                    }
+                    self.k_be[i][j] = sum;
+                }
+            }
+        }
 
         // Invalidate chord LU cache (matrices changed)
         self.chord_valid = false;
-        trap_inverted && be_inverted
-    }
-
-    /// Perform the lazy rebuild both states would do at their next
-    /// `process_sample`, inverting once when their G, C and sample rate are
-    /// bit-identical. Otherwise, or if an inversion fails, `other` keeps its
-    /// pending rebuild and performs it itself.
-    pub fn rebuild_pending_shared(&mut self, other: &mut CircuitState) {
-        let shareable = self.matrices_dirty
-            && other.matrices_dirty
-            && self.current_sample_rate.to_bits() == other.current_sample_rate.to_bits()
-            && same_bits(&self.g_work, &other.g_work)
-            && same_bits(&self.c_work, &other.c_work);
-        if !shareable {
-            return;
-        }
-        let internal_rate = self.current_sample_rate * OVERSAMPLING_FACTOR as f64;
-        let refreshed = self.rebuild_matrices_checked(internal_rate);
-        self.matrices_dirty = false;
-        if !refreshed {
-            return;
-        }
-        other.a = self.a;
-        other.a_neg = self.a_neg;
-        other.a_be = self.a_be;
-        other.a_neg_be = self.a_neg_be;
-        other.a_neg_sub = self.a_neg_sub;
-        other.s = self.s;
-        other.s_ni = self.s_ni;
-        other.k = self.k;
-        other.s_be = self.s_be;
-        other.s_ni_be = self.s_ni_be;
-        other.k_be = self.k_be;
-        other.chord_valid = false;
-        other.matrices_dirty = false;
     }
 
     /// Current resistance of runtime resistor `r_ldr` (ohms).
@@ -4338,10 +4311,6 @@ fn invert_n(a: &[[f64; N]; N]) -> Option<[[f64; N]; N]> {
         }
     }
 
-    if lu.iter().flatten().all(|x| x.is_finite()) {
-        return Some(solve_identity_columns(&lu, &perm));
-    }
-
     let mut result = [[0.0f64; N]; N];
     for col in 0..N {
         let mut b = [0.0f64; N];
@@ -4377,133 +4346,6 @@ fn invert_n(a: &[[f64; N]; N]) -> Option<[[f64; N]; N]> {
     }
 
     Some(result)
-}
-
-/// All identity columns of `invert_n`'s substitution at once, row-major so
-/// the independent columns vectorize instead of serializing on divisions.
-///
-/// Per column this performs the same operations in the same order as the
-/// scalar loop. Its extra forward terms multiply finite `lu` entries by the
-/// +0.0 above the column's unit entry; subtracting that ±0.0 from a partial
-/// sum that started at +0.0 or 1.0 cannot change its bits.
-#[inline(always)]
-fn solve_identity_columns(lu: &[[f64; N]; N], perm: &[usize; N]) -> [[f64; N]; N] {
-    let mut x = [[0.0f64; N]; N];
-    for i in 0..N {
-        x[i][perm[i]] = 1.0;
-    }
-    for i in 1..N {
-        for j in 0..i {
-            let l = lu[i][j];
-            let (done, rest) = x.split_at_mut(i);
-            let (src, dst) = (&done[j], &mut rest[0]);
-            for col in 0..N {
-                dst[col] -= l * src[col];
-            }
-        }
-    }
-    for i in (0..N).rev() {
-        for j in (i + 1)..N {
-            let u = lu[i][j];
-            let (head, tail) = x.split_at_mut(j);
-            let (dst, src) = (&mut head[i], &tail[0]);
-            for col in 0..N {
-                dst[col] -= u * src[col];
-            }
-        }
-        let pivot = lu[i][i];
-        for col in 0..N {
-            x[i][col] /= pivot;
-        }
-    }
-    x
-}
-
-#[inline(always)]
-fn same_bits<const R: usize, const C: usize>(a: &[[f64; C]; R], b: &[[f64; C]; R]) -> bool {
-    a.iter()
-        .flatten()
-        .zip(b.iter().flatten())
-        .all(|(x, y)| x.to_bits() == y.to_bits())
-}
-
-/// Nonzero rows of each `N_I` column and nonzero columns of each `N_V` row.
-const fn incidence_nonzeros<const R: usize, const C: usize>(
-    matrix: &[[f64; C]; R],
-    by_column: bool,
-) -> ([[usize; N]; N], [usize; N]) {
-    let mut index = [[0usize; N]; N];
-    let mut count = [0usize; N];
-    let mut r = 0;
-    while r < R {
-        let mut c = 0;
-        while c < C {
-            if matrix[r][c] != 0.0 {
-                let (outer, inner) = if by_column { (c, r) } else { (r, c) };
-                index[outer][count[outer]] = inner;
-                count[outer] += 1;
-            }
-            c += 1;
-        }
-        r += 1;
-    }
-    (index, count)
-}
-
-const N_I_NONZERO: ([[usize; N]; N], [usize; N]) = incidence_nonzeros(&N_I, true);
-const N_V_NONZERO: ([[usize; N]; N], [usize; N]) = incidence_nonzeros(&N_V, false);
-
-/// S_NI = S * N_i and K = N_v * S_NI.
-///
-/// The sums start at +0.0 and so never hold -0.0; a skipped term is a
-/// finite factor times an exact zero incidence entry, i.e. ±0.0, and adding
-/// it cannot change the sum. Non-finite inputs take the dense loops.
-#[inline(always)]
-fn schur_products(s: &[[f64; N]; N], s_ni: &mut [[f64; M]; N], k: &mut [[f64; M]; M]) {
-    if s.iter().flatten().all(|x| x.is_finite()) {
-        let (rows, counts) = &N_I_NONZERO;
-        for i in 0..N {
-            for j in 0..M {
-                let mut sum = 0.0;
-                for &a in &rows[j][..counts[j]] {
-                    sum += s[i][a] * N_I[a][j];
-                }
-                s_ni[i][j] = sum;
-            }
-        }
-    } else {
-        for i in 0..N {
-            for j in 0..M {
-                let mut sum = 0.0;
-                for a in 0..N {
-                    sum += s[i][a] * N_I[a][j];
-                }
-                s_ni[i][j] = sum;
-            }
-        }
-    }
-    if s_ni.iter().flatten().all(|x| x.is_finite()) {
-        let (cols, counts) = &N_V_NONZERO;
-        for i in 0..M {
-            for j in 0..M {
-                let mut sum = 0.0;
-                for &a in &cols[i][..counts[i]] {
-                    sum += N_V[i][a] * s_ni[a][j];
-                }
-                k[i][j] = sum;
-            }
-        }
-    } else {
-        for i in 0..M {
-            for j in 0..M {
-                let mut sum = 0.0;
-                for a in 0..N {
-                    sum += N_V[i][a] * s_ni[a][j];
-                }
-                k[i][j] = sum;
-            }
-        }
-    }
 }
 
 // =============================================================================
@@ -4651,50 +4493,6 @@ pub fn process_sample(input: f64, state: &mut CircuitState) -> [f64; NUM_OUTPUTS
     for i in 0..M {
         i_nl[i] = 2.0 * state.i_nl_prev[i] - state.i_nl_prev_prev[i];
     }
-    let bjt_args: [BjtArgs; 2] = [
-        BjtArgs::new(
-            state.device_1_is,
-            state.device_1_vt,
-            DEVICE_1_NF,
-            DEVICE_1_NR,
-            state.device_1_bf,
-            state.device_1_br,
-            DEVICE_1_SIGN,
-            DEVICE_1_USE_GP,
-            DEVICE_1_VAF,
-            DEVICE_1_VAR,
-            DEVICE_1_IKF,
-            DEVICE_1_IKR,
-            DEVICE_1_ISE,
-            DEVICE_1_NE,
-            DEVICE_1_ISC,
-            DEVICE_1_NC,
-            DEVICE_1_RB,
-            DEVICE_1_RC,
-            DEVICE_1_RE,
-        ),
-        BjtArgs::new(
-            state.device_2_is,
-            state.device_2_vt,
-            DEVICE_2_NF,
-            DEVICE_2_NR,
-            state.device_2_bf,
-            state.device_2_br,
-            DEVICE_2_SIGN,
-            DEVICE_2_USE_GP,
-            DEVICE_2_VAF,
-            DEVICE_2_VAR,
-            DEVICE_2_IKF,
-            DEVICE_2_IKR,
-            DEVICE_2_ISE,
-            DEVICE_2_NE,
-            DEVICE_2_ISC,
-            DEVICE_2_NC,
-            DEVICE_2_RB,
-            DEVICE_2_RC,
-            DEVICE_2_RE,
-        ),
-    ];
     state.last_nr_iterations = MAX_ITER as u32;
 
     for iter in 0..MAX_ITER {
@@ -4733,12 +4531,56 @@ pub fn process_sample(input: f64, state: &mut CircuitState) -> [f64; NUM_OUTPUTS
         // 4b. Evaluate device currents and Jacobians
         let i_dev0 = diode_current(v_d0, state.device_0_is, state.device_0_n_vt);
         let jdev_0_0 = diode_conductance(v_d0, state.device_0_is, state.device_0_n_vt);
-        let [(i_dev1, i_dev2, bjt1_jac), (i_dev3, i_dev4, bjt2_jac)] =
-            bjt_with_parasitics_lockstep([[v_d1, v_d2], [v_d3, v_d4]], &bjt_args);
+        let (i_dev1, i_dev2, bjt1_jac) = bjt_with_parasitics(
+            v_d1,
+            v_d2,
+            state.device_1_is,
+            state.device_1_vt,
+            DEVICE_1_NF,
+            DEVICE_1_NR,
+            state.device_1_bf,
+            state.device_1_br,
+            DEVICE_1_SIGN,
+            DEVICE_1_USE_GP,
+            DEVICE_1_VAF,
+            DEVICE_1_VAR,
+            DEVICE_1_IKF,
+            DEVICE_1_IKR,
+            DEVICE_1_ISE,
+            DEVICE_1_NE,
+            DEVICE_1_ISC,
+            DEVICE_1_NC,
+            DEVICE_1_RB,
+            DEVICE_1_RC,
+            DEVICE_1_RE,
+        );
         let jdev_1_1 = bjt1_jac[0];
         let jdev_1_2 = bjt1_jac[1];
         let jdev_2_1 = bjt1_jac[2];
         let jdev_2_2 = bjt1_jac[3];
+        let (i_dev3, i_dev4, bjt2_jac) = bjt_with_parasitics(
+            v_d3,
+            v_d4,
+            state.device_2_is,
+            state.device_2_vt,
+            DEVICE_2_NF,
+            DEVICE_2_NR,
+            state.device_2_bf,
+            state.device_2_br,
+            DEVICE_2_SIGN,
+            DEVICE_2_USE_GP,
+            DEVICE_2_VAF,
+            DEVICE_2_VAR,
+            DEVICE_2_IKF,
+            DEVICE_2_IKR,
+            DEVICE_2_ISE,
+            DEVICE_2_NE,
+            DEVICE_2_ISC,
+            DEVICE_2_NC,
+            DEVICE_2_RB,
+            DEVICE_2_RC,
+            DEVICE_2_RE,
+        );
         let jdev_3_3 = bjt2_jac[0];
         let jdev_3_4 = bjt2_jac[1];
         let jdev_4_3 = bjt2_jac[2];
@@ -5524,409 +5366,4 @@ pub fn process_sample(input: f64, state: &mut CircuitState) -> [f64; NUM_OUTPUTS
         output[out_idx] = if scaled.is_finite() { scaled } else { 0.0 };
     }
     output
-}
-
-#[cfg(test)]
-mod exactness_tests {
-    use super::*;
-    use crate::bjt_lockstep::test_support::{BjtParams, Lcg, result_bits};
-
-    fn bits<const R: usize, const C: usize>(m: &[[f64; C]; R]) -> Vec<u64> {
-        m.iter().flatten().map(|x| x.to_bits()).collect()
-    }
-
-    fn matrix_bits(st: &CircuitState) -> Vec<u64> {
-        [
-            bits(&st.a),
-            bits(&st.a_neg),
-            bits(&st.a_be),
-            bits(&st.a_neg_be),
-            bits(&st.a_neg_sub),
-            bits(&st.s),
-            bits(&st.s_ni),
-            bits(&st.k),
-            bits(&st.s_be),
-            bits(&st.s_ni_be),
-            bits(&st.k_be),
-        ]
-        .concat()
-    }
-
-    /// The generated `invert_n`: one substitution per identity column.
-    fn generated_invert_n(a: &[[f64; N]; N]) -> Option<[[f64; N]; N]> {
-        let mut lu = *a;
-        let mut perm = [0usize; N];
-        for i in 0..N {
-            perm[i] = i;
-        }
-        for k in 0..N {
-            let mut max_row = k;
-            let mut max_val = lu[k][k].abs();
-            for i in (k + 1)..N {
-                let v = lu[i][k].abs();
-                if v > max_val {
-                    max_val = v;
-                    max_row = i;
-                }
-            }
-            if max_val < 1e-30 {
-                return None;
-            }
-            if max_row != k {
-                lu.swap(k, max_row);
-                perm.swap(k, max_row);
-            }
-            let pivot = lu[k][k];
-            for i in (k + 1)..N {
-                let m = lu[i][k] / pivot;
-                lu[i][k] = m;
-                for j in (k + 1)..N {
-                    lu[i][j] -= m * lu[k][j];
-                }
-            }
-        }
-        let mut result = [[0.0f64; N]; N];
-        for col in 0..N {
-            let mut b = [0.0f64; N];
-            let mut start = N;
-            for i in 0..N {
-                if perm[i] == col {
-                    b[i] = 1.0;
-                    start = i;
-                    break;
-                }
-            }
-            for i in (start + 1)..N {
-                let mut sum = b[i];
-                for j in start..i {
-                    sum -= lu[i][j] * b[j];
-                }
-                b[i] = sum;
-            }
-            for i in (0..N).rev() {
-                let mut sum = b[i];
-                for j in (i + 1)..N {
-                    sum -= lu[i][j] * b[j];
-                }
-                let pivot = lu[i][i];
-                if pivot.abs() < 1e-30 {
-                    return None;
-                }
-                b[i] = sum / pivot;
-            }
-            for i in 0..N {
-                result[i][col] = b[i];
-            }
-        }
-        Some(result)
-    }
-
-    fn dense_products(s: &[[f64; N]; N]) -> ([[f64; M]; N], [[f64; M]; M]) {
-        let mut s_ni = [[0.0; M]; N];
-        for i in 0..N {
-            for j in 0..M {
-                let mut sum = 0.0;
-                for a in 0..N {
-                    sum += s[i][a] * N_I[a][j];
-                }
-                s_ni[i][j] = sum;
-            }
-        }
-        let mut k = [[0.0; M]; M];
-        for i in 0..M {
-            for j in 0..M {
-                let mut sum = 0.0;
-                for a in 0..N {
-                    sum += N_V[i][a] * s_ni[a][j];
-                }
-                k[i][j] = sum;
-            }
-        }
-        (s_ni, k)
-    }
-
-    /// The generated `rebuild_matrices`: two independent inversions with
-    /// dense Schur products.
-    fn generated_rebuild(st: &mut CircuitState, internal_rate: f64) {
-        let alpha = internal_rate;
-        let alpha_be = internal_rate;
-        let alpha_sub = 4.0 * internal_rate;
-        for i in 0..N {
-            for j in 0..N {
-                st.a[i][j] = st.g_work[i][j] + alpha * st.c_work[i][j];
-                st.a_neg[i][j] = alpha * st.c_work[i][j];
-                st.a_be[i][j] = st.g_work[i][j] + alpha_be * st.c_work[i][j];
-                st.a_neg_be[i][j] = alpha_be * st.c_work[i][j];
-            }
-        }
-        for i in 0..N {
-            for j in 0..N {
-                st.a_neg_sub[i][j] = alpha_sub * st.c_work[i][j] - st.g_work[i][j];
-            }
-        }
-        for j in 0..N {
-            st.a_neg[12][j] = 0.0;
-            st.a_neg_be[12][j] = 0.0;
-            st.a_neg_sub[12][j] = 0.0;
-        }
-        if let Some(inv) = generated_invert_n(&st.a) {
-            st.s = inv;
-            (st.s_ni, st.k) = dense_products(&st.s);
-        }
-        if let Some(inv) = generated_invert_n(&st.a_be) {
-            st.s_be = inv;
-            (st.s_ni_be, st.k_be) = dense_products(&st.s_be);
-        }
-        st.chord_valid = false;
-    }
-
-    const RATES: [f64; 4] = [44_100.0, 48_000.0, 88_200.0, 192_000.0];
-
-    fn state_at(rate: f64, r_ldr: f64) -> CircuitState {
-        let mut st = CircuitState::default();
-        st.set_sample_rate(rate);
-        st.set_runtime_R_r_ldr(r_ldr);
-        st
-    }
-
-    fn system_matrices() -> Vec<[[f64; N]; N]> {
-        let mut out = Vec::new();
-        for rate in RATES {
-            for r in [1_000.0, 4_700.0, 33_000.0, 150_000.0, 1_000_000.0] {
-                let mut st = state_at(rate, r);
-                st.rebuild_matrices(rate * OVERSAMPLING_FACTOR as f64);
-                out.push(st.a);
-            }
-        }
-        let mut rng = Lcg(0x5eed);
-        let base = out[0];
-        for _ in 0..64 {
-            let mut sparse = base;
-            for x in sparse.iter_mut().flatten() {
-                if *x != 0.0 {
-                    *x *= rng.range(0.25, 4.0);
-                } else if rng.unit() < 0.5 {
-                    *x = -0.0;
-                }
-            }
-            out.push(sparse);
-            let mut dense = [[0.0; N]; N];
-            for i in 0..N {
-                for j in 0..N {
-                    dense[i][j] = rng.range(-1.0, 1.0);
-                }
-                dense[i][i] += if rng.unit() < 0.5 { -2.0 } else { 2.0 };
-            }
-            out.push(dense);
-        }
-        out
-    }
-
-    #[test]
-    fn invert_n_matches_generated_substitution() {
-        let mut cases = system_matrices();
-        cases.push([[0.0; N]; N]);
-        let mut non_finite = cases[0];
-        non_finite[3][5] = f64::INFINITY;
-        cases.push(non_finite);
-        let mut nan = cases[1];
-        nan[7][7] = f64::NAN;
-        cases.push(nan);
-        for a in &cases {
-            assert_eq!(
-                invert_n(a).map(|m| bits(&m)),
-                generated_invert_n(a).map(|m| bits(&m))
-            );
-        }
-    }
-
-    #[test]
-    fn schur_products_match_dense_products() {
-        let mut rng = Lcg(7);
-        for a in system_matrices() {
-            let Some(mut s) = invert_n(&a) else {
-                continue;
-            };
-            for pass in 0..3 {
-                if pass == 1 {
-                    for x in s.iter_mut().flatten() {
-                        let u = rng.unit();
-                        if u < 0.1 {
-                            *x = -0.0;
-                        } else if u < 0.2 {
-                            *x = 0.0;
-                        }
-                    }
-                }
-                if pass == 2 {
-                    s[(rng.unit() * N as f64) as usize][(rng.unit() * N as f64) as usize] =
-                        f64::INFINITY;
-                }
-                let (mut s_ni, mut k) = ([[0.0; M]; N], [[0.0; M]; M]);
-                schur_products(&s, &mut s_ni, &mut k);
-                let (s_ni_dense, k_dense) = dense_products(&s);
-                assert_eq!(bits(&s_ni), bits(&s_ni_dense));
-                assert_eq!(bits(&k), bits(&k_dense));
-            }
-        }
-    }
-
-    #[test]
-    fn rebuild_matches_generated_rebuild() {
-        let mut rng = Lcg(11);
-        for rate in RATES {
-            for _ in 0..12 {
-                let st = state_at(rate, 1_000.0 * 1_000.0f64.powf(rng.unit()));
-                let internal_rate = rate * OVERSAMPLING_FACTOR as f64;
-                let (mut fast, mut generated) = (st.clone(), st);
-                fast.rebuild_matrices(internal_rate);
-                generated_rebuild(&mut generated, internal_rate);
-                assert_eq!(matrix_bits(&fast), matrix_bits(&generated));
-            }
-        }
-    }
-
-    #[test]
-    fn shared_rebuild_matches_independent_rebuilds() {
-        for rate in RATES {
-            let mut main = state_at(rate, 100_000.0);
-            let mut shadow = main.clone();
-            let mut solo = main.clone();
-            let mut rng = Lcg(rate as u64);
-            for step in 0..24 {
-                let r = 1_000.0 * 1_000.0f64.powf(rng.unit());
-                for st in [&mut main, &mut shadow, &mut solo] {
-                    st.set_runtime_R_r_ldr(r);
-                }
-                assert!(main.matrices_dirty && shadow.matrices_dirty);
-                main.rebuild_pending_shared(&mut shadow);
-                assert!(!main.matrices_dirty && !shadow.matrices_dirty);
-                generated_rebuild(&mut solo, rate * OVERSAMPLING_FACTOR as f64);
-                solo.matrices_dirty = false;
-                assert_eq!(matrix_bits(&main), matrix_bits(&solo));
-                assert_eq!(matrix_bits(&shadow), matrix_bits(&solo));
-                for n in 0..32 {
-                    let x = 0.2 * ((step * 32 + n) as f64 * 0.37).sin();
-                    let expected = process_sample(x, &mut solo);
-                    assert_eq!(process_sample(x, &mut main), expected);
-                    assert_eq!(process_sample(x, &mut shadow), expected);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn shared_rebuild_leaves_unshareable_rebuilds_pending() {
-        let mut base = state_at(48_000.0, 100_000.0);
-        base.rebuild_matrices(48_000.0 * OVERSAMPLING_FACTOR as f64);
-        base.matrices_dirty = false;
-
-        let (mut main, mut shadow) = (base.clone(), base.clone());
-        main.set_runtime_R_r_ldr(10_000.0);
-        shadow.set_runtime_R_r_ldr(20_000.0);
-        main.rebuild_pending_shared(&mut shadow);
-        assert!(main.matrices_dirty && shadow.matrices_dirty);
-
-        let (mut main, mut clean) = (base.clone(), base.clone());
-        main.set_runtime_R_r_ldr(10_000.0);
-        main.rebuild_pending_shared(&mut clean);
-        assert!(main.matrices_dirty && !clean.matrices_dirty);
-
-        let (mut main, mut other_rate) = (base.clone(), state_at(96_000.0, 100_000.0));
-        main.set_runtime_R_r_ldr(10_000.0);
-        other_rate.set_runtime_R_r_ldr(10_000.0);
-        main.rebuild_pending_shared(&mut other_rate);
-        assert!(main.matrices_dirty && other_rate.matrices_dirty);
-
-        // Singular: `main` keeps its old inverse, `shadow` rebuilds on its own.
-        let mut singular = base;
-        singular.g_work = [[0.0; N]; N];
-        singular.c_work = [[0.0; N]; N];
-        singular.matrices_dirty = true;
-        let (mut main, mut shadow, mut solo) =
-            (singular.clone(), singular.clone(), singular.clone());
-        main.rebuild_pending_shared(&mut shadow);
-        assert!(!main.matrices_dirty && shadow.matrices_dirty);
-        generated_rebuild(&mut solo, 48_000.0 * OVERSAMPLING_FACTOR as f64);
-        assert_eq!(matrix_bits(&main), matrix_bits(&solo));
-        assert_eq!(matrix_bits(&shadow), matrix_bits(&singular));
-    }
-
-    fn device_params(st: &CircuitState) -> [BjtParams; 2] {
-        [
-            BjtParams {
-                is: st.device_1_is,
-                vt: st.device_1_vt,
-                nf: DEVICE_1_NF,
-                nr: DEVICE_1_NR,
-                beta_f: st.device_1_bf,
-                beta_r: st.device_1_br,
-                sign: DEVICE_1_SIGN,
-                use_gp: DEVICE_1_USE_GP,
-                vaf: DEVICE_1_VAF,
-                var: DEVICE_1_VAR,
-                ikf: DEVICE_1_IKF,
-                ikr: DEVICE_1_IKR,
-                ise: DEVICE_1_ISE,
-                ne: DEVICE_1_NE,
-                isc: DEVICE_1_ISC,
-                nc: DEVICE_1_NC,
-                rb: DEVICE_1_RB,
-                rc: DEVICE_1_RC,
-                re: DEVICE_1_RE,
-            },
-            BjtParams {
-                is: st.device_2_is,
-                vt: st.device_2_vt,
-                nf: DEVICE_2_NF,
-                nr: DEVICE_2_NR,
-                beta_f: st.device_2_bf,
-                beta_r: st.device_2_br,
-                sign: DEVICE_2_SIGN,
-                use_gp: DEVICE_2_USE_GP,
-                vaf: DEVICE_2_VAF,
-                var: DEVICE_2_VAR,
-                ikf: DEVICE_2_IKF,
-                ikr: DEVICE_2_IKR,
-                ise: DEVICE_2_ISE,
-                ne: DEVICE_2_NE,
-                isc: DEVICE_2_ISC,
-                nc: DEVICE_2_NC,
-                rb: DEVICE_2_RB,
-                rc: DEVICE_2_RC,
-                re: DEVICE_2_RE,
-            },
-        ]
-    }
-
-    fn scalar(p: &BjtParams, [vbe, vbc]: [f64; 2]) -> (f64, f64, [f64; 4]) {
-        bjt_with_parasitics(
-            vbe, vbc, p.is, p.vt, p.nf, p.nr, p.beta_f, p.beta_r, p.sign, p.use_gp, p.vaf, p.var,
-            p.ikf, p.ikr, p.ise, p.ne, p.isc, p.nc, p.rb, p.rc, p.re,
-        )
-    }
-
-    #[test]
-    fn lockstep_bjt_matches_scalar() {
-        let [d1, d2] = device_params(&CircuitState::default());
-        let mut rng = Lcg(3);
-        for (p1, p2) in d1
-            .with_branch_variants()
-            .into_iter()
-            .zip(d2.with_branch_variants())
-        {
-            let params = [p1, p2];
-            let args = params.map(|p| p.args());
-            for _ in 0..20_000 {
-                let ext = [rng.junction_voltages(), rng.junction_voltages()];
-                let batched = bjt_with_parasitics_lockstep(ext, &args);
-                for d in 0..2 {
-                    assert_eq!(
-                        result_bits(batched[d]),
-                        result_bits(scalar(&params[d], ext[d]))
-                    );
-                }
-            }
-        }
-    }
 }

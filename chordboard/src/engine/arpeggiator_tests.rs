@@ -106,6 +106,57 @@ fn tracker_plays_assigned_chords_without_live_keyboard_input_and_advances_by_loo
 }
 
 #[test]
+fn tracker_inherited_arp_plays_the_source_pattern_on_the_selected_chord() {
+    let mut engine = Engine {
+        sample_rate: 1000.0,
+        ..Engine::default()
+    };
+    let store = crate::arpeggiator::Store::new();
+    store.edit(|state| {
+        state.insert_blank_row_after(0);
+        state.insert_blank_row_after(1);
+        state.rows[0].settings = settings(ArpMode::Loop, 1);
+        state.rows[0].page.loops[0].octave = 1;
+        state.rows[0].page.loops[0].steps[0].gate = 40;
+        state.rows[2].chord = Some(harmony::SavedChord {
+            root: 67,
+            quality: 0,
+            second: None,
+            additions: 0,
+            inversion: 0,
+            spread: 0,
+            transpose: 0,
+        });
+        state.rows[2].duration = 2;
+        state.rows[2].arp_octave = -1;
+        state.rows[2].arp_inversion = 1;
+    });
+    assert!(store.apply_pending(&mut engine.arp.data));
+    engine.accept_arp_generation(&mut |_| {});
+    engine.configure(
+        Config {
+            mode: MANUAL,
+            arp_enabled: true,
+            tracker_enabled: true,
+            bass_enabled: false,
+            ..Config::default()
+        },
+        &mut |_| {},
+    );
+    engine.tracker_play(2, &mut |_| {});
+    let events = advance(&mut engine, 550);
+    let played: Vec<_> = attacks(&events)
+        .into_iter()
+        .map(|(at, _, note, _)| (at, note))
+        .collect();
+    assert_eq!(
+        played,
+        [(0, 79), (100, 74), (200, 71), (300, 79), (400, 74), (500, 71)]
+    );
+    assert!(events.contains(&(40, Out::Off(0, 79, 0.0))));
+}
+
+#[test]
 fn tracker_plays_past_eight_rows_and_wraps_with_each_rows_settings() {
     let mut engine = Engine {
         sample_rate: 1000.0,
@@ -1246,8 +1297,6 @@ fn tracker_variation_fields_are_not_modulation_destinations() {
         "arp_pattern",
         "rate",
         "gate",
-        "swing",
-        "humanize",
         "arp_octaves",
         "arp_sync",
         "arp_free_ms",
@@ -1264,8 +1313,7 @@ fn tracker_variation_fields_are_not_modulation_destinations() {
             "{id}"
         );
     }
-    assert!(routing::SOURCES.iter().any(|source| *source == "Mod 1"));
-    assert!(routing::SOURCES.iter().any(|source| *source == "Mod 2"));
+    assert_eq!(&routing::SOURCES[10..12], &["Tracker Mod 1", "Tracker Mod 2"]);
 }
 
 #[test]
@@ -1486,4 +1534,124 @@ fn global_delay_transport_seek_and_channel_change_release_sounding_tails() {
         assert!(attacks(&advance(&mut e, 100)).is_empty());
         assert_eq!(e.delay.deadline(e.now, e.beat, 500.0), None);
     }
+}
+
+fn tracker_transport_engine() -> Engine {
+    let mut engine = Engine { sample_rate: 1000.0, ..Engine::default() };
+    engine.arp.data.rows[0].chord = harmony::parse_chord_symbol("C");
+    engine.arp.data.rows[0].settings = settings(ArpMode::Loop, 0);
+    let mut second = engine.arp.data.rows[0].clone();
+    second.id = 2;
+    second.chord = harmony::parse_chord_symbol("D");
+    engine.arp.data.rows.push(second);
+    engine.configure(Config {
+        arp_enabled: true, tracker_enabled: true, bass_enabled: false,
+        ..Config::default()
+    }, &mut |_| {});
+    engine
+}
+
+#[test]
+fn tracker_transport_play_starts_selected_row_and_repeated_play_does_not_restart() {
+    let mut engine = tracker_transport_engine();
+    engine.command(Command::TrackerPlay(1), &mut |_| {});
+    let first = attacks(&advance(&mut engine, 25));
+    assert_eq!(engine.arp.row_index, 1);
+    assert_eq!(first[0].2, 2);
+    let next = engine.arp.next;
+    engine.command(Command::TrackerPlay(0), &mut |_| {});
+    assert_eq!(engine.arp.row_index, 1);
+    assert_eq!(engine.arp.next, next);
+}
+
+#[test]
+fn tracker_transport_pause_releases_notes_freezes_position_and_resumes_remaining_time() {
+    let mut engine = tracker_transport_engine();
+    engine.command(Command::TrackerPlay(1), &mut |_| {});
+    advance(&mut engine, 25);
+    let phase = engine.arp.phase;
+    let next = engine.arp.next;
+    let row = engine.arp.row_id;
+    let mut released = Vec::new();
+    engine.command(Command::TrackerPause, &mut |event| released.push(event));
+    assert!(released.iter().any(|e| matches!(e, Out::Off(_, _, _))));
+    assert!(engine.snapshot().tracker_paused);
+    assert!(!engine.snapshot().arp_running);
+    assert!(attacks(&advance(&mut engine, 1000)).is_empty());
+    assert_eq!(engine.arp.phase, phase);
+    assert_eq!(engine.arp.row_id, row);
+    engine.command(Command::TrackerPause, &mut |_| {});
+    engine.command(Command::TrackerPlay(0), &mut |_| {});
+    assert_eq!(engine.arp.next, next + 1000.0);
+    assert_eq!(engine.arp.row_id, row);
+    assert!(!engine.snapshot().tracker_paused);
+    assert!(attacks(&advance(&mut engine, 75)).is_empty());
+    let played = attacks(&advance(&mut engine, 1));
+    assert_eq!(played.len(), 1);
+    assert_eq!(played[0].0, 1100);
+    assert_eq!(played[0].2, 6);
+}
+
+#[test]
+fn tracker_transport_tempo_changes_while_paused_retime_the_remaining_interval() {
+    let mut engine = tracker_transport_engine();
+    for row in &mut engine.arp.data.rows { row.settings.sync = true; row.settings.rate = 0.25; }
+    engine.configure(engine.host_config, &mut |_| {});
+    engine.command(Command::TrackerPlay(0), &mut |_| {});
+    advance(&mut engine, 25);
+    engine.command(Command::TrackerPause, &mut |_| {});
+    advance(&mut engine, 1000);
+    engine.transport(false, 60.0, false, &mut |_| {});
+    engine.command(Command::TrackerPlay(0), &mut |_| {});
+    assert_eq!(engine.arp.next, 1225.0);
+    assert!(attacks(&advance(&mut engine, 200)).is_empty());
+    assert_eq!(attacks(&advance(&mut engine, 1)).len(), 1);
+}
+
+#[test]
+fn tracker_transport_bypass_clears_pause_and_can_start_again() {
+    let mut engine = tracker_transport_engine();
+    advance(&mut engine, 25);
+    engine.command(Command::TrackerPause, &mut |_| {});
+    let mut config = engine.host_config;
+    config.arp_enabled = false;
+    engine.configure(config, &mut |_| {});
+    assert!(!engine.snapshot().tracker_paused);
+    config.arp_enabled = true;
+    engine.configure(config, &mut |_| {});
+    engine.command(Command::TrackerPlay(1), &mut |_| {});
+    assert_eq!(attacks(&advance(&mut engine, 1)).len(), 1);
+    assert_eq!(engine.arp.row_index, 1);
+}
+
+#[test]
+fn tracker_transport_play_retains_selection_until_host_enables_the_parameter() {
+    let mut engine = tracker_transport_engine();
+    let mut config = engine.host_config;
+    config.arp_enabled = false;
+    engine.configure(config, &mut |_| {});
+    engine.command(Command::TrackerPlay(1), &mut |_| {});
+    assert!(attacks(&advance(&mut engine, 100)).is_empty());
+    config.arp_enabled = true;
+    engine.configure(config, &mut |_| {});
+    assert_eq!(engine.arp.row_index, 1);
+    assert_eq!(attacks(&advance(&mut engine, 1))[0].2, 2);
+}
+
+#[test]
+fn global_swing_and_humanize_override_rows_and_performance() {
+    let mut e = Engine::default();
+    e.arp.data.rows[0].settings.swing = -0.7;
+    e.arp.data.rows[0].settings.humanize = 0.9;
+    e.arp.data.performance.settings.swing = -0.2;
+    e.arp.data.performance.settings.humanize = 0.8;
+    let config = Config { tracker_enabled: true, arp_enabled: true, swing: 0.3, humanize: 0.4, ..Config::default() };
+    e.configure(config, &mut |_| {});
+    assert_eq!((e.config.swing, e.config.humanize), (0.3, 0.4));
+    assert_eq!((e.arp_live_settings().swing, e.arp_live_settings().humanize), (0.3, 0.4));
+    e.configure_performance_arp();
+    assert_eq!((e.config.swing, e.config.humanize), (0.3, 0.4));
+    e.configure(Config { swing: -0.5, humanize: 0.0, ..config }, &mut |_| {});
+    e.configure_performance_arp();
+    assert_eq!((e.config.swing, e.config.humanize), (-0.5, 0.0));
 }

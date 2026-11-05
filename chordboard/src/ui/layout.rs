@@ -8,17 +8,12 @@ const WIDTH_REDUCTION: f32 = 128.0;
 const OLD_MOD_COLUMN: f32 = 122.0;
 pub(super) const MAIN_W: f32 = 2081.0 - WIDTH_REDUCTION - OLD_MOD_COLUMN;
 pub(super) const W: f32 = MAIN_W + 190.0;
-// Main modules retain their local coordinates. Rendering and input share this
-// origin, leaving a permanent composition column to their left.
-pub(super) const CONTENT_X: f32 = 318.0;
-pub(super) const EDITOR_W: f32 = W + CONTENT_X;
-pub(super) const TRACKER_SURFACE: Rect = (
-    16.0 - CONTENT_X,
-    92.0,
-    CONTENT_X - 12.0,
-    PIANO_SURFACE.1 - 104.0,
-);
-pub(super) const H: f32 = PIANO_SURFACE.1 + PIANO_SURFACE.3 + 22.0;
+// Programming replaces the two performance modules above the arpeggiator.
+pub(super) const CONTENT_X: f32 = 0.0;
+pub(super) const EDITOR_W: f32 = W;
+pub(super) const MODULE_BOTTOM: f32 = PIANO_SURFACE.1 + PIANO_SURFACE.3;
+pub(super) const TRACKER_SURFACE: Rect = EXPANDED_SURFACE;
+pub(super) const H: f32 = MODULE_BOTTOM + 22.0;
 pub(super) type Rect = (f32, f32, f32, f32);
 pub(super) const HEADER_H: f32 = 76.0;
 pub(super) const MODULE_HEADER_H: f32 = 44.0;
@@ -32,7 +27,9 @@ pub(super) fn module_title_y(y: f32, size: f32) -> f32 {
     module_header_mid(y) + size * 0.35
 }
 
-pub(super) const PAD: Rect = (PERF_SURFACE.0 + 16.0, 136.0, PERF_SURFACE.2 - 32.0, 480.0);
+const PERFORMANCE_H: f32 = 484.0;
+const PAD_H: f32 = PERFORMANCE_H - MODULE_HEADER_H - 16.0;
+pub(super) const PAD: Rect = (PERF_SURFACE.0 + 16.0, 136.0, PERF_SURFACE.2 - 32.0, PAD_H);
 // Keep drawing and pointer targets on the same performance surface.
 const fn field_corner(pad: Rect) -> Rect {
     (pad.0 + pad.2 - 28.0, 100.0, 28.0, 28.0)
@@ -54,16 +51,16 @@ const fn manual_field_inset(pad: Rect) -> Rect {
         pad.3 - LEFT - 72.0,
     )
 }
-pub(super) const ARP_PAD: Rect = (32.0, 136.0, 1012.0, 480.0);
+pub(super) const ARP_PAD: Rect = (32.0, 136.0, 1012.0, PAD_H);
 pub(super) const PLAY_PAD: Rect = manual_field_inset(PAD);
-pub(super) const CHORDS_SURFACE: Rect = (16.0, 92.0, 1044.0, 540.0);
+pub(super) const CHORDS_SURFACE: Rect = (16.0, 92.0, 1044.0, PERFORMANCE_H);
 pub(super) const PERF_SURFACE: Rect = (
     CHORDS_SURFACE.0 + CHORDS_SURFACE.2 + 12.0,
     92.0,
     743.0,
-    540.0,
+    PERFORMANCE_H,
 );
-// Modulators and Tracker end above the full-width keyboard.
+// Modulators end above the full-width keyboard.
 pub(super) const MOD_SURFACE: Rect = (MAIN_W, 92.0, 174.0, ARP_SURFACE.1 + ARP_SURFACE.3 - 92.0);
 pub(super) const EXPAND: Rect = field_corner(PAD);
 pub(super) const EXPANDED_SURFACE: Rect = (16.0, 92.0, MAIN_W - 32.0, CHORDS_SURFACE.3);
@@ -89,7 +86,7 @@ pub(super) fn strum_bypass_rect(expand: f32) -> Rect {
 // Octaves label and buttons share the header slot left of the touch latch.
 pub(super) fn strum_octaves_rect(expand: f32) -> Rect {
     let latch = strum_latch_rect(expand);
-    (latch.0 - 205.0, latch.1, 197.0, 28.0)
+    (latch.0 - 325.0, latch.1, 197.0, 28.0)
 }
 pub(super) fn octave_button_rect(expand: f32, i: usize) -> Rect {
     let slot = strum_octaves_rect(expand);
@@ -143,7 +140,7 @@ pub(super) const ARP_PATTERN_NAMES: [&str; 8] = [
     "Random",
     "Custom",
 ];
-// Humanize and Swing occupy the permanent right stack beside the string editor.
+// Shared timing controls live in the Global module.
 pub(super) fn arp_controls() -> [(&'static str, Rect); 2] {
     [
         ("humanize", arpeggiator::humanize_rect()),
@@ -169,14 +166,9 @@ pub(super) const AFFECT_CHORDS: Rect =
 pub(super) fn protocol_rect(i: usize) -> Rect {
     output_protocol_rect(false, i)
 }
-pub(super) const TEMPO_SYNC: Rect = (1373.0 - WIDTH_REDUCTION - OLD_MOD_COLUMN, 24.0, 126.0, 30.0);
-pub(super) const TEMPO_CONTROL: Rect = (
-    1507.0 - WIDTH_REDUCTION - OLD_MOD_COLUMN,
-    TEMPO_SYNC.1,
-    492.0,
-    TEMPO_SYNC.3,
-);
-pub(super) const DAW_ALIGNMENT: Rect = (TEMPO_CONTROL.0 + TEMPO_CONTROL.2 + 8.0, 24.0, 150.0, 30.0);
+pub(super) const TEMPO_SYNC: Rect = (METER_DEN.0 + METER_DEN.2 + 8.0, TRACKER_SURFACE.1 + 8.0, 112.0, 28.0);
+pub(super) const TEMPO_CONTROL: Rect = (TEMPO_SYNC.0 + 120.0, TEMPO_SYNC.1, 220.0, 28.0);
+pub(super) const DAW_ALIGNMENT: Rect = (TEMPO_CONTROL.0 + TEMPO_CONTROL.2 + 8.0, TEMPO_SYNC.1, 144.0, 28.0);
 pub(super) const STRUM_LATCH: Rect = field_latch(PAD);
 pub(super) const EXPANDED_STRUM_LATCH: Rect = field_latch(EXPANDED_PAD);
 
@@ -194,21 +186,28 @@ impl Panel {
     }
 }
 
-pub(super) const CUSTOM_SURFACE: Rect = (16.0, 92.0, W - 32.0, H - 114.0);
-pub(super) const GLISS_RATE: Rect = (940.0, 486.0, 104.0, 108.0);
-pub(super) const GLISS_VALUE: Rect = (944.0, 570.0, 96.0, 22.0);
-pub(super) const GLISS_DIRECTION: Rect = (832.0, 598.0, 212.0, 28.0);
+pub(super) const CUSTOM_SURFACE: Rect = (16.0, 92.0, W - 32.0, MODULE_BOTTOM - 92.0);
+pub(super) const GLISS_RATE: Rect = (940.0, LATCH.1 + (LATCH.3 - 108.0) * 0.5, 104.0, 108.0);
+pub(super) const GLISS_VALUE: Rect = (GLISS_RATE.0 + 4.0, GLISS_RATE.1 + 84.0, 96.0, 22.0);
+pub(super) const GLISS_DIRECTION: Rect = (832.0, KEY_MENU.1, 212.0, KEY_MENU.3);
 pub(super) fn voicing_controls() -> [(&'static str, Rect); 1] {
     [("gliss_ms", GLISS_RATE)]
 }
-pub(super) fn meter_rect(i: usize) -> Rect {
+pub(super) fn meter_rect(source: usize) -> Rect {
+    use crate::engine::routing::{ARP_MOD_SOURCES, ARP_POSITION_SOURCE, SOURCE_COUNT};
     const INSET: f32 = 12.0;
     const GAP: f32 = 8.0;
-    let count = crate::engine::routing::SOURCE_COUNT as f32;
+    // Move the card without changing the saved source number used for routing.
+    let row = match source {
+        ARP_POSITION_SOURCE => ARP_MOD_SOURCES.start,
+        source if ARP_MOD_SOURCES.contains(&source) => source + 1,
+        source => source,
+    };
+    let count = SOURCE_COUNT as f32;
     let height = (MOD_SURFACE.3 - MODULE_HEADER_H - 2.0 * INSET - (count - 1.0) * GAP) / count;
     (
         MOD_SURFACE.0 + INSET,
-        MOD_SURFACE.1 + MODULE_HEADER_H + INSET + i as f32 * (height + GAP),
+        MOD_SURFACE.1 + MODULE_HEADER_H + INSET + row as f32 * (height + GAP),
         MOD_SURFACE.2 - 2.0 * INSET,
         height,
     )
@@ -216,7 +215,7 @@ pub(super) fn meter_rect(i: usize) -> Rect {
 
 pub(super) fn modulator_bypass_rect(source: usize) -> Rect {
     let r = meter_rect(source);
-    (r.0 + r.2 - 36.0, r.1 + 4.0, 32.0, 20.0)
+    (r.0 + 4.0, r.1 + 3.0, 24.0, 22.0)
 }
 
 pub(super) const KEY_PITCH: f32 = 79.5;
@@ -239,8 +238,8 @@ pub(super) fn key_rect(index: usize) -> Rect {
     )
 }
 // Minimum readable size for hints and secondary labels at the native window size.
-pub(super) const TEXT_SMALL: f32 = 11.0;
-pub(super) const TEXT_LABEL: f32 = 12.0;
+pub(super) const TEXT_SMALL: f32 = 13.0;
+pub(super) const TEXT_LABEL: f32 = 13.0;
 pub(super) fn memory_rect(i: usize) -> Rect {
     (
         32.0 + (1.25 + i as f32) * KEY_PITCH,
@@ -290,6 +289,11 @@ pub(super) fn play_pad_rect(expand: f32) -> Rect {
 
 pub(super) fn expand_rect(expand: f32) -> Rect {
     lerp_rect(EXPAND, EXPANDED_EXPAND, expand)
+}
+
+pub(super) fn strum_chord_latch_rect(expand: f32) -> Rect {
+    let r = strum_latch_rect(expand);
+    (r.0 - 120.0, r.1, 112.0, r.3)
 }
 
 pub(super) fn strum_latch_rect(expand: f32) -> Rect {
@@ -355,12 +359,13 @@ pub(super) fn route_control_rect(id: &str) -> Rect {
 #[cfg(test)]
 pub(super) const ARP_SETTINGS_H: f32 = 44.0;
 pub(super) const ARP_LANE_TOP: f32 = 82.0;
-const ARP_LANE_BODY: f32 = 364.0;
+const ARP_LANE_BODY: f32 = 267.0;
 pub(super) const ARP_H: f32 = ARP_LANE_TOP + ARP_LANE_BODY + 8.0;
+pub(super) const GLOBAL_SURFACE: Rect = (16.0, CHORDS_SURFACE.1 + CHORDS_SURFACE.3 + 12.0, 268.0, ARP_H);
 pub(super) const ARP_SURFACE: Rect = (
-    16.0,
+    GLOBAL_SURFACE.0 + GLOBAL_SURFACE.2 + 12.0,
     CHORDS_SURFACE.1 + CHORDS_SURFACE.3 + 12.0,
-    MAIN_W - 32.0,
+    MAIN_W - 32.0 - GLOBAL_SURFACE.2 - 12.0,
     ARP_H,
 );
 pub(super) const PIANO_SURFACE: Rect = (
@@ -369,28 +374,30 @@ pub(super) const PIANO_SURFACE: Rect = (
     EDITOR_W - 32.0,
     206.0,
 );
-const KEYBOARD_MODULE_W: f32 = (W - 64.0 - 24.0) / 3.0;
+// Preserve the global harmony controls to the left of the piano and MIDI strips.
+pub(super) const KEYBOARD_X: f32 = 350.0;
+const KEYBOARD_MODULE_W: f32 = (W - KEYBOARD_X - 32.0 - 24.0) / 3.0;
 const KEYBOARD_MODULE_Y: f32 = PIANO_SURFACE.1 + PIANO_SURFACE.3 - 54.0;
 const KEYBOARD_CONTROL_Y: f32 = KEYBOARD_MODULE_Y + 8.0;
-pub(super) const BASS_CONTAINER: Rect = (32.0, KEYBOARD_MODULE_Y, KEYBOARD_MODULE_W, 44.0);
+pub(super) const BASS_CONTAINER: Rect = (KEYBOARD_X, KEYBOARD_MODULE_Y, KEYBOARD_MODULE_W, 44.0);
 pub(super) const CHORD_CONTAINER: Rect = (
-    44.0 + KEYBOARD_MODULE_W,
+    KEYBOARD_X + 12.0 + KEYBOARD_MODULE_W,
     KEYBOARD_MODULE_Y,
     KEYBOARD_MODULE_W,
     44.0,
 );
 pub(super) const MELODY_CONTAINER: Rect = (
-    56.0 + KEYBOARD_MODULE_W * 2.0,
+    KEYBOARD_X + 24.0 + KEYBOARD_MODULE_W * 2.0,
     KEYBOARD_MODULE_Y,
     KEYBOARD_MODULE_W,
     44.0,
 );
-pub(super) const BASS_BYPASS: Rect = (42.0, KEYBOARD_MODULE_Y + 10.0, 24.0, 24.0);
+pub(super) const BASS_BYPASS: Rect = (KEYBOARD_X + 10.0, KEYBOARD_MODULE_Y + 10.0, 24.0, 24.0);
 pub(super) const ALWAYS_BASS: Rect = (BASS_CONTAINER.0 + 116.0, KEYBOARD_CONTROL_Y, 112.0, 28.0);
 pub(super) const SPLIT_NOTE: Rect = (MELODY_CONTAINER.0 + 236.0, KEYBOARD_CONTROL_Y, 112.0, 28.0);
-pub(super) const PIANO_KEYS: Rect = (32.0, KEYBOARD_MODULE_Y - 78.0, W - 64.0, 60.0);
-pub(super) const PIANO_SPLITS: Rect = (32.0, PIANO_KEYS.1 - 28.0, W - 64.0, 24.0);
-pub(super) const PIANO_LEADING: Rect = (32.0, PIANO_SPLITS.1 - 34.0, W - 64.0, 28.0);
+pub(super) const PIANO_KEYS: Rect = (KEYBOARD_X, KEYBOARD_MODULE_Y - 78.0, W - KEYBOARD_X - 32.0, 60.0);
+pub(super) const PIANO_SPLITS: Rect = (PIANO_KEYS.0, PIANO_KEYS.1 - 28.0, PIANO_KEYS.2, 24.0);
+pub(super) const PIANO_LEADING: Rect = (PIANO_KEYS.0, PIANO_SPLITS.1 - 34.0, PIANO_KEYS.2, 28.0);
 
 pub(super) fn piano_black(note: u8) -> bool {
     matches!(note % 12, 1 | 3 | 6 | 8 | 10)
@@ -491,15 +498,15 @@ pub(super) fn keyboard_menu_range(id: &str) -> Option<(i32, i32)> {
 // Chord names share the header and keep enough room for extensions and slash bass.
 pub(super) fn chord_readout_rect() -> Rect {
     (
-        16.0,
+        250.0,
         18.0,
-        super::midi_fx::PERFORMANCE_TAB.0 - 16.0 - 16.0,
+        super::midi_fx::PROGRAMMING_TAB.0 - 250.0 - 16.0,
         40.0,
     )
 }
 
-pub(super) const METER_NUM: Rect = (1007.0, 24.0, 44.0, 30.0);
-pub(super) const METER_DEN: Rect = (1067.0, 24.0, 44.0, 30.0);
+pub(super) const METER_NUM: Rect = (TRACKER_SURFACE.0 + TRACKER_SURFACE.2 - 652.0, TRACKER_SURFACE.1 + 8.0, 44.0, 28.0);
+pub(super) const METER_DEN: Rect = (METER_NUM.0 + 60.0, METER_NUM.1, 44.0, 28.0);
 
 /// X labels sit beside their tags; Y labels sit above/below. Flip sides when
 /// another label or tag occupies that space, including nearly meeting Y bounds.

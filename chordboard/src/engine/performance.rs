@@ -1,5 +1,8 @@
 use super::*;
 impl Engine {
+    pub(super) fn strum_chord_retained(&self) -> bool {
+        self.manual_active() && self.config.strum_chord_latch
+    }
     pub(super) fn manual_active(&self) -> bool {
         self.config.strum_enabled && self.config.mode == MANUAL
     }
@@ -59,7 +62,7 @@ impl Engine {
     }
     pub(super) fn end_voice(&mut self, i: usize, release: f32, out: &mut impl FnMut(Out)) {
         if let Some(v) = self.voices[i].take() {
-            if !self.output_owned(v.channel, v.note) {
+            if !self.fx.active() && !self.output_owned(v.channel, v.note) {
                 out(Out::Off(v.channel, v.note, release));
             }
             if v.owner == delay_output::DELAY_OWNER {
@@ -68,7 +71,7 @@ impl Engine {
                     out(Out::Bend(v.channel, 0.5));
                 }
             } else {
-                self.release_delay_source(v.token);
+                self.release_fx_source(v.token, out);
             }
         }
     }
@@ -76,7 +79,7 @@ impl Engine {
         for i in 0..self.voices.len() {
             if self.resetting
                 || self.voices[i].is_some_and(|v| {
-                    v.owner != delay_output::DELAY_OWNER && v.owner != arpeggiator::ARP_OWNER
+                    v.owner != delay_output::DELAY_OWNER && v.owner != arpeggiator::ARP_OWNER && v.owner != arpeggiator::PERFORMANCE_ARP_OWNER
                 })
             {
                 self.end_voice(i, release, out);
@@ -116,6 +119,12 @@ impl Engine {
         e
     }
     fn emit_expression(&self, channel: u8, out: &mut impl FnMut(Out)) {
+        if self.fx.active() {
+            for voice in self.voices.iter().flatten().filter(|v| v.channel == channel) {
+                self.emit_fx_controllers(voice.token, out);
+            }
+            return;
+        }
         let e = self.attack_expression();
         let pressure = if self.y_active && self.config.y_target == 2 {
             self.y
@@ -206,16 +215,20 @@ impl Engine {
             voice.off = off;
             let channel = voice.channel;
             self.emit_expression(channel, out);
-            out(Out::Off(channel, note, 0.0));
-            out(Out::On(channel, note, scaled_velocity));
+            if !self.fx.active() {
+                out(Out::Off(channel, note, 0.0));
+                out(Out::On(channel, note, scaled_velocity));
+            }
             let token = self.new_note_token();
-            self.capture_delay_source(
+            self.capture_fx_source(
                 crate::midi_fx::source::STRUM,
                 token,
+                channel,
                 note,
                 scaled_velocity,
                 self.attack_expression(),
                 (off != u64::MAX).then_some(off),
+                true,
             );
             self.mark_strike(note);
             return;
@@ -257,7 +270,9 @@ impl Engine {
             return;
         }
         self.setup(out);
-        let capacity = if self.config.mpe {
+        let capacity = if self.fx.active() {
+            self.voices.len()
+        } else if self.config.mpe {
             self.config.members.clamp(1, 15) as usize
         } else if self.config.arp_enabled {
             self.voices.len()
@@ -265,7 +280,7 @@ impl Engine {
             15
         };
         let available = |i: &usize| {
-            !self.config.mpe
+            self.fx.active() || !self.config.mpe
                 || (!self.melody_channel(self.member(*i))
                     && !(self.config.control_base > 0
                         && self.member(*i) == self.config.bass_channel))
@@ -291,7 +306,7 @@ impl Engine {
         let channel = if !self.config.mpe && owner == 3 {
             self.config.bass_channel
         } else {
-            self.member(index)
+            self.member(index % self.config.members.clamp(1, 15) as usize)
         };
         self.reclaim_delay_channel(channel, out);
         if !self.melody_channel(channel) {
@@ -305,10 +320,10 @@ impl Engine {
             && self.voices.iter().flatten().any(|voice| {
                 voice.channel == channel && voice.note == note && voice.owner == SELECT_ROOT_OWNER
             });
-        if restrike {
+        if restrike && !self.fx.active() {
             out(Out::Off(channel, note, 0.0));
         }
-        if !owned || restrike {
+        if !self.fx.active() && (!owned || restrike) {
             out(Out::On(channel, note, velocity.clamp(0.01, 1.0)));
         }
         let token = self.new_note_token();
@@ -322,7 +337,7 @@ impl Engine {
             attack_expression,
             token,
         });
-        let source = if owner == arpeggiator::ARP_OWNER {
+        let source = if owner == arpeggiator::ARP_OWNER || owner == arpeggiator::PERFORMANCE_ARP_OWNER {
             crate::midi_fx::source::ARP
         } else if layer {
             let bass = self.config.always_bass && self.selected_root() == Some(note);
@@ -341,13 +356,15 @@ impl Engine {
         } else {
             crate::midi_fx::source::STRUM
         };
-        self.capture_delay_source(
+        self.capture_fx_source(
             source,
             token,
+            channel,
             note,
             velocity,
             attack_expression.unwrap_or_else(|| self.attack_expression()),
             (!layer && off != u64::MAX).then_some(off),
+            restrike,
         );
     }
     fn mark_strike(&mut self, note: u8) {
@@ -495,6 +512,7 @@ impl Engine {
             120.0
         };
         self.retime_arp(previous_tempo, self.tempo);
+        self.with_performance_arp(|e| e.retime_arp(previous_tempo, e.tempo));
         if discontinuity || (self.playing && !playing) {
             let selected = (self.memory, self.notes, self.full_notes, self.expression);
             let retain = discontinuity
@@ -512,6 +530,10 @@ impl Engine {
     }
     // Only a newly played/recalled chord establishes a new rhythmic origin.
     pub(super) fn restart_arp(&mut self) {
+        if self.config.tracker_enabled && !self.in_performance_arp {
+            self.with_performance_arp(|e| e.restart_arp());
+            return;
+        }
         if !self.promoting
             && !self.arp_live_settings().lock_length
             && matches!(
@@ -527,10 +549,13 @@ impl Engine {
     /// Output offsets are relative to this span. Inputs at an offset must be
     /// applied before advancing the sample at that offset.
     pub fn advance(&mut self, samples: usize, out: &mut impl FnMut(usize, Out)) {
+        self.refresh_fx_lifetimes();
+        self.refresh_fx_expression();
         self.refresh_arp_events();
         let mut offset = 0;
         while offset < samples {
             self.refresh_arp_events();
+            let performance_deadline = self.performance_arp_deadline();
             let deadline = self
                 .voices
                 .iter()
@@ -541,11 +566,13 @@ impl Engine {
                 .chain(self.layer_pending.iter().flatten().map(|event| event.0))
                 // The arp clock and RNG also advance in the other modes.
                 .chain(self.arp_deadline())
+                .chain(performance_deadline)
                 .chain(self.delay.deadline(
                     self.now,
                     self.beat,
                     self.sample_rate as f64 * 60.0 / self.tempo,
                 ))
+                .chain(self.fx.deadline(self.fx_context()))
                 .chain(self.smoothing_active().then_some(self.now))
                 .min()
                 .unwrap_or(u64::MAX);
@@ -573,6 +600,7 @@ impl Engine {
         }
         self.tick_glissando(out);
         self.tick_automatic_arp(out);
+        self.tick_performance_arp(out);
         self.tick_delay(out);
         for i in 0..self.scheduled.len() {
             if self.scheduled[i].is_some_and(|e| e.at <= self.now) {
@@ -581,6 +609,7 @@ impl Engine {
                 }
             }
         }
+        self.flush_fx(out);
         self.now = self.now.wrapping_add(1);
         self.beat += 1.0 / (self.sample_rate as f64 * 60.0 / self.tempo);
     }

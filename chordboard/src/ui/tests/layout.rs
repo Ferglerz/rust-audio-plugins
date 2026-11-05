@@ -4,6 +4,7 @@ use nih_plug_vizia::vizia::backend::BackendContext;
 
 #[test]
 fn voice_leading_display_cycles_mode_and_modulation_is_one_column() {
+    use crate::engine::routing::{ARP_MOD_SOURCES, ARP_POSITION_SOURCE, PERF_MOD_SOURCES};
     let mut view = view(1, false);
     assert!(PIANO_LEADING.1 + PIANO_LEADING.3 + 2.0 < PIANO_SPLITS.1);
     assert!(PIANO_SPLITS.1 + PIANO_SPLITS.3 < PIANO_KEYS.1);
@@ -19,13 +20,17 @@ fn voice_leading_display_cycles_mode_and_modulation_is_one_column() {
                 .preview_normalized((view.params.voice_leading.value() + 1) % 3)
         ))
     );
-    for i in 0..crate::engine::routing::SOURCE_COUNT {
-        let r = meter_rect(i);
+    let cards = (0..ARP_MOD_SOURCES.start)
+        .chain([ARP_POSITION_SOURCE])
+        .chain(ARP_MOD_SOURCES)
+        .chain(PERF_MOD_SOURCES);
+    let mut previous_bottom = MOD_SURFACE.1;
+    for source in cards {
+        let r = meter_rect(source);
         assert_eq!(r.0, meter_rect(0).0);
         assert!(r.1 + r.3 < MOD_SURFACE.1 + MOD_SURFACE.3);
-        if i > 0 {
-            assert!(r.1 > meter_rect(i - 1).1 + meter_rect(i - 1).3);
-        }
+        assert!(r.1 > previous_bottom);
+        previous_bottom = r.1 + r.3;
     }
 }
 #[test]
@@ -84,22 +89,22 @@ fn self_modulation_is_rejected_by_drag_and_both_route_menus() {
     assert!(changes.borrow().is_empty());
 }
 #[test]
-fn tempo_targets_fit_the_header() {
-    assert!(TEMPO_CONTROL.2 >= 3.0 * 150.0);
-    let controls = [super::super::midi_fx::PERFORMANCE_TAB, super::super::midi_fx::FX_TAB,
-        METER_NUM, METER_DEN, TEMPO_SYNC, TEMPO_CONTROL, DAW_ALIGNMENT, APPEARANCE];
+fn tempo_targets_fit_the_tracker_header() {
+    let controls = [METER_NUM, METER_DEN, TEMPO_SYNC, TEMPO_CONTROL, DAW_ALIGNMENT];
     for pair in controls.windows(2) {
         assert!(pair[0].0 + pair[0].2 + 8.0 <= pair[1].0);
         assert_eq!(pair[0].1 + pair[0].3 * 0.5, pair[1].1 + pair[1].3 * 0.5);
     }
-    for r in [TEMPO_SYNC, TEMPO_CONTROL] {
-        assert!(r.0 >= 0.0 && r.0 + r.2 < APPEARANCE.0);
-        assert!(r.1 >= 0.0 && r.1 + r.3 < HEADER_H);
+    for r in controls {
+        assert!(r.0 >= tracker::transport_rect().0 + tracker::transport_rect().2);
+        assert!(r.0 + r.2 <= TRACKER_SURFACE.0 + TRACKER_SURFACE.2);
+        assert!(r.1 >= TRACKER_SURFACE.1 && r.1 + r.3 <= TRACKER_SURFACE.1 + MODULE_HEADER_H);
     }
-    assert!(TEMPO_SYNC.0 + TEMPO_SYNC.2 <= TEMPO_CONTROL.0);
-    assert_eq!(TEMPO_CONTROL.1, TEMPO_SYNC.1);
-    assert_eq!(TEMPO_CONTROL.3, TEMPO_SYNC.3);
+    let tabs = [midi_fx::PROGRAMMING_TAB, midi_fx::PERFORMANCE_TAB, midi_fx::FX_TAB];
+    for r in tabs { assert_eq!((r.1, r.3), (0.0, HEADER_H)); }
+    assert_eq!((tabs[0].0 + tabs[2].0 + tabs[2].2) * 0.5, W * 0.5);
 }
+
 #[test]
 fn chord_readout_tracks_slash_bass_inversions_transpose_and_sustain() {
     let mut view = view(0, false);
@@ -406,7 +411,7 @@ fn module_header_controls_fit_inline_without_overlap() {
         }
     }
     assert!(key_rect(0).1 >= CHORDS_SURFACE.1 + MODULE_HEADER_H);
-    assert!(TEMPO_SYNC.1 + TEMPO_SYNC.3 < HEADER_H);
+    assert!(TEMPO_SYNC.1 + TEMPO_SYNC.3 <= TRACKER_SURFACE.1 + MODULE_HEADER_H);
     assert!(TEMPO_CONTROL.0 >= TEMPO_SYNC.0 + TEMPO_SYNC.2 + 8.0);
     assert!(TEMPO_CONTROL.0 + TEMPO_CONTROL.2 < APPEARANCE.0);
 }
@@ -510,26 +515,17 @@ fn modulator_cards_fill_the_module_and_appearance_aligns_with_its_edge() {
 }
 
 #[test]
-fn arp_editor_bypass_is_local_and_old_header_location_is_inactive() {
-    for enabled in [false, true] {
-        let mut view = view(3, false);
-        Arc::get_mut(&mut view.params).unwrap().arp_enabled =
-            BoolParam::new("Arpeggiator", enabled);
-        let (mut cx, target, changes) = context();
-        // Removing the navigation tabs leaves the old header power location inactive.
-        click(&mut view, &mut cx, target, (772.0, 25.0, 28.0, 28.0));
-        assert!(view.arp_editor_open());
-        assert!(changes.borrow().is_empty());
-        open_arp(&mut view);
-        click(&mut view, &mut cx, target, arp_power_rect());
-        assert_eq!(
-            &*changes.borrow(),
-            &[(
-                view.params.arp_enabled.as_ptr(),
-                if enabled { 0.0 } else { 1.0 }
-            )]
-        );
-    }
+fn arp_editor_bypass_is_local_to_each_program() {
+    let mut view = view(3, false);
+    let (mut cx, target, changes) = context();
+    click(&mut view, &mut cx, target, arp_power_rect());
+    assert!(view.params.arpeggiator.snapshot().performance.enabled);
+    assert!(view.params.arpeggiator.snapshot().rows[0].enabled);
+    click(&mut view, &mut cx, target, midi_fx::PROGRAMMING_TAB);
+    click(&mut view, &mut cx, target, arp_power_rect());
+    assert!(!view.params.arpeggiator.snapshot().rows[0].enabled);
+    assert!(view.params.arpeggiator.snapshot().performance.enabled);
+    assert!(changes.borrow().is_empty());
 }
 
 #[test]

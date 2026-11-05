@@ -72,7 +72,7 @@ fn dragged_steps(drag: NoteDrag, x: f32, y: f32) -> [CustomStep; CUSTOM_STEPS] {
 impl ChordboardView {
     fn custom_note_at(&self, x: f32, y: f32) -> Option<usize> {
         let state = self.params.arpeggiator.snapshot();
-        let row = state.rows.get(self.arp_ui.edit_page)?;
+        let row = state.editor_row(self.arp_ui.edit_page, !self.programming);
         (0..CUSTOM_STEPS).rev().find(|&i| {
             hit(
                 note_rect(i, row.settings.custom[i], self.custom_bottom),
@@ -83,9 +83,7 @@ impl ChordboardView {
     }
     pub(super) fn draw_custom(&self, d: &mut Draw) {
         let state = self.params.arpeggiator.snapshot();
-        let Some(row) = state.rows.get(self.arp_ui.edit_page) else {
-            return;
-        };
+        let row = state.editor_row(self.arp_ui.edit_page, !self.programming);
         let r = CUSTOM_SURFACE;
         d.font = self.ui_font.get();
         d.text(
@@ -152,10 +150,10 @@ impl ChordboardView {
             let x = g.0 + i as f32 * cell;
             d.line(x, g.1, x, g.1 + g.3, LINE, 1.0);
             if i < 7 {
-                d.text(x + 8.0, g.1 - 8.0, &format!("{}", i + 1), 11.0, MUTED);
+                d.text(x + 8.0, g.1 - 8.0, &format!("{}", i + 1), TEXT_LABEL, MUTED);
             }
         }
-        d.text(g.0 + 7.0 * cell + 8.0, g.1 - 8.0, "Tail", 11.0, MUTED);
+        d.text(g.0 + 7.0 * cell + 8.0, g.1 - 8.0, "Tail", TEXT_LABEL, MUTED);
         let active = (self.snapshot.arp_running
             && self.snapshot.arp_row_index as usize == self.arp_ui.edit_page
             && row.settings.pattern == 7)
@@ -212,8 +210,8 @@ impl ChordboardView {
                 2.0,
             );
         }
-        d.text(r.0 + 24.0, r.1 + r.3 - 36.0, "Drag notes to reorder / change degree & octave · Drag right edges for duration · Right-click toggles rest · Scroll a note for velocity", 11.0, MUTED);
-        d.text(r.0 + 24.0, r.1 + r.3 - 16.0, "Seven chord-relative steps · Duration and velocity multiply the arp lane and global controls · Cmd/Ctrl-click restores a step", 11.0, MUTED);
+        d.text(r.0 + 24.0, r.1 + r.3 - 36.0, "Drag notes to reorder / change degree & octave · Drag right edges for duration · Right-click toggles rest · Scroll a note for velocity", TEXT_LABEL, MUTED);
+        d.text(r.0 + 24.0, r.1 + r.3 - 16.0, "Seven chord-relative steps · Duration and velocity multiply the arp lane and global controls · Cmd/Ctrl-click restores a step", TEXT_LABEL, MUTED);
     }
     pub(super) fn custom_event(
         &mut self,
@@ -227,9 +225,8 @@ impl ChordboardView {
                 WindowEvent::MouseMove(_, _) => {
                     let steps = dragged_steps(drag, x, y);
                     self.params.arpeggiator.edit(|s| {
-                        if let Some(row) = s.rows.get_mut(drag.row) {
-                            row.settings.custom = steps;
-                        }
+                        let row = s.editor_row_mut(drag.row, !self.programming);
+                        row.settings.custom = steps;
                     });
                     cx.needs_redraw();
                     return true;
@@ -273,13 +270,12 @@ impl ChordboardView {
                     } else {
                         let index = self.arp_ui.edit_page;
                         self.params.arpeggiator.edit(|s| {
-                            if let Some(row) = s.rows.get_mut(index) {
-                                match action {
-                                    0 => row.settings.custom.rotate_left(1),
-                                    1 => row.settings.custom.rotate_right(1),
-                                    2 => row.settings.custom.reverse(),
-                                    _ => row.settings.custom = default_custom(),
-                                }
+                            let row = s.editor_row_mut(index, !self.programming);
+                            match action {
+                                0 => row.settings.custom.rotate_left(1),
+                                1 => row.settings.custom.rotate_right(1),
+                                2 => row.settings.custom.reverse(),
+                                _ => row.settings.custom = default_custom(),
                             }
                         });
                     }
@@ -287,12 +283,15 @@ impl ChordboardView {
                     let row_index = self.arp_ui.edit_page;
                     if cx.modifiers().intersects(Modifiers::CTRL | Modifiers::LOGO) {
                         self.params.arpeggiator.edit(|s| {
-                            if let Some(row) = s.rows.get_mut(row_index) {
-                                row.settings.custom[index] = default_custom()[index];
-                            }
+                            let row = s.editor_row_mut(row_index, !self.programming);
+                            row.settings.custom[index] = default_custom()[index];
                         });
                     } else {
-                        let steps = self.params.arpeggiator.snapshot().rows[row_index]
+                        let steps = self
+                            .params
+                            .arpeggiator
+                            .snapshot()
+                            .editor_row(row_index, !self.programming)
                             .settings
                             .custom;
                         let n = note_rect(index, steps[index], self.custom_bottom);
@@ -312,9 +311,8 @@ impl ChordboardView {
                 if let Some(i) = self.custom_note_at(x, y) {
                     let index = self.arp_ui.edit_page;
                     self.params.arpeggiator.edit(|s| {
-                        if let Some(row) = s.rows.get_mut(index) {
-                            row.settings.custom[i].rest ^= true;
-                        }
+                        let row = s.editor_row_mut(index, !self.programming);
+                        row.settings.custom[i].rest ^= true;
                     });
                 }
             }
@@ -322,11 +320,10 @@ impl ChordboardView {
                 if let Some(i) = self.custom_note_at(x, y) {
                     let index = self.arp_ui.edit_page;
                     self.params.arpeggiator.edit(|s| {
-                        if let Some(row) = s.rows.get_mut(index) {
-                            let step = &mut row.settings.custom[i];
-                            step.velocity = (step.velocity as i16 + if *dy > 0.0 { 5 } else { -5 })
-                                .clamp(0, 200) as u8;
-                        }
+                        let row = s.editor_row_mut(index, !self.programming);
+                        let step = &mut row.settings.custom[i];
+                        step.velocity = (step.velocity as i16 + if *dy > 0.0 { 5 } else { -5 })
+                            .clamp(0, 200) as u8;
                     });
                 }
             }
@@ -380,12 +377,13 @@ mod interaction_tests {
     use super::*;
 
     #[test]
-    fn custom_overlay_covers_modules_but_leaves_tracker_and_keeps_edits_on_row() {
+    fn custom_overlay_covers_modules_and_tracker_and_keeps_edits_on_row() {
         let mut view = ChordboardView::new(
             Arc::new(ChordboardParams::default()),
             Arc::new(Bridge::default()),
             Arc::new(PreviewContext),
         );
+        view.programming = true;
         view.params.arpeggiator.edit(|s| {
             s.add_row_after(0);
         });
@@ -396,7 +394,7 @@ mod interaction_tests {
         let mut cx = Context::default();
         let target = Element::new(&mut cx).entity();
         let mut cx = EventContext::new_with_current(&mut cx, target);
-        assert!(!view.custom_event(
+        assert!(view.custom_event(
             &mut cx,
             &WindowEvent::MouseDown(MouseButton::Left),
             TRACKER_SURFACE.0 + 10.0,

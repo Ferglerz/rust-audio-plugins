@@ -7,6 +7,7 @@ pub mod filters;
 pub mod hammer;
 pub mod mlp_correction;
 pub mod pickup;
+pub mod pickup_tables;
 pub mod reed;
 pub mod tables;
 pub mod variation;
@@ -21,7 +22,6 @@ pub mod preamp;
 pub mod tremolo;
 
 // Output stage
-mod bjt_lockstep;
 pub mod gen_power_amp;
 #[cfg(not(feature = "legacy-tremolo"))]
 pub mod gen_tremolo;
@@ -42,12 +42,7 @@ pub mod alias_audit;
 //     use openwurli_dsp::{WurliEngine, VoiceState};
 //
 // Without these, callers would need `openwurli_dsp::engine::WurliEngine`.
-#[cfg(feature = "runtime-models")]
-pub use engine::CircuitMode;
 pub use engine::{VoiceState, WurliEngine};
 
-// Temporary CPU/audio comparison candidate; excluded from defaults.
-#[cfg(feature = "experimental-circuit-lut")]
-mod circuit_lut;
-
-mod circuit_math;
+#[cfg(feature = "runtime-models")]
+pub use engine::CircuitMode;

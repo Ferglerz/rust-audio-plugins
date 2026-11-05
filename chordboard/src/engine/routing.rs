@@ -7,7 +7,11 @@ pub const LOOP_OCTAVE_IDS: [&str; 4] = [
     "arp_loop_4_octave",
 ];
 pub const ROUTE_COUNT: usize = 16;
-pub const SOURCE_COUNT: usize = 12;
+pub const SOURCE_COUNT: usize = 14;
+pub const ARP_MOD_SOURCES: std::ops::Range<usize> = 9..11;
+pub const ARP_POSITION_SOURCE: usize = 11;
+pub const PERF_MOD_SOURCES: std::ops::Range<usize> = 12..14;
+// Saved route source numbers are one-based. Append new sources at the end.
 pub const SOURCES: [&str; SOURCE_COUNT + 1] = [
     "Off",
     "Pitch wheel",
@@ -17,11 +21,13 @@ pub const SOURCES: [&str; SOURCE_COUNT + 1] = [
     "Pressure",
     "Timbre",
     "Input Vel",
-    "X controller",
-    "Y controller",
-    "Mod 1",
-    "Mod 2",
+    "Strum X",
+    "Strum Y",
+    "Tracker Mod 1",
+    "Tracker Mod 2",
     "Arp Position",
+    "Perf Mod 1",
+    "Perf Mod 2",
 ];
 pub const SOURCE_SHORT: [&str; SOURCE_COUNT] = [
     "Pitch",
@@ -36,9 +42,15 @@ pub const SOURCE_SHORT: [&str; SOURCE_COUNT] = [
     "Mod 1",
     "Mod 2",
     "Arp Pos",
+    "Perf Mod 1",
+    "Perf Mod 2",
 ];
 pub const SOURCE_DEFAULTS: [f32; SOURCE_COUNT] =
-    [0.5, 0.0, 0.0, 0.0, 0.0, 0.5, 0.8, 0.0, 0.8, 0.0, 0.0, 0.0];
+    [0.5, 0.0, 0.0, 0.0, 0.0, 0.5, 0.8, 0.0, 0.8, 0.0, 0.0, 0.0, 0.0, 0.0];
+
+pub fn bipolar_source(index: usize) -> bool {
+    ARP_MOD_SOURCES.contains(&index) || PERF_MOD_SOURCES.contains(&index)
+}
 
 #[derive(Clone, Copy, Default)]
 pub(super) struct RouteSmoother {
@@ -73,7 +85,9 @@ impl Default for Route {
 }
 impl Route {
     pub fn additive(self) -> bool {
-        matches!(self.source, 10 | 11)
+        self.source
+            .checked_sub(1)
+            .is_some_and(|index| bipolar_source(index as usize))
     }
     /// Bipolar routes preserve zero and use the contour's span as their depth.
     pub fn output(self, input: f32) -> f32 {
@@ -441,28 +455,28 @@ pub const TARGETS: &[Target] = &[
         discrete: false,
     },
     Target {
-        name: "X controller",
+        name: "Strum X",
         id: "source_7",
         min: 0.0,
         max: 1.0,
         discrete: false,
     },
     Target {
-        name: "Y controller",
+        name: "Strum Y",
         id: "source_8",
         min: 0.0,
         max: 1.0,
         discrete: false,
     },
     Target {
-        name: "Mod 1",
+        name: "Tracker Mod 1",
         id: "source_9",
         min: -1.0,
         max: 1.0,
         discrete: false,
     },
     Target {
-        name: "Mod 2",
+        name: "Tracker Mod 2",
         id: "source_10",
         min: -1.0,
         max: 1.0,
@@ -557,6 +571,20 @@ pub const TARGETS: &[Target] = &[
         id: "velocity_scale",
         min: 0.0,
         max: 2.0,
+        discrete: false,
+    },
+    Target {
+        name: "Perf Mod 1",
+        id: "source_12",
+        min: -1.0,
+        max: 1.0,
+        discrete: false,
+    },
+    Target {
+        name: "Perf Mod 2",
+        id: "source_13",
+        min: -1.0,
+        max: 1.0,
         discrete: false,
     },
 ];
@@ -658,8 +686,6 @@ impl Target {
                 | "arp_pattern"
                 | "rate"
                 | "gate"
-                | "swing"
-                | "humanize"
                 | "arp_page"
                 | "arp_octaves"
                 | "arp_sync"
@@ -945,7 +971,7 @@ impl Engine {
                     value += engine.route_output(slot, input);
                 }
             }
-            values[index] = value.clamp(if matches!(index, 9 | 10) { -1.0 } else { 0.0 }, 1.0);
+            values[index] = value.clamp(if bipolar_source(index) { -1.0 } else { 0.0 }, 1.0);
             marks[index] = 2;
             values[index]
         }
@@ -994,7 +1020,7 @@ impl Engine {
         if !value.is_finite() || index >= SOURCE_COUNT {
             return;
         }
-        let value = value.clamp(if matches!(index, 9 | 10) { -1.0 } else { 0.0 }, 1.0);
+        let value = value.clamp(if bipolar_source(index) { -1.0 } else { 0.0 }, 1.0);
         if self.sources[index] == value {
             return;
         }
@@ -1074,6 +1100,24 @@ mod tests {
     }
 
     #[test]
+    fn swing_and_humanize_are_routable_on_both_arpeggiators() {
+        let mut e = Engine::default();
+        let mut config = Config {
+            tracker_enabled: true,
+            arp_enabled: true,
+            ..Config::default()
+        };
+        config.routes[0] = route(2, "swing");
+        config.routes[1] = route(2, "humanize");
+        e.configure(config, &mut |_| {});
+        e.source(1, 1.0, &mut |_| {});
+        assert_eq!((e.config.swing, e.config.humanize), (0.75, 1.0));
+        e.with_performance_arp(|e| {
+            assert_eq!((e.config.swing, e.config.humanize), (0.75, 1.0));
+        });
+    }
+
+    #[test]
     fn bipolar_offsets_preserve_bases_sum_before_clamping_and_never_accumulate() {
         let mut e = Engine::default();
         let mut c = Config {
@@ -1139,7 +1183,7 @@ mod tests {
             };
             e.configure(c, &mut |_| {});
             let initial = e.config.velocity;
-            let value = if matches!(source, 10 | 11) {
+            let value = if bipolar_source(source - 1) {
                 -0.2
             } else {
                 0.75
@@ -1161,7 +1205,7 @@ mod tests {
             e.advance(5, &mut |_, _| {});
             assert!(!e.smoothing_active());
             let destination = &TARGETS[target("velocity") as usize];
-            let norm = if matches!(source, 10 | 11) {
+            let norm = if bipolar_source(source - 1) {
                 destination.normalized(&c) + value
             } else {
                 value
@@ -1395,7 +1439,7 @@ mod tests {
         e.position(0.5, 1, &mut |_| {});
         assert_eq!(
             e.snapshot().sources,
-            [0.9, 0.2, 0.3, 0.4, 0.6, 0.7, 0.8, 0.1, 0.5, 0.0, 0.0, 0.0]
+            [0.9, 0.2, 0.3, 0.4, 0.6, 0.7, 0.8, 0.1, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0]
         );
     }
     #[test]

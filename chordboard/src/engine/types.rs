@@ -12,6 +12,7 @@ pub(super) const SELECT_ROOT_OWNER: u8 = 5;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Config {
     pub strum_enabled: bool,
+    pub strum_chord_latch: bool,
     pub root_on_select: bool,
     pub routes: [Route; ROUTE_COUNT],
     pub filter: u8,
@@ -116,6 +117,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             strum_enabled: true,
+            strum_chord_latch: false,
             root_on_select: false,
             routes: super::routing::default_routes(),
             filter: 0,
@@ -271,6 +273,8 @@ pub enum Out {
 }
 #[derive(Clone, Copy, Debug)]
 pub enum Command {
+    TrackerPlay(usize),
+    TrackerPause,
     KeyDown(u8, u8, u8),
     KeyUp(u8),
     ReleaseKeyboard,
@@ -287,6 +291,20 @@ pub enum Command {
     Capture(usize),
     Recall(u64),
     RecallMemory(usize, u64),
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ArpPlayback {
+    pub notes: [i16; crate::arpeggiator::STEPS],
+    pub len: u8,
+    pub phase: i64,
+    pub step: u8,
+    pub running: bool,
+    pub aligned: bool,
+}
+impl Default for ArpPlayback {
+    fn default() -> Self {
+        Self { notes: [0; crate::arpeggiator::STEPS], len: 0, phase: 0, step: 0, running: false, aligned: false }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Snapshot {
@@ -332,6 +350,8 @@ pub struct Snapshot {
     pub arp_step: u8,
     pub arp_phase: i64,
     pub arp_running: bool,
+    pub tracker_paused: bool,
+    pub performance_arp: ArpPlayback,
     pub arp_aligned: bool,
     pub time_sig_host: bool,
     pub time_sig_num: u8,
@@ -381,6 +401,8 @@ impl Default for Snapshot {
             arp_step: 0,
             arp_phase: 0,
             arp_running: false,
+            tracker_paused: false,
+            performance_arp: ArpPlayback::default(),
             arp_aligned: false,
             time_sig_host: false,
             time_sig_num: 4,

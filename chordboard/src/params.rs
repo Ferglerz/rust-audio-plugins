@@ -91,12 +91,18 @@ pub struct ChordboardParams {
     pub velocity_scale: FloatParam,
     #[id = "gate_scale"]
     pub gate_scale: FloatParam,
+    #[id = "swing"]
+    pub swing: FloatParam,
+    #[id = "humanize"]
+    pub humanize: FloatParam,
     #[id = "transpose"]
     pub transpose: IntParam,
     #[id = "spread"]
     pub spread: IntParam,
     #[id = "latch"]
     pub latch: BoolParam,
+    #[id = "strum_chord_latch"]
+    pub strum_chord_latch: BoolParam,
     #[id = "strum_latch"]
     pub strum_latch: BoolParam,
     #[id = "velocity"]
@@ -268,9 +274,11 @@ impl Default for ChordboardParams {
             modulators: std::array::from_fn(|_| ModulatorParams::default()),
             quick_midi: std::array::from_fn(|_| crate::midi_learn::Binding::default()),
             arpeggiator: crate::arpeggiator::Store::new(),
+            swing: ArpPageParams::default().swing,
+            humanize: ArpPageParams::default().humanize,
             arp_pages: std::array::from_fn(|_| ArpPageParams::default()),
             arp_page: IntParam::new("Arp page", 0, IntRange::Linear { min: 0, max: 7 }),
-            arp_enabled: BoolParam::new("Arpeggiator", false),
+            arp_enabled: BoolParam::new("Tracker playback", false),
             editor_state: ViziaState::new_screen_sized(
                 "Chordboard",
                 crate::ui::initial_editor_size,
@@ -375,6 +383,7 @@ impl Default for ChordboardParams {
                 crate::harmony::VOICING_NAMES[v as usize].to_string()
             })),
             latch: BoolParam::new("Latch", false),
+            strum_chord_latch: BoolParam::new("Strumfield chord latch", false),
             strum_latch: BoolParam::new("Trackpad latch", false),
             strum_hold: BoolParam::new("Hold", false),
             velocity: FloatParam::new(
@@ -401,7 +410,33 @@ impl Default for ChordboardParams {
                 12,
                 IntRange::Linear { min: 1, max: 12 },
             ),
-            gliss_ms: FloatParam::new("Glissando", 0.0, FloatRange::Linear { min: 0.0, max: 2000.0 }).with_unit(" ms"),
+            gliss_ms: FloatParam::new(
+                "Glissando",
+                0.0,
+                FloatRange::Skewed {
+                    min: 0.0,
+                    max: 4000.0,
+                    factor: FloatRange::skew_factor(-1.0),
+                },
+            )
+            .with_value_to_string(Arc::new(|ms| {
+                if ms.round() < 1000.0 {
+                    format!("{ms:.0} ms")
+                } else {
+                    format!("{:.1}s", ms / 1000.0)
+                }
+            }))
+            .with_string_to_value(Arc::new(|text| {
+                let (number, scale) = if let Some(ms) = text.strip_suffix("ms") {
+                    (ms, 1.0)
+                } else if let Some(seconds) = text.strip_suffix('s') {
+                    (seconds, 1000.0)
+                } else {
+                    (text, 1.0)
+                };
+                let ms = number.trim().parse::<f32>().ok()? * scale;
+                ms.is_finite().then_some(ms)
+            })),
             gliss_direction: IntParam::new("Glissando direction", 0, IntRange::Linear { min: 0, max: 6 }),
             strum_ms: FloatParam::new(
                 "Rate",
@@ -705,19 +740,20 @@ impl ChordboardParams {
             strings_played: self.strings_played.value() as u8,
             routed_x: None,
             legacy_direct_x: self.schema_version.load(Ordering::Relaxed) < 2,
-            gliss_ms: self.gliss_ms.value(),
-            gliss_direction: self.gliss_direction.value() as u8,
+            gliss_ms: crate::midi_learn::float_value(self, crate::midi_learn::GLISS_TIME),
+            gliss_direction: quick(crate::midi_learn::GLISS_DIRECTION) as u8,
             strum_ms: self.strum_ms.value(),
             strum_sync: self.strum_sync.value(),
             strum_beats: self.strum_beats.value(),
             strum_hold: self.strum_hold.value(),
+            strum_chord_latch: self.strum_chord_latch.value(),
             direction: self.direction.value() as u8,
             contour: self.contour.value(),
             contour_curve: self.contour_curve.value(),
             arp_pattern: self.arp_pages[arp_page].arp_pattern.value() as u8,
             rate: self.arp_pages[arp_page].rate.value(),
             gate: 0.65,
-            swing: self.arp_pages[arp_page].swing.value(),
+            swing: crate::midi_learn::float_value(self, crate::midi_learn::SWING),
             arp_mode: self.arp_pages[arp_page].settings().mode,
             arp_octaves: self.arp_pages[arp_page].arp_octaves.value() as u8,
             arp_sync: self.arp_pages[arp_page].arp_sync.value(),
@@ -725,7 +761,7 @@ impl ChordboardParams {
             host_sync: self.tempo_sync.value(),
             daw_alignment: quick(crate::midi_learn::DAW_ALIGNMENT) != 0,
             octaves: quick(crate::midi_learn::OCTAVES) as u8,
-            humanize: self.arp_pages[arp_page].humanize.value(),
+            humanize: crate::midi_learn::float_value(self, crate::midi_learn::HUMANIZE),
             mpe: self.mpe_enabled(),
             upper: self.upper.value(),
             members: self.members.value() as u8,
@@ -805,7 +841,8 @@ macro_rules! control_catalog {
                 for route in &self.routes {
                     for value in route.values() { visit(value); }
                 }
-                for value in self.arp_pages[self.arp_page.value() as usize].values() { visit(value); }
+                // The last two legacy adapter values are now global host parameters above.
+                for value in self.arp_pages[self.arp_page.value() as usize].values().into_iter().take(6) { visit(value); }
                 changed |= signature.len() != index;
                 signature.truncate(index);
                 changed
@@ -815,7 +852,7 @@ macro_rules! control_catalog {
                 let mut controls = vec![$($builder(stringify!($field), $group, &self.$field)),*];
                 for modulator in &self.modulators { controls.push(toggle("modulator_bypass", 6, &modulator.bypass)); }
                 for route in &self.routes { controls.extend(route.controls()); }
-                controls.extend(self.arp_pages[self.arp_page.value() as usize].controls());
+                controls.extend(self.arp_pages[self.arp_page.value() as usize].controls().into_iter().filter(|c| !matches!(c.id, "swing" | "humanize")));
                 controls
             }
 
@@ -844,6 +881,8 @@ control_catalog! {
     control(voicing_override, 0),
     control(gate_scale, 0),
     control(velocity_scale, 0),
+    control(swing, 0),
+    control(humanize, 0),
     control(voice_leading, 0),
     control(transpose, 0),
     control(spread, 0),
@@ -851,6 +890,7 @@ control_catalog! {
     toggle(strum_enabled, 0),
     toggle(root_on_select, 0),
     toggle(strum_latch, 1),
+    toggle(strum_chord_latch, 1),
     control(velocity, 0),
     control(length_ms, 0),
     control(strings, 1),
@@ -947,6 +987,34 @@ impl ChordboardParams {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn glissando_range_and_readout_support_milliseconds_and_seconds() {
+        let params = ChordboardParams::default();
+        let time = &params.gliss_ms;
+        assert_eq!(time.preview_plain(0.0), 0.0);
+        assert_eq!(time.preview_plain(0.5), 1000.0);
+        assert_eq!(time.preview_plain(1.0), 4000.0);
+        for (ms, label) in [(127.60255, "128 ms"), (1200.0, "1.2s"), (4000.0, "4.0s")] {
+            assert_eq!(
+                time.normalized_value_to_string(time.preview_normalized(ms), true),
+                label
+            );
+        }
+        for (text, ms) in [
+            ("128 ms", 128.0),
+            ("1.2s", 1200.0),
+            ("1.2 s", 1200.0),
+            ("128", 128.0),
+        ] {
+            assert_eq!(
+                time.string_to_normalized_value(text),
+                Some(time.preview_normalized(ms))
+            );
+        }
+        assert_eq!(time.string_to_normalized_value("NaN"), None);
+    }
+
     #[test]
     fn split_note_readout_roundtrips_and_rejects_out_of_range_notes() {
         for note in 0..=127 {
@@ -1529,12 +1597,21 @@ mod signature_tests {
         );
         for expected in &page_controls {
             assert_control_matches(page.control(expected.id).unwrap(), expected);
-            assert_control_matches(params.control(expected.id).unwrap(), expected);
+            if !matches!(expected.id, "swing" | "humanize") {
+                assert_control_matches(params.control(expected.id).unwrap(), expected);
+            }
         }
         assert_eq!(
             page.values().as_slice(),
             page_controls.iter().map(|c| c.norm).collect::<Vec<_>>(),
         );
+        assert_eq!(params.control("swing").unwrap().ptr, params.swing.as_ptr());
+        assert_eq!(params.control("humanize").unwrap().ptr, params.humanize.as_ptr());
+        let host = params.param_map();
+        for id in ["swing", "humanize"] {
+            assert_eq!(host.iter().filter(|entry| entry.0 == id).count(), 1);
+            assert_eq!(params.controls().iter().filter(|c| c.id == id).count(), 1);
+        }
         assert!(page.control("missing").is_none());
         assert!(params.control("missing").is_none());
     }

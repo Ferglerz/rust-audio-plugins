@@ -85,6 +85,8 @@ pub struct Draw<'a> {
     pub icon_font: Option<FontId>,
     pub offset_x: f32,
     pub alpha_mul: f32,
+    /// Render colors in grayscale with less contrast against the panel.
+    pub dimmed: bool,
     /// Fade disabled content into its background in either theme.
     pub disabled: bool,
     pub hover: Option<(f32, f32)>,
@@ -128,6 +130,7 @@ impl<'a> Draw<'a> {
             icon_font: None,
             offset_x: 0.0,
             alpha_mul: 1.0,
+            dimmed: false,
             disabled: false,
             hover: None,
         }
@@ -155,6 +158,13 @@ impl<'a> Draw<'a> {
 
     pub fn color(&self, c: Color) -> Color {
         let mut col = theme::transform_color(c, self.light);
+        if self.dimmed {
+            let panel = theme::transform_color(theme::PANEL, self.light);
+            let gray = luma(panel) * 0.35 + luma(col) * 0.65;
+            col.r = gray;
+            col.g = gray;
+            col.b = gray;
+        }
         if self.disabled {
             col.a *= 0.4;
         }
@@ -174,6 +184,10 @@ impl<'a> Draw<'a> {
     pub fn reset_scissor(&mut self) {
         self.c.reset_scissor();
     }
+}
+
+fn luma(color: Color) -> f32 {
+    0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b
 }
 
 #[cfg(test)]

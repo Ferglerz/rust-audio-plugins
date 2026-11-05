@@ -8,6 +8,10 @@ Do not create or submit a pull request, including a draft or an upstream PR, wit
 
 Do not use computer-use or UI automation to inspect or control REAPER for this project. Verify plugins through source inspection, focused checks, builds, and installed bundle inspection instead.
 
+## Plugin UI copy
+
+Put usage instructions and explanations in the existing bottom tooltip area. Keep controls and containers free of inline helper text. Keep functional labels, current values, and actionable status visible in the UI.
+
 ## Plugin installation
 
 After changing a plugin, run that plugin's `scripts/install.sh`. All seven wrappers call `scripts/install-plugin.sh`, which clears the plugin's release artifact, builds from the current checkout, verifies the bundled executable, installs it, and verifies the installed bundle. `cargo xtask bundle` alone does not update the DAW installation.

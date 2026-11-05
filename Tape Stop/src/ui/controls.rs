@@ -49,6 +49,7 @@ pub(super) const XY_PAD: (f32, f32, f32, f32) = (
 pub(super) const XY_AXIS: (f32, f32, f32, f32) = (XY_PAD.0, 376.0, 124.0, 28.0);
 pub(super) const XY_MODE: (f32, f32, f32, f32) = (XY_PAD.0 + 132.0, 376.0, 120.0, 28.0);
 pub(super) const TIME_SYNC: (f32, f32, f32, f32) = (490.0, 22.0, 96.0, 30.0);
+pub(super) const AFFECT_MIDI: (f32, f32, f32, f32) = (340.0, 22.0, 138.0, 30.0);
 pub(super) const TEMPO_HEADER: pleasant_ui::tempo::Header = pleasant_ui::tempo::Header {
     source: (600.0, 22.0, 136.0, 30.0),
     bpm: (746.0, 22.0, 150.0, 30.0),

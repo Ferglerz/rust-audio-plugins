@@ -122,11 +122,15 @@ impl Chordboard {
         }
         // Preserve zero-length buffers and hosts' end-boundary/trailing MIDI:
         // apply those inputs after the span, clamping only their output timing.
+        let trailing = next.is_some();
         while let Some(event) = next.take() {
             self.input(event, &mut |event| {
                 out(count.saturating_sub(1) as u32, event);
             });
             next = next_event();
+        }
+        if trailing || count == 0 {
+            self.engine.flush_fx(&mut |event| out(count.saturating_sub(1) as u32, event));
         }
     }
 
@@ -222,6 +226,7 @@ impl Chordboard {
                     self.engine.midi_note(false, channel, note, 0.0, out);
                 }
             }
+            self.engine.arp.data.apply_midi_powers(&self.params);
             self.engine.configure(self.current_config(), out);
             if let Some(selection) = self.quick_midi.selection.take() {
                 self.engine.select_root(selection, out);
@@ -486,6 +491,7 @@ impl Plugin for Chordboard {
             }
             arp_updated = true;
         }
+        self.engine.arp.data.apply_midi_powers(&self.params);
         if arp_updated {
             self.engine
                 .accept_arp_generation(&mut |e| emitted.push(0, e));

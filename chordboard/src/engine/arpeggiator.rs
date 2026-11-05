@@ -1,7 +1,9 @@
 //! Automatic arp clock, independent of the live Strumfield.
 use super::*;
 use crate::arpeggiator::{ArpMode, Prepared, Settings, Step, StepState, Store, LOOPS, STEPS};
+use routing::{ARP_MOD_SOURCES, ARP_POSITION_SOURCE, PERF_MOD_SOURCES};
 pub const ARP_OWNER: u8 = 1;
+pub const PERFORMANCE_ARP_OWNER: u8 = 6;
 pub fn pass_length(notes: usize, pattern: u8) -> usize {
     Engine::pattern_length(pattern, notes)
 }
@@ -59,6 +61,8 @@ pub struct Runtime {
     pub step: u8,
     pub display_phase: i64,
     pub running: bool,
+    pub(super) paused_at: Option<u64>,
+    pub(super) requested_row: Option<usize>,
     pub done: bool,
     pub(super) finished: bool,
     pub(super) applied_page: u8,
@@ -94,6 +98,8 @@ impl Default for Runtime {
             step: 0,
             display_phase: 0,
             running: false,
+            paused_at: None,
+            requested_row: None,
             done: false,
             finished: false,
             applied_page: 0,
@@ -234,12 +240,15 @@ pub fn program_cycle(
 
 impl Engine {
     pub(super) fn active_arp_page(&self) -> &crate::arpeggiator::Page {
+        if self.in_performance_arp {
+            return &self.arp.data.performance.page;
+        }
         if self.config.tracker_enabled {
             self.arp
                 .data
                 .rows
                 .get(self.arp.row_index)
-                .map(|row| &row.page)
+                .map(|row| if row.enabled { &row.page } else { &self.arp.data.performance.page })
                 .unwrap_or(&self.arp.data.pages[0])
         } else {
             &self.arp.data.pages[self.arp.active as usize]
@@ -268,7 +277,7 @@ impl Engine {
             return;
         }
         let factor = old_tempo / new_tempo;
-        let now = self.now as f64;
+        let now = self.arp.paused_at.unwrap_or(self.now) as f64;
         self.arp.next = now + (self.arp.next - now) * factor;
         for event in self.arp.events.iter_mut().flatten() {
             event.at = (now + (event.at as f64 - now) * factor).round().max(now) as u64;
@@ -293,6 +302,8 @@ impl Engine {
             self.arp.preserve_paste_clock = false;
             self.reset_automatic_arp(out);
             self.reset_delay(out);
+            let ctx = self.fx_context();
+            self.fx.clear(ctx, out);
             self.arp.active = self.host_config.arp_page.min(7);
             self.configure(self.host_config, out);
         }
@@ -331,22 +342,36 @@ impl Engine {
                 }
             }
         }
+        let previous_sources = self.sources;
+        self.with_performance_arp(|e| {
+            if e.arp.restore_epoch != e.arp.data.restore_epoch {
+                e.arp.restore_epoch = e.arp.data.restore_epoch;
+                e.reset_automatic_arp(out);
+            }
+            if !e.arp_gated() { e.reset_automatic_arp(out); }
+        });
+        self.refresh_perf_mod_routes(previous_sources, out);
+        self.sync_layers(out);
         self.update_delay_power(out);
+        self.configure_fx(out);
     }
     pub(super) fn arp_live_settings(&self) -> Settings {
-        let settings = self.arp_requested_settings();
+        let mut settings = self.arp_requested_settings();
+        settings.swing = self.config.swing;
+        settings.humanize = self.config.humanize;
         self.arp
             .timing
             .map_or(settings, |timing| timing.apply(settings))
     }
     fn arp_requested_settings(&self) -> Settings {
+        if self.in_performance_arp { return self.arp.data.performance.settings; }
         if self.config.tracker_enabled {
             return self
                 .arp
                 .data
                 .rows
                 .get(self.arp.row_index)
-                .map_or(Settings::default(), |row| row.settings);
+                .map_or(Settings::default(), |row| if row.enabled { row.settings } else { self.arp.data.performance.settings });
         }
         let requested = self.arp.paste_settings[self.arp.active.min(7) as usize]
             .unwrap_or(self.host_config.arp_settings[self.arp.active.min(7) as usize]);
@@ -382,14 +407,60 @@ impl Engine {
         } else {
             self.config.arp_enabled
                 && self.notes.len > 0
-                && (self.playing
+                && ((!self.in_performance_arp && self.playing)
+                    || self.pedal
                     || (self.config.latch && self.memory.is_some())
                     || self.root.is_some_and(|s| s.held)
                     || self.held_inputs.iter().any(Option::is_some)
                     || self.melody.iter().any(|n| n.iter().any(|&v| v)))
         }
     }
+    pub(super) fn tracker_play(&mut self, selected: usize, out: &mut impl FnMut(Out)) {
+        if !self.config.tracker_enabled || self.arp.data.rows.is_empty() {
+            return;
+        }
+        // The host can apply the Play button's power parameter after its UI command.
+        if !self.config.arp_enabled {
+            self.arp.requested_row = Some(selected);
+            return;
+        }
+        self.arp.requested_row = None;
+        if let Some(paused_at) = self.arp.paused_at.take() {
+            let elapsed = self.now.saturating_sub(paused_at);
+            self.arp.next += elapsed as f64;
+            for event in self.arp.events.iter_mut().flatten() {
+                event.at = event.at.saturating_add(elapsed);
+                event.boundary += elapsed as f64;
+            }
+            return;
+        }
+        if self.arp.running && !self.arp.finished {
+            return;
+        }
+        self.reset_automatic_arp(out);
+        self.arp.row_index = selected.min(self.arp.data.rows.len() - 1);
+        self.arp.row_id = self.arp.data.rows[self.arp.row_index].id;
+        self.arp.active = self.arp.row_index.min(u8::MAX as usize) as u8;
+        self.arp.loops_in_row = 0;
+        self.configure(self.host_config, out);
+    }
+
+    pub(super) fn tracker_pause(&mut self, out: &mut impl FnMut(Out)) {
+        if !self.config.tracker_enabled || !self.config.arp_enabled || self.arp.paused_at.is_some() {
+            return;
+        }
+        self.arp.paused_at = Some(self.now);
+        self.clear_arp_sources();
+        // Release only the tracker voices; live keyboard/Strumfield notes remain playable.
+        for i in 0..self.voices.len() {
+            if self.voices[i].is_some_and(|voice| voice.owner == self.automatic_arp_owner()) {
+                self.end_voice(i, 0.0, out);
+            }
+        }
+    }
+
     pub(super) fn restart_automatic_arp(&mut self) {
+        if self.arp.paused_at.is_some() { self.arp.paused_at = Some(self.now); }
         self.arp.phase = 0;
         self.arp.clock_phase = 0;
         self.arp.counted_phase = 0;
@@ -403,12 +474,24 @@ impl Engine {
     }
     pub(super) fn reset_automatic_arp(&mut self, out: &mut impl FnMut(Out)) {
         self.restart_automatic_arp();
-        self.sources[9..].fill(0.0);
+        self.clear_arp_sources();
         for i in 0..self.voices.len() {
-            if self.voices[i].is_some_and(|v| v.owner == ARP_OWNER) {
+            if self.voices[i].is_some_and(|v| v.owner == self.automatic_arp_owner()) {
                 self.end_voice(i, 0.0, out);
             }
         }
+    }
+    fn arp_mod_sources(&self) -> std::ops::Range<usize> {
+        if self.in_performance_arp {
+            PERF_MOD_SOURCES
+        } else {
+            ARP_MOD_SOURCES
+        }
+    }
+    fn clear_arp_sources(&mut self) {
+        let lanes = self.arp_mod_sources();
+        self.sources[lanes].fill(0.0);
+        self.sources[ARP_POSITION_SOURCE] = 0.0;
     }
     pub(super) fn arp_cycle_chord(&self) -> Notes {
         let mut notes = if self.config.tracker_enabled {
@@ -464,6 +547,11 @@ impl Engine {
         for (i, variation) in page.loops.iter_mut().enumerate() {
             variation.octave = self.config.arp_loop_octaves[i];
         }
+        if self.config.tracker_enabled {
+            if let Some(row) = self.arp.data.rows.get(self.arp.row_index) {
+                page.offset_voicing(row.arp_octave, row.arp_inversion);
+            }
+        }
         page
     }
     pub(super) fn resolved_arp_cycle(&self, phase: i64, seed: u32) -> ([i16; STEPS], usize) {
@@ -495,6 +583,7 @@ impl Engine {
         (slots, count, notes)
     }
     pub(super) fn arp_deadline(&self) -> Option<u64> {
+        if self.arp.paused_at.is_some() { return None; }
         if !self.arp_gated() {
             return self.arp.running.then_some(self.now);
         }
@@ -566,13 +655,7 @@ impl Engine {
         }
         let ordinal = phase.rem_euclid(count as i64) as usize;
         let index = slots[ordinal];
-        let step = if self.config.tracker_enabled {
-            *self.arp.data.rows[self.arp.row_index]
-                .page
-                .step(index, self.arp_pass_len())
-        } else {
-            *self.arp.data.pages[self.arp.active as usize].step(index, self.arp_pass_len())
-        };
+        let step = *self.active_arp_page().step(index, self.arp_pass_len());
         let interval = self.arp_interval(self.arp.clock_phase + phase - self.arp.phase);
         let jitter = self.humanize_timing(interval);
         let at = (boundary + interval * step.micro as f64 / 100.0 + jitter)
@@ -678,11 +761,12 @@ impl Engine {
         }
     }
     pub(super) fn tick_automatic_arp(&mut self, out: &mut impl FnMut(Out)) {
+        if self.arp.paused_at.is_some() { return; }
         self.refresh_arp_events();
         if !self.arp_gated() {
             if self.arp.running {
                 self.restart_automatic_arp();
-                self.sources[9..].fill(0.0);
+                self.clear_arp_sources();
                 self.configure(self.host_config, out);
             }
             return;
@@ -730,7 +814,7 @@ impl Engine {
                     }
                 } else if self.arp.done {
                     self.arp.finished = true;
-                    self.sources[9..].fill(0.0);
+                    self.clear_arp_sources();
                     self.arp.next += (0..completed_count)
                         .map(|i| self.arp_interval(self.arp.clock_phase + i))
                         .sum::<f64>();
@@ -777,12 +861,12 @@ impl Engine {
             if count == 0 {
                 self.arp.running = false;
                 self.arp.events.fill(None);
-                self.sources[9..].fill(0.0);
+                self.clear_arp_sources();
                 return;
             }
             if self.arp.done && !self.arp.finished {
                 self.arp.finished = true;
-                self.sources[9..].fill(0.0);
+                self.clear_arp_sources();
                 self.configure(self.host_config, out);
             }
             if !self.arp.done {
@@ -838,9 +922,10 @@ impl Engine {
             self.arp.step = event.step as u8;
             self.arp.display_phase = event.phase;
             self.arp.seed = event.seed;
-            self.sources[9] = event.adjustment.mods[0] as f32 / 100.0;
-            self.sources[10] = event.adjustment.mods[1] as f32 / 100.0;
-            self.sources[11] = event.position;
+            let lanes = self.arp_mod_sources();
+            self.sources[lanes]
+                .copy_from_slice(&event.adjustment.mods.map(|value| value as f32 / 100.0));
+            self.sources[ARP_POSITION_SOURCE] = event.position;
             self.configure(self.host_config, out);
             if event.audible {
                 let (notes, len) = self.resolved_arp_cycle(event.phase, event.seed);
@@ -866,7 +951,7 @@ impl Engine {
                         .round()
                         .max(1.0) as u64;
                     if velocity > 0.0 {
-                        self.strike_prepared(pitch as u8, velocity, duration, ARP_OWNER, out);
+                        self.strike_prepared(pitch as u8, velocity, duration, self.automatic_arp_owner(), out);
                     }
                 }
             }

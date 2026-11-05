@@ -1,4 +1,4 @@
-//! Composite the module stack as one page, leaving the tracker and header fixed.
+//! Composite module regions independently, retaining their visible transition frames.
 //! Three reusable GPU images retain the visible frame, the outgoing frame, and
 //! the live destination. Retargeting freezes the current composite, so fast row
 //! clicks never jump back to a previously selected row or duplicate parameters.
@@ -112,29 +112,55 @@ fn image(canvas: &mut Canvas, id: ImageId, x: f32, y: f32, w: f32, h: f32) {
 
 impl ChordboardView {
     pub(super) fn draw_row_modules(&self, d: &mut Draw) {
-        let width = EDITOR_W * d.s;
-        let height = (H - HEADER_H - 22.0) * d.s;
+        self.draw_modules(d);
+        self.draw_sliding_region(
+            d,
+            &self.row_slide,
+            &self.row_frames,
+            ARP_SURFACE,
+            Self::draw_arp_module,
+        );
+        self.draw_sliding_region(
+            d,
+            &self.top_slide,
+            &self.top_frames,
+            TRACKER_SURFACE,
+            Self::draw_top_page,
+        );
+        self.draw_module_overlays(d);
+    }
+
+    fn draw_sliding_region(
+        &self,
+        d: &mut Draw,
+        slide: &RowSlide,
+        cache: &std::cell::RefCell<Option<RowFrames>>,
+        region: Rect,
+        draw: fn(&Self, &mut Draw),
+    ) {
+        let width = region.2 * d.s;
+        let height = region.3 * d.s;
         let size = (width.ceil() as usize, height.ceil() as usize);
-        let mut cache = self.row_frames.borrow_mut();
+        let mut cache = cache.borrow_mut();
         if cache.as_ref().is_some_and(|frames| frames.size != size) {
             if let Some(frames) = cache.take() {
                 frames.delete(d.c);
             }
         }
         if cache.is_none() {
-            *cache = RowFrames::new(d.c, size, self.row_slide.generation);
+            *cache = RowFrames::new(d.c, size, slide.generation);
         }
         let Some(frames) = cache.as_mut() else {
             // Keep the editor usable if the GPU cannot allocate page textures.
-            self.draw_modules(d);
+            draw(self, d);
             return;
         };
-        if frames.generation != self.row_slide.generation {
+        if frames.generation != slide.generation {
             std::mem::swap(&mut frames.visible, &mut frames.outgoing);
-            frames.generation = self.row_slide.generation;
+            frames.generation = slide.generation;
             frames.transition = frames.populated;
         }
-        let sliding = self.row_slide.active() && frames.transition;
+        let sliding = slide.active() && frames.transition;
         d.c.save();
         d.c.reset();
         d.c.set_render_target(RenderTarget::Image(if sliding {
@@ -144,17 +170,17 @@ impl ChordboardView {
         }));
         d.c.clear_rect(0, 0, size.0 as u32, size.1 as u32, d.color(BG));
         {
-            let mut page = Draw::new(d.c, d.light, d.s, CONTENT_X * d.s, -HEADER_H * d.s, d.font)
+            let mut page = Draw::new(d.c, d.light, d.s, -region.0 * d.s, -region.1 * d.s, d.font)
                 .with_hover(if sliding { None } else { d.hover });
             page.fallback_font = d.fallback_font;
             page.icon_font = d.icon_font;
-            self.draw_modules(&mut page);
+            draw(self, &mut page);
         }
         if sliding {
             d.c.reset();
             d.c.set_render_target(RenderTarget::Image(frames.visible));
             d.c.clear_rect(0, 0, size.0 as u32, size.1 as u32, d.color(BG));
-            let (outgoing, incoming) = self.row_slide.offsets(width);
+            let (outgoing, incoming) = slide.offsets(width);
             image(
                 d.c,
                 frames.outgoing,
@@ -177,8 +203,8 @@ impl ChordboardView {
         image(
             d.c,
             frames.visible,
-            d.ox - CONTENT_X * d.s,
-            d.oy + HEADER_H * d.s,
+            d.ox + region.0 * d.s,
+            d.oy + region.1 * d.s,
             size.0 as f32,
             size.1 as f32,
         );

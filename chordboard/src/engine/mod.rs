@@ -1,10 +1,13 @@
 pub mod arpeggiator;
 mod delay;
 mod delay_output;
+mod fx;
+mod fx_output;
 mod layers;
 mod midi;
 mod ordering;
 mod performance;
+mod performance_arp;
 pub mod routing;
 mod types;
 use crate::harmony::{self, Notes};
@@ -12,7 +15,14 @@ pub use types::*;
 
 pub struct Engine {
     pub arp: arpeggiator::Runtime,
+    performance_arp: arpeggiator::Runtime,
+    in_performance_arp: bool,
+    performance_arp_position: f32,
     delay: delay::Runtime,
+    fx: fx::Runtime,
+    fx_expression_stamp: Option<([Expression; 16], [f32; 16], Expression)>,
+    fx_output_serial: u64,
+    fx_lifetimes: [Option<(u64, Option<u64>)>; 48],
     next_token: u64,
     beat: f64,
     host_beat_available: bool,
@@ -93,7 +103,14 @@ impl Default for Engine {
     fn default() -> Self {
         Self {
             arp: arpeggiator::Runtime::default(),
+            performance_arp: arpeggiator::Runtime::default(),
+            in_performance_arp: false,
+            performance_arp_position: 0.0,
             delay: delay::Runtime::default(),
+            fx: fx::Runtime::default(),
+            fx_expression_stamp: None,
+            fx_output_serial: 0,
+            fx_lifetimes: [None; 48],
             next_token: 1,
             beat: 0.0,
             host_beat_available: false,
@@ -181,6 +198,10 @@ impl Engine {
         self.configure_inner(config, true, out);
     }
     fn configure_inner(&mut self, config: Config, restart: bool, out: &mut impl FnMut(Out)) {
+        if self.in_performance_arp {
+            self.configure_performance_arp();
+            return;
+        }
         let previous_sources = self.source_overrides;
         let previous_host = self.host_config;
         let old = self.config;
@@ -191,9 +212,10 @@ impl Engine {
             && !old.arp_enabled
             && !self.arp.data.rows.is_empty()
         {
-            self.arp.row_index = 0;
-            self.arp.row_id = self.arp.data.rows[0].id;
-            self.arp.active = 0;
+            self.arp.row_index = self.arp.requested_row.take().unwrap_or(0)
+                .min(self.arp.data.rows.len() - 1);
+            self.arp.row_id = self.arp.data.rows[self.arp.row_index].id;
+            self.arp.active = self.arp.row_index.min(u8::MAX as usize) as u8;
             self.arp.loops_in_row = 0;
         }
         if self.recalled {
@@ -227,7 +249,7 @@ impl Engine {
         // Tracker row indices can exceed the legacy bank's eight pages. Select
         // the source before indexing: map_or eagerly evaluates its fallback.
         let (settings, page) = if let Some(row) = tracker_row {
-            (row.settings, row.page)
+            if row.enabled { (row.settings, row.page) } else { (self.arp.data.performance.settings, self.arp.data.performance.page) }
         } else {
             let page = self.arp.active.min(7) as usize;
             (config.arp_settings[page], self.arp.data.pages[page])
@@ -252,8 +274,8 @@ impl Engine {
             config.arp_sync = settings.sync;
             config.arp_free_ms = settings.free_ms;
             config.rate = settings.rate;
-            config.swing = settings.swing;
-            config.humanize = settings.humanize;
+            config.swing = if config.tracker_enabled { self.host_config.swing } else { settings.swing };
+            config.humanize = if config.tracker_enabled { self.host_config.humanize } else { settings.humanize };
         }
         let unrouted_config = config;
         self.prepare_route_smoothing();
@@ -274,8 +296,14 @@ impl Engine {
             || old.bass_channel != config.bass_channel
             || old.upper_channel != config.upper_channel;
         let mode = old.mode != config.mode;
+        if !config.arp_enabled || !config.tracker_enabled {
+            self.arp.paused_at = None;
+        }
         if mode || route || old.arp_enabled != config.arp_enabled {
             self.reset_automatic_arp(out);
+            if route || mode {
+                self.with_performance_arp(|e| e.reset_automatic_arp(out));
+            }
             config = unrouted_config;
             self.prepare_route_smoothing();
             self.apply_routes(&mut config);
@@ -307,6 +335,7 @@ impl Engine {
             self.restart_automatic_arp();
         }
         self.update_delay_power(out);
+        self.configure_fx(out);
         if old.strum_enabled && !config.strum_enabled && config.mode == MANUAL {
             self.x_primed = false;
             for i in 0..self.voices.len() {
@@ -345,6 +374,7 @@ impl Engine {
             }
         }
         if !config.latch
+            && !self.strum_chord_retained()
             && !config.key_split
             && !self.pedal
             && self.root.is_none()
@@ -428,11 +458,12 @@ impl Engine {
                 }
                 for (index, cc) in [(1, 1), (2, 11), (3, 2)] {
                     if previous_sources[index].is_some() && self.source_overrides[index].is_none() {
-                        out(Out::Cc(
-                            channel,
-                            cc,
-                            self.controller_baseline(cc) as f32 / 127.0,
-                        ));
+                        let value = self.controller_baseline(cc) as f32 / 127.0;
+                        if self.fx.active() {
+                            for voice in self.voices.iter().flatten().filter(|v| v.channel == channel) {
+                                self.fx.controller(voice.token, cc, value, out);
+                            }
+                        } else { out(Out::Cc(channel, cc, value)); }
                     }
                 }
             }
@@ -499,7 +530,7 @@ impl Engine {
             self.second = None;
             self.recalled = false;
         }
-        if self.config.latch || self.config.key_split {
+        if self.config.latch || self.config.key_split || self.strum_chord_retained() {
             if self.root.is_some_and(|s| !s.held) {
                 self.root = None;
                 self.second = None;
@@ -555,7 +586,7 @@ impl Engine {
         self.down[id as usize] = false;
         self.addition_inputs[id as usize] = false;
         self.held_inputs[id as usize] = None;
-        if self.config.latch || self.config.key_split {
+        if self.config.latch || self.config.key_split || self.strum_chord_retained() {
             let old_additions = self.additions;
             self.refresh_additions();
             // Releases never change held harmony or restart strums/arp timing.
@@ -637,7 +668,7 @@ impl Engine {
                 return;
             }
             self.root = None;
-            if !self.config.latch && !self.pedal {
+            if !self.config.latch && !self.pedal && !self.strum_chord_retained() {
                 self.notes = Notes::default();
                 if self.config.mode == CHORD {
                     self.stop_voices(velocity, out);
@@ -648,6 +679,8 @@ impl Engine {
     }
     pub fn command(&mut self, cmd: Command, out: &mut impl FnMut(Out)) {
         match cmd {
+            Command::TrackerPlay(selected) => self.tracker_play(selected, out),
+            Command::TrackerPause => self.tracker_pause(out),
             Command::KeyDown(key, note, quality) => self.note_on(
                 2048 + key as u16,
                 note,
@@ -664,7 +697,7 @@ impl Engine {
                         self.note_off((2048 + key) as u16, 0.0, out);
                     }
                 }
-                if had_keyboard && self.root.is_none() && !self.config.key_split {
+                if had_keyboard && self.root.is_none() && !self.config.key_split && !self.strum_chord_retained() {
                     self.notes = Notes::default();
                     self.stop_voices(0.0, out);
                     self.scheduled.fill(None);
@@ -783,7 +816,11 @@ impl Engine {
     }
     pub fn panic(&mut self, out: &mut impl FnMut(Out)) {
         self.resetting = true;
+        let ctx = self.fx_context();
+        self.fx.clear(ctx, out);
+        self.fx_expression_stamp = None;
         self.reset_automatic_arp(out);
+        self.with_performance_arp(|e| e.reset_automatic_arp(out));
         self.reset_delay(out);
         self.learned_note_held.fill(false);
         self.midi_held.fill(false);
@@ -897,12 +934,14 @@ impl Engine {
         let mut echoes = [0; 48];
         let mut echo_count = 0;
         if self.arp.data.midi_fx.delay.voice_leading {
+            echo_count = self.fx.echo_notes(&mut echoes);
             for voice in self
                 .voices
                 .iter()
                 .flatten()
                 .filter(|v| v.owner == delay_output::DELAY_OWNER)
             {
+                if echo_count == echoes.len() { break; }
                 echoes[echo_count] = voice.note;
                 echo_count += 1;
             }
@@ -982,7 +1021,7 @@ impl Engine {
                 }
             }
         }
-        if self.root.is_some() || self.config.latch || self.config.key_split || self.pedal {
+        if self.root.is_some() || self.config.latch || self.config.key_split || self.pedal || self.strum_chord_retained() {
             if play && (self.chord_input_held() || self.config.latch || self.pedal) {
                 self.start_mode(retrigger, out);
             }
@@ -991,6 +1030,7 @@ impl Engine {
         }
     }
     fn start_mode(&mut self, retrigger: bool, out: &mut impl FnMut(Out)) {
+        if self.performance_arp_enabled() && !self.manual_active() { return; }
         if self.notes.len == 0 {
             return;
         }
@@ -1212,7 +1252,9 @@ impl Engine {
             },
             arp_step: self.arp.step,
             arp_phase: self.arp.display_phase,
-            arp_running: self.arp.running && !self.arp.finished,
+            arp_running: self.arp.running && !self.arp.finished && self.arp.paused_at.is_none(),
+            tracker_paused: self.arp.paused_at.is_some(),
+            performance_arp: self.performance_arp_snapshot(),
             arp_aligned: self.arp_alignment_available(),
             time_sig_host: self.time_sig_host,
             time_sig_num: self.time_sig_num,
@@ -1297,3 +1339,6 @@ mod arpeggiator_tests;
 
 #[cfg(test)]
 mod global_arp_tests;
+
+#[cfg(test)]
+mod fx_integration_tests;

@@ -45,6 +45,7 @@ fn tracker_state_round_trip_preserves_dynamic_rows_and_every_tap_field() {
     }
     for (page_index, row) in state.rows.iter_mut().enumerate() {
         row.duration = page_index as u32 + 1;
+        row.inherit_arp = page_index % 2 != 0;
         row.settings.pattern = (page_index % 7) as u8;
         let page = &mut row.page;
         for (index, step) in page.loops.iter_mut().flat_map(|l| &mut l.steps).enumerate() {
@@ -390,6 +391,7 @@ fn legacy_tracker_json_defaults_new_program_fields_without_changing_chord_or_tim
     original.rows[0].settings.pattern = 2;
     original.rows[0].settings.rate = 0.5;
     original.rows[0].settings.swing = 0.25;
+    original.rows[0].settings.fill = Fill::Repeat;
     original.rows[0].settings.octaves = 2;
     original.rows[0].page.ensure_loops(2);
     original.rows[0].page.loops[1].octave = -1;
@@ -426,6 +428,8 @@ fn programmable_tracker_round_trip_preserves_custom_controls_and_loop_inversions
     store.edit(|state| {
         let row = &mut state.rows[0];
         row.chord = Some(crate::harmony::parse_chord_symbol("Dm9").unwrap());
+        row.arp_octave = -2;
+        row.arp_inversion = 3;
         row.settings.pattern = 7;
         row.settings.lock_length = true;
         row.settings.steps = 5;
@@ -517,7 +521,7 @@ fn global_midi_fx_survives_all_row_operations_and_state_restore() {
         s.midi_fx.order = vec![MidiFxId::Delay, MidiFxId::Delay];
     });
     let expected = store.snapshot().midi_fx;
-    assert_eq!(expected.order, vec![MidiFxId::Delay]);
+    assert_eq!(expected.order, vec![MidiFxId::Delay, MidiFxId::Harmonizer, MidiFxId::RhythmGate, MidiFxId::VoiceSplitter]);
     store.edit(|s| {
         s.add_row_after(0);
         let copied = s.rows[0].clone();
@@ -537,5 +541,49 @@ fn global_midi_fx_survives_all_row_operations_and_state_restore() {
         serde_json::from_str(r#"{"rows":[{"page":{"delay":{"enabled":true}}}]}"#).unwrap();
     assert_eq!(old.midi_fx, crate::midi_fx::MidiFxState::default());
     store.edit(|s| s.midi_fx.order.clear());
-    assert_eq!(store.snapshot().midi_fx.order, vec![MidiFxId::Delay]);
+    assert_eq!(store.snapshot().midi_fx.order, crate::midi_fx::MidiFxState::default().order);
+}
+
+#[test]
+fn independent_arp_programs_round_trip_and_old_presets_keep_tracker_enabled() {
+    let old: State = serde_json::from_str(r#"{"rows":[{"id":1,"duration":4}]}"#).unwrap();
+    assert!(old.rows[0].enabled);
+    assert!(!old.performance.enabled);
+    let mut state = old;
+    state.rows[0].enabled = false;
+    state.rows[0].settings.pattern = 1;
+    state.performance.enabled = true;
+    state.performance.settings.pattern = 7;
+    state.performance.settings.custom[2].octave = 2;
+    state.performance.page.loops[0].steps[1].velocity = 78;
+    let saved = serde_json::to_string(&state).unwrap();
+    let restored: State = serde_json::from_str(&saved).unwrap();
+    assert_eq!(restored, state);
+    let prepared = Prepared::new(&restored, 7, 2);
+    assert_eq!(prepared.performance, state.performance);
+    assert_eq!(prepared.rows, state.rows);
+}
+
+#[test]
+fn visual_origins_persist_without_publishing_or_changing_audio_rows() {
+    let store = Store::new();
+    store.edit(|s| { s.add_row_after(0); s.rows[1].duration = 3; });
+    let mut audio = store.initial_prepared();
+    while store.apply_pending(&mut audio) {}
+    let before = audio.rows.clone();
+    let generation = audio.generation;
+    store.set_view_row_origin(before[1].id);
+    store.set_view_step_origin(1, false, 3);
+    store.set_view_step_origin(0, true, 2);
+    assert!(!store.apply_pending(&mut audio));
+    assert_eq!(audio.generation, generation);
+    assert_eq!(audio.rows, before);
+    let restored: State = serde_json::from_str(&serde_json::to_string(&store.snapshot()).unwrap()).unwrap();
+    assert_eq!(restored.view_row_start(), 1);
+    assert_eq!(restored.rows[1].view_step_origin, 3);
+    assert_eq!(restored.performance.view_step_origin, 2);
+    store.edit(|_| {});
+    assert!(store.apply_pending(&mut audio));
+    assert_eq!(audio.rows, before);
+    assert_eq!(audio.performance.view_step_origin, 0);
 }

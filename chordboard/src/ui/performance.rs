@@ -1,6 +1,39 @@
 use super::*;
 
 impl ChordboardView {
+    pub(super) fn draw_daw_alignment(&self, d: &mut Draw) {
+        self.icon_button(d, DAW_ALIGNMENT, "DAW align", self.params.daw_alignment.value(), GOLD, style::Icon::AlignedLoop);
+    }
+
+    pub(super) fn draw_strum_power(&self, d: &mut Draw) {
+        let bypass = strum_bypass_rect(self.expand_t());
+        d.bypass_button(
+            bypass,
+            !self.params.strum_enabled.value(),
+            TEAL,
+            self.hover_amount(bypass) > 0.01,
+            self.button_press_amount(bypass),
+        );
+    }
+
+    pub(super) fn draw_strum_octaves(&self, d: &mut Draw) {
+        let expand = self.expand_t();
+        let first = octave_button_rect(expand, 0);
+        d.text_right(
+            first.0 - 8.0,
+            first.1 + first.3 * 0.5 + TEXT_SMALL * 0.35,
+            "Octaves",
+            TEXT_SMALL,
+            MUTED,
+        );
+        let octaves = self.params.octaves.value();
+        for i in 0..4 {
+            let r = octave_button_rect(expand, i);
+            self.button(d, r, &(i + 1).to_string(), octaves == i as i32 + 1, GOLD);
+            self.live_choice(d, "octaves", i as f32 + 1.0, r);
+        }
+    }
+
     pub(super) fn meter(&self) -> (u8, u8) {
         if self.params.tempo_sync.value() && self.snapshot.time_sig_host {
             (self.snapshot.time_sig_num, self.snapshot.time_sig_den)
@@ -12,15 +45,15 @@ impl ChordboardView {
         }
     }
     pub(super) fn draw_tempo_header(&self, d: &mut Draw) {
-        self.icon_button(d, DAW_ALIGNMENT, "DAW align", self.params.daw_alignment.value(), GOLD, style::Icon::AlignedLoop);
+        self.draw_daw_alignment(d);
         let synced = self.params.tempo_sync.value();
         let (num, den) = self.meter();
         let host_meter = synced && self.snapshot.time_sig_host;
         if host_meter {
-            d.text(METER_NUM.0 + 8.0, 43.5, &format!("{num}/{den}"), 13.0, TEXT);
+            d.text(METER_NUM.0 + 8.0, METER_NUM.1 + 19.5, &format!("{num}/{den}"), 13.0, TEXT);
         } else {
             self.button(d, METER_NUM, &num.to_string(), false, GOLD);
-            d.text(METER_NUM.0 + 49.0, 43.5, "/", 13.0, MUTED);
+            d.text(METER_NUM.0 + 49.0, METER_NUM.1 + 19.5, "/", 13.0, MUTED);
             self.button(d, METER_DEN, &den.to_string(), false, GOLD);
         }
         pleasant_ui::tempo::Header {
@@ -42,14 +75,7 @@ impl ChordboardView {
 
     pub(super) fn draw_strumfield_header(&self, d: &mut Draw) {
         let surface = perf_surface_rect(self.expand_t());
-        let bypass = strum_bypass_rect(self.expand_t());
-        d.bypass_button(
-            bypass,
-            !self.params.strum_enabled.value(),
-            TEAL,
-            self.hover_amount(bypass) > 0.01,
-            self.button_press_amount(bypass),
-        );
+        self.draw_strum_power(d);
         let disabled = d.disabled;
         d.disabled = false;
         d.font = self.font.get();
@@ -61,21 +87,8 @@ impl ChordboardView {
             TEXT,
         );
         d.font = self.ui_font.get();
-        let expand = self.expand_t();
-        let first = octave_button_rect(expand, 0);
-        d.text_right(
-            first.0 - 8.0,
-            first.1 + first.3 * 0.5 + TEXT_SMALL * 0.35,
-            "Octaves",
-            TEXT_SMALL,
-            MUTED,
-        );
-        let octaves = self.params.octaves.value();
-        for i in 0..4 {
-            let r = octave_button_rect(expand, i);
-            self.button(d, r, &(i + 1).to_string(), octaves == i as i32 + 1, GOLD);
-            self.live_choice(d, "octaves", i as f32 + 1.0, r);
-        }
+        self.draw_strum_octaves(d);
+        self.button(d, strum_chord_latch_rect(self.expand_t()), "Chord latch", self.params.strum_chord_latch.value(), TEAL);
         self.touch_latch_button(
             d,
             strum_latch_rect(self.expand_t()),
@@ -276,7 +289,7 @@ impl ChordboardView {
     }
 
     pub(super) fn draw_meters(&self, d: &mut Draw) {
-        use crate::engine::routing::SOURCES;
+        use crate::engine::routing::{bipolar_source, SOURCES};
         d.font = self.font.get();
         d.text(
             MOD_SURFACE.0 + 10.0,
@@ -286,13 +299,16 @@ impl ChordboardView {
             TEXT,
         );
         for (i, label) in SOURCES[1..].iter().enumerate() {
-            let label = if i == 6 { "Input velocity" } else if i == 11 { "Arp position" } else { label };
+            let label = match i {
+                6 => "Input velocity",
+                _ => label,
+            };
             let r = meter_rect(i);
             let value = self.snapshot.sources[i];
             let bypassed = self.params.modulators[i].bypass.value();
             let accent = if bypassed {
                 MUTED
-            } else if matches!(i, 9 | 10) {
+            } else if bipolar_source(i) {
                 GOLD
             } else {
                 TEAL
@@ -374,30 +390,28 @@ impl ChordboardView {
                     accent,
                 );
             }
-            if i == 0 || matches!(i, 9 | 10) {
+            if i == 0 || bipolar_source(i) {
                 let center = x + width * 0.5;
                 d.line(center, y - 2.0, center, y + 8.0, MUTED, 1.0);
             }
-            let color = if matches!(i, 9 | 10) || linked || dragging || hover > 0.3 {
+            let color = if bipolar_source(i) || linked || dragging || hover > 0.3 {
                 accent
             } else {
                 MUTED
             };
-            style::MODULATOR_ICONS[i].draw(d, x + 8.0, r.1 + 14.0, color);
-            d.text_right(
-                modulator_bypass_rect(i).0 - 5.0,
-                r.1 + 37.0,
-                label,
-                TEXT_SMALL,
-                color,
-            );
             let power = modulator_bypass_rect(i);
+            let center = (power.0 + power.2 * 0.5, power.1 + power.3 * 0.5);
+            let label_x = r.0 + r.2 - 8.0 - d.text_width(label, TEXT_LABEL);
+            d.text_middle(label_x, center.1, label, TEXT_LABEL, color);
+            if !bypassed && !self.hover_pointer().is_some_and(|(x, y)| hit(r, x, y)) {
+                style::MODULATOR_ICONS[i].draw(d, center.0, center.1, color);
+                continue;
+            }
             let power_hover = self.hover_amount(power);
             let flash = self
                 .action_flash
                 .filter(|(rect, _)| *rect == power)
                 .map_or(0.0, |(_, amount)| amount);
-            let center = (power.0 + power.2 * 0.5, power.1 + power.3 * 0.5);
             let pulse = if power_hover > 0.0 {
                 let seconds = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -443,12 +457,13 @@ impl ChordboardView {
 
 // Pitch uses a normalized center; dedicated step modulators use signed offsets.
 pub(super) fn meter_fill(source: usize, value: f32) -> (f32, f32) {
-    let value = if matches!(source, 9 | 10) {
+    let bipolar = crate::engine::routing::bipolar_source(source);
+    let value = if bipolar {
         (value.clamp(-1.0, 1.0) + 1.0) * 0.5
     } else {
         value.clamp(0.0, 1.0)
     };
-    if source == 0 || matches!(source, 9 | 10) {
+    if source == 0 || bipolar {
         (value.min(0.5), value.max(0.5))
     } else {
         (0.0, value)

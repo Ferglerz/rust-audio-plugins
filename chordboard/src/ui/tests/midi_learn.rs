@@ -135,7 +135,52 @@ fn learn_surface_includes_voicing_and_manual_tempo() {
     let mut view = view(1, false);
     view.snapshot.notes = harmony::voice(60, 0, None, 0, 0, 0);
     Arc::get_mut(&mut view.params).unwrap().tempo_sync = nih_plug::prelude::BoolParam::new("Host sync", false);
+    view.programming = true;
     let targets = view.surface_midi_targets();
     assert!(targets.iter().any(|(i, r)| *i == 0 && Some(*r) == view.voicing_bounds()));
     assert!(targets.iter().any(|(i, r)| *i == crate::midi_learn::TEMPO && *r == TEMPO_CONTROL));
+}
+
+#[test]
+fn midi_learn_keeps_page_navigation_and_uses_only_visible_controls() {
+    use crate::midi_learn as midi;
+
+    let mut view = view(1, false);
+    let (mut cx, entity, changes) = context();
+    open(&mut view, &mut cx, entity);
+    for (binding, rect) in [
+        (midi::GLISS_TIME, GLISS_RATE),
+        (midi::GLISS_DIRECTION, GLISS_DIRECTION),
+        (midi::PERFORMANCE_ARP, arp_power_rect()),
+        (midi::SWING, arpeggiator::swing_rect()),
+        (midi::HUMANIZE, arpeggiator::humanize_rect()),
+    ] {
+        click(&mut view, &mut cx, entity, rect);
+        assert_eq!(view.bridge.quick_learn.load(Ordering::Acquire), binding as u32 + 1);
+    }
+    click(&mut view, &mut cx, entity, midi_fx::PROGRAMMING_TAB);
+    assert!(view.quick_midi.show && view.programming);
+    click(&mut view, &mut cx, entity, DAW_ALIGNMENT);
+    assert_eq!(view.bridge.quick_learn.load(Ordering::Acquire), midi::DAW_ALIGNMENT as u32 + 1);
+    click(&mut view, &mut cx, entity, GLISS_RATE);
+    assert_eq!(view.bridge.quick_learn.load(Ordering::Acquire), midi::DAW_ALIGNMENT as u32 + 1);
+
+    click(&mut view, &mut cx, entity, midi_fx::FX_TAB);
+    assert!(view.quick_midi.show && view.fx_ui.open);
+    let targets = view.surface_midi_targets();
+    assert_eq!(targets.len(), crate::midi_fx::EFFECTS.len());
+    for effect in crate::midi_fx::EFFECTS {
+        let binding = midi::fx_power_target(effect);
+        let (_, rect) = targets.iter().find(|(id, _)| *id == binding).unwrap();
+        click(&mut view, &mut cx, entity, *rect);
+        assert_eq!(view.bridge.quick_learn.load(Ordering::Acquire), binding as u32 + 1);
+    }
+    assert!(changes.borrow().is_empty());
+
+    click(&mut view, &mut cx, entity, midi_fx::FX_LEARN);
+    assert!(view.fx_ui.open && !view.quick_midi.show);
+    click(&mut view, &mut cx, entity, midi_fx::FX_LEARN);
+    assert!(view.fx_ui.open && view.quick_midi.show);
+    click(&mut view, &mut cx, entity, midi_fx::PERFORMANCE_TAB);
+    assert!(view.quick_midi.show && !view.programming && !view.fx_ui.open);
 }

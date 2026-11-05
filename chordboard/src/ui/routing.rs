@@ -1,5 +1,5 @@
 use super::*;
-use crate::engine::routing::{SOURCES, TARGETS};
+use crate::engine::routing::{bipolar_source, SOURCES, TARGETS};
 
 #[derive(Clone, Copy)]
 pub(super) struct RouteDrag {
@@ -290,7 +290,9 @@ impl ChordboardView {
             ("strum_enabled", strum_bypass_rect(self.expand_t())),
             ("octaves", strum_octaves_rect(self.expand_t())),
         ]);
-        targets.push(("arp_pattern", arp_direction_rect()));
+        if !self.editor_arp_inherits() {
+            targets.push(("arp_pattern", arp_direction_rect()));
+        }
         if self.manual_playing() {
             targets.push(("x", self.play_pad()));
         }
@@ -364,7 +366,7 @@ impl ChordboardView {
             self.status = "A controller cannot modulate its own setup".into();
             return;
         }
-        let existing = if matches!(source, 9 | 10) {
+        let existing = if bipolar_source(source) {
             self.params.routes.iter().position(|p| {
                 p.source.value() as usize == source + 1 && p.target.value() as usize == target
             })
@@ -535,7 +537,7 @@ impl ChordboardView {
         source: usize,
         mod_target: bool,
     ) {
-        let color = if matches!(source, 9 | 10) { GOLD } else { TEAL };
+        let color = if bipolar_source(source) { GOLD } else { TEAL };
         let bend = ((end.1 - start.1).abs() * 0.4).clamp(24.0, 180.0)
             * if end.1 >= start.1 { 1.0 } else { -1.0 };
         let points: Vec<_> = if mod_target {

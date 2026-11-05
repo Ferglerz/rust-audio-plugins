@@ -3,7 +3,7 @@ use crossbeam_queue::ArrayQueue;
 use nih_plug::params::persist::PersistentField;
 use serde::{Deserialize, Serialize};
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
     Arc, RwLock,
 };
 
@@ -14,9 +14,13 @@ pub const STEPS: usize = LOOP_STEPS * LOOPS;
 pub const CUSTOM_STEPS: usize = 7;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Fill {
-    #[default]
     Repeat,
+    #[default]
     Evolve,
+}
+
+fn legacy_fill() -> Fill {
+    Fill::Repeat
 }
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -65,6 +69,7 @@ pub struct Settings {
     pub pattern: u8,
     pub lock_length: bool,
     pub steps: u8,
+    #[serde(default = "legacy_fill")]
     pub fill: Fill,
     pub custom: [CustomStep; CUSTOM_STEPS],
     /// Number of pattern passes (historical parameter ID: arp_octaves).
@@ -82,7 +87,7 @@ impl Default for Settings {
             pattern: 0,
             lock_length: false,
             steps: 4,
-            fill: Fill::Repeat,
+            fill: Fill::default(),
             custom: default_custom(),
             octaves: 1,
             sync: true,
@@ -225,22 +230,40 @@ impl Page {
     pub fn octaves(&self) -> [i8; LOOPS] {
         self.loops.map(|l| l.octave)
     }
+
+    pub fn offset_voicing(&mut self, octave: i8, inversion: i8) {
+        for variation in &mut self.loops {
+            variation.octave += octave;
+            variation.inversion += inversion;
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TrackerRow {
+    pub enabled: bool,
+    pub inherit_arp: bool,
     pub id: u64,
     pub chord: Option<crate::harmony::SavedChord>,
     pub duration: u32,
+    pub arp_octave: i8,
+    pub arp_inversion: i8,
+    /// Display origin only; audio occurrence indices stay unchanged.
+    pub view_step_origin: usize,
     pub settings: Settings,
     pub page: Page,
 }
 impl Default for TrackerRow {
     fn default() -> Self {
         Self {
+            enabled: true,
+            inherit_arp: false,
             id: 1,
             chord: None,
             duration: 1,
+            arp_octave: 0,
+            arp_inversion: 0,
+            view_step_origin: 0,
             settings: Settings::default(),
             page: Page::default(),
         }
@@ -249,6 +272,8 @@ impl Default for TrackerRow {
 impl TrackerRow {
     fn sanitize(&mut self) {
         self.duration = self.duration.max(1);
+        self.arp_octave = self.arp_octave.clamp(-4, 4);
+        self.arp_inversion = self.arp_inversion.clamp(-12, 12);
         self.settings.pattern = self.settings.pattern.min(7);
         self.settings.steps = self.settings.steps.clamp(1, LOOP_STEPS as u8);
         for step in &mut self.settings.custom {
@@ -269,6 +294,9 @@ impl TrackerRow {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct State {
+    pub performance: TrackerRow,
+    /// Stable row identity shown at the left edge of the tracker.
+    pub view_row_origin: u64,
     pub midi_fx: crate::midi_fx::MidiFxState,
     /// Dynamic composition rows. Audio processing only reads the prepared copy.
     pub rows: Vec<TrackerRow>,
@@ -279,6 +307,8 @@ pub struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
+            performance: TrackerRow { enabled: false, id: 0, ..TrackerRow::default() },
+            view_row_origin: 0,
             midi_fx: crate::midi_fx::MidiFxState::default(),
             rows: vec![TrackerRow::default()],
             pages: [Page::default(); PAGES],
@@ -286,7 +316,20 @@ impl Default for State {
     }
 }
 impl State {
+    pub fn view_row_start(&self) -> usize {
+        self.rows.iter().position(|r| r.id == self.view_row_origin).unwrap_or(0)
+    }
+    pub fn editor_row(&self, index: usize, performance: bool) -> &TrackerRow {
+        if performance { &self.performance } else { &self.rows[index.min(self.rows.len() - 1)] }
+    }
+    pub fn editor_row_mut(&mut self, index: usize, performance: bool) -> &mut TrackerRow {
+        let index = index.min(self.rows.len() - 1);
+        if performance { &mut self.performance } else { &mut self.rows[index] }
+    }
+
     fn sanitize(&mut self) {
+        self.performance.sanitize();
+        self.performance.chord = None;
         self.midi_fx.sanitize();
         if self.rows.is_empty() {
             self.rows.push(TrackerRow::default());
@@ -324,6 +367,16 @@ impl State {
         self.rows.insert(index, row);
         index
     }
+    pub fn insert_blank_row_after(&mut self, previous: usize) -> usize {
+        let index = self.add_row_after(previous);
+        let row = &mut self.rows[index];
+        row.chord = None;
+        row.duration = 1;
+        row.arp_octave = 0;
+        row.arp_inversion = 0;
+        row.inherit_arp = true;
+        index
+    }
     pub fn delete_row(&mut self, selected: usize) -> usize {
         if self.rows.len() <= 1 {
             self.rows[0] = TrackerRow::default();
@@ -354,23 +407,68 @@ impl State {
 pub type PreparedPage = Page;
 #[derive(Debug)]
 pub struct Prepared {
+    pub performance: TrackerRow,
     pub midi_fx: crate::midi_fx::MidiFxState,
+    saved_powers: u8,
     pub generation: u64,
     pub restore_epoch: u64,
     pub rows: Vec<TrackerRow>,
     pub pages: [PreparedPage; PAGES],
 }
 impl Prepared {
+    pub(crate) fn apply_midi_powers(&mut self, params: &crate::params::ChordboardParams) {
+        use crate::midi_learn::{fx_power_target, power_override, PERFORMANCE_ARP};
+        let enabled = |target| {
+            power_override(params, target)
+                .unwrap_or(self.saved_powers & (1 << (target - PERFORMANCE_ARP)) != 0)
+        };
+        self.performance.enabled = enabled(PERFORMANCE_ARP);
+        for effect in crate::midi_fx::EFFECTS {
+            self.midi_fx.set_enabled(effect, enabled(fx_power_target(effect)));
+        }
+    }
+
     fn new(state: &State, generation: u64, restore_epoch: u64) -> Self {
+        // Resolve the source in tracker order on the control thread. Keep each
+        // entry's own chord and duration, including when starting mid-tracker.
+        let mut previous_arp = None;
+        let rows = state
+            .rows
+            .iter()
+            .map(|row| {
+                let arp = if row.inherit_arp {
+                    previous_arp.unwrap_or(row)
+                } else {
+                    row
+                };
+                previous_arp = Some(arp);
+                TrackerRow {
+                    enabled: arp.enabled,
+                    settings: arp.settings,
+                    page: arp.page,
+                    view_step_origin: 0,
+                    ..row.clone()
+                }
+            })
+            .collect();
         Self {
+            performance: TrackerRow { view_step_origin: 0, ..state.performance.clone() },
             generation,
             restore_epoch,
             midi_fx: state.midi_fx.clone(),
-            rows: state.rows.clone(),
+            saved_powers: power_bits(state),
+            rows,
             pages: std::array::from_fn(|p| state.pages[p]),
         }
     }
 }
+fn power_bits(state: &State) -> u8 {
+    use crate::midi_learn::{fx_power_target, PERFORMANCE_ARP};
+    crate::midi_fx::EFFECTS.into_iter().fold(u8::from(state.performance.enabled), |bits, effect| {
+        bits | (u8::from(state.midi_fx.enabled(effect)) << (fx_power_target(effect) - PERFORMANCE_ARP))
+    })
+}
+
 struct ControlState {
     state: State,
     generation: u64,
@@ -382,21 +480,25 @@ pub struct Store {
     updates: ArrayQueue<Box<Prepared>>,
     retired: ArrayQueue<Box<Prepared>>,
     consuming: AtomicBool,
+    powers: AtomicU8,
     pub initialization_pending: AtomicBool,
     pub replacement_serials: [AtomicU64; PAGES],
 }
 
 impl Default for Store {
     fn default() -> Self {
+        let state = State::default();
+        let powers = AtomicU8::new(power_bits(&state));
         Self {
             control: RwLock::new(ControlState {
-                state: State::default(),
+                state,
                 generation: 0,
                 restore_epoch: 0,
             }),
             updates: ArrayQueue::new(2),
             retired: ArrayQueue::new(4),
             consuming: AtomicBool::new(false),
+            powers,
             initialization_pending: AtomicBool::new(false),
             replacement_serials: std::array::from_fn(|_| AtomicU64::new(0)),
         }
@@ -409,6 +511,31 @@ impl Store {
     }
     pub fn snapshot(&self) -> State {
         self.control.read().unwrap().state.clone()
+    }
+
+    pub(crate) fn power(&self, target: usize) -> bool {
+        self.powers.load(Ordering::Acquire) & (1 << (target - crate::midi_learn::PERFORMANCE_ARP)) != 0
+    }
+
+    pub fn tracker_arp_inheritance(&self, index: usize) -> Option<bool> {
+        if index == 0 {
+            return None;
+        }
+        self.control
+            .read()
+            .unwrap()
+            .state
+            .rows
+            .get(index)
+            .map(|row| row.inherit_arp)
+    }
+
+    /// UI metadata never publishes a generation to the audio thread.
+    pub fn set_view_row_origin(&self, id: u64) {
+        self.control.write().unwrap().state.view_row_origin = id;
+    }
+    pub fn set_view_step_origin(&self, index: usize, performance: bool, origin: usize) {
+        self.control.write().unwrap().state.editor_row_mut(index, performance).view_step_origin = origin;
     }
 
     /// Control thread only. Publication is serialized with edits and obsolete boxes reclaimed here.
@@ -470,6 +597,7 @@ impl Store {
     }
 
     fn publish(&self, control: &ControlState) {
+        self.powers.store(power_bits(&control.state), Ordering::Release);
         let mut prepared = Box::new(Prepared::new(
             &control.state,
             control.generation,

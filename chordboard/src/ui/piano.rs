@@ -1,6 +1,69 @@
 use super::*;
 
 impl ChordboardView {
+    pub(super) fn draw_piano_learn_buttons(&self, d: &mut Draw, dim_containers: bool) {
+        // Row 1 additions: Always-play buttons (positioned after VL buttons via constants)
+        self.button(
+            d,
+            ALWAYS_BASS,
+            "Play Always",
+            self.params.always_bass.value(),
+            GOLD,
+        );
+        self.button(
+            d,
+            affect_chords_rect(self.params.mpe_enabled()),
+            "Affect Chords",
+            self.params.affect_chords.value(),
+            if self.params.key_split.value() {
+                TEAL
+            } else {
+                MUTED
+            },
+        );
+        self.icon_button(
+            d,
+            melody_split_rect(self.params.mpe_enabled()),
+            if self.learning() == 6 {
+                "Cancel"
+            } else {
+                "Learn Split"
+            },
+            self.learning() == 6,
+            if self.params.key_split.value() {
+                TEAL
+            } else {
+                MUTED
+            },
+            style::Icon::Learn,
+        );
+        if !dim_containers {
+            return;
+        }
+        if !self.params.bass_enabled.value() {
+            let r = BASS_CONTAINER;
+            d.rounded_rect(r.0, r.1, r.2, r.3, 6.0, alpha(BG, 0.45));
+        }
+        d.bypass_button(
+            BASS_BYPASS,
+            !self.params.bass_enabled.value(),
+            GOLD,
+            self.hover_amount(BASS_BYPASS) > 0.01,
+            self.button_press_amount(BASS_BYPASS),
+        );
+        if !self.params.key_split.value() {
+            let r = melody_container(self.params.mpe_enabled());
+            d.rounded_rect(r.0, r.1, r.2, r.3, 6.0, alpha(BG, 0.45));
+        }
+        d.bypass_button(
+            key_split_rect(self.params.mpe_enabled()),
+            !self.params.key_split.value(),
+            TEAL,
+            self.hover_amount(key_split_rect(self.params.mpe_enabled())) > 0.01,
+            self.button_press_amount(key_split_rect(self.params.mpe_enabled())),
+        );
+    }
+
     pub(super) fn learn_highlight_color(&self) -> Color {
         match self.learning() {
             5 => GOLD,
@@ -511,65 +574,9 @@ impl ChordboardView {
             false,
             TEAL,
         );
-        // Row 1 additions: Always-play buttons (positioned after VL buttons via constants)
-        self.button(
-            d,
-            ALWAYS_BASS,
-            "Play Always",
-            self.params.always_bass.value(),
-            GOLD,
-        );
-        self.button(
-            d,
-            affect_chords_rect(self.params.mpe_enabled()),
-            "Affect Chords",
-            self.params.affect_chords.value(),
-            if self.params.key_split.value() {
-                TEAL
-            } else {
-                MUTED
-            },
-        );
+        self.draw_piano_learn_buttons(d, true);
         let split_note = self.params.split_note.value() as u8;
-        self.icon_button(
-            d,
-            melody_split_rect(self.params.mpe_enabled()),
-            if self.learning() == 6 {
-                "Cancel"
-            } else {
-                "Learn Split"
-            },
-            self.learning() == 6,
-            if self.params.key_split.value() {
-                TEAL
-            } else {
-                MUTED
-            },
-            style::Icon::Learn,
-        );
         let base = self.params.control_base.load(Ordering::Relaxed);
-        if !self.params.bass_enabled.value() {
-            let r = BASS_CONTAINER;
-            d.rounded_rect(r.0, r.1, r.2, r.3, 6.0, alpha(BG, 0.45));
-        }
-        d.bypass_button(
-            BASS_BYPASS,
-            !self.params.bass_enabled.value(),
-            GOLD,
-            self.hover_amount(BASS_BYPASS) > 0.01,
-            self.button_press_amount(BASS_BYPASS),
-        );
-        if !self.params.key_split.value() {
-            let r = melody_container(self.params.mpe_enabled());
-            d.rounded_rect(r.0, r.1, r.2, r.3, 6.0, alpha(BG, 0.45));
-        }
-        d.bypass_button(
-            key_split_rect(self.params.mpe_enabled()),
-            !self.params.key_split.value(),
-            TEAL,
-            self.hover_amount(key_split_rect(self.params.mpe_enabled())) > 0.01,
-            self.button_press_amount(key_split_rect(self.params.mpe_enabled())),
-        );
         let voicing = self.spread_preview_notes();
         let theory_pitch = self.theory_changed_pitch();
         let learn_hover = if matches!(self.learning(), 4..=6) {
@@ -731,7 +738,7 @@ impl ChordboardView {
                 } else {
                     "Learn octave"
                 },
-                11.0,
+                TEXT_LABEL,
                 COLORS[4],
             );
             if control_hover && self.learning() != 4 {
@@ -773,7 +780,7 @@ impl ChordboardView {
                 } else {
                     "Control octave"
                 },
-                11.0,
+                TEXT_LABEL,
                 if self.learning() == 4 {
                     COLORS[4]
                 } else if hot {
@@ -992,7 +999,7 @@ impl ChordboardView {
         )
     }
 
-    fn draw_piano_leading(&self, d: &mut Draw) {
+    pub(super) fn draw_piano_leading(&self, d: &mut Draw) {
         let leading_y = PIANO_LEADING.1 + PIANO_LEADING.3 * 0.5;
         let from = self.snapshot.leading_from;
         let to = self.snapshot.leading_to;
@@ -1154,53 +1161,56 @@ impl ChordboardView {
             d.text(r.0 + r.2 - 18.0, r.1 + 19.0, "!", 15.0, GOLD);
         }
 
-        // Channel/mode controls from keyboard_controls()
         for (c, r) in self.keyboard_controls() {
-            let color = if c.id.starts_with("bass") {
-                GOLD
-            } else if c.id == "output_channel" {
-                COLORS[1]
-            } else if !self.params.key_split.value() {
-                MUTED
-            } else {
-                TEAL
-            };
-            if c.id == "bass_split" {
-                self.icon_button(
-                    d,
-                    r,
-                    if self.learning() == 5 {
-                        "Cancel"
-                    } else {
-                        "Learn Split"
-                    },
-                    self.learning() == 5,
-                    GOLD,
-                    style::Icon::Learn,
-                );
-                continue;
+            self.draw_keyboard_control(d, &c, r);
+        }
+    }
+
+    pub(super) fn draw_keyboard_control(&self, d: &mut Draw, c: &Control, r: Rect) {
+        let color = if c.id.starts_with("bass") {
+            GOLD
+        } else if c.id == "output_channel" {
+            COLORS[1]
+        } else if !self.params.key_split.value() {
+            MUTED
+        } else {
+            TEAL
+        };
+        if c.id == "bass_split" {
+            self.icon_button(
+                d,
+                r,
+                if self.learning() == 5 {
+                    "Cancel"
+                } else {
+                    "Learn Split"
+                },
+                self.learning() == 5,
+                GOLD,
+                style::Icon::Learn,
+            );
+            return;
+        }
+        let label = match c.id {
+            "bass_channel" => "Ch",
+            "output_channel" => "Ch",
+            "upper_channel" => "Ch",
+            "members" => "N",
+            _ => &c.name,
+        };
+        if keyboard_menu_range(c.id).is_some() {
+            self.button(
+                d,
+                r,
+                &format!("{label} {} ▾", self.display_value(c)),
+                self.menu == Some(Menu::KeyboardParam(c.id)),
+                color,
+            );
+            if self.routed_control(c).is_some() {
+                self.live_highlight(d, r);
             }
-            let label = match c.id {
-                "bass_channel" => "Ch",
-                "output_channel" => "Ch",
-                "upper_channel" => "Ch",
-                "members" => "N",
-                _ => &c.name,
-            };
-            if keyboard_menu_range(c.id).is_some() {
-                self.button(
-                    d,
-                    r,
-                    &format!("{label} {} ▾", self.display_value(&c)),
-                    self.menu == Some(Menu::KeyboardParam(c.id)),
-                    color,
-                );
-                if self.routed_control(&c).is_some() {
-                    self.live_highlight(d, r);
-                }
-            } else {
-                self.draw_control(d, &c, r, color);
-            }
+        } else {
+            self.draw_control(d, c, r, color);
         }
     }
 }

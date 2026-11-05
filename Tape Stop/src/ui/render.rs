@@ -24,7 +24,15 @@ impl TapeStopView {
 
         d.rounded_rect(0.0, 0.0, UI_W, HEADER_HEIGHT, 0.0, PANEL);
         d.text(36.0, 44.0, "TAPE STOP", 24.0, GOLD);
-        d.text(200.0, 44.0, "MIDI TAPE BRAKE", 13.0, TEXT);
+        let affect_midi = self.params.affect_midi.value();
+        d.button_surface(AFFECT_MIDI, TEAL, affect_midi as u8 as f32, 0.0, 0.0);
+        d.text_centered(
+            AFFECT_MIDI.0 + AFFECT_MIDI.2 * 0.5,
+            AFFECT_MIDI.1 + 20.0,
+            if affect_midi { "Affect MIDI: On" } else { "Affect MIDI: Off" },
+            12.0,
+            if affect_midi { TEAL } else { TEXT },
+        );
 
         d.appearance_button(THEME_BUTTON, prefs().label());
 

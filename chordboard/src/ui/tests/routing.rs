@@ -122,7 +122,13 @@ fn route_drag_to(
 }
 #[test]
 fn route_drag_links_only_on_drop_and_never_moves_the_destination_control() {
-    for (source, id) in [(0, "length_ms"), (3, "velocity_scale"), (8, "complexity")] {
+    let perf_mod = crate::engine::routing::PERF_MOD_SOURCES.start;
+    for (source, id) in [
+        (0, "length_ms"),
+        (3, "velocity_scale"),
+        (8, "complexity"),
+        (perf_mod, "velocity_scale"),
+    ] {
         let mut view = view(2, false);
         if id == "humanize" {
             open_arp(&mut view);
@@ -142,8 +148,8 @@ fn route_drag_links_only_on_drop_and_never_moves_the_destination_control() {
             &mut view,
             &mut cx,
             entity,
-            r.0 + 20.0,
-            r.1 + 20.0,
+            r.0 + r.2 * 0.5,
+            r.1 + r.3 * 0.5,
             WindowEvent::MouseDown(MouseButton::Left),
         );
         event(
@@ -194,16 +200,17 @@ fn route_drag_cancel_jitter_and_focus_loss_never_assign_or_strum() {
             BoolParam::new("Trackpad latch", true);
         let (mut cx, entity, changes) = context();
         let r = meter_rect(1);
+        let center = (r.0 + r.2 * 0.5, r.1 + r.3 * 0.5);
         event(
             &mut view,
             &mut cx,
             entity,
-            r.0 + 20.0,
-            r.1 + 20.0,
+            center.0,
+            center.1,
             WindowEvent::MouseDown(MouseButton::Left),
         );
         let (x, y) = if cancel == 0 {
-            (r.0 + 22.0, r.1 + 21.0)
+            (center.0 + 2.0, center.1 + 1.0)
         } else if cancel == 1 {
             // Gap between the arpeggiator module and the keyboard. Empty chrome, not a route target.
             (730.0, ARP_SURFACE.1 + ARP_SURFACE.3 + 6.0)
@@ -688,8 +695,6 @@ fn tracker_row_settings_are_not_route_targets_and_loop_edits_keep_manual_octaves
         "arp_page",
         "arp_octaves",
         "arp_pattern",
-        "humanize",
-        "swing",
         "rate",
         "gate",
         "arp_sync",
@@ -710,6 +715,8 @@ fn tracker_row_settings_are_not_route_targets_and_loop_edits_keep_manual_octaves
         assert!(!targets.iter().any(|(i, _)| TARGETS[*i].id == id));
     }
     for id in [
+        "swing",
+        "humanize",
         "octaves",
         "base_inversion",
         "complexity",
@@ -727,9 +734,9 @@ fn tracker_row_settings_are_not_route_targets_and_loop_edits_keep_manual_octaves
         .1;
     assert!(!hit(ARP_SURFACE, manual.0, manual.1));
     let (mut cx, target, changes) = context();
-    click(&mut view, &mut cx, target, arpeggiator::loop_add_rect());
+    click(&mut view, &mut cx, target, arpeggiator::tracker_voicing_button(false, true));
     let state = view.params.arpeggiator.snapshot();
-    assert_eq!(state.rows[0].settings.octaves, 2);
+    assert_eq!(state.rows[0].arp_octave, 1);
     assert_eq!(view.params.octaves.value(), 3);
     assert!(!changes
         .borrow()

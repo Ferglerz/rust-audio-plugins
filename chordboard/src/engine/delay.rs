@@ -20,6 +20,7 @@ const BEAT_EPSILON: f64 = 0.000_000_001;
 pub enum Action {
     On {
         token: u64,
+        source_token: u64,
         note: u8,
         velocity: f32,
         expression: Expression,
@@ -362,6 +363,7 @@ impl Runtime {
             };
             return Some(Action::On {
                 token,
+                source_token: train.source_token,
                 note: train.note,
                 velocity: train.velocity.min(1.0) as f32,
                 expression: train.expression,
@@ -376,6 +378,12 @@ impl Runtime {
     pub fn clear(&mut self) {
         self.trains.fill(None);
         self.echoes.fill(None);
+    }
+
+    /// Keep source routing metadata alive while any repeat still refers to it.
+    pub fn references(&self, source_token: u64) -> bool {
+        self.trains.iter().flatten().any(|v| v.source_token == source_token)
+            || self.echoes.iter().flatten().any(|v| v.source_token == source_token)
     }
 }
 

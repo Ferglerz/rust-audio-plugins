@@ -292,7 +292,7 @@ fn defaults_use_auto_strum_zero_sweep_and_unassigned_y_controller() {
     );
     assert_eq!(arp_power_rect().1, arp_direction_rect().1);
     assert!(arp_power_rect().0 + arp_power_rect().2 < arp_direction_rect().0);
-    assert!(METER_NUM.0 + METER_NUM.2 < TEMPO_SYNC.0);
+    assert!(METER_DEN.0 + METER_DEN.2 < TEMPO_SYNC.0);
 }
 #[test]
 fn direction_chooser_selects_exact_patterns() {
@@ -633,5 +633,35 @@ fn octave_modulation_reserves_its_maximum_string_count() {
     for norm in [0.0, 0.3, 0.7, 1.0, 0.0] {
         view.snapshot.routed[target] = Some(norm);
         assert_eq!(view.string_count(), 12);
+    }
+}
+
+#[test]
+fn performance_arp_edits_are_independent_and_disable_glissando_controls() {
+    let mut view = view(2, false);
+    let (mut cx, target, changes) = context();
+    let original = view.params.arpeggiator.snapshot().rows[0].clone();
+    click(&mut view, &mut cx, target, arp_power_rect());
+    click(&mut view, &mut cx, target, arpeggiator::loop_add_rect());
+    assert!(view.performance_arp_enabled());
+    assert_eq!(view.params.arpeggiator.snapshot().performance.settings.octaves, 2);
+    assert_eq!(view.params.arpeggiator.snapshot().rows[0], original);
+    assert!(!view.placed_controls().iter().any(|(c, _)| c.id == "gliss_ms"));
+    click(&mut view, &mut cx, target, GLISS_DIRECTION);
+    assert!(view.menu.is_none());
+    view.arp_row_param_event(&RawParamEvent::SetParameterNormalized(view.arp_params().arp_pattern.as_ptr(), 1.0));
+    assert_eq!(view.params.arpeggiator.snapshot().performance.settings.pattern, 7);
+    click(&mut view, &mut cx, target, midi_fx::PROGRAMMING_TAB);
+    assert_eq!(view.arp_params().arp_pattern.value(), original.settings.pattern as i32);
+    click(&mut view, &mut cx, target, midi_fx::PERFORMANCE_TAB);
+    assert_eq!(view.arp_params().arp_pattern.value(), 7);
+    click(&mut view, &mut cx, target, arp_power_rect());
+    assert!(view.placed_controls().iter().any(|(c, _)| c.id == "gliss_ms"));
+    changes.borrow_mut().clear();
+    for expanded in [0.0, 1.0] {
+        view.expand_progress = expanded;
+        view.expand_target = expanded;
+        click(&mut view, &mut cx, target, strum_chord_latch_rect(expanded));
+        assert_eq!(changes.borrow().last().copied(), Some((view.params.strum_chord_latch.as_ptr(), 1.0)));
     }
 }

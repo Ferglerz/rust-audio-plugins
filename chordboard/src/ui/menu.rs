@@ -117,6 +117,12 @@ impl Menu {
                 ("MIDI expression", (1..7).collect()),
                 ("Performance", (7..10).collect()),
                 ("Arpeggiator", (10..13).collect()),
+                (
+                    "Performance Arp",
+                    crate::engine::routing::PERF_MOD_SOURCES
+                        .map(|source| source + 1)
+                        .collect(),
+                ),
             ],
             Self::RouteTarget => {
                 let targets: Vec<_> = crate::engine::routing::available_targets().collect();
@@ -321,7 +327,7 @@ impl ChordboardView {
     pub(super) fn draw_root_menu(&self, d: &mut Draw, menu: Menu) {
         let bounds = self.menu_bounds(menu);
         self.surface(d, bounds);
-        d.text(bounds.0 + 12.0, bounds.1 + 24.0, "Root note", 12.0, MUTED);
+        d.text(bounds.0 + 12.0, bounds.1 + 24.0, "Root note", TEXT_LABEL, MUTED);
         for black in [false, true] {
             for note in (0..12u8).filter(|&n| piano_black(n) == black) {
                 let r = root_key_rect(bounds, note);
@@ -376,7 +382,7 @@ impl ChordboardView {
                         option.0 + option.2 * 0.5,
                         option.1 + option.3 - 8.0,
                         &music::label(label),
-                        11.0,
+                        TEXT_LABEL,
                         if on {
                             GOLD
                         } else if black {

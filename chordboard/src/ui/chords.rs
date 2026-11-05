@@ -1,6 +1,58 @@
 use super::*;
 
 impl ChordboardView {
+    pub(super) fn draw_gliss_direction(&self, d: &mut Draw) {
+        self.button(d, GLISS_DIRECTION, &format!("Direction: {} ▾", ARP_PATTERN_NAMES[self.params.gliss_direction.value() as usize]), self.menu == Some(Menu::GlissDirection), GOLD);
+    }
+
+    pub(super) fn draw_chord_latch(&self, d: &mut Draw) {
+        let live_latch = self.routed_plain("latch");
+        let latched = live_latch.map_or(self.params.latch.value(), |value| value >= 0.5);
+        let latch_color = if latched { GOLD } else { MUTED };
+        let radius = if self.quick_midi.show { 5.0 } else { 0.0 };
+        d.rounded_rect(LATCH.0, LATCH.1, LATCH.2, LATCH.3, radius, BG);
+        d.rounded_rect(
+            LATCH.0,
+            LATCH.1,
+            LATCH.2,
+            LATCH.3,
+            radius,
+            alpha(
+                if latched { GOLD } else { TEXT },
+                if latched { 0.22 } else { 0.0 } + self.hover_amount(LATCH) * 0.08,
+            ),
+        );
+        d.outline_rounded(
+            LATCH.0,
+            LATCH.1,
+            LATCH.2,
+            LATCH.3,
+            5.0,
+            if latched { GOLD } else { LINE },
+            1.5,
+        );
+        d.font = self.bold_font.get();
+        style::Icon::Lock.draw(d, LATCH.0 + 15.0, LATCH.1 + 24.0, latch_color);
+        d.text_centered(
+            LATCH.0 + LATCH.2 * 0.5 + 9.0,
+            LATCH.1 + 28.0,
+            "Latch",
+            14.0,
+            latch_color,
+        );
+        d.text_centered(
+            LATCH.0 + LATCH.2 * 0.5,
+            LATCH.1 + 45.0,
+            "Shift",
+            TEXT_LABEL,
+            MUTED,
+        );
+        d.font = self.ui_font.get();
+        if live_latch.is_some() {
+            self.live_highlight(d, LATCH);
+        }
+    }
+
     pub(super) fn current_chord_key(&self) -> Option<usize> {
         if self.snapshot.root < 0 && self.snapshot.notes.len == 0 {
             return None;
@@ -54,49 +106,7 @@ impl ChordboardView {
     pub(super) fn draw_chords(&self, d: &mut Draw) {
         d.font = self.ui_font.get();
         self.draw_chord_page_title(d, "CHORDS");
-        let live_latch = self.routed_plain("latch");
-        let latched = live_latch.map_or(self.params.latch.value(), |value| value >= 0.5);
-        let latch_color = if latched { GOLD } else { MUTED };
-        d.rect(LATCH.0, LATCH.1, LATCH.2, LATCH.3, BG);
-        d.rect(
-            LATCH.0,
-            LATCH.1,
-            LATCH.2,
-            LATCH.3,
-            alpha(
-                if latched { GOLD } else { TEXT },
-                if latched { 0.22 } else { 0.0 } + self.hover_amount(LATCH) * 0.08,
-            ),
-        );
-        d.outline_rounded(
-            LATCH.0,
-            LATCH.1,
-            LATCH.2,
-            LATCH.3,
-            5.0,
-            if latched { GOLD } else { LINE },
-            1.5,
-        );
-        d.font = self.bold_font.get();
-        style::Icon::Lock.draw(d, LATCH.0 + 15.0, LATCH.1 + 24.0, latch_color);
-        d.text_centered(
-            LATCH.0 + LATCH.2 * 0.5 + 9.0,
-            LATCH.1 + 28.0,
-            "Latch",
-            14.0,
-            latch_color,
-        );
-        d.text_centered(
-            LATCH.0 + LATCH.2 * 0.5,
-            LATCH.1 + 45.0,
-            "Shift",
-            11.0,
-            MUTED,
-        );
-        d.font = self.ui_font.get();
-        if live_latch.is_some() {
-            self.live_highlight(d, LATCH);
-        }
+        self.draw_chord_latch(d);
         self.button_tinted(
             d,
             Menu::Key.trigger_rect(),
@@ -120,10 +130,13 @@ impl ChordboardView {
         }
 
         let row_chord = self.params.arpeggiator.snapshot().rows[self.arp_ui.edit_page].chord;
+        let gliss_disabled = d.disabled;
+        d.disabled |= self.performance_arp_enabled();
         if let Some(c) = self.control("gliss_ms") {
             self.draw_control(d, &c, GLISS_RATE, GOLD);
         }
-        self.button(d, GLISS_DIRECTION, &format!("Direction: {} ▾", ARP_PATTERN_NAMES[self.params.gliss_direction.value() as usize]), self.menu == Some(Menu::GlissDirection), GOLD);
+        self.draw_gliss_direction(d);
+        d.disabled = gliss_disabled;
 
         let current_key = self.current_chord_key();
         for i in 0..KEY_COUNT {
@@ -282,7 +295,7 @@ impl ChordboardView {
                 );
                 let roman = music::label(&roman);
                 let roman_size =
-                    (11.0 * (w - 8.0) / self.text_width(d, &roman, 11.0).max(1.0)).min(11.0);
+                    (TEXT_LABEL * (w - 8.0) / self.text_width(d, &roman, TEXT_LABEL).max(1.0)).min(TEXT_LABEL);
                 d.text(
                     x + 4.0,
                     y + 40.0,
@@ -292,10 +305,10 @@ impl ChordboardView {
                 );
             }
             if ignored {
-                d.text(x + w - 8.0, y + 13.0, "!", 11.0, COLORS[4]);
+                d.text(x + w - 8.0, y + 13.0, "!", TEXT_LABEL, COLORS[4]);
             }
             d.font = self.font.get();
-            d.text_right(x + w - 4.0, y + h - 4.0, harmony::HINTS[i], 11.0, MUTED);
+            d.text_right(x + w - 4.0, y + h - 4.0, harmony::HINTS[i], TEXT_LABEL, MUTED);
         }
         d.font = self.ui_font.get();
         self.draw_memories(d);

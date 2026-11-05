@@ -9,9 +9,12 @@ pub mod ui;
 
 use params::{CpuMode, OpenWurliUiParams};
 
-// Preserve the default signal level feeding Extra Sag. Volume is applied
-// after all nonlinear stages, relative to this fixed engine output level.
-const ENGINE_VOLUME: f32 = 0.5;
+// Use upstream v0.9's nominal physical volume-pot position. The wrapper's
+// Volume remains a linear output control with its existing 50% default.
+const ENGINE_VOLUME: f64 = 0.8;
+const OUTPUT_VOLUME_REFERENCE: f32 = 0.5;
+// Upstream's plugin-level alignment, applied after the physical signal chain.
+const OUTPUT_ALIGNMENT_DB: f32 = 14.0;
 
 pub struct OpenWurliUi {
     params: Arc<OpenWurliUiParams>,
@@ -84,7 +87,7 @@ impl OpenWurliUi {
                 CpuMode::Fast => CircuitMode::Fast,
                 CpuMode::Heavy => CircuitMode::Heavy,
             });
-        self.engine.set_volume(ENGINE_VOLUME as f64);
+        self.engine.set_volume(ENGINE_VOLUME);
         self.engine
             .set_tremolo_depth(self.params.tremolo_depth.value() as f64);
         self.engine
@@ -156,9 +159,12 @@ impl OpenWurliUi {
     }
 
     fn finish_output(&mut self, output: &mut [f32]) {
+        for sample in output.iter_mut() {
+            *sample *= util::db_to_gain(OUTPUT_ALIGNMENT_DB);
+        }
         self.finish.process(output, self.params.rail_sag.value());
         for sample in output {
-            *sample *= self.params.volume.smoothed.next() / ENGINE_VOLUME;
+            *sample *= self.params.volume.smoothed.next() / OUTPUT_VOLUME_REFERENCE;
         }
     }
 }
@@ -193,7 +199,7 @@ impl Plugin for OpenWurliUi {
             *drive = drive.clamp(0.5, params::PICKUP_DRIVE_MAX);
         }
         // Missing parameters retain their current value in NIH-plug. Explicitly
-        // restore the old Fast sound even when loading into a Heavy instance.
+        // restore Fast selection even when loading into a Heavy instance.
         state
             .params
             .entry("extended_notes".into())
@@ -629,6 +635,19 @@ mod tests {
     }
 
     #[test]
+    fn default_output_uses_upstream_fourteen_db_alignment() {
+        with_circuit_stack(|| {
+            let mut plugin = OpenWurliUi::default();
+            plugin.params.volume.smoothed.reset(0.5);
+            let mut output = [0.1, -0.1, 0.0];
+            plugin.finish_output(&mut output);
+            assert!((output[0] - 0.5011872).abs() < 1e-6);
+            assert!((output[1] + 0.5011872).abs() < 1e-6);
+            assert_eq!(output[2], 0.0);
+        });
+    }
+
+    #[test]
     fn fast_finish_preserves_silence_and_controls_sag() {
         let mut finish = FastFinish::new(44_100.0);
         let original = [0.2; 1024];
@@ -726,7 +745,10 @@ mod tests {
                     let (muted, muted_sag) = render(0.0);
                     assert!(quiet.iter().any(|s| s.abs() > 1e-6));
                     assert!(
-                        quiet.iter().zip(&loud).all(|(a, b)| (2.0 * a - b).abs() < 1e-6),
+                        quiet
+                            .iter()
+                            .zip(&loud)
+                            .all(|(a, b)| (2.0 * a - b).abs() < 1e-6),
                         "{mode:?}, sag={sag}: Volume must scale output without changing tone"
                     );
                     assert_eq!(quiet_sag, loud_sag, "Volume changed the sag envelope");

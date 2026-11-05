@@ -7,6 +7,7 @@ impl Engine {
 
     /// Every note currently owned by this processor, including transparent melody.
     pub fn owned_output_notes(&self) -> [[bool; 128]; 16] {
+        if self.fx.active() { return self.fx.owned_notes(); }
         let mut notes = self.melody;
         for input in &self.bass {
             for (note, channel) in input.iter().enumerate() {
@@ -42,8 +43,8 @@ impl Engine {
         out: &mut impl FnMut(Out),
     ) {
         if let Some(channel) = self.bass[input][note].take() {
-            self.release_delay_source(Self::bass_delay_token(input, note));
-            if !self.output_owned(channel, note as u8) {
+            self.release_fx_source(Self::bass_delay_token(input, note), out);
+            if !self.fx.active() && !self.output_owned(channel, note as u8) {
                 out(Out::Off(channel, note as u8, velocity));
             }
         }
@@ -69,8 +70,8 @@ impl Engine {
             self.reclaim_delay_channel(channel, out);
             let owned = self.output_owned(channel, note);
             self.bass[input][note_index] = Some(channel);
-            self.capture_bass_delay(input, channel, note, velocity);
-            if !owned {
+            self.capture_bass_fx(input, channel, note, velocity);
+            if !self.fx.active() && !owned {
                 out(Out::On(channel, note, velocity.clamp(0.01, 1.0)));
             }
         } else if !self.bass_sustain[input] {
@@ -108,7 +109,7 @@ impl Engine {
 
     pub(super) fn melody_bend(&self, channel: u8) -> f32 {
         let member = self.config.mpe
-            && (0..self.config.members.clamp(1, 15) as usize).any(|i| self.member(i) == channel);
+            && (self.fx.active() || (0..self.config.members.clamp(1, 15) as usize).any(|i| self.member(i) == channel));
         let range = if member {
             self.config.bend_range
         } else {
@@ -121,6 +122,7 @@ impl Engine {
     }
 
     pub(super) fn emit_melody_expression(&self, channel: u8, out: &mut impl FnMut(Out)) {
+        if self.fx.active() { return; }
         let expression = self.channels[channel as usize];
         out(Out::Pressure(channel, expression.pressure));
         out(Out::Cc(channel, 74, expression.timbre));
@@ -136,7 +138,16 @@ impl Engine {
         out: &mut impl FnMut(Out),
     ) {
         let id = channel as usize * 128 + note as usize;
+        if !pressed && self.fx.active() && self.melody_sustain[channel as usize] {
+            self.down[id] = false;
+            return;
+        }
+        if pressed && self.fx.active() && self.melody[channel as usize][note as usize] && !self.down[id] {
+            self.melody[channel as usize][note as usize] = false;
+            self.release_fx_source(Self::melody_delay_token(channel, note), out);
+        }
         if pressed == self.melody[channel as usize][note as usize] {
+            if pressed { self.down[id] = true; }
             return;
         }
         if pressed {
@@ -149,7 +160,7 @@ impl Engine {
             self.setup(out);
             // A transparent MPE melody owns its original member channel. Move
             // generated voices away before forwarding its expression or attack.
-            if self.config.mpe {
+            if self.config.mpe && !self.fx.active() {
                 let displaced = self.voices;
                 for (i, voice) in displaced.into_iter().enumerate() {
                     if let Some(voice) = voice.filter(|v| v.channel == channel) {
@@ -169,20 +180,22 @@ impl Engine {
             self.emit_melody_expression(channel, out);
             let mut expression = self.channels[channel as usize];
             expression.bend = self.melody_bend(channel);
-            self.capture_delay_source(
+            self.capture_fx_source(
                 crate::midi_fx::source::MELODY,
                 Self::melody_delay_token(channel, note),
+                channel,
                 note,
                 velocity,
                 expression,
                 None,
+                false,
             );
-            if !already_owned {
+            if !self.fx.active() && !already_owned {
                 out(Out::On(channel, note, velocity.clamp(0.01, 1.0)));
             }
         } else {
-            self.release_delay_source(Self::melody_delay_token(channel, note));
-            if !self.output_owned(channel, note) {
+            self.release_fx_source(Self::melody_delay_token(channel, note), out);
+            if !self.fx.active() && !self.output_owned(channel, note) {
                 out(Out::Off(channel, note, velocity));
             }
         }
@@ -216,14 +229,15 @@ impl Engine {
                 if self.melody[channel][note] {
                     self.melody[channel][note] = false;
                     self.down[channel * 128 + note] = false;
-                    if !self.output_owned(channel as u8, note as u8) {
+                    self.release_fx_source(Self::melody_delay_token(channel as u8, note as u8), out);
+                    if !self.fx.active() && !self.output_owned(channel as u8, note as u8) {
                         out(Out::Off(channel as u8, note as u8, 0.0));
                     }
                 }
             }
             if self.melody_sustain[channel] {
                 self.melody_sustain[channel] = false;
-                out(Out::Cc(channel as u8, 64, 0.0));
+                if !self.fx.active() { out(Out::Cc(channel as u8, 64, 0.0)); }
             }
         }
         self.layer_latched = false;
@@ -235,7 +249,7 @@ impl Engine {
 
     pub(super) fn sync_layers(&mut self, out: &mut impl FnMut(Out)) {
         let enabled =
-            (self.config.always_bass && self.config.bass_enabled) || self.config.always_chord;
+            (self.config.always_bass && self.config.bass_enabled) || (self.config.always_chord && !self.performance_arp_enabled());
         // Melody owns only its transparent notes; chord selection gates the
         // accompaniment regardless of whether the melody split is enabled.
         let held = self.chord_input_held();
@@ -247,7 +261,7 @@ impl Engine {
         }
         let mut desired = [false; 128];
         if enabled && (held || self.layer_latched) {
-            if self.config.always_chord {
+            if self.config.always_chord && !self.performance_arp_enabled() {
                 for &note in self.full_notes.as_slice() {
                     desired[note as usize] = true;
                 }

@@ -68,7 +68,7 @@ impl Default for OpenWurliUiParams {
             speaker_character: percent_param("Speaker Character", 0.0, 50.0),
             // Retain the saved ID, but learned voicing is now always active.
             mlp_enabled: BoolParam::new("MLP Corrections (always enabled)", true).hide(),
-            // Old presets omit this parameter and retain the previous Fast sound.
+            // Old presets omit this parameter and retain Fast selection.
             cpu_mode: EnumParam::new("CPU Mode", CpuMode::Fast),
             reed_decay: FloatParam::new(
                 "Reed Decay",

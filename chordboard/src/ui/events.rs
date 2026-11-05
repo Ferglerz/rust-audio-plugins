@@ -83,6 +83,10 @@ impl ChordboardView {
             || self.arp_editor_value_at(x, y)
     }
     fn press_expanded_strum(&mut self, cx: &mut EventContext, x: f32, y: f32) -> bool {
+        if hit(strum_chord_latch_rect(self.expand_t()), x, y) {
+            self.set(cx, "strum_chord_latch", if self.params.strum_chord_latch.value() { 0.0 } else { 1.0 });
+            return true;
+        }
         if hit(strum_bypass_rect(self.expand_t()), x, y) {
             self.toggle_strum_bypass(cx);
             return true;
@@ -209,9 +213,9 @@ impl ChordboardView {
         self.edit = None;
         let defaults = crate::arpeggiator::Settings::default();
         let value = match control.id {
-            "swing" => self.arp_params().swing.preview_normalized(defaults.swing),
+            "swing" => self.params.swing.preview_normalized(defaults.swing),
             "humanize" => self
-                .arp_params()
+                .params
                 .humanize
                 .preview_normalized(defaults.humanize),
             "arp_free_ms" => self
@@ -266,7 +270,11 @@ impl ChordboardView {
             self.set_panel(None);
             return false;
         }
+        let was_tracker_dragging = self.tracker_drag.is_some();
         self.refresh_arp_editor_params();
+        if was_tracker_dragging && self.tracker_drag.is_none() {
+            cx.release();
+        }
         let bounds = cx.bounds();
         let Some((x, y)) = pleasant_ui::local_xy(
             bounds.x,
@@ -279,18 +287,43 @@ impl ChordboardView {
             return false;
         };
         let x = x - CONTENT_X;
+        if self.tracker_drag.is_some() && self.tracker_event(cx, event, x, y) {
+            return true;
+        }
         if self.custom_event(cx, event, x, y) {
             return true;
         }
-        if !self.quick_midi.show && self.midi_fx_event(cx, event, x, y) {
+        if self.midi_fx_event(cx, event, x, y) {
+            return true;
+        }
+        if !self.fx_ui.open && self.panel.is_none() && !self.quick_midi.show
+            && self.menu.is_none() && self.edit.is_none() && self.drag.is_none()
+            && !self.arp_editor_dragging()
+            && hit(TRACKER_SURFACE, x, y)
+            && !(self.programming && !self.top_slide.active() && y < TRACKER_SURFACE.1 + MODULE_HEADER_H && x >= METER_NUM.0)
+            && (self.programming || self.top_slide.active())
+            && matches!(event, WindowEvent::MouseDown(_) | WindowEvent::MouseDoubleClick(_)
+                | WindowEvent::MouseTripleClick(_) | WindowEvent::MouseMove(_, _)
+                | WindowEvent::MouseScroll(_, _))
+        {
+            self.pointer = Some((x, y));
+            if matches!(event, WindowEvent::MouseDown(MouseButton::Left)) {
+                self.button_press_origin = Some((x, y));
+            }
+            if !self.top_slide.active() {
+                self.tracker_event(cx, event, x, y);
+            }
+            cx.needs_redraw();
             return true;
         }
         // Tracker navigation remains available while moving controls cannot be
         // edited at their destination coordinates. Releases still end gestures.
         if !self.fx_ui.open
             && self.row_slide.active()
-            && (x >= 0.0 || hit(PIANO_SURFACE, x, y))
-            && y >= HEADER_H
+            && hit(ARP_SURFACE, x, y)
+            && !globals::global_controls().iter().any(|(_, r)| hit(*r, x, y))
+            && self.tracker_drag.is_none()
+            && !(self.tracker_visible() && hit(TRACKER_SURFACE, x, y))
             && matches!(
                 event,
                 WindowEvent::MouseDown(_)
@@ -379,12 +412,12 @@ impl ChordboardView {
                 | WindowEvent::MouseTripleClick(MouseButton::Left) => {
                     self.button_press_origin = Some((x, y));
                     self.press_surface_midi_target(cx, x, y, false);
-                    self.press_global(cx, x, y, false);
+                    if !self.fx_ui.open { self.press_global(cx, x, y, false); }
                     self.press_quick_midi(cx, x, y, false);
                 }
                 WindowEvent::MouseDown(MouseButton::Right) => {
                     self.press_surface_midi_target(cx, x, y, true);
-                    self.press_global(cx, x, y, true);
+                    if !self.fx_ui.open { self.press_global(cx, x, y, true); }
                     self.press_quick_midi(cx, x, y, true);
                 }
                 WindowEvent::KeyDown(Code::Escape, _) => {
@@ -634,21 +667,6 @@ impl ChordboardView {
                 if self.press_global(cx, x, y, false) || self.press_quick_midi(cx, x, y, false) {
                     return true;
                 }
-                if self.tracker_selection
-                    && self.panel.is_none()
-                    && self.expand_t() == 0.0
-                    && hit(CHORDS_SURFACE, x, y)
-                {
-                    if let Some(chord) = (0..KEY_COUNT)
-                        .find(|&i| {
-                            hit(self.keyboard_key_rect(i), x, y) && self.keyboard_chord(i).is_some()
-                        })
-                        .and_then(|i| self.keyboard_chord(i))
-                    {
-                        self.assign_tracker_chord(chord);
-                        return true;
-                    }
-                }
                 if self.strum_bound_at(x, y).is_some()
                     || !(self.manual_playing() && hit(self.play_pad(), x, y))
                 {
@@ -673,7 +691,9 @@ impl ChordboardView {
                 {
                     return self.press_piano(cx, x, y);
                 }
-                if self.expand_t() > 0.0 && y >= HEADER_H && y < ARP_SURFACE.1 {
+                if !self.programming && self.expand_t() > 0.0 && x < MOD_SURFACE.0
+                    && y >= HEADER_H && y < ARP_SURFACE.1
+                {
                     return self.press_expanded_strum(cx, x, y);
                 }
                 if hit(self.expand_button(), x, y) {
@@ -716,32 +736,39 @@ impl ChordboardView {
                         return true;
                     }
                 }
-                if !(self.params.tempo_sync.value() && self.snapshot.time_sig_host)
+                if self.tracker_visible() && !(self.params.tempo_sync.value() && self.snapshot.time_sig_host)
                     && (hit(METER_NUM, x, y) || hit(METER_DEN, x, y))
                 {
                     self.open_menu(Menu::Meter(hit(METER_DEN, x, y)));
                     return true;
                 }
-                if hit(DAW_ALIGNMENT, x, y) {
+                if self.tracker_visible() && hit(DAW_ALIGNMENT, x, y) {
                     self.set(cx, "daw_alignment", if self.params.daw_alignment.value() { 0.0 } else { 1.0 });
                     return true;
                 }
-                if (pleasant_ui::tempo::Header {
-                    source: TEMPO_SYNC,
-                    bpm: TEMPO_CONTROL,
-                })
-                .hit(x, y)
-                    == Some(pleasant_ui::tempo::Hit::Source)
-                {
-                    self.set(
-                        cx,
-                        "tempo_sync",
-                        if self.params.tempo_sync.value() {
-                            0.0
-                        } else {
-                            1.0
-                        },
-                    );
+                if self.tracker_visible() {
+                    use pleasant_ui::tempo::{Header, Hit};
+                    let header = Header {
+                        source: TEMPO_SYNC,
+                        bpm: TEMPO_CONTROL,
+                    };
+                    match header.hit(x, y) {
+                        Some(Hit::Source) => {
+                            let value = if self.params.tempo_sync.value() { 0.0 } else { 1.0 };
+                            self.set(cx, "tempo_sync", value);
+                            return true;
+                        }
+                        Some(Hit::Bpm) => {
+                            if !self.params.tempo_sync.value() {
+                                self.press_control(cx, x, y);
+                            }
+                            return true;
+                        }
+                        None => {}
+                    }
+                }
+                if !self.programming && hit(strum_chord_latch_rect(self.expand_t()), x, y) {
+                    self.set(cx, "strum_chord_latch", if self.params.strum_chord_latch.value() { 0.0 } else { 1.0 });
                     return true;
                 }
                 if hit(strum_latch_rect(self.expand_t()), x, y) {
@@ -780,15 +807,18 @@ impl ChordboardView {
                     return true;
                 }
                 for i in 0..KEY_COUNT {
-                    if self.keyboard_chord(i).is_some() && hit(self.keyboard_key_rect(i), x, y) {
-                        if let Some(chord) = self.keyboard_chord(i) {
-                            self.bridge.send(Command::KeyDown(
-                                i as u8 + POINTER_KEY_OFFSET,
-                                (self.params.keyboard_octave.value() + chord.root as i32) as u8,
-                                chord.quality,
-                            ));
-                        }
-                        self.drag = Some(Drag::Key(i as u8 + POINTER_KEY_OFFSET));
+                    if !hit(self.keyboard_key_rect(i), x, y) {
+                        continue;
+                    }
+                    if let Some(chord) = self.keyboard_chord(i) {
+                        self.assign_tracker_chord(chord);
+                        let token = i as u8 + POINTER_KEY_OFFSET;
+                        self.bridge.send(Command::KeyDown(
+                            token,
+                            (self.params.keyboard_octave.value() + chord.root as i32) as u8,
+                            chord.quality,
+                        ));
+                        self.drag = Some(Drag::Key(token));
                         cx.capture();
                         return true;
                     }
@@ -824,7 +854,7 @@ impl ChordboardView {
                     self.inversion(cx, 1);
                     return true;
                 }
-                if hit(GLISS_DIRECTION, x, y) {
+                if !self.performance_arp_enabled() && hit(GLISS_DIRECTION, x, y) {
                     self.open_menu(Menu::GlissDirection);
                     return true;
                 }

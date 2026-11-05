@@ -155,7 +155,7 @@ impl Engine {
         }
         self.source(4, value, out);
         self.channels[channel as usize].pressure = value.clamp(0.0, 1.0);
-        if self.config.key_split
+        if !self.fx.active() && self.config.key_split
             && note.map_or_else(
                 || self.melody_channel(channel),
                 |note| self.melody_note_held(channel, note),
@@ -181,7 +181,7 @@ impl Engine {
             return;
         }
         self.input_bend_values[channel as usize] = value.clamp(0.0, 1.0);
-        if self.config.key_split && self.melody_channel(channel) {
+        if !self.fx.active() && self.config.key_split && self.melody_channel(channel) {
             out(Out::Bend(channel, self.melody_bend(channel)));
         }
         self.source(0, value, out);
@@ -273,12 +273,17 @@ impl Engine {
                 self.cc[channel as usize].fill(0);
                 self.cc_known[channel as usize].fill(false);
                 self.bass_pedal(channel, false, out);
+                self.fx_master_pedal(channel, false, out);
                 self.channels[channel as usize] = Expression::default();
                 self.input_bend_values[channel as usize] = 0.5;
                 if self.config.key_split {
                     self.melody_sustain[channel as usize] = false;
-                    out(Out::Cc(channel, 121, value));
-                    out(Out::Cc(channel, 64, 0.0));
+                    if self.fx.active() {
+                        self.release_fx_melody_pedal(channel, out);
+                    } else {
+                        out(Out::Cc(channel, 121, value));
+                        out(Out::Cc(channel, 64, 0.0));
+                    }
                 }
                 if self.root.is_some_and(|s| s.held && s.channel == channel) {
                     self.expression = Expression::default();
@@ -288,13 +293,17 @@ impl Engine {
             }
             64 => {
                 self.bass_pedal(channel, raw >= 64, out);
+                self.fx_master_pedal(channel, raw >= 64, out);
                 if self.config.key_split {
                     self.melody_sustain[channel as usize] = raw >= 64;
-                    out(Out::Cc(channel, 64, value));
+                    if self.fx.active() {
+                        if raw < 64 { self.release_fx_melody_pedal(channel, out); }
+                    } else { out(Out::Cc(channel, 64, value)); }
                 }
                 self.pedal = raw >= 64;
                 if !self.pedal
                     && !self.config.latch
+                    && !self.strum_chord_retained()
                     && !self.config.key_split
                     && self.root.is_none()
                 {
@@ -338,7 +347,7 @@ impl Engine {
         }
         if cc == 74 {
             self.channels[channel as usize].timbre = value;
-            if self.config.key_split && self.melody_channel(channel) {
+            if !self.fx.active() && self.config.key_split && self.melody_channel(channel) {
                 out(Out::Cc(channel, 74, value));
             }
             if self.root.is_some_and(|s| s.held && s.channel == channel) {

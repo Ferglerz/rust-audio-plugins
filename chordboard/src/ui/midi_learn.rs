@@ -18,6 +18,7 @@ pub(super) struct QuickMidiUi {
     elapsed: f32,
     signature: [u32; COUNT],
     armed: u32,
+    power: [bool; COUNT - midi::PERFORMANCE_ARP],
 }
 
 impl Default for QuickMidiUi {
@@ -29,6 +30,7 @@ impl Default for QuickMidiUi {
             elapsed: pleasant_ui::page_slide::DURATION,
             signature: [0; COUNT],
             armed: 0,
+            power: [false; COUNT - midi::PERFORMANCE_ARP],
         }
     }
 }
@@ -74,40 +76,133 @@ pub(super) fn mode_rect(index: usize) -> Rect {
 impl ChordboardView {
     /// Shared placement keeps the learn overlay and its pointer targets aligned.
     pub(super) fn surface_midi_targets(&self) -> Vec<(usize, Rect)> {
-        let mut targets: Vec<_> = self.base_controls().into_iter()
-            .filter(|(c, _)| !globals::is_global(c.id))
+        if self.fx_ui.open {
+            return self.fx_midi_targets();
+        }
+        let mut targets: Vec<_> = self.keyboard_controls().into_iter()
+            .chain(arp_controls().into_iter().filter_map(|(id, r)| self.control(id).map(|c| (c, r))))
             .filter_map(|(c, r)| IDS.iter().position(|id| *id == c.id).map(|i| (i, r)))
             .collect();
         targets.extend([
-            (midi::DAW_ALIGNMENT, DAW_ALIGNMENT),
             (midi::ALWAYS_BASS, ALWAYS_BASS),
             (midi::AFFECT_CHORDS, affect_chords_rect(self.params.mpe_enabled())),
             (midi::KEY_SPLIT, key_split_rect(self.params.mpe_enabled())),
             (midi::SPLIT_NOTE, melody_split_rect(self.params.mpe_enabled())),
             (midi::BASS_ENABLED, BASS_BYPASS),
-            (midi::STRUM_ENABLED, strum_bypass_rect(self.expand_t())),
-            (midi::OCTAVES, strum_octaves_rect(self.expand_t())),
             (1, self.voice_leading_rect()),
-            (5, LATCH),
-            (6, arp_power_rect()),
         ]);
-        // The expanded performance surface covers the chord chooser and latch.
-        if self.expand_t() > 0.0 {
-            targets.retain(|(i, _)| !matches!(*i, midi::ROOT_ON_SELECT | 5));
+        if self.programming {
+            targets.push((6, midi_fx::PROGRAMMING_TRANSPORT));
         }
-        if let Some(r) = self.voicing_bounds() { targets.push((0, r)); }
+        if !self.top_slide.active() {
+            if self.programming {
+                targets.extend([(midi::DAW_ALIGNMENT, DAW_ALIGNMENT), (6, tracker::transport_rect())]);
+                if !self.params.tempo_sync.value() {
+                    targets.push((midi::TEMPO, TEMPO_CONTROL));
+                }
+            } else {
+                targets.extend([
+                    (midi::STRUM_ENABLED, strum_bypass_rect(self.expand_t())),
+                    (midi::OCTAVES, strum_octaves_rect(self.expand_t())),
+                ]);
+                if self.expand_t() == 0.0 {
+                    targets.extend([
+                        (midi::ROOT_ON_SELECT, ROOT_ON_SELECT),
+                        (5, LATCH),
+                        (midi::GLISS_TIME, GLISS_RATE),
+                        (midi::GLISS_DIRECTION, GLISS_DIRECTION),
+                    ]);
+                }
+            }
+        }
+        if !self.programming && !self.row_slide.active() {
+            targets.push((midi::PERFORMANCE_ARP, arp_power_rect()));
+        }
+        if let Some(r) = self.voicing_bounds() {
+            targets.push((0, r));
+        }
         targets
     }
 
-    pub(super) fn draw_surface_midi_targets(&self, d: &mut Draw) {
+    fn draw_surface_midi_targets(&self, d: &mut Draw) {
+        if !self.fx_ui.open {
+            self.draw_piano_learn_buttons(d, false);
+        }
         for (target, r) in self.surface_midi_targets() {
+            match target {
+                0 => self.button(d, r, harmony::VOICING_NAMES[self.params.spread.value() as usize], false, GOLD),
+                1 => self.draw_piano_leading(d),
+                5 => self.draw_chord_latch(d),
+                6 => self.draw_tracker_transport(d, r),
+                midi::OCTAVES => self.draw_strum_octaves(d),
+                midi::DAW_ALIGNMENT => self.draw_daw_alignment(d),
+                midi::GLISS_DIRECTION => self.draw_gliss_direction(d),
+                midi::TEMPO => self.button(d, r, &format!("{:.1} bpm", self.params.tempo.value()), false, GOLD),
+                midi::BASS_ENABLED | midi::KEY_SPLIT | midi::STRUM_ENABLED | midi::PERFORMANCE_ARP..midi::COUNT => {
+                    let color = if midi::value(&self.params, target) == 0 {
+                        MUTED
+                    } else if target == midi::BASS_ENABLED {
+                        GOLD
+                    } else {
+                        TEAL
+                    };
+                    d.rounded_rect(r.0, r.1, r.2, r.3, 5.0, PANEL);
+                    d.power_icon(r.0 + r.2 * 0.5, r.1 + r.3 * 0.5, color);
+                }
+                midi::BASS_CHANNEL | midi::BASS_SPLIT | midi::OUTPUT_CHANNEL | midi::UPPER_CHANNEL => {
+                    if let Some(c) = self.control(IDS[target]) {
+                        self.draw_keyboard_control(d, &c, r);
+                    }
+                }
+                midi::ALWAYS_BASS | midi::AFFECT_CHORDS | midi::SPLIT_NOTE => {}
+                _ => {
+                    if let Some(c) = self.control(IDS[target]) {
+                        self.draw_control(d, &c, r, GOLD);
+                    }
+                }
+            }
             let armed = self.bridge.quick_learn.load(Ordering::Acquire) == target as u32 + 1;
             let assigned = self.params.quick_midi[target].mapping.load(Ordering::Acquire) != 0;
-            d.rounded_rect(r.0, r.1, r.2, r.3, 4.0, alpha(GOLD, if armed { 0.24 } else { 0.10 }));
-            d.outline_rounded(r.0, r.1, r.2, r.3, 4.0,
+            let hot = self.hover_amount(r);
+            d.rounded_rect(r.0, r.1, r.2, r.3, 5.0, alpha(GOLD, if armed { 0.24 } else { 0.08 + hot * 0.12 }));
+            d.outline_rounded(r.0, r.1, r.2, r.3, 5.0,
                 alpha(GOLD, if armed || assigned { 1.0 } else { 0.65 }), if armed { 2.0 } else { 1.0 });
-
         }
+    }
+
+    pub(super) fn draw_learn_overlay(&self, d: &mut Draw) {
+        let light = d.light;
+        d.light = false;
+        d.rect(-CONTENT_X, 0.0, EDITOR_W, H, alpha(pleasant_ui::theme::rgb(0, 0, 0), 0.55));
+        d.light = light;
+
+        let nav = midi_fx::PROGRAMMING_TAB;
+        d.rect(nav.0, nav.1, nav.2 * 3.0, nav.3, PANEL);
+        self.draw_page_navigation(d);
+        if self.fx_ui.open {
+            self.draw_fx_learn_button(d);
+        } else {
+            self.surface(d, MOD_SURFACE);
+            self.draw_modulator_pages(d);
+            self.draw_global_targets(d);
+        }
+        self.draw_surface_midi_targets(d);
+        d.light = false;
+        d.font = self.ui_font.get();
+        d.text(32.0, H - 10.0, &self.midi_learn_status(), MODULE_TITLE_SIZE, GOLD);
+        d.light = light;
+    }
+
+    pub(super) fn toggle_learnable_power(
+        &self,
+        target: usize,
+        set: impl FnOnce(&mut crate::arpeggiator::State, bool),
+    ) {
+        let enabled = midi::value(&self.params, target) != 0;
+        let pending = &self.params.quick_midi[target].pending;
+        let previous = pending.load(Ordering::Acquire);
+        self.params.arpeggiator.edit(|state| set(state, !enabled));
+        let _ = pending.compare_exchange(previous, 0, Ordering::AcqRel, Ordering::Acquire);
     }
 
     pub(super) fn press_surface_midi_target(&mut self, cx: &mut EventContext, x: f32, y: f32, clear: bool) {
@@ -150,7 +245,7 @@ impl ChordboardView {
         y: f32,
         clear: bool,
     ) -> bool {
-        if !hit(MOD_SURFACE, x, y) {
+        if self.fx_ui.open || !hit(MOD_SURFACE, x, y) {
             return false;
         }
         if hit(if self.quick_midi.show { exit_rect() } else { switch_rect() }, x, y) {
@@ -219,6 +314,12 @@ impl ChordboardView {
             changed |= signature != self.quick_midi.signature[i];
             self.quick_midi.signature[i] = signature;
             if i == midi::ROOT {
+                continue;
+            }
+            if i >= midi::PERFORMANCE_ARP {
+                let enabled = midi::value(&self.params, i) != 0;
+                changed |= enabled != self.quick_midi.power[i - midi::PERFORMANCE_ARP];
+                self.quick_midi.power[i - midi::PERFORMANCE_ARP] = enabled;
                 continue;
             }
             let Some(id) = IDS.get(i) else {
@@ -377,13 +478,28 @@ impl ChordboardView {
                 _ => "Unassigned".into(),
             };
             format!("{} · {} · Click to learn · Right-click to clear", target_label(target), source)
+        } else if let Some((x, y)) = self.pointer {
+            if let Some(hint) = self.quick_midi_hint(x, y) {
+                hint
+            } else if self.fx_ui.open {
+                "MIDI Learn · Select a highlighted power switch".into()
+            } else {
+                "MIDI Learn · Select a highlighted control".into()
+            }
         } else {
             "MIDI Learn · Select a highlighted control".into()
         }
     }
 
     pub(super) fn quick_midi_hint(&self, x: f32, y: f32) -> Option<String> {
-        if hit(if self.quick_midi.show { exit_rect() } else { switch_rect() }, x, y) {
+        let switch = if self.fx_ui.open {
+            midi_fx::FX_LEARN
+        } else if self.quick_midi.show {
+            exit_rect()
+        } else {
+            switch_rect()
+        };
+        if hit(switch, x, y) {
             return Some(
                 if self.quick_midi.show {
                     "Finish MIDI learn"
@@ -393,7 +509,7 @@ impl ChordboardView {
                 .into(),
             );
         }
-        if !self.quick_midi.show || !hit(MOD_SURFACE, x, y) {
+        if self.fx_ui.open || !self.quick_midi.show || !hit(MOD_SURFACE, x, y) {
             return None;
         }
         VISIBLE_TARGETS.into_iter().find(|&i| hit(chip_rect(i), x, y)).map(|i| {

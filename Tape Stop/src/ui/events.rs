@@ -122,6 +122,16 @@ impl TapeStopView {
 
             match window_event {
                 WindowEvent::MouseDown(MouseButton::Left) => {
+                    if Self::inside(mouse_x, mouse_y, AFFECT_MIDI) {
+                        self.end_drag(cx);
+                        self.emit_param_norm(
+                            cx,
+                            self.params.affect_midi.as_ptr(),
+                            (!self.params.affect_midi.value()) as u8 as f32,
+                        );
+                        cx.needs_redraw();
+                        return;
+                    }
                     if Self::inside(mouse_x, mouse_y, TIME_SYNC) {
                         self.end_drag(cx);
                         self.emit_param_norm(

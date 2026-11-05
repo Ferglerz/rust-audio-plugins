@@ -8,43 +8,42 @@ impl Engine {
         self.next_token = self.next_token.wrapping_add(1).max(1);
         token
     }
-    pub(super) fn capture_delay_source(
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn capture_delay_source(&mut self, source: u8, token: u64, note: u8,
+        velocity: f32, expression: Expression, off: Option<u64>) {
+        self.capture_fx_source(source, token, self.config.output_channel, note, velocity, expression, off, false);
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn capture_fx_source(
         &mut self,
         source: u8,
         token: u64,
+        channel: u8,
         note: u8,
         velocity: f32,
         expression: Expression,
         off: Option<u64>,
+        retrigger: bool,
     ) {
         if self.resetting {
             return;
         }
-        // The persisted module sequence is also the processing sequence. New effect
-        // types must be dispatched here in that order; echo feedback stays internal.
-        for index in 0..self.arp.data.midi_fx.order.len() {
-            match self.arp.data.midi_fx.order[index] {
-                crate::midi_fx::MidiFxId::Delay => self.delay.capture(
-                    self.arp.data.midi_fx.delay,
-                    source,
-                    token,
-                    note,
-                    velocity,
-                    expression,
-                    off,
-                    self.now,
-                    self.beat,
-                    self.sample_rate as f64,
-                    self.tempo,
-                ),
-            }
+        let ctx = self.fx_context();
+        self.fx.capture(fx::Input { token, source, channel, note, velocity, expression, off, retrigger }, ctx);
+        if !self.fx.active() {
+            self.delay.capture(self.arp.data.midi_fx.delay, source, token, note, velocity,
+                expression, off, self.now, self.beat, self.sample_rate as f64, self.tempo);
         }
     }
-    pub(super) fn release_delay_source(&mut self, token: u64) {
+    pub(super) fn release_fx_source(&mut self, token: u64, out: &mut impl FnMut(Out)) {
         if !self.resetting {
-            self.delay.release(token, self.now, self.beat);
+            let ctx = self.fx_context();
+            self.fx.release(token, ctx, out);
+            if !self.fx.active() { self.delay.release(token, self.now, self.beat); }
         }
     }
+
     pub(super) fn update_delay_power(&mut self, out: &mut impl FnMut(Out)) {
         let power = self.arp.data.midi_fx.delay.enabled;
         if self.delay_power && !power {
@@ -74,7 +73,7 @@ impl Engine {
     }
     /// Resolve only new attacks. Existing echo tokens retain their actual pitch
     /// until release, so a harmony change cannot misdirect a pending note-off.
-    fn delay_note(&self, mut note: u8) -> u8 {
+    pub(super) fn delay_note(&self, mut note: u8) -> u8 {
         let settings = self.arp.data.midi_fx.delay;
         let chord_notes = if self.config.tracker_enabled {
             self.arp_cycle_chord()
@@ -131,6 +130,7 @@ impl Engine {
         note
     }
     pub(super) fn tick_delay(&mut self, out: &mut impl FnMut(Out)) {
+        if self.fx.active() { return; }
         while let Some(action) = self.delay.pop_due(self.now, self.beat) {
             match action {
                 delay::Action::Off { token } => {
@@ -150,6 +150,7 @@ impl Engine {
                     fine,
                     pan,
                     channel: requested,
+                    ..
                 } => {
                     let note = self.delay_note(note);
                     let allowed = |channel: u8| {
@@ -211,20 +212,22 @@ impl Engine {
     pub(super) fn melody_delay_token(channel: u8, note: u8) -> u64 {
         (1 << 62) | (channel as u64 * 128 + note as u64)
     }
-    pub(super) fn capture_bass_delay(
+    pub(super) fn capture_bass_fx(
         &mut self,
         input: usize,
         channel: u8,
         note: u8,
         velocity: f32,
     ) {
-        self.capture_delay_source(
+        self.capture_fx_source(
             source::BASS,
             Self::bass_delay_token(input, note as usize),
+            channel,
             note,
             velocity,
-            self.channels[channel as usize],
+            self.channels[input],
             None,
+            false,
         );
     }
 }

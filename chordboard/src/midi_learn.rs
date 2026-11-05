@@ -27,7 +27,23 @@ pub const BASS_SPLIT: usize = 26;
 pub const SPLIT_NOTE: usize = 27;
 pub const TEMPO: usize = 28;
 pub const DAW_ALIGNMENT: usize = 29;
-pub const COUNT: usize = 30;
+pub const GLISS_TIME: usize = 30;
+pub const GLISS_DIRECTION: usize = 31;
+pub const SWING: usize = 32;
+pub const HUMANIZE: usize = 33;
+pub const PERFORMANCE_ARP: usize = 34;
+pub const FX_POWER_START: usize = 35;
+pub const COUNT: usize = 39;
+
+pub fn fx_power_target(effect: crate::midi_fx::MidiFxId) -> usize {
+    use crate::midi_fx::MidiFxId::*;
+    FX_POWER_START + match effect {
+        Harmonizer => 0,
+        RhythmGate => 1,
+        VoiceSplitter => 2,
+        Delay => 3,
+    }
+}
 pub const IDS: [&str; COUNT] = [
     "spread",
     "voice_leading",
@@ -59,6 +75,15 @@ pub const IDS: [&str; COUNT] = [
     "split_note",
     "tempo",
     "daw_alignment",
+    "gliss_ms",
+    "gliss_direction",
+    "swing",
+    "humanize",
+    "performance_arp_enabled",
+    "harmonizer_enabled",
+    "rhythm_gate_enabled",
+    "voice_splitter_enabled",
+    "delay_enabled",
 ];
 pub const LABELS: [&str; COUNT] = [
     "Voicing",
@@ -67,7 +92,7 @@ pub const LABELS: [&str; COUNT] = [
     "Transpose",
     "Chord Quality",
     "Latch",
-    "Arp On/Off",
+    "Tracker On/Off",
     "Arp Page",
     "Change Root",
     "Base Inversion",
@@ -91,6 +116,15 @@ pub const LABELS: [&str; COUNT] = [
     "Melody split note",
     "Manual tempo",
     "DAW alignment",
+    "Glissando time",
+    "Glissando direction",
+    "Swing",
+    "Humanize",
+    "Performance Arp bypass",
+    "Harmonizer bypass",
+    "Rhythm Gate bypass",
+    "Voice Splitter bypass",
+    "MIDI Delay bypass",
 ];
 const RANGES: [(i32, i32); COUNT] = [
     (0, crate::harmony::VOICING_NAMES.len() as i32 - 1),
@@ -123,6 +157,15 @@ const RANGES: [(i32, i32); COUNT] = [
     (0, 127),
     (0, 127),
     (0, 1),
+    (0, 127),
+    (0, 6),
+    (0, 127),
+    (0, 127),
+    (0, 1),
+    (0, 1),
+    (0, 1),
+    (0, 1),
+    (0, 1),
 ];
 pub const NOTE: u8 = 3;
 
@@ -140,9 +183,13 @@ pub struct Binding {
 
 impl Binding {
     pub fn value(&self, base: i32) -> i32 {
+        self.pending_value(base).unwrap_or(base)
+    }
+
+    fn pending_value(&self, base: i32) -> Option<i32> {
         let encoded = self.pending.load(Ordering::Acquire);
         if encoded == 0 {
-            return base;
+            return None;
         }
         let previous = ((encoded >> 8) & 255) as i32 - 128;
         let desired = (encoded & 255) as i32 - 128;
@@ -151,9 +198,9 @@ impl Binding {
             let _ = self
                 .pending
                 .compare_exchange(encoded, 0, Ordering::AcqRel, Ordering::Acquire);
-            base
+            None
         } else {
-            desired
+            Some(desired)
         }
     }
 
@@ -196,6 +243,11 @@ pub fn base(params: &ChordboardParams, target: usize) -> i32 {
         SPLIT_NOTE => params.split_note.value(),
         TEMPO => float_base(&params.tempo),
         DAW_ALIGNMENT => params.daw_alignment.value() as i32,
+        GLISS_TIME => float_base(&params.gliss_ms),
+        GLISS_DIRECTION => params.gliss_direction.value(),
+        SWING => float_base(&params.swing),
+        HUMANIZE => float_base(&params.humanize),
+        PERFORMANCE_ARP..COUNT => params.arpeggiator.power(target) as i32,
         _ => 0,
     }
 }
@@ -226,6 +278,9 @@ pub fn float_value(params: &ChordboardParams, target: usize) -> f32 {
         VELOCITY => &params.velocity,
         GATE_SCALE => &params.gate_scale,
         VELOCITY_SCALE => &params.velocity_scale,
+        GLISS_TIME => &params.gliss_ms,
+        SWING => &params.swing,
+        HUMANIZE => &params.humanize,
         _ => return 0.0,
     };
     let base = float_base(param);
@@ -235,6 +290,10 @@ pub fn float_value(params: &ChordboardParams, target: usize) -> f32 {
     } else {
         param.preview_plain(desired as f32 / 127.0)
     }
+}
+
+pub(crate) fn power_override(params: &ChordboardParams, target: usize) -> Option<bool> {
+    params.quick_midi[target].pending_value(base(params, target)).map(|v| v != 0)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -551,6 +610,10 @@ mod tests {
         assert_eq!(config.velocity, 1.0);
         assert_eq!(config.gate_scale, 2.0);
         assert_eq!(config.velocity_scale, 2.0);
+        assert_eq!(config.gliss_ms, 4000.0);
+        assert_eq!(config.gliss_direction, 6);
+        assert_eq!(config.swing, 0.75);
+        assert_eq!(config.humanize, 1.0);
         let restored = ChordboardParams::default();
         restored.deserialize_fields(&params.serialize_fields());
         assert_eq!(restored.config().gate_scale, 2.0);
@@ -608,6 +671,33 @@ mod tests {
             );
             assert!(input.consume(note(9, 40, false), &params, &armed, [0; 2]));
         }
+    }
+
+    #[test]
+    fn learned_power_switches_apply_to_audio_and_survive_new_tracker_data() {
+        let mut plugin = Chordboard::default();
+        plugin.params.arpeggiator.edit(|state| state.performance.enabled = true);
+        assert!(plugin.params.arpeggiator.apply_pending(&mut plugin.engine.arp.data));
+        for (number, target) in [PERFORMANCE_ARP, fx_power_target(crate::midi_fx::MidiFxId::Delay)]
+            .into_iter().enumerate()
+        {
+            plugin.bridge.quick_learn.store(target as u32 + 1, Ordering::Release);
+            send(&mut plugin, note(9, 30 + number as u8, true));
+            send(&mut plugin, note(9, 30 + number as u8, false));
+            send(&mut plugin, note(9, 30 + number as u8, true));
+            send(&mut plugin, note(9, 30 + number as u8, false));
+        }
+        let delay_enabled = plugin.params.arpeggiator.snapshot().midi_fx.delay.enabled;
+        assert!(!plugin.engine.arp.data.performance.enabled);
+        assert_eq!(plugin.engine.arp.data.midi_fx.delay.enabled, !delay_enabled);
+
+        plugin.params.arpeggiator.edit(|state| state.rows[0].duration = 2);
+        assert!(plugin.params.arpeggiator.apply_pending(&mut plugin.engine.arp.data));
+        plugin.engine.arp.data.apply_midi_powers(&plugin.params);
+        assert!(!plugin.engine.arp.data.performance.enabled);
+        assert_eq!(plugin.engine.arp.data.midi_fx.delay.enabled, !delay_enabled);
+        send(&mut plugin, note(9, 30, true));
+        assert!(plugin.engine.arp.data.performance.enabled);
     }
 
     #[test]

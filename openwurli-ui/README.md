@@ -2,80 +2,42 @@
 
 An independent CLAP/VST3 instrument with the [OpenWurli](https://github.com/hal0zer0/openwurli) synthesis engine and a Pleasant UI editor. Its plugin IDs are distinct from upstream OpenWurli so both can be installed in one host.
 
-The 720 × 550 main panel has two rows of knobs: Volume, Tremolo Depth and Speaker Character above Reed Decay, Hammer Hardness and Pickup Drive. The cog opens sound settings for Tremolo Response, Extra Sag and Extended Notes. Reed Decay spans 0.5–20×; Hammer Hardness, Pickup Drive and Tremolo Response span 0.5–2×. These multipliers are neutral at 1.0×. Reed, hammer and pickup settings affect newly started notes; tremolo response and extra sag apply live. Main knobs use vertical dragging and double-click reset.
+## Upstream update (0.2.0)
 
-Learned voicing (MLP corrections) is **always active**. A small neural network uses recorded piano references to adjust overtone tuning, decay and pickup response once at note-on. The cog panel explains this behavior. The old `mlp` automation ID remains hidden and inert for saved-session compatibility: loading a project saved with corrections off now uses the corrected sound. The engine's correction model and source revision are unchanged.
+The DSP is based on upstream **v0.9.0**, revision [`531680b5b49eb4a734a8d8ef7a9c13cb83cf79f9`](https://github.com/hal0zer0/openwurli/commit/531680b5b49eb4a734a8d8ef7a9c13cb83cf79f9), checked against upstream `main` on November 5, 2026. This replaces the v0.7-based Ferglerz fork. It brings the physical reed/finger-overlap pickup, hammer-derived reed swing, amplitude-dependent air drag, steadier partials, retrained learned voicing, revised amplifier circuits and volume network, and upstream's +14 dB plugin output alignment.
 
-Both drawing and pointer input fit the artwork to the host's available width and height. The background fills the complete editor with square corners, including any margins around the fitted artwork.
+**Existing sessions retain their controls and automation IDs, but sound and level change to the v0.9 model.** The wrapper version is now 0.2.0. Keep the previous source/build if exact playback of older sessions is required.
 
-## Upstream source
+See [local DSP changes](vendor/openwurli-dsp/LOCAL_CHANGES.md) for the integration boundaries. The earlier [CPU report](docs/cpu-optimization-results.md), [runtime-mode report](docs/runtime-modes.md), and [Heavy recovery proof](docs/heavy-recovery-shortcut-2026-10-03.md) describe the previous v0.7 engine; their performance and bit-equivalence claims do not apply to this version. The old SIMD reed/transistor paths, experimental circuit tables, shared shadow-preamp solve, and Heavy recovery shortcut are superseded by the v0.9 source. Generated preamp and power-amplifier solvers remain identical to upstream.
 
-The engine is vendored from the [Ferglerz fork](https://github.com/Ferglerz/openwurli) at revision `1899523a3eb7a73a7f9c905c8c04ee04a06b415d`. See [local DSP changes](vendor/openwurli-dsp/LOCAL_CHANGES.md) for provenance and the full-MIDI note entry points. Earlier DSP
-optimizations were developed on
-[`codex/dsp-cpu-optimizations`](https://github.com/Ferglerz/openwurli/tree/codex/dsp-cpu-optimizations),
-based on original upstream OpenWurli v0.7.0 (`3023a8a6c42c654c5caeec52fd22dcf2cff3cb15`),
-and merged into the controls branch. The pinned revision adds the exact Heavy recovery shortcut on
-[`codex/heavy-recovery-shortcut`](https://github.com/Ferglerz/openwurli/tree/codex/heavy-recovery-shortcut).
-The local copy preserves the original clamped API and adds explicit full-range note-on/off APIs.
+## Controls
 
-The Engine information page has been removed from the editor. See
-[the implementation and evidence report](docs/cpu-optimization-results.md)
-for before/after timings, bitwise audio comparisons, rejected lookup candidates,
-reproduction commands and limitations. Original analytical equations remain
-permanent reference code; experimental tables are generated from those equations
-and are **disabled** in this plugin. Original complete engines can be reconstructed
-from pinned Git revisions by the fork's comparison tools.
+The 720 × 550 panel exposes Volume, Tremolo Depth, Tremolo Response and Speaker Character above Reed Decay, Hammer Hardness and Pickup Drive, alongside Fast/Heavy, Extended Notes and Extra Sag switches. Main knobs use vertical dragging and double-click reset. Drawing and pointer input fit the artwork to the available host size; the background fills the editor.
 
-The wrapper uses OpenWurli's default fast preamp and power amp. Its Reed, Hammer, Pickup, and Tremolo controls still call the fork's engine APIs. Extra Sag applies optional level-dependent output gain reduction and defaults off. Its strength is now 10× the original, with the same 8 ms attack and 150 ms release, making louder notes and chords compress more strongly. Hiss has been removed from the wrapper and native preamps in both circuit modes. The old noise parameter IDs remain hidden and inert for saved-session compatibility. Saved projects with Sag enabled keep that setting and use the stronger effect.
+Reed Decay spans 0.5–20×; Hammer Hardness and Tremolo Response span 0.5–2×; Pickup Drive spans 0.5–1.04×. All multipliers are neutral at 1×. Reed and hammer settings affect newly started notes. Pickup Drive scales the physical swing in millimetres, including the associated air-drag loss. Tremolo Response changes LDR timing live.
 
-For future updates, port the optimization branch against the intended upstream
-revision, repeat its native/table comparisons, then integrate it into
-`codex/pleasant-controls` and refresh the vendored source here, preserving the documented local changes. Do not silently
-change the sound model while benchmarking a CPU patch: current upstream v0.9
-changes reed physics, pickup and amplifier behavior relative to this v0.7 engine.
-UI changes stay in this repository. The upstream-based branch is prepared for a
-later port/review; no pull request has been opened.
+Learned voicing is always active, now using upstream's corrected-pitch training and its tuning/decay corrections. The retired MLP pickup-displacement correction is no longer applied. The old `mlp` ID remains hidden and inert. Hiss stays disabled in both native preamps; the old noise IDs also remain hidden and inert.
 
-## Build
+Volume retains its existing linear output behavior and 50% default. Internally the v0.9 physical volume network stays at upstream's nominal 80% position and factory reed-bar trim. The +14 dB alignment follows the circuit/speaker chain, then Extra Sag applies optional level-dependent compression with the existing 8 ms attack, 150 ms release and strength of 12. Volume follows these stages, so changing it does not change tone or sag. Extra Sag defaults off and saved settings survive.
 
-From the audio-plugins workspace root:
+Fast is the default circuit selection. Heavy uses upstream's generated preamp and power amplifier, including physical rail sag. A live change settles the incoming circuit for 100 ms, then crossfades for 20 ms without retriggering held notes. Extra Sag is a separate post-engine effect shared by both modes.
+
+Extended Notes defaults off: normal mode accepts MIDI 33–96 and ignores notes beyond either end. Enabling it plays MIDI 0–127 at the requested pitches in both modes. Notes held when it is disabled still release correctly. Older presets restore Fast and normal note range.
+
+## Build and verify
+
+From the workspace root:
 
 ```sh
 cargo check -p openwurli-ui
-cargo run -p openwurli-ui-xtask -- bundle openwurli-ui --release
+cargo test -p openwurli-ui --release --quiet
+./openwurli-ui/scripts/install.sh
 ```
 
-The bundles appear in `target/bundled/`.
+The installer rebuilds from the current source, verifies the bundled executables, installs both formats, and verifies the signed installed bundles. Reload the plugin in the host after replacing a loaded bundle.
 
-On macOS, run `./openwurli-ui/scripts/install.sh` from the workspace root. It uses the shared installer to rebuild from source and verify the installed CLAP and VST3 bundles. Reload the plugin in the host after replacing a loaded bundle.
+The 21 wrapper tests pass in release mode. Compile checks (including test targets) and crate-scoped Clippy also pass. The wrapper tests cover saved parameters, MIDI timing, sustain, extended notes, character controls, linear output volume and sag. [Upstream audio fixtures](tests/fixtures/upstream-0.9.0/README.md) compare neutral controls with independent unmodified upstream renders in Fast and Heavy modes at 44.1, 48 and 96 kHz. A separate regression covers live mode changes after buffer growth and sample-rate changes. No DAW UI automation is used.
 
 ## License and attribution
 
 OpenWurli DSP is by hal0zer0 and is licensed under GPL-3.0-or-later. This wrapper and its Pleasant UI dependency are also GPL-3.0-or-later; the license text is in [LICENSE](LICENSE). Preserve upstream's license and source attribution when distributing binaries; the complete corresponding source includes the pinned OpenWurli revision and this wrapper.
-
-## Fast and Heavy circuit modes (0.1.1)
-
-The main-page **CPU: FAST / CPU: HEAVY** button selects and saves the circuit
-model. Fast remains the default for old presets. A live change settles the
-incoming circuit for 100 ms, then crossfades for 20 ms without retriggering notes.
-Heavy retains its physical amplifier rails; **Extra Sag** is the existing shared
-post-engine effect. The models can sound different.
-
-An exact CPU pass reduces render time in both models while keeping their output
-bit-identical to the previous 0.1.1 engine. Heavy gains most: its preamp matrix
-rebuilds are shared and its transistor solves run in lockstep. The failing
-damper approximation is not included. See [runtime modes and CPU
-evidence](docs/runtime-modes.md) for the changes, measurements, completed checks
-and remaining validation.
-
-A later Heavy-only optimization skips recovery work that the existing amplifier
-guard would discard. Paired M1 benchmarks measured 27.4% less render time for six
-notes and 47.1% less for 64 notes at 50% tremolo, with exact output in the tested
-matrix. Fast remains unchanged. The complete solver is retained, including a
-`reference-full-recovery` build feature and the native exponential configuration.
-See [the recovery shortcut proof](docs/heavy-recovery-shortcut-2026-10-03.md) for
-coverage, reference builds and remaining latency limits.
-
-## Extended notes
-
-The advanced panel’s **Extended Notes** toggle defaults off. Normal mode accepts MIDI 33–96 and ignores notes outside either end without striking or releasing an end key. Enabling it plays the full MIDI 0–127 range at the requested pitches in Fast and Heavy modes. Notes already held still release correctly after the toggle is disabled. The setting is saved and automatable; old presets select the normal range.

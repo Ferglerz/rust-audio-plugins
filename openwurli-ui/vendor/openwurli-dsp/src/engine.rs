@@ -1,8 +1,8 @@
 //! WurliEngine — synth engine extracted from `openwurli-plugin`.
 //!
 //! Owns voice management (slots, allocation, stealing, sustain pedal)
-//! and the shared signal chain (preamp → fixed circuit drive → power amp
-//! → speaker → PSG × user volume). Framework-agnostic so any host
+//! and the shared signal chain (preamp → volume network → power amp
+//! → speaker → output scaling). Framework-agnostic so any host
 //! (nih-plug, custom DAW integration, oomox/Vurli) can wrap it without
 //! copying voice or signal-chain code.
 //!
@@ -180,6 +180,7 @@ runtime_amp!(crate::power_amp::HeavyPowerAmp);
 struct CircuitChain<P, A> {
     preamp: P,
     amp: A,
+    c9_state: f64,
     oversampler: Oversampler,
     speaker: Speaker,
     up: Vec<f64>,
@@ -198,6 +199,7 @@ impl<P: PreampModel, A: RuntimeAmp> CircuitChain<P, A> {
         Self {
             preamp,
             amp,
+            c9_state: 0.0,
             oversampler: Oversampler::new(),
             speaker: Speaker::new(sample_rate),
             up: vec![0.0; MAX_BLOCK_SIZE * 2],
@@ -220,12 +222,20 @@ impl<P: PreampModel, A: RuntimeAmp> CircuitChain<P, A> {
 
     fn reset(&mut self) {
         self.preamp.reset();
+        self.c9_state = 0.0;
         self.amp.reset();
         self.oversampler.reset();
         self.speaker.reset();
     }
 
-    fn process_bus(&mut self, input: &[f64], ldr: &[f64], oversample: bool) {
+    fn process_bus(
+        &mut self,
+        input: &[f64],
+        ldr: &[f64],
+        gain: &[f64],
+        alpha: &[f64],
+        oversample: bool,
+    ) {
         let len = input.len();
         if oversample {
             self.oversampler.upsample_2x(input, &mut self.up[..len * 2]);
@@ -234,7 +244,11 @@ impl<P: PreampModel, A: RuntimeAmp> CircuitChain<P, A> {
         for i in 0..count {
             self.preamp.set_ldr_resistance(ldr[i]);
             let signal = if oversample { self.up[i] } else { input[i] };
-            let drive = self.preamp.process_sample(signal) * tables::FIXED_CIRCUIT_DRIVE;
+            let base = if oversample { i / 2 } else { i };
+            let preamp_out = self.preamp.process_sample(signal);
+            let drive_gain = self.preamp.open_circuit_output_factor() * gain[base];
+            self.c9_state += alpha[base] * (preamp_out * drive_gain - self.c9_state);
+            let drive = self.c9_state;
             #[cfg(test)]
             {
                 self.drive_peak = self.drive_peak.max(drive.abs());
@@ -265,6 +279,8 @@ struct RuntimeCircuits {
     fast: CircuitChain<crate::dk_preamp::FastPreamp, crate::power_amp::FastPowerAmp>,
     heavy: CircuitChain<crate::dk_preamp::HeavyPreamp, crate::power_amp::HeavyPowerAmp>,
     ldr: Vec<f64>,
+    gain: Vec<f64>,
+    alpha: Vec<f64>,
     mode: CircuitMode,
     mix: LinearSmoother,
     preroll_samples: u32,
@@ -286,6 +302,8 @@ impl RuntimeCircuits {
                 sample_rate,
             ),
             ldr: vec![0.0; MAX_BLOCK_SIZE * 2],
+            gain: vec![0.0; MAX_BLOCK_SIZE],
+            alpha: vec![0.0; MAX_BLOCK_SIZE],
             mode,
             mix: LinearSmoother::new(mode.weight(), (sample_rate * 0.020).round().max(1.0) as u32),
             preroll_samples: (sample_rate * 0.100).round().max(1.0) as u32,
@@ -298,6 +316,8 @@ impl RuntimeCircuits {
         self.heavy.ensure_buffer_capacity(len);
         if self.ldr.len() < len * 2 {
             self.ldr.resize(len * 2, 0.0);
+            self.gain.resize(len, 0.0);
+            self.alpha.resize(len, 0.0);
         }
     }
 
@@ -349,10 +369,20 @@ pub struct WurliEngine {
     // Shared signal chain (mono, post voice-sum)
     #[cfg(not(feature = "runtime-models"))]
     preamp: DkPreamp,
+    /// R-11 "Reed Bar Trim" [Ω], the per-unit factory trimmer ahead of the
+    /// volume pot (see tables::R11_REED_BAR_VOLUME_DEFAULT). Smoothed so a
+    /// host sweep does not step the drive.
+    reed_bar_trim: LinearSmoother,
+    /// C-9 pole at the amp input (volume network, see tables::volume_pot_pole_hz):
+    /// one-pole lowpass state and its coefficient, refreshed per base-rate sample.
+    #[cfg(not(feature = "runtime-models"))]
+    c9_state: f64,
+    #[cfg(not(feature = "runtime-models"))]
+    c9_alpha: f64,
 
     /// Test-only power-amp drive probe. Accumulates peak and mean-square of
     /// the signal actually presented to `PowerAmp::process`, i.e.
-    /// `preamp_out * FIXED_CIRCUIT_DRIVE`. Used by the drive-headroom probe
+    /// `preamp_out * volume_pot_gain(vol)`. Used by the drive-headroom probe
     /// to compare against the amp's linearity envelope. `cfg(test)` so the
     /// hot loop carries nothing in release builds.
     #[cfg(test)]
@@ -418,6 +448,11 @@ impl WurliEngine {
             age_counter: 0,
             #[cfg(not(feature = "runtime-models"))]
             preamp: DkPreamp::new(os_sr),
+            reed_bar_trim: LinearSmoother::new(tables::R11_REED_BAR_VOLUME_DEFAULT, ramp),
+            #[cfg(not(feature = "runtime-models"))]
+            c9_state: 0.0,
+            #[cfg(not(feature = "runtime-models"))]
+            c9_alpha: 1.0,
             #[cfg(test)]
             drive_peak: 0.0,
             #[cfg(test)]
@@ -452,7 +487,7 @@ impl WurliEngine {
             mlp_enabled: false,
             voice_character: VoiceCharacter::default(),
             tremolo_response: 1.0,
-            volume: LinearSmoother::new(0.5, ramp),
+            volume: LinearSmoother::new(0.8, ramp),
             tremolo_depth: LinearSmoother::new(0.5, ramp),
             speaker_character: LinearSmoother::new(0.0, ramp),
             nan_guard_fires: 0,
@@ -506,6 +541,7 @@ impl WurliEngine {
         #[cfg(not(feature = "runtime-models"))]
         {
             self.preamp.reset();
+            self.c9_state = 0.0;
             self.oversampler.reset();
             self.power_amp.reset();
             self.speaker.reset();
@@ -517,17 +553,19 @@ impl WurliEngine {
         self.sustain_held = false;
         // Snap smoothers so a ramp doesn't survive a transport reset.
         self.volume.snap_to(self.volume.target);
+        self.reed_bar_trim.snap_to(self.reed_bar_trim.target);
         self.tremolo_depth.snap_to(self.tremolo_depth.target);
         self.speaker_character
             .snap_to(self.speaker_character.target);
         self.warm_up();
     }
 
-    /// Settle the preamp / shadow-pump / CdS-envelope to their steady operating
-    /// point by running internal silence with the tremolo active. The real 200A
-    /// preamp is always biased at its DC operating point; a solver started cold
-    /// takes ~0.5 s (the shadow-pump's multi-second transient) to reach the
-    /// steady tremolo modulation, and a note struck during that window rides a
+    /// Settle the preamp / tremolo oscillator / CdS-envelope to their steady
+    /// operating point by running internal silence with the tremolo active. The
+    /// real 200A preamp is always biased at its DC operating point; a chain
+    /// started cold takes a while to reach the steady tremolo modulation (the
+    /// retired shadow-pump used to lengthen this; the settle time was sized
+    /// then), and a note struck during that window rides a
     /// deep gain excursion that reads as repeated attacks. Called after every
     /// `reset()` and `set_sample_rate()` so the first note is always clean.
     /// Not on the per-buffer path — a one-time settle, allocation-free.
@@ -557,6 +595,7 @@ impl WurliEngine {
         #[cfg(not(feature = "runtime-models"))]
         {
             self.preamp = DkPreamp::new(self.os_sample_rate);
+            self.c9_state = 0.0;
         }
         #[cfg(feature = "runtime-models")]
         {
@@ -576,6 +615,7 @@ impl WurliEngine {
         }
         let ramp = ramp_samples_for_rate(sr);
         self.volume.set_ramp_samples(ramp);
+        self.reed_bar_trim.set_ramp_samples(ramp);
         self.tremolo_depth.set_ramp_samples(ramp);
         self.speaker_character.set_ramp_samples(ramp);
         self.warm_up();
@@ -686,8 +726,27 @@ impl WurliEngine {
 
     // ── Param setters ────────────────────────────────────────────────────
 
+    /// One-pole lowpass coefficient for corner `fc` at rate `sr`
+    /// (exact-decay form; a corner above Nyquist degrades to passthrough).
+    fn one_pole_alpha(fc: f64, sr: f64) -> f64 {
+        if !fc.is_finite() || fc >= 0.5 * sr {
+            1.0
+        } else {
+            1.0 - (-2.0 * std::f64::consts::PI * fc / sr).exp()
+        }
+    }
+
     pub fn set_volume(&mut self, v: f64) {
         self.volume.set_target(v);
+    }
+
+    /// R-11 "Reed Bar Trim", ohms (0..=25 000): the per-unit factory trimmer
+    /// between the preamp output and the volume pot. Undocumented setting;
+    /// the default (tables::R11_REED_BAR_VOLUME_DEFAULT, 17.2K) is transferred
+    /// from the non-A factory calibration, an inference pending a bench reading.
+    pub fn set_reed_bar_trim(&mut self, r11_ohms: f64) {
+        self.reed_bar_trim
+            .set_target(r11_ohms.clamp(0.0, tables::R11_REED_BAR_VOLUME_MAX));
     }
 
     pub fn set_tremolo_depth(&mut self, depth: f64) {
@@ -794,13 +853,6 @@ impl WurliEngine {
         }
     }
 
-    /// Heavy solver lifetime events, including resets hidden by the older
-    /// generated-state diagnostic snapshot. Preserved across engine resets.
-    #[cfg(feature = "runtime-models")]
-    pub fn heavy_solver_diagnostics(&self) -> crate::power_amp::HeavySolverDiagnostics {
-        self.circuits.heavy.amp.solver_diagnostics()
-    }
-
     // ── Render ───────────────────────────────────────────────────────────
 
     /// Render `out.len()` mono samples through the full chain.
@@ -813,27 +865,26 @@ impl WurliEngine {
         self.ensure_buffer_capacity(len);
 
         // After this call, out_buf holds the post-power-amp signal at base rate
-        // (preamp + vol² + power amp ran inside the OS bus together).
+        // (preamp + volume network + power amp ran inside the OS bus together).
         self.render_voices_to_preamp_out(0, len);
 
         for (i, sample_slot) in out.iter_mut().enumerate() {
             let speaker_char = self.speaker_character.next();
             self.speaker.set_character(speaker_char);
             let shaped = self.speaker.process(self.out_buf[i]);
-            // User volume is applied here as a linear post-amp multiplier
-            // (decoupled from circuit drive — see tables::FIXED_CIRCUIT_DRIVE).
-            // POST_SPEAKER_GAIN maps the fixed-drive amp output to DAW-friendly
-            // levels; user_vol scales linearly inside that envelope. No
+            // User volume is the drawn pot between preamp and power amp and
+            // was applied in render_voices_to_preamp_out. POST_SPEAKER_GAIN is
+            // the rail-to-full-scale mapping (0 dB: ±22 V = ±1.0). No
             // nonlinear ceiling — output peak management belongs in the host
             // / Vurli per project scope rules.
-            let user_vol = self.volume.next();
-            let post_gain = shaped * tables::POST_SPEAKER_GAIN * user_vol;
+            let post_gain = shaped * tables::POST_SPEAKER_GAIN;
             let sample = post_gain as f32;
             // NaN guard: non-finite samples crash PipeWire/JACK audio engines.
             *sample_slot = if sample.is_finite() {
                 sample
             } else {
                 self.preamp.reset();
+                self.c9_state = 0.0;
                 self.oversampler.reset();
                 self.power_amp.reset();
                 self.speaker.reset();
@@ -886,8 +937,7 @@ impl WurliEngine {
                 } else {
                     a + (b - a) * mix
                 };
-                let volume = self.volume.next();
-                let sample = (shaped * tables::POST_SPEAKER_GAIN * volume) as f32;
+                let sample = (shaped * tables::POST_SPEAKER_GAIN) as f32;
                 *sample_slot = if sample.is_finite() {
                     sample
                 } else {
@@ -917,6 +967,11 @@ impl WurliEngine {
         let factor = if self.oversample { 2 } else { 1 };
         for i in 0..len {
             self.tremolo.set_depth(self.tremolo_depth.next());
+            let vol = self.volume.next();
+            let r11 = self.reed_bar_trim.next();
+            self.circuits.gain[i] = tables::volume_pot_gain(vol, r11);
+            self.circuits.alpha[i] =
+                Self::one_pole_alpha(tables::volume_pot_pole_hz(vol, r11), self.os_sample_rate);
             for j in 0..factor {
                 self.circuits.ldr[i * factor + j] = self.tremolo.process();
             }
@@ -926,6 +981,8 @@ impl WurliEngine {
             self.circuits.fast.process_bus(
                 &self.sum_buf[..len],
                 &self.circuits.ldr[..len * factor],
+                &self.circuits.gain[..len],
+                &self.circuits.alpha[..len],
                 self.oversample,
             );
         }
@@ -933,6 +990,8 @@ impl WurliEngine {
             self.circuits.heavy.process_bus(
                 &self.sum_buf[..len],
                 &self.circuits.ldr[..len * factor],
+                &self.circuits.gain[..len],
+                &self.circuits.alpha[..len],
                 self.oversample,
             );
         }
@@ -1043,16 +1102,25 @@ impl WurliEngine {
                 for i in 0..len {
                     let depth = self.tremolo_depth.next();
                     self.tremolo.set_depth(depth);
+                    // The drawn volume network: preamp open-circuit output → R-11
+                    // → 10K pot at the user's position → amp input (loaded), with
+                    // C-9 against the wiper's source resistance as a one-pole.
+                    let vol = self.volume.next();
+                    let r11 = self.reed_bar_trim.next();
+                    let drive_gain = self.preamp.open_circuit_output_factor()
+                        * tables::volume_pot_gain(vol, r11);
+                    self.c9_alpha = Self::one_pole_alpha(
+                        tables::volume_pot_pole_hz(vol, r11),
+                        self.os_sample_rate,
+                    );
 
                     for j in 0..2 {
                         let idx = i * 2 + j;
                         let r_ldr = self.tremolo.process();
                         self.preamp.set_ldr_resistance(r_ldr);
                         let preamp_out = self.preamp.process_sample(self.up_buf[idx]);
-                        // Pin BJT drive at the clean operating point. User volume
-                        // is applied post-amp in render() as a linear multiplier
-                        // (decoupled from circuit drive — see FIXED_CIRCUIT_DRIVE).
-                        let drive = preamp_out * tables::FIXED_CIRCUIT_DRIVE;
+                        self.c9_state += self.c9_alpha * (preamp_out * drive_gain - self.c9_state);
+                        let drive = self.c9_state;
                         #[cfg(test)]
                         {
                             self.drive_peak = self.drive_peak.max(drive.abs());
@@ -1074,8 +1142,16 @@ impl WurliEngine {
                     let r_ldr = self.tremolo.process();
                     self.preamp.set_ldr_resistance(r_ldr);
                     let preamp_out = self.preamp.process_sample(self.sum_buf[i]);
-                    // Drive pinned; user volume applied post-amp in render().
-                    let drive = preamp_out * tables::FIXED_CIRCUIT_DRIVE;
+                    let vol = self.volume.next();
+                    let r11 = self.reed_bar_trim.next();
+                    let drive_gain = self.preamp.open_circuit_output_factor()
+                        * tables::volume_pot_gain(vol, r11);
+                    self.c9_alpha = Self::one_pole_alpha(
+                        tables::volume_pot_pole_hz(vol, r11),
+                        self.os_sample_rate,
+                    );
+                    self.c9_state += self.c9_alpha * (preamp_out * drive_gain - self.c9_state);
+                    let drive = self.c9_state;
                     #[cfg(test)]
                     {
                         self.drive_peak = self.drive_peak.max(drive.abs());
@@ -1559,14 +1635,157 @@ mod tests {
         );
     }
 
+    /// Structural invariant (2026-09-23): with the mapping FULL_SCALE_VOLTS = the
+    /// amp's rail, the output cannot exceed full scale at ANY setting — the rail
+    /// tanh bounds the amp and nothing downstream has gain > 1. Sweep the
+    /// settings that raise the drive or add downstream stages: trim at its
+    /// hottest (0 Ω) and at default, full volume, tremolo off and full, speaker
+    /// bypass and authentic; worst-phase ff chord.
+    fn worst_peak_across_settings(sr: f64) -> (f32, String) {
+        let mut worst = (0.0f32, String::new());
+        for &trim in &[0.0f64, tables::R11_REED_BAR_VOLUME_DEFAULT] {
+            for &trem in &[0.0f64, 1.0] {
+                for &spk in &[0.0f64, 1.0] {
+                    let mut e = WurliEngine::new(sr);
+                    e.ensure_buffer_capacity(1024);
+                    e.set_volume(1.0);
+                    e.set_reed_bar_trim(trim);
+                    e.set_tremolo_depth(trem);
+                    e.set_speaker_character(spk);
+                    e.set_mlp_enabled(false);
+                    e.set_noise_enabled(false);
+                    e.warm_up();
+                    let mut buf = vec![0.0f32; 1024];
+                    for _ in 0..6 {
+                        e.render(&mut buf);
+                    }
+                    // Worst-phase onset from the peak-invariant probe (≈162 ms).
+                    let delay = (sr * 0.162) as usize;
+                    let mut pos = 0;
+                    while pos < delay {
+                        let len = 1024.min(delay - pos);
+                        e.render(&mut buf[..len]);
+                        pos += len;
+                    }
+                    for &n in &[48u8, 55, 60, 63, 67, 70] {
+                        e.note_on(n, 1.0);
+                    }
+                    let mut peak = 0.0f32;
+                    let mut pos2 = 0;
+                    while pos2 < sr as usize {
+                        let len = 1024.min(sr as usize - pos2);
+                        e.render(&mut buf[..len]);
+                        for &s in &buf[..len] {
+                            peak = peak.max(s.abs());
+                        }
+                        pos2 += len;
+                    }
+                    if peak > worst.0 {
+                        worst = (peak, format!("trim={trim} trem={trem} spk={spk}"));
+                    }
+                }
+            }
+        }
+        worst
+    }
+
+    /// At 44.1 kHz the output passes the 2x decimator. Its response to a rail-clipped edge
+    /// overshoots the flat top (a bandlimited clipped waveform always does; a true-peak meter
+    /// shows the same), by more the richer the clipped waveform's upper harmonics. Measured:
+    /// 1.0089 (2026-09-23), 1.0200 with the overlap pickup law and the provisional reed swing
+    /// (2026-09-26) — while the same probe without the decimator reads exactly 1.0000
+    /// (`test_output_never_exceeds_full_scale_without_decimator`), so nothing else adds level.
     #[test]
-    fn test_user_volume_scales_output_linearly() {
-        // DECOUPLING INVARIANT (2026-04-26): user volume is applied post-amp
-        // as a linear multiplier (see tables::FIXED_CIRCUIT_DRIVE). Render
-        // the same content at vol=0.5 and vol=1.0; output peak must scale
-        // exactly 2.0× — proves the BJT operating point is identical and
-        // user volume is doing nothing but linear attenuation. If this
-        // regresses, someone re-coupled drive to user volume somewhere.
+    fn test_output_never_exceeds_full_scale_across_settings() {
+        let worst = worst_peak_across_settings(44_100.0);
+        assert!(
+            worst.0 <= 1.025,
+            "output exceeded full scale beyond the decimator margin: peak {:.4} at {} — a \
+             downstream stage adds level or the mapping no longer equals the rail \
+             (tables::FULL_SCALE_VOLTS)",
+            worst.0,
+            worst.1
+        );
+        println!(
+            "worst-case peak across settings: {:.4} at {}",
+            worst.0, worst.1
+        );
+    }
+
+    /// The strict form of the invariant: at 96 kHz the engine does not oversample, so there is
+    /// no decimator overshoot and the output must not exceed the rail at all.
+    #[test]
+    fn test_output_never_exceeds_full_scale_without_decimator() {
+        let worst = worst_peak_across_settings(96_000.0);
+        assert!(
+            worst.0 <= 1.001,
+            "output exceeded full scale with no decimator in the path: peak {:.4} at {} — a \
+             stage adds level (tables::FULL_SCALE_VOLTS)",
+            worst.0,
+            worst.1
+        );
+    }
+
+    /// Where does a rail-clipped chord pick up its overshoot? Compare the
+    /// post-amp buffer (after the decimator, before the speaker) with the
+    /// final output, at 44.1 kHz (oversampled) and 88.2 kHz (no decimator).
+    #[test]
+    #[ignore = "diagnostic probe"]
+    fn full_scale_overshoot_probe() {
+        for &sr in &[44_100.0f64, 88_200.0] {
+            let mut e = WurliEngine::new(sr);
+            e.ensure_buffer_capacity(1024);
+            e.set_volume(1.0);
+            e.set_reed_bar_trim(0.0);
+            e.set_tremolo_depth(1.0);
+            e.set_speaker_character(0.0);
+            e.set_mlp_enabled(false);
+            e.set_noise_enabled(false);
+            e.warm_up();
+            let mut buf = vec![0.0f32; 1024];
+            for _ in 0..6 {
+                e.render(&mut buf);
+            }
+            let delay = (sr as usize) * 162 / 1000;
+            let mut pos = 0;
+            while pos < delay {
+                let len = 1024.min(delay - pos);
+                e.render(&mut buf[..len]);
+                pos += len;
+            }
+            for &n in &[48u8, 55, 60, 63, 67, 70] {
+                e.note_on(n, 1.0);
+            }
+            let (mut pk_amp, mut pk_out) = (0.0f64, 0.0f32);
+            let mut pos2 = 0;
+            let total = sr as usize;
+            while pos2 < total {
+                let len = 1024.min(total - pos2);
+                e.render(&mut buf[..len]);
+                for &v in &e.out_buf[..len] {
+                    pk_amp = pk_amp.max(v.abs());
+                }
+                for &v in &buf[..len] {
+                    pk_out = pk_out.max(v.abs());
+                }
+                pos2 += len;
+            }
+            println!(
+                "sr {sr}: post-amp(+decimator) peak {pk_amp:.4}, output peak {pk_out:.4} (speaker bypass adds {:+.2} dB)",
+                20.0 * (pk_out as f64 / pk_amp).log10()
+            );
+        }
+    }
+
+    #[test]
+    fn test_user_volume_follows_pot_law() {
+        // VOLUME NETWORK (2026-09-23): user volume is the drawn pot between
+        // preamp and power amp (tables::volume_pot_gain), so the output must
+        // follow that law in the amp's linear region. Compare vol=0.75 and
+        // vol=1.0 (both drive the amp above its crossover notch and below
+        // its clip knee for a single note); the peak ratio must match the
+        // pot-network gain ratio. If this regresses, either the network or
+        // the post-amp path picked up an extra volume dependence.
         let render_at = |vol: f64| -> f32 {
             let mut e = engine();
             e.ensure_buffer_capacity(1024);
@@ -1592,16 +1811,17 @@ mod tests {
             }
             out.iter().fold(0.0f32, |a, &s| a.max(s.abs()))
         };
-        let p_05 = render_at(0.5);
+        let p_075 = render_at(0.75);
         let p_10 = render_at(1.0);
-        let ratio = p_10 / p_05;
-        // Pure linear scaling would be ratio=2.0. Per-voice OU jitter and
-        // MLP per-engine determinism allow ±2% slack.
+        let ratio = (p_10 / p_075) as f64;
+        let r11 = tables::R11_REED_BAR_VOLUME_DEFAULT;
+        let expected = tables::volume_pot_gain(1.0, r11) / tables::volume_pot_gain(0.75, r11);
+        // ±6 % slack: MLP determinism and the amp's
+        // residual level dependence (crossover notch, shelf) at these drives.
         assert!(
-            (1.96..=2.04).contains(&ratio),
-            "user volume should scale linearly: ratio {ratio:.3} (p_05={p_05:.4}, \
-             p_10={p_10:.4}). Drive may have been re-coupled to user vol — see \
-             tables::FIXED_CIRCUIT_DRIVE."
+            (ratio / expected - 1.0).abs() < 0.06,
+            "user volume should follow the pot network: ratio {ratio:.3}, expected \
+             {expected:.3} (p_075={p_075:.4}, p_10={p_10:.4}) — see tables::volume_pot_gain."
         );
     }
 
@@ -1904,41 +2124,65 @@ mod tests {
     /// Power-amp drive-headroom probe (Phase-2 closing measurement).
     ///
     /// Reports peak and RMS of the signal actually presented to the power amp
-    /// (`preamp_out * FIXED_CIRCUIT_DRIVE`) so it can be compared against the
-    /// amp's linearity envelope. Reference points:
+    /// (`preamp_out * volume_pot_gain(vol)`, at vol 0.5 and 1.0) so it can be
+    /// compared against the amp's linearity envelope. Reference points:
     ///   * behavioural amp closed-loop gain 68.93x, rails at 22 V
     ///     => hard rail clip at 22 / 68.93 = 319 mV input
     ///   * SPICE reference: THD crosses 1% near 295-300 mV input, razor cliff above
     ///
-    /// User volume is applied POST-amp, so drive is volume-independent by
-    /// construction (that is the point of the 2026-04-26 decoupling).
+    /// Since 2026-09-23 the drive follows the drawn volume network, so the
+    /// probe runs at the default pot position and at full.
     #[test]
     #[ignore = "diagnostic probe"]
     fn power_amp_drive_headroom_probe() {
         let sr = 44_100.0;
-        let mk = || {
-            let mut e = WurliEngine::new(sr);
-            e.ensure_buffer_capacity(1024);
-            e.set_volume(1.0);
-            e.set_tremolo_depth(1.0);
-            e.set_speaker_character(0.0);
-            e.set_mlp_enabled(true);
-            e.set_noise_enabled(false);
-            e.warm_up();
-            e
-        };
-        let run = |e: &mut WurliEngine, total: usize| {
-            let mut buf = vec![0.0f32; 1024];
-            let mut pos = 0;
-            while pos < total {
-                let len = 1024.min(total - pos);
-                e.render(&mut buf[..len]);
-                pos += len;
+        for vol in [0.8f64, 1.0] {
+            println!("  --- pot position {vol} (R-11 at its default) ---");
+            let mk = || {
+                let mut e = WurliEngine::new(sr);
+                e.ensure_buffer_capacity(1024);
+                e.set_volume(vol);
+                e.set_tremolo_depth(1.0);
+                e.set_speaker_character(0.0);
+                e.set_mlp_enabled(true);
+                e.set_noise_enabled(false);
+                e.warm_up();
+                e
+            };
+            let run = |e: &mut WurliEngine, total: usize| {
+                let mut buf = vec![0.0f32; 1024];
+                let mut pos = 0;
+                while pos < total {
+                    let len = 1024.min(total - pos);
+                    e.render(&mut buf[..len]);
+                    pos += len;
+                }
+            };
+            println!("  stimulus            peak mV    RMS mV   % of 319 mV clip");
+            // (a) single ff notes across the register
+            for note in [36u8, 48, 60, 72, 84] {
+                let mut best = (0.0f64, 0.0f64);
+                for delay_ms in [0usize, 44, 89, 133, 162] {
+                    let mut e = mk();
+                    run(&mut e, (sr as usize) * delay_ms / 1000);
+                    e.drive_peak = 0.0;
+                    e.drive_sumsq = 0.0;
+                    e.drive_n = 0;
+                    e.note_on(note, 0.95);
+                    run(&mut e, sr as usize);
+                    let rms = (e.drive_sumsq / e.drive_n as f64).sqrt();
+                    if e.drive_peak > best.0 {
+                        best = (e.drive_peak, rms);
+                    }
+                }
+                println!(
+                    "  note {note:>3} ff       {:8.1}  {:8.1}   {:6.1}%",
+                    best.0 * 1000.0,
+                    best.1 * 1000.0,
+                    best.0 / 0.319 * 100.0
+                );
             }
-        };
-        println!("  stimulus            peak mV    RMS mV   % of 319 mV clip");
-        // (a) single ff notes across the register
-        for note in [36u8, 48, 60, 72, 84] {
+            // (b) worst-phase ff chord — same stimulus as the peak invariant
             let mut best = (0.0f64, 0.0f64);
             for delay_ms in [0usize, 44, 89, 133, 162] {
                 let mut e = mk();
@@ -1946,7 +2190,9 @@ mod tests {
                 e.drive_peak = 0.0;
                 e.drive_sumsq = 0.0;
                 e.drive_n = 0;
-                e.note_on(note, 0.95);
+                for &n in &[48u8, 55, 60, 63, 67, 70] {
+                    e.note_on(n, 0.95);
+                }
                 run(&mut e, sr as usize);
                 let rms = (e.drive_sumsq / e.drive_n as f64).sqrt();
                 if e.drive_peak > best.0 {
@@ -1954,35 +2200,12 @@ mod tests {
                 }
             }
             println!(
-                "  note {note:>3} ff       {:8.1}  {:8.1}   {:6.1}%",
+                "  chord ff worst-ph  {:8.1}  {:8.1}   {:6.1}%",
                 best.0 * 1000.0,
                 best.1 * 1000.0,
                 best.0 / 0.319 * 100.0
             );
         }
-        // (b) worst-phase ff chord — same stimulus as the peak invariant
-        let mut best = (0.0f64, 0.0f64);
-        for delay_ms in [0usize, 44, 89, 133, 162] {
-            let mut e = mk();
-            run(&mut e, (sr as usize) * delay_ms / 1000);
-            e.drive_peak = 0.0;
-            e.drive_sumsq = 0.0;
-            e.drive_n = 0;
-            for &n in &[48u8, 55, 60, 63, 67, 70] {
-                e.note_on(n, 0.95);
-            }
-            run(&mut e, sr as usize);
-            let rms = (e.drive_sumsq / e.drive_n as f64).sqrt();
-            if e.drive_peak > best.0 {
-                best = (e.drive_peak, rms);
-            }
-        }
-        println!(
-            "  chord ff worst-ph  {:8.1}  {:8.1}   {:6.1}%",
-            best.0 * 1000.0,
-            best.1 * 1000.0,
-            best.0 / 0.319 * 100.0
-        );
     }
 
     /// Behavioural power-amp linearity envelope — where does its nonlinearity
