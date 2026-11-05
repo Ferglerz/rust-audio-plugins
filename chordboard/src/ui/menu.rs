@@ -10,6 +10,7 @@ pub(super) enum Menu {
     KeyboardParam(&'static str),
     ArpRate,
     ArpPattern,
+    GlissDirection,
 }
 
 impl Menu {
@@ -39,6 +40,7 @@ impl Menu {
                 let (min, max) = keyboard_menu_range(id).expect("keyboard dropdown");
                 return (min..=max).map(|value| value.to_string()).collect();
             }
+            Self::GlissDirection => return ARP_PATTERN_NAMES[..7].iter().map(|s| s.to_string()).collect(),
             Self::ArpPattern => {
                 return ARP_PATTERN_NAMES
                     .iter()
@@ -75,7 +77,8 @@ impl Menu {
                 _ => "Chord MIDI channel",
             },
             Self::ArpRate => "Arp rate",
-            Self::ArpPattern => "Strum direction",
+            Self::ArpPattern => "Arp direction",
+            Self::GlissDirection => "Glissando direction",
         }
     }
 
@@ -86,7 +89,7 @@ impl Menu {
             Self::Scale => 230.0,
             Self::Meter(_) | Self::KeyboardParam(_) => 40.0,
             Self::ArpRate => 112.0,
-            Self::ArpPattern => 148.0,
+            Self::ArpPattern | Self::GlissDirection => 236.0,
         }
     }
 
@@ -96,7 +99,7 @@ impl Menu {
             Self::RouteTarget => 4,
             Self::Scale => 3,
             Self::ArpRate => 2,
-            Self::ArpPattern => 1,
+            Self::ArpPattern | Self::GlissDirection => 1,
             Self::Key => 3,
             Self::Meter(_) | Self::KeyboardParam(_) => 6,
         }
@@ -281,6 +284,7 @@ impl Menu {
             Self::KeyboardParam(id) => keyboard_control_rect(id, false),
             Self::ArpRate => arp_rate_rect(),
             Self::ArpPattern => arp_direction_rect(),
+            Self::GlissDirection => GLISS_DIRECTION,
         }
     }
 }

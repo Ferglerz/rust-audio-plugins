@@ -538,6 +538,7 @@ impl Engine {
                 .filter(|voice| !voice.layer)
                 .map(|voice| voice.off)
                 .chain(self.scheduled.iter().flatten().map(|event| event.at))
+                .chain(self.layer_pending.iter().flatten().map(|event| event.0))
                 // The arp clock and RNG also advance in the other modes.
                 .chain(self.arp_deadline())
                 .chain(self.delay.deadline(
@@ -570,6 +571,7 @@ impl Engine {
                 self.end_voice(i, 0.0, out);
             }
         }
+        self.tick_glissando(out);
         self.tick_automatic_arp(out);
         self.tick_delay(out);
         for i in 0..self.scheduled.len() {

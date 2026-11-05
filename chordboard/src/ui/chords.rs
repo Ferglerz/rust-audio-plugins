@@ -120,11 +120,10 @@ impl ChordboardView {
         }
 
         let row_chord = self.params.arpeggiator.snapshot().rows[self.arp_ui.edit_page].chord;
-        let context = format!("Row {} · {}", self.arp_ui.edit_page + 1,
-            row_chord.map(harmony::chord_name).unwrap_or_else(|| "Choose chord".into()));
-        let context = self.fit_text(d, &context, ROW_CONTEXT.2 - 16.0, 11.0);
-        d.text_middle(ROW_CONTEXT.0 + 8.0, ROW_CONTEXT.1 + ROW_CONTEXT.3 * 0.5,
-            &context, 11.0, if self.tracker_selection { TEAL } else { MUTED });
+        if let Some(c) = self.control("gliss_ms") {
+            self.draw_control(d, &c, GLISS_RATE, GOLD);
+        }
+        self.button(d, GLISS_DIRECTION, &format!("Direction: {} ▾", ARP_PATTERN_NAMES[self.params.gliss_direction.value() as usize]), self.menu == Some(Menu::GlissDirection), GOLD);
 
         let current_key = self.current_chord_key();
         for i in 0..KEY_COUNT {

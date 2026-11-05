@@ -85,7 +85,7 @@ pub struct Draw<'a> {
     pub icon_font: Option<FontId>,
     pub offset_x: f32,
     pub alpha_mul: f32,
-    /// Desaturate and dim disabled module content without changing its geometry.
+    /// Fade disabled content into its background in either theme.
     pub disabled: bool,
     pub hover: Option<(f32, f32)>,
 }
@@ -156,10 +156,7 @@ impl<'a> Draw<'a> {
     pub fn color(&self, c: Color) -> Color {
         let mut col = theme::transform_color(c, self.light);
         if self.disabled {
-            let gray = (0.2126 * col.r + 0.7152 * col.g + 0.0722 * col.b) * 0.6;
-            col.r = gray;
-            col.g = gray;
-            col.b = gray;
+            col.a *= 0.4;
         }
         col.a = (col.a * self.alpha_mul).clamp(0.0, 1.0);
         col

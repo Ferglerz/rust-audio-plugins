@@ -182,6 +182,13 @@ impl ChordboardView {
     }
 
     pub(super) fn press_piano(&mut self, cx: &mut EventContext, x: f32, y: f32) -> bool {
+        if globals::global_controls()
+            .iter()
+            .any(|(_, r)| hit(*r, x, y))
+        {
+            self.press_control(cx, x, y);
+            return true;
+        }
         if self.params.control_base.load(Ordering::Relaxed) >= 0
             && hit(self.control_octave_delete_rect(), x, y)
         {

@@ -272,8 +272,64 @@ impl Engine {
                 }
             }
         }
+        if desired != self.layer_desired {
+            self.layer_desired = desired;
+            self.layer_pending.fill(None);
+            let mut notes = [0u8; 128];
+            let mut count = 0;
+            for (note, &wanted) in desired.iter().enumerate() {
+                if wanted {
+                    notes[count] = note as u8;
+                    count += 1;
+                }
+            }
+            if count > 0 {
+                let pattern = self.config.gliss_direction.min(6);
+                if pattern == 5 {
+                    if let Some(second) = self.second {
+                        if let Some(index) = notes[..count]
+                            .iter()
+                            .position(|n| n % 12 == second.note % 12)
+                        {
+                            notes[..count].swap(1.min(count - 1), index);
+                        }
+                    }
+                }
+                // Random is a permutation: every chord tone must arrive by the deadline.
+                if pattern == 6 {
+                    for i in (1..count).rev() {
+                        let j = ordering::random(&mut self.rng) as usize % (i + 1);
+                        notes.swap(i, j);
+                    }
+                }
+                let strikes = Self::pattern_length(pattern, count).min(self.layer_pending.len());
+                let total = (self.config.gliss_ms.max(0.0) as f64 * self.sample_rate as f64
+                    / 1000.0)
+                    .round() as u64;
+                for step in 0..strikes {
+                    let index = ordering::index(
+                        if pattern == 6 { 0 } else { pattern },
+                        step,
+                        count,
+                        &mut self.rng,
+                    );
+                    let at = self
+                        .now
+                        .saturating_add(total * step as u64 / (strikes - 1).max(1) as u64);
+                    self.layer_pending[step] = Some((at, notes[index]));
+                }
+            }
+        }
+        self.tick_glissando(out);
+        // Output protocol changes can retire voices without changing harmony.
+        // Restore those layers, but never bypass an outstanding glissando attack.
         for (note, &wanted) in desired.iter().enumerate() {
             if wanted
+                && !self
+                    .layer_pending
+                    .iter()
+                    .flatten()
+                    .any(|(_, n)| *n as usize == note)
                 && !self
                     .voices
                     .iter()
@@ -281,6 +337,27 @@ impl Engine {
                     .any(|v| v.note as usize == note && v.owner == 0)
             {
                 self.allocate_voice(note as u8, self.strike_velocity(), self.now, true, out);
+            }
+        }
+    }
+
+    pub(super) fn tick_glissando(&mut self, out: &mut impl FnMut(Out)) {
+        for i in 0..self.layer_pending.len() {
+            if let Some((_, note)) = self.layer_pending[i].filter(|(at, _)| *at <= self.now) {
+                self.layer_pending[i] = None;
+                if self.layer_desired[note as usize] {
+                    let owned = self
+                        .voices
+                        .iter()
+                        .flatten()
+                        .any(|v| v.note == note && v.owner == 0);
+                    if !owned {
+                        self.allocate_voice(note, self.strike_velocity(), self.now, true, out);
+                    } else if self.config.gliss_ms > 0.0 {
+                        // Bounce/thirds modes articulate repeated tones through the final deadline.
+                        self.strike(note, self.strike_velocity(), 0, out);
+                    }
+                }
             }
         }
     }

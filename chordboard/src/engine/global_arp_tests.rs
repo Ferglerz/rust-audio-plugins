@@ -624,3 +624,24 @@ fn daw_alignment_is_global_across_rows_without_changing_their_repeat_setting() {
     assert!(!engine.arp_alignment_available());
     assert_eq!(engine.config.arp_mode, ArpMode::SyncLoop);
 }
+
+#[test]
+fn custom_duration_can_extend_into_the_following_slot() {
+    let e = Engine { config: Config { gate: 1.0, gate_scale: 1.0, ..Config::default() }, ..Engine::default() };
+    assert_eq!(e.effective_arp_gate_scaled(100, 2.0), 2.0);
+    assert_eq!(e.effective_arp_gate_scaled(50, 2.0), 1.0);
+    assert_eq!(e.effective_arp_gate_scaled(100, 0.5), 0.5);
+}
+
+#[test]
+fn custom_note_tail_sounds_across_the_next_slot() {
+    let mut program = Settings { pattern: 7, lock_length: false, ..settings() };
+    program.custom[0].gate = 200;
+    program.custom[1].rest = true;
+    let mut first = row(1, chord(60, 0), program);
+    first.page.loops[0].steps[0].gate = 100;
+    let mut engine = tracker(vec![first], Config::default());
+    let events = advance(&mut engine, 201);
+    assert!(events.contains(&(200, Out::Off(0, 60, 0.0))));
+    assert!(!events.iter().any(|(at, e)| *at < 200 && matches!(e, Out::Off(_, 60, _))));
+}

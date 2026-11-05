@@ -112,7 +112,7 @@ fn image(canvas: &mut Canvas, id: ImageId, x: f32, y: f32, w: f32, h: f32) {
 
 impl ChordboardView {
     pub(super) fn draw_row_modules(&self, d: &mut Draw) {
-        let width = W * d.s;
+        let width = EDITOR_W * d.s;
         let height = (H - HEADER_H - 22.0) * d.s;
         let size = (width.ceil() as usize, height.ceil() as usize);
         let mut cache = self.row_frames.borrow_mut();
@@ -144,7 +144,7 @@ impl ChordboardView {
         }));
         d.c.clear_rect(0, 0, size.0 as u32, size.1 as u32, d.color(BG));
         {
-            let mut page = Draw::new(d.c, d.light, d.s, 0.0, -HEADER_H * d.s, d.font)
+            let mut page = Draw::new(d.c, d.light, d.s, CONTENT_X * d.s, -HEADER_H * d.s, d.font)
                 .with_hover(if sliding { None } else { d.hover });
             page.fallback_font = d.fallback_font;
             page.icon_font = d.icon_font;
@@ -177,7 +177,7 @@ impl ChordboardView {
         image(
             d.c,
             frames.visible,
-            d.ox,
+            d.ox - CONTENT_X * d.s,
             d.oy + HEADER_H * d.s,
             size.0 as f32,
             size.1 as f32,

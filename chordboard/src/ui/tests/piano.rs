@@ -206,28 +206,29 @@ fn module_grid_and_keyboard_midi_controls_fit_without_overlapping() {
         PERF_SURFACE.1 + PERF_SURFACE.3
     );
     assert_eq!(ARP_SURFACE.1 - PERF_SURFACE.1 - PERF_SURFACE.3, 12.0);
-    assert_eq!(GLOBAL_SURFACE.1 - ARP_SURFACE.1 - ARP_SURFACE.3, 12.0);
     assert!(arp_direction_rect().1 + arp_direction_rect().3 < arpeggiator::lane_rect(0).1);
     assert!(ARP_LANE_TOP > ARP_SETTINGS_H);
-    assert_eq!(CHORDS_SURFACE.0, PIANO_SURFACE.0);
+    assert_eq!(TRACKER_SURFACE.0, PIANO_SURFACE.0);
+    assert_eq!(TRACKER_SURFACE.2, 340.0 * 0.9);
     assert_eq!(PERF_SURFACE.0 - CHORDS_SURFACE.0 - CHORDS_SURFACE.2, 12.0);
-    assert_eq!(MOD_SURFACE.0 - GLOBAL_SURFACE.0 - GLOBAL_SURFACE.2, 16.0);
-    assert_eq!(
-        MOD_SURFACE.1 + MOD_SURFACE.3,
-        GLOBAL_SURFACE.1 + GLOBAL_SURFACE.3
-    );
-    assert_eq!(PIANO_SURFACE.1 - GLOBAL_SURFACE.1 - GLOBAL_SURFACE.3, 12.0);
-    assert_eq!(GLOBAL_SURFACE.0, PIANO_SURFACE.0);
-    assert_eq!(GLOBAL_SURFACE.0 + GLOBAL_SURFACE.2, MAIN_W - 16.0);
+    assert_eq!(MOD_SURFACE.0 - ARP_SURFACE.0 - ARP_SURFACE.2, 16.0);
+    assert_eq!(MOD_SURFACE.1 + MOD_SURFACE.3, ARP_SURFACE.1 + ARP_SURFACE.3);
+    assert_eq!(PIANO_SURFACE.1 - ARP_SURFACE.1 - ARP_SURFACE.3, 12.0);
+    assert_eq!(TRACKER_SURFACE.1 + TRACKER_SURFACE.3 + 12.0, PIANO_SURFACE.1);
     assert_eq!(H, PIANO_SURFACE.1 + PIANO_SURFACE.3 + 22.0);
-    assert!(GLOBAL_SURFACE.1 + GLOBAL_SURFACE.3 < PIANO_SURFACE.1);
     let globals = globals::global_controls();
     for (index, (_, r)) in globals.iter().enumerate() {
-        assert!(r.0 >= GLOBAL_SURFACE.0 && r.0 + r.2 <= GLOBAL_SURFACE.0 + GLOBAL_SURFACE.2);
-        assert!(r.1 >= GLOBAL_SURFACE.1 && r.1 + r.3 <= GLOBAL_SURFACE.1 + GLOBAL_SURFACE.3);
-        assert!(r.1 + r.3 < PIANO_SURFACE.1);
+        let surface = if index < 3 { PIANO_SURFACE } else { ARP_SURFACE };
+        assert!(hit(surface, r.0, r.1));
+        assert!(hit(surface, r.0 + r.2, r.1 + r.3));
+        if index < 3 {
+            assert!(r.0 + r.2 < PIANO_KEYS.0);
+        } else {
+            assert!(r.0 + r.2 < arpeggiator::lane_rect(0).0);
+        }
         for (_, other) in &globals[..index] {
-            assert!(r.0 >= other.0 + other.2 || other.0 >= r.0 + r.2);
+            assert!(r.0 >= other.0 + other.2 || other.0 >= r.0 + r.2
+                || r.1 >= other.1 + other.3 || other.1 >= r.1 + r.3);
         }
     }
     for mpe in [false, true] {

@@ -439,11 +439,11 @@ fn tracker_text_edit_does_not_swallow_arpeggiator_clicks() {
 }
 
 #[test]
-fn tracker_is_a_separate_full_height_module_below_the_header() {
+fn tracker_ends_above_the_full_width_keyboard() {
     let r = TRACKER_SURFACE;
     assert!(r.1 > HEADER_H);
     assert!(r.0 + r.2 < CHORDS_SURFACE.0);
-    assert_eq!(r.1 + r.3, PIANO_SURFACE.1 + PIANO_SURFACE.3);
+    assert_eq!(r.1 + r.3 + 12.0, PIANO_SURFACE.1);
     for i in [0, 1, 2, 4] {
         let button = tracker::action_rect(i);
         assert!(button.0 >= r.0 && button.0 + button.2 <= r.0 + r.2);

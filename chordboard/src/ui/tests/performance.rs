@@ -301,7 +301,7 @@ fn direction_chooser_selects_exact_patterns() {
         open_arp(&mut view);
         let (mut cx, target, changes) = context();
         click_menu_trigger(&mut view, &mut cx, target, Menu::ArpPattern);
-        assert!(view.arp_chooser_open());
+        assert_eq!(view.menu, Some(Menu::ArpPattern));
         click_menu_option(&mut view, &mut cx, target, Menu::ArpPattern, selected);
         assert!(view.menu.is_none());
         assert!(changes.borrow().iter().any(|(ptr, value)| {
@@ -412,7 +412,7 @@ fn left_performance_targets_do_not_overlap() {
     targets.extend((0..KEY_COUNT).map(key_rect));
     targets.extend((0..MEMORY_COUNT).map(memory_rect));
     targets.extend((0..2).map(inversion_rect));
-    targets.push(ROW_CONTEXT);
+    targets.extend([GLISS_RATE, GLISS_DIRECTION]);
     for (i, a) in targets.iter().enumerate() {
         assert!(a.0 >= 0.0 && a.1 >= 0.0 && a.0 + a.2 <= W && a.1 + a.3 <= H);
         for (j, b) in targets.iter().enumerate().skip(i + 1) {

@@ -105,11 +105,7 @@ pub(super) fn click_menu_option(
     menu: Menu,
     index: usize,
 ) {
-    let r = if menu == Menu::ArpPattern {
-        arpeggiator::chooser_card_for(index, 8)
-    } else {
-        view.menu_option_rect(menu, index)
-    };
+    let r = view.menu_option_rect(menu, index);
     click(view, cx, target, r);
     if menu == Menu::ArpPattern {
         view.tick_arp_editor(pleasant_ui::page_slide::DURATION);

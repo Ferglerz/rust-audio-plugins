@@ -443,7 +443,7 @@ impl Engine {
         let mut config = self.config;
         config.gate = gate as f32 / 100.0;
         self.apply_routes(&mut config);
-        (config.gate * self.config.gate_scale * custom).clamp(0.01, 1.0)
+        (config.gate * self.config.gate_scale * custom).clamp(0.01, custom.max(1.0))
     }
     pub(super) fn arp_recipe(&self) -> Option<crate::harmony::SavedChord> {
         if self.config.tracker_enabled {

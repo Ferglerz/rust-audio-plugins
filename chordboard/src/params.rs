@@ -108,6 +108,10 @@ pub struct ChordboardParams {
     pub strings: IntParam,
     #[id = "strings_played"]
     pub strings_played: IntParam,
+    #[id = "gliss_ms"]
+    pub gliss_ms: FloatParam,
+    #[id = "gliss_direction"]
+    pub gliss_direction: IntParam,
     #[id = "strum_ms"]
     pub strum_ms: FloatParam,
     #[id = "strum_sync"]
@@ -397,6 +401,8 @@ impl Default for ChordboardParams {
                 12,
                 IntRange::Linear { min: 1, max: 12 },
             ),
+            gliss_ms: FloatParam::new("Glissando", 0.0, FloatRange::Linear { min: 0.0, max: 2000.0 }).with_unit(" ms"),
+            gliss_direction: IntParam::new("Glissando direction", 0, IntRange::Linear { min: 0, max: 6 }),
             strum_ms: FloatParam::new(
                 "Rate",
                 125.0,
@@ -699,6 +705,8 @@ impl ChordboardParams {
             strings_played: self.strings_played.value() as u8,
             routed_x: None,
             legacy_direct_x: self.schema_version.load(Ordering::Relaxed) < 2,
+            gliss_ms: self.gliss_ms.value(),
+            gliss_direction: self.gliss_direction.value() as u8,
             strum_ms: self.strum_ms.value(),
             strum_sync: self.strum_sync.value(),
             strum_beats: self.strum_beats.value(),
@@ -847,6 +855,8 @@ control_catalog! {
     control(length_ms, 0),
     control(strings, 1),
     control(strings_played, 1),
+    control(gliss_ms, 0),
+    control(gliss_direction, 0),
     control(strum_ms, 1),
     toggle(strum_sync, 1),
     control(strum_beats, 1),

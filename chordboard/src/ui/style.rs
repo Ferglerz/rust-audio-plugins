@@ -378,7 +378,7 @@ impl ChordboardView {
 
     pub(super) fn hover_pointer(&self) -> Option<(f32, f32)> {
         pleasant_ui::idle_hover(self.pointer, self.drag.is_some()).filter(|&(x, y)| {
-            self.fx_ui.open || !self.row_slide.active() || x < 0.0 || y < HEADER_H
+            self.fx_ui.open || !self.row_slide.active() || (x < 0.0 && !hit(PIANO_SURFACE, x, y)) || y < HEADER_H
         })
     }
 

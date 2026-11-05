@@ -59,6 +59,8 @@ pub struct Engine {
     bass_sustain: [bool; 16],
     melody_sustain: [bool; 16],
     layer_latched: bool,
+    layer_desired: [bool; 128],
+    layer_pending: [Option<(u64, u8)>; 128],
     pub x: f32,
     pub y: f32,
     pub y_active: bool,
@@ -138,6 +140,8 @@ impl Default for Engine {
             bass_sustain: [false; 16],
             melody_sustain: [false; 16],
             layer_latched: false,
+            layer_desired: [false; 128],
+            layer_pending: [None; 128],
             x: 0.0,
             y: 0.8,
             y_active: false,
@@ -786,6 +790,8 @@ impl Engine {
         self.stop_voices(0.0, out);
         self.stop_melody(out);
         self.stop_bass(out);
+        self.layer_pending.fill(None);
+        self.layer_desired.fill(false);
         self.scheduled.fill(None);
         self.root = None;
         self.second = None;

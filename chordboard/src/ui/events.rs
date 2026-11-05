@@ -174,6 +174,8 @@ impl ChordboardView {
                 self.restore_shift_latch(cx);
                 let value = if globals::is_global(c.id) {
                     globals::value_rect(c.id)
+                } else if c.id == "gliss_ms" {
+                    GLISS_VALUE
                 } else if matches!(c.id, "humanize" | "swing") {
                     arpeggiator::adjustment_value_rect(r)
                 } else {
@@ -277,6 +279,9 @@ impl ChordboardView {
             return false;
         };
         let x = x - CONTENT_X;
+        if self.custom_event(cx, event, x, y) {
+            return true;
+        }
         if !self.quick_midi.show && self.midi_fx_event(cx, event, x, y) {
             return true;
         }
@@ -284,7 +289,7 @@ impl ChordboardView {
         // edited at their destination coordinates. Releases still end gestures.
         if !self.fx_ui.open
             && self.row_slide.active()
-            && x >= 0.0
+            && (x >= 0.0 || hit(PIANO_SURFACE, x, y))
             && y >= HEADER_H
             && matches!(
                 event,
@@ -565,30 +570,6 @@ impl ChordboardView {
         {
             return true;
         }
-        if self.panel == Some(Panel::Custom) && hit(CHORDS_SURFACE, x, y) {
-            match event {
-                WindowEvent::MouseDown(MouseButton::Left) => {
-                    if hit(self.panel_close_rect(Panel::Custom), x, y) {
-                        self.set_panel(None);
-                    } else {
-                        self.press_custom(
-                            cx,
-                            x,
-                            y,
-                            cx.modifiers().intersects(Modifiers::CTRL | Modifiers::LOGO),
-                        );
-                    }
-                    return true;
-                }
-                WindowEvent::MouseScroll(_, dy) => {
-                    self.scroll_custom(x, y, *dy);
-                    cx.needs_redraw();
-                    return true;
-                }
-                WindowEvent::MouseDown(_) | WindowEvent::MouseDoubleClick(_) => return true,
-                _ => {}
-            }
-        }
         match event {
             WindowEvent::KeyDown(code, _) if self.focused && !cx.modifiers().command() => {
                 if let Some(slot) = MEMORY_CODES.iter().position(|c| c == code) {
@@ -841,6 +822,10 @@ impl ChordboardView {
                 }
                 if hit(inversion_control_rect(self.params.mpe_enabled(), 1), x, y) {
                     self.inversion(cx, 1);
+                    return true;
+                }
+                if hit(GLISS_DIRECTION, x, y) {
+                    self.open_menu(Menu::GlissDirection);
                     return true;
                 }
                 if hit(arp_direction_rect(), x, y) {

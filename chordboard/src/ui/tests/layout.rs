@@ -87,7 +87,7 @@ fn self_modulation_is_rejected_by_drag_and_both_route_menus() {
 fn tempo_targets_fit_the_header() {
     assert!(TEMPO_CONTROL.2 >= 3.0 * 150.0);
     let controls = [super::super::midi_fx::PERFORMANCE_TAB, super::super::midi_fx::FX_TAB,
-        METER_NUM, METER_DEN, TEMPO_SYNC, TEMPO_CONTROL, APPEARANCE];
+        METER_NUM, METER_DEN, TEMPO_SYNC, TEMPO_CONTROL, DAW_ALIGNMENT, APPEARANCE];
     for pair in controls.windows(2) {
         assert!(pair[0].0 + pair[0].2 + 8.0 <= pair[1].0);
         assert_eq!(pair[0].1 + pair[0].3 * 0.5, pair[1].1 + pair[1].3 * 0.5);
@@ -245,9 +245,9 @@ fn compact_layout_preserves_keyboard_velocity_heights_and_memory_gap() {
     let tile = key_rect(KEY_COLUMNS * 2);
     assert_eq!(memory_rect(0).1 - tile.1 - tile.3, 10.0);
     assert!(tile.3 / tile.2 < 1.3);
-    assert_eq!(PIANO_SURFACE.2, W - 32.0);
+    assert_eq!(PIANO_SURFACE.2, EDITOR_W - 32.0);
     assert_eq!(PIANO_SURFACE.0 + PIANO_SURFACE.2, MOD_SURFACE.0 + MOD_SURFACE.2);
-    assert_eq!(MOD_SURFACE.1 + MOD_SURFACE.3, GLOBAL_SURFACE.1 + GLOBAL_SURFACE.3);
+    assert_eq!(MOD_SURFACE.1 + MOD_SURFACE.3, ARP_SURFACE.1 + ARP_SURFACE.3);
     assert_eq!(PIANO_KEYS.0 + PIANO_KEYS.2, W - 32.0);
     let first = key_rect(0);
     let last = memory_rect(MEMORY_COUNT - 1);
@@ -258,7 +258,7 @@ fn compact_layout_preserves_keyboard_velocity_heights_and_memory_gap() {
         .map(key_rect)
         .chain((0..MEMORY_COUNT).map(memory_rect))
     {
-        assert_eq!((r.2, r.3), (66.0, 78.0));
+        assert_eq!((r.2, r.3), (TILE_WIDTH, TILE_HEIGHT));
         assert!(r.0 >= CHORDS_SURFACE.0 + 16.0);
         assert!(r.0 + r.2 <= CHORDS_SURFACE.0 + CHORDS_SURFACE.2 - 16.0);
     }
@@ -395,7 +395,7 @@ fn split_drag_repairs_extreme_loaded_boundaries() {
 }
 #[test]
 fn module_header_controls_fit_inline_without_overlap() {
-    let chords = vec![Menu::Key.trigger_rect(), ORDER, ROW_CONTEXT];
+    let chords = vec![Menu::Key.trigger_rect(), ORDER, ROOT_ON_SELECT];
     for (module, title_width, controls) in [(CHORDS_SURFACE, 78.0, chords)] {
         let mut right = module.0 + title_width;
         for r in controls {
@@ -561,10 +561,11 @@ fn global_footer_fits_short_host_windows_and_hit_testing_uses_the_same_scale() {
 }
 
 #[test]
-fn row_context_has_no_hidden_transpose_action() {
+fn glissando_direction_opens_without_hidden_transpose_action() {
     let mut view = view(2, false);
     let (mut cx, target, changes) = context();
-    click(&mut view, &mut cx, target, ROW_CONTEXT);
+    click(&mut view, &mut cx, target, GLISS_DIRECTION);
+    assert_eq!(view.menu, Some(Menu::GlissDirection));
     assert!(changes.borrow().is_empty());
 }
 

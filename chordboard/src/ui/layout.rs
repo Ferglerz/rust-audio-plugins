@@ -6,18 +6,17 @@ pub(super) fn editor_scale(width: f32, height: f32) -> f32 {
 use super::{arpeggiator, KEY_COLUMNS};
 const WIDTH_REDUCTION: f32 = 128.0;
 const OLD_MOD_COLUMN: f32 = 122.0;
-pub(super) const MAIN_W: f32 = 1871.0 - WIDTH_REDUCTION - OLD_MOD_COLUMN;
+pub(super) const MAIN_W: f32 = 2081.0 - WIDTH_REDUCTION - OLD_MOD_COLUMN;
 pub(super) const W: f32 = MAIN_W + 190.0;
 // Main modules retain their local coordinates. Rendering and input share this
 // origin, leaving a permanent composition column to their left.
-pub(super) const CONTENT_X: f32 = 352.0;
+pub(super) const CONTENT_X: f32 = 318.0;
 pub(super) const EDITOR_W: f32 = W + CONTENT_X;
-pub(super) const TRACKER_SURFACE: Rect = (16.0 - CONTENT_X, 92.0, CONTENT_X - 12.0, H - 114.0);
-pub(super) const GLOBAL_SURFACE: Rect = (
-    16.0,
-    ARP_SURFACE.1 + ARP_SURFACE.3 + 12.0,
-    MAIN_W - 32.0,
-    212.0,
+pub(super) const TRACKER_SURFACE: Rect = (
+    16.0 - CONTENT_X,
+    92.0,
+    CONTENT_X - 12.0,
+    PIANO_SURFACE.1 - 104.0,
 );
 pub(super) const H: f32 = PIANO_SURFACE.1 + PIANO_SURFACE.3 + 22.0;
 pub(super) type Rect = (f32, f32, f32, f32);
@@ -33,7 +32,7 @@ pub(super) fn module_title_y(y: f32, size: f32) -> f32 {
     module_header_mid(y) + size * 0.35
 }
 
-pub(super) const PAD: Rect = (1096.0 - WIDTH_REDUCTION, 136.0, 621.0, 358.0);
+pub(super) const PAD: Rect = (PERF_SURFACE.0 + 16.0, 136.0, PERF_SURFACE.2 - 32.0, 480.0);
 // Keep drawing and pointer targets on the same performance surface.
 const fn field_corner(pad: Rect) -> Rect {
     (pad.0 + pad.2 - 28.0, 100.0, 28.0, 28.0)
@@ -55,19 +54,19 @@ const fn manual_field_inset(pad: Rect) -> Rect {
         pad.3 - LEFT - 72.0,
     )
 }
-pub(super) const ARP_PAD: Rect = (32.0, 136.0, 892.0, 358.0);
+pub(super) const ARP_PAD: Rect = (32.0, 136.0, 1012.0, 480.0);
 pub(super) const PLAY_PAD: Rect = manual_field_inset(PAD);
-pub(super) const CHORDS_SURFACE: Rect = (16.0, 92.0, 924.0, 418.0);
-pub(super) const PERF_SURFACE: Rect = (1080.0 - WIDTH_REDUCTION, 92.0, 653.0, 418.0);
-// Modulators stop at Global; the keyboard spans the full width below.
-pub(super) const MOD_SURFACE: Rect = (
-    MAIN_W,
+pub(super) const CHORDS_SURFACE: Rect = (16.0, 92.0, 1044.0, 540.0);
+pub(super) const PERF_SURFACE: Rect = (
+    CHORDS_SURFACE.0 + CHORDS_SURFACE.2 + 12.0,
     92.0,
-    174.0,
-    GLOBAL_SURFACE.1 + GLOBAL_SURFACE.3 - 92.0,
+    743.0,
+    540.0,
 );
+// Modulators and Tracker end above the full-width keyboard.
+pub(super) const MOD_SURFACE: Rect = (MAIN_W, 92.0, 174.0, ARP_SURFACE.1 + ARP_SURFACE.3 - 92.0);
 pub(super) const EXPAND: Rect = field_corner(PAD);
-pub(super) const EXPANDED_SURFACE: Rect = (16.0, 92.0, MAIN_W - 32.0, 418.0);
+pub(super) const EXPANDED_SURFACE: Rect = (16.0, 92.0, MAIN_W - 32.0, CHORDS_SURFACE.3);
 pub(super) const EXPANDED_PAD: Rect = (32.0, PAD.1, MAIN_W - 64.0, PAD.3);
 pub(super) const EXPANDED_PLAY_PAD: Rect = manual_field_inset(EXPANDED_PAD);
 pub(super) const EXPANDED_EXPAND: Rect = field_corner(EXPANDED_PAD);
@@ -81,7 +80,6 @@ pub(super) const LATCH: Rect = (
 pub(super) const KEY_MENU: Rect = (104.0, 100.0, 260.0, 28.0);
 pub(super) const ORDER: Rect = (372.0, 100.0, 116.0, 28.0);
 pub(super) const ROOT_ON_SELECT: Rect = (496.0, 100.0, 148.0, 28.0);
-pub(super) const ROW_CONTEXT: Rect = (652.0, 100.0, 272.0, 28.0);
 pub(super) const APPEARANCE: Rect = (W - 16.0 - 72.0, 24.0, 72.0, 30.0);
 pub(super) const STRUM_BYPASS: Rect = (PERF_SURFACE.0 + 10.0, 100.0, 28.0, 28.0);
 pub(super) fn strum_bypass_rect(expand: f32) -> Rect {
@@ -119,7 +117,10 @@ pub(super) fn inversion_control_rect(mpe: bool, i: usize) -> Rect {
     )
 }
 pub(super) fn output_controls() -> [(&'static str, Rect); 1] {
-    [("length_ms", (PAD.0 + 8.0, 450.0, PAD.2 - 16.0, 38.0))]
+    [(
+        "length_ms",
+        (PAD.0 + 8.0, PAD.1 + PAD.3 - 44.0, PAD.2 - 16.0, 38.0),
+    )]
 }
 
 pub(super) const ARP_RATES: [(&str, f32); 8] = [
@@ -172,10 +173,10 @@ pub(super) const TEMPO_SYNC: Rect = (1373.0 - WIDTH_REDUCTION - OLD_MOD_COLUMN, 
 pub(super) const TEMPO_CONTROL: Rect = (
     1507.0 - WIDTH_REDUCTION - OLD_MOD_COLUMN,
     TEMPO_SYNC.1,
-    282.0,
+    492.0,
     TEMPO_SYNC.3,
 );
-pub(super) const DAW_ALIGNMENT: Rect = (TEMPO_CONTROL.0 + 290.0, 24.0, 150.0, 30.0);
+pub(super) const DAW_ALIGNMENT: Rect = (TEMPO_CONTROL.0 + TEMPO_CONTROL.2 + 8.0, 24.0, 150.0, 30.0);
 pub(super) const STRUM_LATCH: Rect = field_latch(PAD);
 pub(super) const EXPANDED_STRUM_LATCH: Rect = field_latch(EXPANDED_PAD);
 
@@ -187,13 +188,18 @@ pub(super) enum Panel {
 impl Panel {
     pub(super) fn rect(self) -> Rect {
         match self {
-            Self::Routes | Self::Custom => CHORDS_SURFACE,
+            Self::Routes => CHORDS_SURFACE,
+            Self::Custom => CUSTOM_SURFACE,
         }
     }
 }
 
-pub(super) fn voicing_controls() -> [(&'static str, Rect); 0] {
-    []
+pub(super) const CUSTOM_SURFACE: Rect = (16.0, 92.0, W - 32.0, H - 114.0);
+pub(super) const GLISS_RATE: Rect = (940.0, 486.0, 104.0, 108.0);
+pub(super) const GLISS_VALUE: Rect = (944.0, 570.0, 96.0, 22.0);
+pub(super) const GLISS_DIRECTION: Rect = (832.0, 598.0, 212.0, 28.0);
+pub(super) fn voicing_controls() -> [(&'static str, Rect); 1] {
+    [("gliss_ms", GLISS_RATE)]
 }
 pub(super) fn meter_rect(i: usize) -> Rect {
     const INSET: f32 = 12.0;
@@ -213,9 +219,9 @@ pub(super) fn modulator_bypass_rect(source: usize) -> Rect {
     (r.0 + r.2 - 36.0, r.1 + 4.0, 32.0, 20.0)
 }
 
-pub(super) const KEY_PITCH: f32 = 70.0;
+pub(super) const KEY_PITCH: f32 = 79.5;
 pub(super) const TILE_WIDTH: f32 = KEY_PITCH - 4.0;
-pub(super) const TILE_HEIGHT: f32 = 78.0;
+pub(super) const TILE_HEIGHT: f32 = 94.0;
 const KEY_ROW_PITCH: f32 = TILE_HEIGHT + 8.0;
 // Center all four tile rows in the body beneath the inline header.
 const TILE_GROUP_HEIGHT: f32 = 3.0 * TILE_HEIGHT + 2.0 * 8.0 + 10.0 + TILE_HEIGHT;
@@ -349,13 +355,18 @@ pub(super) fn route_control_rect(id: &str) -> Rect {
 #[cfg(test)]
 pub(super) const ARP_SETTINGS_H: f32 = 44.0;
 pub(super) const ARP_LANE_TOP: f32 = 82.0;
-const ARP_LANE_BODY: f32 = 262.0;
+const ARP_LANE_BODY: f32 = 364.0;
 pub(super) const ARP_H: f32 = ARP_LANE_TOP + ARP_LANE_BODY + 8.0;
-pub(super) const ARP_SURFACE: Rect = (16.0, 522.0, MAIN_W - 32.0, ARP_H);
-pub(super) const PIANO_SURFACE: Rect = (
+pub(super) const ARP_SURFACE: Rect = (
     16.0,
-    GLOBAL_SURFACE.1 + GLOBAL_SURFACE.3 + 12.0,
-    W - 32.0,
+    CHORDS_SURFACE.1 + CHORDS_SURFACE.3 + 12.0,
+    MAIN_W - 32.0,
+    ARP_H,
+);
+pub(super) const PIANO_SURFACE: Rect = (
+    16.0 - CONTENT_X,
+    ARP_SURFACE.1 + ARP_SURFACE.3 + 12.0,
+    EDITOR_W - 32.0,
     206.0,
 );
 const KEYBOARD_MODULE_W: f32 = (W - 64.0 - 24.0) / 3.0;

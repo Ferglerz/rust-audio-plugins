@@ -131,13 +131,6 @@ impl ChordboardView {
                 2.0,
             );
             let rows = self.params.arpeggiator.snapshot().rows;
-            d.text_middle(
-                r.0 + r.2 - 90.0,
-                r.1 + 22.0,
-                &format!("{} rows", rows.len()),
-                13.0,
-                MUTED,
-            );
             for (i, label) in ["Duplicate", "Copy", "Paste"].iter().enumerate() {
                 self.arp_button(d, action_rect(i), label, false, TEAL);
             }
@@ -261,8 +254,15 @@ impl ChordboardView {
                 self.close_icon(d, delete, red, false);
                 if self.snapshot.arp_running && self.snapshot.arp_row_index as usize == i {
                     let pulse = 0.5 + 0.5 * self.voicing_pulse.sin();
-                    d.outline_rounded(rr.0 + 1.0, rr.1 + 1.0, rr.2 - 2.0, rr.3 - 2.0,
-                        5.0, alpha(GOLD, 0.55 + pulse * 0.45), 2.5);
+                    d.outline_rounded(
+                        rr.0 + 1.0,
+                        rr.1 + 1.0,
+                        rr.2 - 2.0,
+                        rr.3 - 2.0,
+                        5.0,
+                        alpha(GOLD, 0.55 + pulse * 0.45),
+                        2.5,
+                    );
                 }
             }
             if let Some((from, target)) = self.tracker_drag {

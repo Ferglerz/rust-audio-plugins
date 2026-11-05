@@ -281,7 +281,7 @@ impl ChordboardView {
             }
         }
         // Prevent invisible performance controls receiving pointer events, even in empty space.
-        x >= 0.0
+        (x >= 0.0 || hit(PIANO_SURFACE, x, y))
             && y >= HEADER_H
             && matches!(
                 event,

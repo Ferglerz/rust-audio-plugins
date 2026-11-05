@@ -40,7 +40,7 @@ fn wires_face_destinations_and_sliding_route_page_blocks_hidden_controls() {
     );
     assert!(changes.borrow().is_empty());
     assert_eq!(view.route_elapsed, 0.0);
-    assert_eq!(MAIN_W, 1621.0); // Preserve the width of the performance surfaces.
+    assert_eq!(MAIN_W, ARP_SURFACE.0 + ARP_SURFACE.2 + 16.0);
 }
 #[test]
 fn global_transpose_reset_closes_editing_and_emits_zero() {
@@ -313,8 +313,8 @@ fn output_controls_follow_the_arp_editor_page_and_keep_strumfield_velocity_free(
         assert_eq!(velocity.len(), 1);
         assert_eq!(velocity[0].1, globals::global_rect("velocity_scale"));
         let r = velocity[0].1;
-        assert!(r.1 >= GLOBAL_SURFACE.1);
-        assert!(r.1 + r.3 <= GLOBAL_SURFACE.1 + GLOBAL_SURFACE.3);
+        assert!(r.1 >= ARP_SURFACE.1);
+        assert!(r.1 + r.3 <= ARP_SURFACE.1 + ARP_SURFACE.3);
         assert!(!hit(PAD, r.0, r.1));
         assert!(!hit(PERF_SURFACE, r.0, r.1));
     }
@@ -784,7 +784,7 @@ fn arpeggiator_settings_work_while_strumfield_is_expanded() {
         Some((view.params.arp_enabled.as_ptr(), 1.0))
     );
     click(&mut view, &mut cx, target, arp_direction_rect());
-    assert!(view.arp_chooser_open());
+    assert_eq!(view.menu, Some(Menu::ArpPattern));
     view.menu = None;
     let humanize = arp_controls()[0].1;
     event(

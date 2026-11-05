@@ -595,3 +595,56 @@ fn host_voicing_changes_update_every_position_of_a_held_chord() {
     e.midi_note(false, 0, 60, 0.0, &mut |_| {});
     assert!(e.root.is_none());
 }
+
+#[test]
+fn glissando_total_time_does_not_depend_on_chord_size_or_direction() {
+    for quality in [0, 1, 2, 3, 4] {
+        for direction in 0..=6 {
+            let mut e = Engine { sample_rate: 1000.0, ..Engine::default() };
+            configure(&mut e, Config { mode: MANUAL, always_chord: true, always_bass: false,
+                gliss_ms: 120.0, gliss_direction: direction, ..Config::default() });
+            let first = send(&mut e, Command::KeyDown(0, 60, quality));
+            let mut events: Vec<_> = notes(&first).into_iter().map(|n| (0, n)).collect();
+            e.advance(121, &mut |at, event| { if let Out::On(_, n, _) = event { events.push((at, n)); } });
+            assert_eq!(events.first().map(|e| e.0), Some(0));
+            assert_eq!(events.last().map(|e| e.0), Some(120), "quality {quality}, direction {direction}");
+            for note in e.full_notes.as_slice() { assert!(events.iter().any(|e| e.1 == *note)); }
+            if direction == 1 { assert!(events.windows(2).all(|p| p[0].1 > p[1].1)); }
+        }
+    }
+}
+
+#[test]
+fn glissando_release_and_panic_cancel_pending_attacks() {
+    for panic in [false, true] {
+        let mut e = Engine { sample_rate: 1000.0, ..Engine::default() };
+        configure(&mut e, Config { mode: MANUAL, always_chord: true, always_bass: false,
+            gliss_ms: 120.0, ..Config::default() });
+        send(&mut e, Command::KeyDown(0, 60, 0));
+        if panic { e.panic(&mut |_| {}); } else { send(&mut e, Command::KeyUp(0)); }
+        let mut attacks = Vec::new();
+        e.advance(500, &mut |_, event| { if let Out::On(_, n, _) = event { attacks.push(n); } });
+        assert!(attacks.is_empty());
+        assert!(e.layer_pending.iter().all(Option::is_none));
+    }
+}
+
+#[test]
+fn glissando_zero_is_immediate_and_advance_matches_tick() {
+    let build = |ms| {
+        let mut e = Engine { sample_rate: 1000.0, ..Engine::default() };
+        configure(&mut e, Config { mode: MANUAL, always_chord: true, always_bass: false,
+            gliss_ms: ms, ..Config::default() });
+        let output = send(&mut e, Command::KeyDown(0, 60, 0));
+        (e, output)
+    };
+    let (e, output) = build(0.0);
+    assert_eq!(notes(&output), e.full_notes.as_slice());
+    let (mut a, _) = build(137.0);
+    let (mut b, _) = build(137.0);
+    let mut left = Vec::new();
+    let mut right = Vec::new();
+    a.advance(200, &mut |at, event| left.push((at, event)));
+    for at in 0..200 { b.tick(&mut |event| right.push((at, event))); }
+    assert_eq!(left, right);
+}

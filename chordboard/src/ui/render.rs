@@ -62,6 +62,16 @@ impl ChordboardView {
         } else {
             self.draw_row_modules(&mut d);
         }
+        if self.slide_panel == Panel::Custom && self.route_progress > 0.0 {
+            let r = CUSTOM_SURFACE;
+            d.scissor(r.0, r.1, r.2, r.3);
+            d.offset_x = (1.0 - self.route_progress) * r.2;
+            self.surface(&mut d, r);
+            self.draw_custom(&mut d);
+            self.close_icon(&mut d, self.panel_close_rect(Panel::Custom), TEAL, false);
+            d.offset_x = 0.0;
+            d.reset_scissor();
+        }
         self.draw_tracker(&mut d);
         let base_controls = self.base_controls();
         let panel_controls = self.panel_controls();
@@ -123,7 +133,7 @@ impl ChordboardView {
             self.draw_global_targets(&mut d);
             self.draw_surface_midi_targets(&mut d);
             d.font = self.ui_font.get();
-            d.text(GLOBAL_SURFACE.0 + 14.0, module_title_y(GLOBAL_SURFACE.1, MODULE_TITLE_SIZE),
+            d.text(32.0, H - 10.0,
                 &self.midi_learn_status(), MODULE_TITLE_SIZE, GOLD);
             return;
         }
@@ -152,13 +162,23 @@ impl ChordboardView {
                     label.clone()
                 };
                 let allowed = self.route_menu_allowed(menu, i);
-                self.button(
-                    &mut d,
-                    r,
-                    &label,
-                    allowed && i == self.menu_selection(menu),
-                    if allowed { menu_color } else { MUTED },
-                );
+                if matches!(menu, Menu::ArpPattern | Menu::GlissDirection) {
+                    let selected = i == self.menu_selection(menu);
+                    self.button_surface(&mut d, r, selected, menu_color);
+                    let color = if selected { menu_color } else { TEXT };
+                    arpeggiator::draw_direction_icon(
+                        &mut d, i, (r.0 + 12.0, r.1 + (r.3 - 14.0) * 0.5, 40.0, 14.0), color,
+                    );
+                    d.text_right(r.0 + r.2 - 12.0, r.1 + r.3 * 0.5 + 4.2, &label, 12.0, color);
+                } else {
+                    self.button(
+                        &mut d,
+                        r,
+                        &label,
+                        allowed && i == self.menu_selection(menu),
+                        if allowed { menu_color } else { MUTED },
+                    );
+                }
                 if !allowed {
                     d.rect(r.0, r.1, r.2, r.3, alpha(PANEL, 0.65));
                 }
@@ -193,11 +213,12 @@ impl ChordboardView {
         self.surface(d, performance);
         if expand < 1.0 {
             d.scissor(chords.0, chords.1, chords.2.max(0.0), CHORDS_SURFACE.3);
-            d.offset_x = -self.route_progress * CHORDS_SURFACE.2;
-            if self.route_progress < 1.0 {
+            let route_progress = if self.slide_panel == Panel::Routes { self.route_progress } else { 0.0 };
+            d.offset_x = -route_progress * CHORDS_SURFACE.2;
+            if route_progress < 1.0 {
                 self.draw_chords(d);
             }
-            if self.route_progress > 0.0 {
+            if route_progress > 0.0 {
                 d.offset_x = (1.0 - self.route_progress) * CHORDS_SURFACE.2;
                 match self.slide_panel {
                     Panel::Routes => self.draw_routes(d),
@@ -230,10 +251,10 @@ impl ChordboardView {
         d.disabled = false;
         let base_controls = self.base_controls();
         for (c, r) in &base_controls {
-            if r.1 < HEADER_H || hit(GLOBAL_SURFACE, r.0, r.1) {
+            if r.1 < HEADER_H || globals::is_global(c.id) {
                 continue;
             }
-            if c.id == "root_on_select" {
+            if matches!(c.id, "root_on_select" | "gliss_ms") {
                 continue;
             }
             if hit(ARP_SURFACE, r.0, r.1) || hit(ARP_PAD, r.0, r.1) {
@@ -257,7 +278,7 @@ impl ChordboardView {
         self.surface(d, ARP_SURFACE);
         self.draw_arp_editor(d);
         self.draw_keyboard_pages(d);
-        self.draw_globals(d);
+        self.draw_global_targets(d);
 
         self.draw_memory_drag(d);
         self.draw_route_drag(d);
@@ -274,11 +295,20 @@ impl ChordboardView {
             return Some(hint);
         }
         let (x, y) = self.hover_pointer()?;
+        if self.panel == Some(Panel::Custom) && hit(CUSTOM_SURFACE, x, y) {
+            return Some("Drag blocks to move notes; drag their right edges for duration. Right-click for rest, scroll for velocity.".into());
+        }
+        if hit(GLISS_RATE, x, y) || hit(GLISS_DIRECTION, x, y) {
+            return Some("Glissando: total time from first to last chord-on-select attack. 0 ms plays the chord together.".into());
+        }
         if hit(midi_fx::FX_TAB, x, y) {
             return Some("Global MIDI effects · Shared by every tracker row".into());
         }
         if hit(midi_fx::PERFORMANCE_TAB, x, y) {
             return Some("Return to performance controls".into());
+        }
+        if self.fx_ui.open && hit(PIANO_SURFACE, x, y) && x < 0.0 {
+            return None;
         }
         if self.fx_ui.open && x >= 0.0 && y >= HEADER_H {
             if x < midi_fx::DELAY_SURFACE.0 {
@@ -598,6 +628,16 @@ impl ChordboardView {
         }
     }
     pub(super) fn draw_control(&self, d: &mut Draw, c: &Control, rect: Rect, color: Color) {
+        if c.id == "gliss_ms" {
+            let mut layout = pleasant_ui::draw::KnobLayout::new(rect);
+            layout.cy = rect.1 + 50.0;
+            layout.radius = 29.0;
+            layout.label_y = rect.1 + 12.0;
+            layout.value_y = rect.1 + 99.0;
+            let layout = layout.with_text_sizes(11.0, 13.0);
+            d.knob_with_layout(&layout, "Glissando", &self.display_value(c), c.norm, color, false);
+            return;
+        }
         if matches!(c.id, "humanize" | "swing") {
             self.draw_adjustment_knob(d, c, rect);
             return;
@@ -902,15 +942,24 @@ mod tests {
         assert!(output_controls().iter().all(|(id, _)| *id != "strings"));
     }
     #[test]
-    fn chords_header_selection_button_sits_between_order_and_row_context() {
-        let row = [Menu::Key.trigger_rect(), ORDER, ROOT_ON_SELECT, ROW_CONTEXT];
+    fn chords_header_and_lower_right_glissando_do_not_overlap() {
+        let row = [Menu::Key.trigger_rect(), ORDER, ROOT_ON_SELECT];
         for pair in row.windows(2) {
-            assert_eq!(pair[0].1, pair[1].1);
+            assert_eq!(pair[0].1 + pair[0].3 * 0.5, pair[1].1 + pair[1].3 * 0.5);
             assert_eq!(pair[0].0 + pair[0].2 + 8.0, pair[1].0, "{pair:?}");
         }
-        assert_disjoint(&row);
+        let mut controls = row.to_vec();
+        controls.extend([GLISS_RATE, GLISS_DIRECTION, LATCH]);
+        controls.extend((0..KEY_COUNT).map(key_rect));
+        controls.extend((0..MEMORY_COUNT).map(memory_rect));
+        assert_disjoint(&controls);
+        for r in [GLISS_RATE, GLISS_DIRECTION] {
+            assert!(hit(CHORDS_SURFACE, r.0, r.1));
+            assert!(hit(CHORDS_SURFACE, r.0 + r.2, r.1 + r.3));
+        }
+        assert!(GLISS_RATE.1 > key_rect(KEY_COUNT - 1).1);
         assert_eq!(
-            ROW_CONTEXT.0 + ROW_CONTEXT.2,
+            GLISS_DIRECTION.0 + GLISS_DIRECTION.2,
             CHORDS_SURFACE.0 + CHORDS_SURFACE.2 - 16.0
         );
 

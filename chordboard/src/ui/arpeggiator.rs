@@ -311,9 +311,11 @@ pub(super) fn custom_edit_rect() -> Rect {
     let r = fill_rect();
     (r.0 + r.2 + 8.0, r.1, 120.0, r.3)
 }
+pub(super) const OUTPUT_COLUMN_W: f32 = 144.0;
+
 pub(super) fn page_block() -> Rect {
     (
-        ARP_SURFACE.0 + 12.0,
+        ARP_SURFACE.0 + OUTPUT_COLUMN_W + 12.0,
         ARP_SURFACE.1 + ARP_LANE_TOP - 28.0,
         134.0,
         28.0,
@@ -338,7 +340,7 @@ const LANE_GAP: f32 = 6.0;
 pub(super) fn lane_rect(index: usize) -> Rect {
     let height = ((ARP_SURFACE.3 - LANE_GRID_TOP - 12.0 - 2.0 * LANE_GAP) / 3.0).floor();
     (
-        ARP_SURFACE.0 + 12.0 + (index % 2) as f32 * (LANE_BUTTON_W + LANE_GAP),
+        ARP_SURFACE.0 + OUTPUT_COLUMN_W + 12.0 + (index % 2) as f32 * (LANE_BUTTON_W + LANE_GAP),
         ARP_SURFACE.1 + LANE_GRID_TOP + (index / 2) as f32 * (height + LANE_GAP),
         LANE_BUTTON_W,
         height,
@@ -383,9 +385,9 @@ fn loop_header_button(r: Rect, button: usize) -> Rect {
 }
 pub(super) fn graph_rect() -> Rect {
     (
-        ARP_SURFACE.0 + 162.0,
+        ARP_SURFACE.0 + OUTPUT_COLUMN_W + 162.0,
         ARP_SURFACE.1 + ARP_LANE_TOP + 36.0,
-        ARP_SURFACE.2 - 280.0,
+        ARP_SURFACE.2 - OUTPUT_COLUMN_W - 280.0,
         ARP_SURFACE.3 - ARP_LANE_TOP - 123.0,
     )
 }
@@ -470,9 +472,9 @@ fn dropdown_rect(which: Dropdown, index: usize) -> Rect {
 fn chooser_area() -> Rect {
     let s = ARP_SURFACE;
     (
-        s.0 + 16.0,
+        s.0 + OUTPUT_COLUMN_W + 16.0,
         s.1 + ARP_LANE_TOP + 5.0,
-        s.2 - 128.0,
+        s.2 - OUTPUT_COLUMN_W - 128.0,
         s.3 - ARP_LANE_TOP - 17.0,
     )
 }
@@ -498,6 +500,17 @@ const ORDER_CONTOURS: [[u8; 5]; 8] = [
     [2, 4, 0, 3, 1],
     [0, 2, 1, 4, 3],
 ];
+
+pub(super) fn draw_direction_icon(d: &mut Draw, index: usize, r: Rect, color: Color) {
+    let points = std::array::from_fn::<_, 5, _>(|j| {
+        (r.0 + j as f32 * r.2 / 4.0,
+         r.1 + r.3 - ORDER_CONTOURS[index][j] as f32 * r.3 / 4.0)
+    });
+    d.poly(&points, color, 1.6);
+    for (x, y) in points {
+        d.circle(x, y, 2.0, color, true);
+    }
+}
 
 pub(super) fn delay_power_rect() -> Rect {
     (DELAY_SURFACE.0 + 12.0, DELAY_SURFACE.1 + 8.0, 28.0, 28.0)
@@ -937,7 +950,7 @@ impl ChordboardView {
         v.extend([
             (power_rect(), self.params.arp_enabled.value()),
             (mode_rect(), self.arp_params().arp_mode.value() != 0),
-            (order_rect(), self.arp_ui.chooser == Some(Chooser::Order)),
+            (order_rect(), self.menu == Some(Menu::ArpPattern)),
             (loop_add_rect(), false),
             (sync_rect(), self.arp_params().arp_sync.value()),
         ]);
@@ -1183,9 +1196,7 @@ impl ChordboardView {
             None => return,
         }
         self.set_arp_chooser(None);
-        if index == 7 {
-            self.set_panel(Some(Panel::Custom));
-        }
+
         cx.needs_redraw();
     }
     pub(in crate::ui) fn cancel_arp_editor(&mut self) {
@@ -1659,11 +1670,7 @@ impl ChordboardView {
                 if self.explain_modulation("arp_pattern") {
                     return true;
                 }
-                self.set_arp_chooser(if self.arp_ui.chooser == Some(Chooser::Order) {
-                    None
-                } else {
-                    Some(Chooser::Order)
-                });
+                self.open_menu(Menu::ArpPattern);
             }
         } else if hit(loop_add_rect(), x, y) {
             self.add_arp_loop(cx);
@@ -2119,6 +2126,8 @@ impl ChordboardView {
         // Bypass stops playback; settings remain editable. Only the pattern dims.
         d.disabled = false;
         self.draw_arp_strings(d);
+        let divider_x = s.0 + OUTPUT_COLUMN_W;
+        d.line(divider_x, s.1 + 56.0, divider_x, s.1 + s.3 - 16.0, LINE, 1.0);
         if self.arp_ui.chooser_position > 0.0 {
             let r = chooser_area();
             d.scissor(r.0, r.1, r.2, r.3);
@@ -2180,7 +2189,7 @@ impl ChordboardView {
                 "{} ▾",
                 ARP_PATTERN_NAMES[p.arp_pattern.value().clamp(0, 7) as usize]
             ),
-            self.arp_ui.chooser == Some(Chooser::Order),
+            self.menu == Some(Menu::ArpPattern),
             GOLD,
         );
         let saved_disabled = d.disabled;
@@ -2954,7 +2963,7 @@ mod tests {
     }
 
     #[test]
-    fn loop_header_actions_fit_four_loops_and_custom_opens_its_editor() {
+    fn loop_header_actions_fit_four_loops_and_custom_keeps_chord_board() {
         use self::support::*;
         for count in 1..=4 {
             for index in 0..count {
@@ -2972,7 +2981,7 @@ mod tests {
         let (mut cx, target, _) = context();
         view.set_arp_chooser(Some(Chooser::Order));
         view.choose_arp_option(&mut EventContext::new_with_current(&mut cx, target), 7);
-        assert_eq!(view.panel, Some(Panel::Custom));
+        assert_eq!(view.panel, None);
         assert!(view.arp_ui.chooser.is_none());
     }
 

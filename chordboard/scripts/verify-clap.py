@@ -615,11 +615,34 @@ def run_play_contract_tests(path):
                 h.close()
     print('CLAP Play contract passed: independent power, all three selection modes strum in regular MIDI and MPE, arp bypass ownership and panic.')
 
+def run_glissando_tests(path):
+    for direction in range(7):
+        h=Harness(path)
+        try:
+            h.run([h.parameter('Output protocol',2), h.parameter('Arpeggiator',0),
+                   h.parameter('Always play bass',0), h.parameter('Always play full chord',1),
+                   h.parameter('Glissando',100/2000), h.parameter('Glissando direction',direction)])
+            origin=h.time
+            events=timeline(h,5000,[midi(0,0x91,60,100)])
+            played=attacks(events)
+            assert played[0][1]==origin,('glissando first attack',direction,played)
+            assert played[-1][1]==origin+4800,('glissando total time',direction,played)
+            assert {e[3] for e in played}=={60,64,67},('glissando missing chord tones',direction,played)
+            events.extend(timeline(h,256,[midi(0,0x81,60,0)]))
+            assert_released(events)
+            # Releasing before completion must prevent every remaining attack.
+            h.run([midi(0,0x91,60,100),midi(1,0x81,60,0)])
+            assert not attacks(timeline(h,5000)),('glissando release did not cancel',direction)
+        finally:
+            h.close()
+    print('CLAP Glissando passed: all directions complete in 100 ms, include every chord tone, and cancel on release.')
+
 if __name__=='__main__':
     assert len(sys.argv)>1,__doc__
     path=pathlib.Path(sys.argv[1]).expanduser().resolve()
     if path.is_dir():path=path/'Contents'/'MacOS'/'Chordboard'
     suites={
+        '--glissando':run_glissando_tests,
         '--extensions':run_extension_tests,
         '--arpeggiator':run_arpeggiator_tests,
         '--midi-delay':run_midi_delay_tests,

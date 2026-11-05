@@ -155,6 +155,8 @@ struct ChordboardView {
     button_press_origin: Option<(f32, f32)>,
     memory_ui: MemoryUi,
     arp_ui: arpeggiator::ArpUi,
+    custom_drag: Option<custom::NoteDrag>,
+    custom_bottom: i16,
     fx_ui: midi_fx::FxUi,
     row_slide: row_slide::RowSlide,
     row_frames: std::cell::RefCell<Option<row_slide::RowFrames>>,
@@ -240,6 +242,8 @@ impl ChordboardView {
             button_press_origin: None,
             memory_ui: MemoryUi::default(),
             arp_ui: arpeggiator::ArpUi::default(),
+            custom_drag: None,
+            custom_bottom: -7,
             fx_ui: midi_fx::FxUi::default(),
             row_slide: row_slide::RowSlide::default(),
             row_frames: std::cell::RefCell::new(None),
@@ -372,6 +376,7 @@ impl ChordboardView {
             self.slide_panel = page;
         }
         self.panel = panel;
+        self.custom_drag = None;
         if panel != Some(Panel::Routes) {
             self.selected_modulator = None;
         }
@@ -521,6 +526,7 @@ impl ChordboardView {
                 .position(|(_, beats)| (*beats - self.arp_params().rate.value()).abs() < 0.0001)
                 .unwrap_or(3),
             Menu::ArpPattern => self.arp_params().arp_pattern.value().clamp(0, 7) as usize,
+            Menu::GlissDirection => self.params.gliss_direction.value() as usize,
             Menu::Key => harmony::KEY_CHOICES
                 .iter()
                 .position(|(name, _, _)| *name == self.key_name())
@@ -598,6 +604,7 @@ impl ChordboardView {
                     .rate
                     .preview_normalized(ARP_RATES[index].1),
             ),
+            Menu::GlissDirection => Self::emit(cx, self.params.gliss_direction.as_ptr(), self.params.gliss_direction.preview_normalized(index as i32)),
             Menu::ArpPattern => Self::emit(
                 cx,
                 self.arp_params().arp_pattern.as_ptr(),

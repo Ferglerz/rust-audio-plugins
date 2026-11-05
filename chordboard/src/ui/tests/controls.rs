@@ -1084,7 +1084,7 @@ fn delay_fx_page_blocks_hidden_controls_and_has_module_power() {
     assert!(!view.fx_ui.open);
     assert!(view.params.arpeggiator.snapshot().midi_fx.delay.enabled);
     click(&mut view, &mut cx, target, arpeggiator::order_rect());
-    assert!(view.arp_chooser_open());
+    assert_eq!(view.menu, Some(Menu::ArpPattern));
 }
 
 #[test]
@@ -1135,14 +1135,14 @@ fn tracker_rows_recall_independent_adjustments_but_share_delay_sources() {
 }
 
 #[test]
-fn ordering_chooser_captures_strings_and_shift_without_changing_latch() {
+fn direction_dropdown_captures_strings_and_shift_without_changing_latch() {
     let mut view = string_editor_view();
     let (mut cx, target, changes) = context();
     click(&mut view, &mut cx, target, arpeggiator::order_rect());
-    assert!(view.arp_chooser_open());
+    assert_eq!(view.menu, Some(Menu::ArpPattern));
     let before = view.params.arpeggiator.snapshot();
     let (x, y) = string_point(1);
-    // While sliding, covered strings do not start a paint gesture or select a card.
+    // An outside click dismisses the dropdown without starting a string gesture.
     event(
         &mut view,
         &mut cx,
@@ -1153,6 +1153,7 @@ fn ordering_chooser_captures_strings_and_shift_without_changing_latch() {
     );
     assert!(!view.arp_editor_dragging());
     assert_eq!(view.params.arpeggiator.snapshot(), before);
+    view.open_menu(Menu::ArpPattern);
     BackendContext::new(&mut cx)
         .modifiers()
         .set(Modifiers::SHIFT, true);
@@ -1605,4 +1606,52 @@ fn arp_horizontal_scroll_keeps_the_whole_row_fitted_and_timing_targets_aligned()
     let page = view.params.arpeggiator.snapshot().rows[0].page;
     assert_eq!(page.loops[0].steps[3].micro, 49);
     assert!(page.loops[0].steps[..3].iter().all(|s| s.micro == 0));
+}
+
+#[test]
+fn relocated_performance_knobs_keep_drag_scroll_and_value_entry() {
+    for id in globals::GLOBAL_IDS.into_iter().chain(["gliss_ms"]) {
+        let mut view = view(0, false);
+        let (mut cx, target, changes) = context();
+        let control = view.control(id).unwrap();
+        let r = if id == "gliss_ms" { GLISS_RATE } else { globals::global_rect(id) };
+        let (x, y) = (r.0 + r.2 * 0.5, r.1 + r.3 * 0.5);
+        event(&mut view, &mut cx, target, x, y, WindowEvent::MouseDown(MouseButton::Left));
+        assert!(changes.borrow().is_empty(), "{id}: press must not jump");
+        event(&mut view, &mut cx, target, x, y - 40.0, WindowEvent::MouseMove(x, y - 40.0));
+        assert!(changes.borrow().iter().any(|(ptr, norm)| *ptr == control.ptr && *norm > control.norm), "{id}: drag must edit its parameter");
+        event(&mut view, &mut cx, target, x, y - 40.0, WindowEvent::MouseUp(MouseButton::Left));
+        assert!(view.drag.is_none());
+        changes.borrow_mut().clear();
+        event(&mut view, &mut cx, target, x, y, WindowEvent::MouseScroll(0.0, 1.0));
+        assert!(changes.borrow().iter().any(|(ptr, _)| *ptr == control.ptr), "{id}: wheel must reach knob");
+        let value = if id == "gliss_ms" { GLISS_VALUE } else { globals::value_rect(id) };
+        click(&mut view, &mut cx, target, value);
+        assert_eq!(view.edit.as_ref().map(|edit| edit.target), Some(id));
+    }
+}
+
+#[test]
+fn relocated_knobs_are_blocked_on_fx_page_and_during_row_slides() {
+    for fx in [false, true] {
+        let mut view = view(0, false);
+        let (mut cx, target, changes) = context();
+        view.fx_ui.open = fx;
+        if !fx {
+            view.row_slide.select(1, 0);
+            view.row_slide.select(2, 1);
+        }
+        for (_, r) in globals::global_controls() {
+            let (x, y) = (r.0 + r.2 * 0.5, r.1 + r.3 * 0.5);
+            event(&mut view, &mut cx, target, x, y, WindowEvent::MouseDown(MouseButton::Left));
+            assert!(view.drag.is_none());
+            event(&mut view, &mut cx, target, x, y, WindowEvent::MouseScroll(0.0, 1.0));
+            assert!(changes.borrow().is_empty());
+        }
+        if !fx {
+            let r = globals::global_rect("complexity");
+            view.pointer = Some((r.0 + r.2 * 0.5, r.1 + r.3 * 0.5));
+            assert!(view.hover_pointer().is_none());
+        }
+    }
 }
