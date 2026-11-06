@@ -13,6 +13,14 @@ use nih_plug::prelude::*;
 use params::ChordboardParams;
 use std::sync::{atomic::Ordering, Arc};
 
+pub(crate) fn finite(value: f32, fallback: f32) -> f32 {
+    if value.is_finite() {
+        value
+    } else {
+        fallback
+    }
+}
+
 // Stay within both wrappers' preallocated outgoing event capacities. If a host
 // delivers a pathological event storm, drop the whole new batch and release
 // the voices that existed at entry, rather than allocating or losing Note Offs.
@@ -448,7 +456,7 @@ impl Plugin for Chordboard {
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
         let count = buffer.samples();
-        let starting_notes = self.engine.owned_output_notes();
+        self.engine.refresh_owned_note_cache();
         let mut emitted = EventBatch::default();
         let transport = context.transport();
         let playing = transport.playing;
@@ -491,13 +499,18 @@ impl Plugin for Chordboard {
             }
             arp_updated = true;
         }
+        let powers = self.engine.arp.data.power_stamp();
         self.engine.arp.data.apply_midi_powers(&self.params);
+        let powers_changed = powers != self.engine.arp.data.power_stamp();
         if arp_updated {
             self.engine
                 .accept_arp_generation(&mut |e| emitted.push(0, e));
         }
-        self.engine
-            .configure(self.current_config(), &mut |e| emitted.push(0, e));
+        let config = self.current_config();
+        if arp_updated || powers_changed || config != self.engine.host_config {
+            self.engine
+                .configure(config, &mut |e| emitted.push(0, e));
+        }
         self.engine
             .transport(playing, tempo, jump, &mut |e| emitted.push(0, e));
         self.engine
@@ -556,6 +569,7 @@ impl Plugin for Chordboard {
             for channel in 0..16 {
                 context.send_event(output(Out::Cc(channel, 64, 0.0), 0));
             }
+            let starting_notes = *self.engine.owned_notes_cache;
             let owned_count = starting_notes
                 .iter()
                 .flatten()

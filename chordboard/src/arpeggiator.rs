@@ -49,6 +49,23 @@ pub fn default_custom() -> [CustomStep; CUSTOM_STEPS] {
     })
 }
 pub const MODE_NAMES: [&str; 4] = ["Once", "Loop", "Sync Loop", "Aligned Loop"];
+pub const PATTERN_NAMES: [&str; 8] = [
+    "Up",
+    "Down",
+    "Up / Down",
+    "Up in 3rds",
+    "Down in 3rds",
+    "As played",
+    "Random",
+    "Custom",
+];
+pub const STRUM_DIRECTION_NAMES: [&str; 5] = [
+    "Up",
+    "Down",
+    "Alternate",
+    "Up in 3rds",
+    "Down in 3rds",
+];
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ArpMode {
     Once,
@@ -138,13 +155,7 @@ impl Default for Step {
         }
     }
 }
-fn finite(value: f32, default: f32) -> f32 {
-    if value.is_finite() {
-        value
-    } else {
-        default
-    }
-}
+use crate::finite;
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Loop {
@@ -416,6 +427,15 @@ pub struct Prepared {
     pub pages: [PreparedPage; PAGES],
 }
 impl Prepared {
+    pub(crate) fn power_stamp(&self) -> u16 {
+        let mut bits = u16::from(self.performance.enabled);
+        for (index, effect) in crate::midi_fx::EFFECTS.iter().enumerate() {
+            if self.midi_fx.enabled(*effect) {
+                bits |= 1 << (index + 1);
+            }
+        }
+        bits
+    }
     pub(crate) fn apply_midi_powers(&mut self, params: &crate::params::ChordboardParams) {
         use crate::midi_learn::{fx_power_target, power_override, PERFORMANCE_ARP};
         let enabled = |target| {

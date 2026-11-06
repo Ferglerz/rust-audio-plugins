@@ -167,6 +167,7 @@ pub(super) struct Runtime {
     gate_clock: Option<GateClock>,
     serial: u64,
     dirty: bool,
+    pub(super) notes_changed: bool,
 }
 impl Default for Runtime {
     fn default() -> Self {
@@ -191,6 +192,7 @@ impl Default for Runtime {
             gate_clock: None,
             serial: 0,
             dirty: false,
+            notes_changed: false,
         }
     }
 }
@@ -428,6 +430,7 @@ impl Runtime {
         Some(index)
     }
     fn release_node(&mut self, index: usize, ctx: Context, out: &mut impl FnMut(Out)) {
+        self.notes_changed = true;
         let Some(mut node) = self.nodes[index].filter(|n| n.live) else {
             return;
         };
@@ -484,6 +487,7 @@ impl Runtime {
         }
     }
     fn clear_outputs(&mut self, out: &mut impl FnMut(Out)) {
+        self.notes_changed = true;
         let notes = self.owned_notes();
         for (channel, notes) in notes.iter().enumerate() {
             for (note, &owned) in notes.iter().enumerate() {
@@ -675,6 +679,8 @@ impl Runtime {
                     self.nodes[index] = Some(node);
                 }
             }
+            let harmony = (id == MidiFxId::Harmonizer && self.harmonizer.enabled)
+                .then(|| HarmonyPitches::build(self.harmonizer.mode, ctx));
             for index in 0..self.node_len {
                 let Some(mut node) = self.nodes[index].filter(|n| n.live && n.next == stage) else {
                     continue;
@@ -700,8 +706,9 @@ impl Runtime {
                             .iter()
                             .filter(|v| v.enabled && v.velocity > 0.0)
                         {
-                            let Some(pitch) =
-                                harmony_pitch(node.input.note, voice.interval, settings.mode, ctx)
+                            let Some(pitch) = harmony
+                                .as_ref()
+                                .and_then(|scale| scale.pitch(node.input.note, voice.interval))
                             else {
                                 continue;
                             };
@@ -795,6 +802,7 @@ impl Runtime {
         self.gate_clock = Some(clock);
     }
     fn emit_ready(&mut self, ctx: Context, out: &mut impl FnMut(Out)) {
+        self.notes_changed = true;
         for index in 0..self.node_len {
             let Some(mut node) = self.nodes[index].filter(|n| n.live && n.next == 4) else {
                 continue;
@@ -960,7 +968,7 @@ impl Runtime {
         }
     }
 }
-fn expression_out(channel: u8, expression: Expression, out: &mut impl FnMut(Out)) {
+pub(super) fn expression_out(channel: u8, expression: Expression, out: &mut impl FnMut(Out)) {
     out(Out::Bend(channel, expression.bend));
     out(Out::Pressure(channel, expression.pressure));
     out(Out::Cc(channel, 74, expression.timbre));
@@ -969,37 +977,63 @@ fn reset_expression(channel: u8, out: &mut impl FnMut(Out)) {
     expression_out(channel, Expression::default(), out);
     out(Out::Cc(channel, 10, 0.5));
 }
+struct HarmonyPitches {
+    fixed: bool,
+    pitches: [u8; 128],
+    count: i16,
+}
+impl HarmonyPitches {
+    fn build(mode: HarmonizerMode, ctx: Context) -> Self {
+        if mode == HarmonizerMode::Fixed {
+            return Self {
+                fixed: true,
+                pitches: [0; 128],
+                count: 0,
+            };
+        }
+        let mut mask = [false; 12];
+        match mode {
+            HarmonizerMode::Scale => {
+                for &tone in harmony::scale_tones(ctx.scale) {
+                    mask[((ctx.key % 12 + tone) % 12) as usize] = true;
+                }
+            }
+            HarmonizerMode::Chord => {
+                for &tone in ctx.chord.as_slice() {
+                    mask[(tone % 12) as usize] = true;
+                }
+            }
+            HarmonizerMode::Fixed => {}
+        }
+        let mut pitches = [0u8; 128];
+        let mut count = 0i16;
+        for pitch in 0..128u8 {
+            if mask[(pitch % 12) as usize] {
+                pitches[count as usize] = pitch;
+                count += 1;
+            }
+        }
+        Self {
+            fixed: false,
+            pitches,
+            count,
+        }
+    }
+    fn pitch(&self, note: u8, interval: i8) -> Option<u8> {
+        if self.fixed {
+            return u8::try_from(i16::from(note) + i16::from(interval))
+                .ok()
+                .filter(|&n| n <= 127);
+        }
+        let nearest = (0..self.count)
+            .min_by_key(|&i| (self.pitches[i as usize].abs_diff(note), self.pitches[i as usize]))?;
+        let target = nearest + i16::from(interval);
+        (target >= 0 && target < self.count).then(|| self.pitches[target as usize])
+    }
+}
+#[cfg(test)]
 fn harmony_pitch(note: u8, interval: i8, mode: HarmonizerMode, ctx: Context) -> Option<u8> {
-    if mode == HarmonizerMode::Fixed {
-        return u8::try_from(i16::from(note) + i16::from(interval))
-            .ok()
-            .filter(|&n| n <= 127);
-    }
-    let mut mask = [false; 12];
-    match mode {
-        HarmonizerMode::Scale => {
-            for &tone in harmony::scale_tones(ctx.scale) {
-                mask[((ctx.key % 12 + tone) % 12) as usize] = true;
-            }
-        }
-        HarmonizerMode::Chord => {
-            for &tone in ctx.chord.as_slice() {
-                mask[(tone % 12) as usize] = true;
-            }
-        }
-        HarmonizerMode::Fixed => unreachable!(),
-    }
-    let mut pitches = [0u8; 128];
-    let mut count = 0;
-    for pitch in 0..128 {
-        if mask[pitch % 12] {
-            pitches[count] = pitch as u8;
-            count += 1;
-        }
-    }
-    let nearest = (0..count).min_by_key(|&i| (pitches[i].abs_diff(note), pitches[i]))? as i16;
-    let target = nearest + i16::from(interval);
-    (target >= 0 && target < count as i16).then(|| pitches[target as usize])
+    HarmonyPitches::build(mode, ctx).pitch(note, interval)
 }
 #[cfg(test)]
 #[path = "fx_tests.rs"]

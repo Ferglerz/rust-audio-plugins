@@ -1,7 +1,22 @@
 //! Echo allocation never steals a dry voice or changes an occupied dry channel.
 use super::*;
+use crate::harmony::Notes;
 use crate::midi_fx::source;
 pub(super) use super::DELAY_OWNER;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) struct DelayMapKey {
+    tracker: bool,
+    follow: bool,
+    leading: bool,
+    voice_leading: u8,
+    mode: u8,
+    notes_empty: bool,
+    full_empty: bool,
+    chord: Notes,
+    full: Notes,
+    memory: Option<crate::harmony::SavedChord>,
+}
 impl Engine {
     pub(super) fn new_note_token(&mut self) -> u64 {
         let token = self.next_token;
@@ -86,17 +101,7 @@ impl Engine {
             return note;
         }
         if settings.follow_chords {
-            // Search MIDI pitches rather than clipping octaves near 0 or 127.
-            // Equal distances resolve downward, deterministically.
-            note = (0..=127u8)
-                .filter(|n| {
-                    chord_notes
-                        .as_slice()
-                        .iter()
-                        .any(|tone| tone % 12 == n % 12)
-                })
-                .min_by_key(|n| n.abs_diff(note))
-                .unwrap_or(note);
+            note = nearest_chord_pitch(note, chord_notes.as_slice());
         }
         if settings.voice_leading && self.config.voice_leading < 2 {
             if let Some(recipe) = self.memory {
@@ -128,6 +133,38 @@ impl Engine {
             }
         }
         note
+    }
+    pub(super) fn cached_delay_map(&mut self) -> [u8; 128] {
+        let key = self.delay_map_key();
+        if let Some(cached) = &self.delay_map_cache {
+            if cached.0 == key {
+                return cached.1;
+            }
+        }
+        let map = std::array::from_fn(|note| self.delay_note(note as u8));
+        let result = map;
+        self.delay_map_cache = Some(Box::new((key, map)));
+        result
+    }
+    fn delay_map_key(&self) -> DelayMapKey {
+        let settings = self.arp.data.midi_fx.delay;
+        let chord = if self.config.tracker_enabled {
+            self.arp_cycle_chord()
+        } else {
+            self.full_notes
+        };
+        DelayMapKey {
+            tracker: self.config.tracker_enabled,
+            follow: settings.follow_chords,
+            leading: settings.voice_leading,
+            voice_leading: self.config.voice_leading,
+            mode: self.config.mode,
+            notes_empty: self.notes.len == 0,
+            full_empty: self.full_notes.len == 0,
+            chord,
+            full: self.full_notes,
+            memory: self.memory,
+        }
     }
     pub(super) fn tick_delay(&mut self, out: &mut impl FnMut(Out)) {
         if self.fx.active() { return; }
@@ -187,9 +224,7 @@ impl Engine {
                         self.delay_bend_ranges[channel as usize] = range;
                     }
                     expression.bend = (expression.bend + fine / (200.0 * range)).clamp(0.0, 1.0);
-                    out(Out::Bend(channel, expression.bend));
-                    out(Out::Pressure(channel, expression.pressure));
-                    out(Out::Cc(channel, 74, expression.timbre));
+                    fx::expression_out(channel, expression, out);
                     out(Out::Cc(channel, 10, (pan + 1.0) * 0.5));
                     out(Out::On(channel, note, velocity));
                     self.voices[index] = Some(Voice {
@@ -230,4 +265,29 @@ impl Engine {
             false,
         );
     }
+}
+
+/// Equal distances resolve downward, matching a full 0..=127 scan.
+fn nearest_chord_pitch(note: u8, chord: &[u8]) -> u8 {
+    let mut pcs = [false; 12];
+    for &tone in chord {
+        pcs[(tone % 12) as usize] = true;
+    }
+    if !pcs.iter().any(|&on| on) {
+        return note;
+    }
+    for dist in 0..=127u8 {
+        if let Some(lower) = note.checked_sub(dist) {
+            if pcs[(lower % 12) as usize] {
+                return lower;
+            }
+        }
+        if dist > 0 {
+            let upper = note as u16 + dist as u16;
+            if upper <= 127 && pcs[(upper as u8 % 12) as usize] {
+                return upper as u8;
+            }
+        }
+    }
+    note
 }

@@ -130,16 +130,7 @@ pub(super) const ARP_RATES: [(&str, f32); 8] = [
     ("1/8T", 1.0 / 3.0),
     ("1/16T", 1.0 / 6.0),
 ];
-pub(super) const ARP_PATTERN_NAMES: [&str; 8] = [
-    "Up",
-    "Down",
-    "Up / Down",
-    "Up in 3rds",
-    "Down in 3rds",
-    "As played",
-    "Random",
-    "Custom",
-];
+pub(super) use crate::arpeggiator::PATTERN_NAMES as ARP_PATTERN_NAMES;
 // Shared timing controls live in the Global module.
 pub(super) fn arp_controls() -> [(&'static str, Rect); 2] {
     [

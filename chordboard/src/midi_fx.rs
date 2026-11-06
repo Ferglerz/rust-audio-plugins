@@ -85,13 +85,7 @@ impl DelaySettings {
         }
     }
 }
-fn finite(value: f32, default: f32) -> f32 {
-    if value.is_finite() {
-        value
-    } else {
-        default
-    }
-}
+use crate::finite;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HarmonizerMode {

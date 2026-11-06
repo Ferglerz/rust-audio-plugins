@@ -720,18 +720,9 @@ impl Target {
             "spread" => crate::harmony::VOICING_NAMES[v as usize].into(),
             "quality" => crate::harmony::QUALITY_NAMES[v as usize].into(),
             "arp_mode" => crate::arpeggiator::MODE_NAMES[v as usize].into(),
-            "direction" => {
-                ["Up", "Down", "Alternate", "Up in 3rds", "Down in 3rds"][v as usize].into()
-            }
-            "arp_pattern" => [
-                "Up",
-                "Down",
-                "Up/Down",
-                "Up in 3rds",
-                "Down in 3rds",
-                "Played order",
-                "Random",
-            ][v as usize]
+            "direction" => crate::arpeggiator::STRUM_DIRECTION_NAMES[v as usize].into(),
+            "arp_pattern" => crate::arpeggiator::PATTERN_NAMES
+                [v as usize]
                 .into(),
             "y_target" => [
                 "Velocity",
@@ -899,8 +890,32 @@ impl Engine {
         // most once per millisecond so smoothing cannot flood the host queue.
         let interval = (self.sample_rate / 1000.0).round().max(1.0) as u64;
         if self.now.is_multiple_of(interval) || !self.smoothing_active() {
-            self.configure(self.host_config, out);
+            self.apply_smoothed_targets(out);
         }
+    }
+    /// Push smoothed route values into the live config. Structural changes still
+    /// take the full configure path so voice and harmony resets stay intact.
+    pub(super) fn apply_smoothed_targets(&mut self, out: &mut impl FnMut(Out)) {
+        let old = self.config;
+        let previous_sources = self.source_overrides;
+        let mut config = self.host_config;
+        for page in 0..8 {
+            if let Some(settings) = self.arp.paste_settings[page] {
+                if config.arp_settings[page] != settings {
+                    config.arp_settings[page] = settings;
+                }
+            }
+        }
+        let initialized = self.overlay_arp_settings(&mut config);
+        self.apply_routes(&mut config);
+        config.arp_octaves = config.arp_octaves.clamp(1, initialized);
+        if smoothed_needs_configure(&old, &config) {
+            self.configure(self.host_config, out);
+            return;
+        }
+        self.config = config;
+        self.source_overrides = self.resolved_source_overrides();
+        self.publish_source_overrides(previous_sources, out);
     }
     pub(super) fn resolved_source_overrides(&self) -> [Option<f32>; SOURCE_COUNT] {
         let effective = self.effective_sources();
@@ -1673,4 +1688,31 @@ mod tests {
         );
         assert!(route(2, "x").active());
     }
+}
+
+fn smoothed_needs_configure(old: &Config, new: &Config) -> bool {
+    fn structure(config: Config) -> Config {
+        Config {
+            velocity: 0.0,
+            velocity_scale: 0.0,
+            gate_scale: 0.0,
+            length_ms: 0.0,
+            gliss_ms: 0.0,
+            strum_ms: 0.0,
+            strum_beats: 0.0,
+            contour: 0.0,
+            contour_curve: 0.0,
+            rate: 0.0,
+            gate: 0.0,
+            swing: 0.0,
+            humanize: 0.0,
+            arp_free_ms: 0.0,
+            x_min: 0.0,
+            x_max: 0.0,
+            y_min: 0.0,
+            y_max: 0.0,
+            ..config
+        }
+    }
+    structure(*old) != structure(*new)
 }

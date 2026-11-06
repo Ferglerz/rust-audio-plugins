@@ -75,20 +75,13 @@ impl Engine {
         config.tracker_enabled = false;
         config.arp_page = 0;
         config.arp_enabled = program.enabled;
-        config.arp_mode = match settings.mode {
-            crate::arpeggiator::ArpMode::Once => crate::arpeggiator::ArpMode::Once,
-            _ if config.daw_alignment => crate::arpeggiator::ArpMode::AlignedLoop,
-            crate::arpeggiator::ArpMode::AlignedLoop => crate::arpeggiator::ArpMode::SyncLoop,
-            mode => mode,
-        };
-        config.arp_pattern = settings.pattern;
-        config.arp_octaves = settings.octaves.min(program.page.initialized);
-        config.arp_loop_octaves = program.page.octaves();
-        config.arp_sync = settings.sync;
-        config.arp_free_ms = settings.free_ms;
-        config.rate = settings.rate;
-        config.swing = self.host_config.swing;
-        config.humanize = self.host_config.humanize;
+        arpeggiator::apply_arp_playback(
+            &mut config,
+            settings,
+            &program.page,
+            self.host_config.swing,
+            self.host_config.humanize,
+        );
         self.apply_routes(&mut config);
         self.source_overrides = self.resolved_source_overrides();
         self.config = config;

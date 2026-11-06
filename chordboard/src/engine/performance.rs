@@ -62,6 +62,7 @@ impl Engine {
     }
     pub(super) fn end_voice(&mut self, i: usize, release: f32, out: &mut impl FnMut(Out)) {
         if let Some(v) = self.voices[i].take() {
+            self.touch_owned_notes();
             if !self.fx.active() && !self.output_owned(v.channel, v.note) {
                 out(Out::Off(v.channel, v.note, release));
             }
@@ -327,6 +328,7 @@ impl Engine {
             out(Out::On(channel, note, velocity.clamp(0.01, 1.0)));
         }
         let token = self.new_note_token();
+        self.touch_owned_notes();
         self.voices[index] = Some(Voice {
             note,
             channel,

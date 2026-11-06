@@ -301,11 +301,7 @@ impl Default for ChordboardParams {
             slot_9: AtomicU64::new(0),
             quality: IntParam::new("Base quality", 0, IntRange::Linear { min: 0, max: 11 })
                 .with_value_to_string(Arc::new(|v| {
-                    [
-                        "Major", "Minor", "7", "Maj7", "Min7", "Dim", "Aug", "6", "Min6", "Dim7",
-                        "Half dim", "Power",
-                    ][v as usize]
-                        .to_string()
+                    crate::harmony::QUALITY_NAMES[v as usize].to_string()
                 })),
             voice_leading: IntParam::new("Voice leading", 2, IntRange::Linear { min: 0, max: 2 })
                 .with_value_to_string(Arc::new(|v| {
@@ -337,7 +333,11 @@ impl Default for ChordboardParams {
                 })),
             voicing_override: IntParam::new("Voicing", 0, IntRange::Linear { min: 0, max: 5 })
                 .with_value_to_string(Arc::new(|v| {
-                    ["Saved", "Close", "Open", "Wide", "Drop 2", "Drop 3"][v as usize].into()
+                    if v <= 0 {
+                        "Saved".into()
+                    } else {
+                        crate::harmony::VOICING_NAMES[v as usize - 1].into()
+                    }
                 })),
             velocity_scale: FloatParam::new(
                 "Velocity scale",
@@ -480,7 +480,7 @@ impl Default for ChordboardParams {
                 IntRange::Linear { min: 0, max: 4 },
             )
             .with_value_to_string(Arc::new(|v| {
-                ["Up", "Down", "Alternate", "Up in 3rds", "Down in 3rds"][v as usize].to_string()
+                crate::arpeggiator::STRUM_DIRECTION_NAMES[v as usize].to_string()
             }))
             .hide(),
             contour: FloatParam::new(
@@ -1435,17 +1435,7 @@ impl ArpPageParams {
                 IntRange::Linear { min: 0, max: 7 },
             )
             .with_value_to_string(Arc::new(|v| {
-                [
-                    "Up",
-                    "Down",
-                    "Up / Down",
-                    "Up in 3rds",
-                    "Down in 3rds",
-                    "Played order",
-                    "Random",
-                    "Custom",
-                ][v as usize]
-                    .into()
+                crate::arpeggiator::PATTERN_NAMES[v as usize].into()
             })),
             arp_octaves: IntParam::new(
                 "Loops",
