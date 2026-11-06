@@ -1,4 +1,4 @@
-use tape_stop::dsp::hermite::hermite_interpolate;
+use pleasant_dsp::interpolation::hermite_f32 as hermite_interpolate;
 use tape_stop::dsp::ring_buffer::StereoRingBuffer;
 use tape_stop::dsp::TapeStopEngine;
 

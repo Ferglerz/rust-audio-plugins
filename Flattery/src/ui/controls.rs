@@ -88,7 +88,7 @@ impl FlatteryView {
     }
 
     pub(super) fn inside(px: f32, py: f32, rect: (f32, f32, f32, f32)) -> bool {
-        px >= rect.0 && px <= rect.0 + rect.2 && py >= rect.1 && py <= rect.1 + rect.3
+        pleasant_ui::point_in_rect(px, py, rect)
     }
 
     pub(super) fn zoom_button_rects(

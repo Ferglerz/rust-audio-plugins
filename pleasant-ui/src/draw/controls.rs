@@ -63,6 +63,25 @@ impl KnobLayout {
     }
 }
 
+/// Points along a knob arc, on the stack: arcs need at most 25 points and
+/// allocating a `Vec` per knob per frame shows up in redraw-heavy editors.
+fn arc_points(
+    cx: f32,
+    cy: f32,
+    rad: f32,
+    start: f32,
+    sweep: f32,
+    steps: usize,
+) -> ([(f32, f32); 25], usize) {
+    let steps = steps.clamp(1, 24);
+    let mut points = [(0.0, 0.0); 25];
+    for (i, point) in points.iter_mut().take(steps + 1).enumerate() {
+        let a = start + sweep * (i as f32 / steps as f32);
+        *point = (cx + rad * a.cos(), cy + rad * a.sin());
+    }
+    (points, steps + 1)
+}
+
 impl Draw<'_> {
     /// Shared small-radius button face and curved selection accent.
     /// Animation amounts are in 0..=1. Reserve the lower 2 px for the offset
@@ -376,12 +395,8 @@ impl Draw<'_> {
         let total_sweep = 270.0_f32.to_radians();
         let cur_angle = start_angle + total_sweep * n.clamp(0.0, 1.0);
 
-        let mut bg_pts = Vec::with_capacity(25);
-        for i in 0..=24 {
-            let a = start_angle + total_sweep * (i as f32 / 24.0);
-            bg_pts.push((cx + rad * a.cos(), cy + rad * a.sin()));
-        }
-        self.poly(&bg_pts, LINE, 2.5 * scale);
+        let (bg_pts, bg_len) = arc_points(cx, cy, rad, start_angle, total_sweep, 24);
+        self.poly(&bg_pts[..bg_len], LINE, 2.5 * scale);
 
         let value_start = if BIPOLAR {
             start_angle + total_sweep * 0.5
@@ -401,12 +416,8 @@ impl Draw<'_> {
                 n
             };
             let steps = ((24.0 * extent).ceil() as usize).max(2);
-            let mut val_pts = Vec::with_capacity(steps + 1);
-            for i in 0..=steps {
-                let a = value_start + value_sweep * (i as f32 / steps as f32);
-                val_pts.push((cx + rad * a.cos(), cy + rad * a.sin()));
-            }
-            self.poly(&val_pts, color, 2.5 * scale);
+            let (val_pts, val_len) = arc_points(cx, cy, rad, value_start, value_sweep, steps);
+            self.poly(&val_pts[..val_len], color, 2.5 * scale);
         }
 
         self.circle(cx, cy, 13.0 * scale, rgb(28, 33, 40), true);
@@ -469,12 +480,8 @@ impl Draw<'_> {
         let center_angle = start_angle + total_sweep * 0.5;
         let cur_angle = start_angle + total_sweep * n.clamp(0.0, 1.0);
 
-        let mut bg_pts = Vec::with_capacity(25);
-        for i in 0..=24 {
-            let a = start_angle + total_sweep * (i as f32 / 24.0);
-            bg_pts.push((cx + rad * a.cos(), cy + rad * a.sin()));
-        }
-        self.poly(&bg_pts, LINE, 2.5 * scale);
+        let (bg_pts, bg_len) = arc_points(cx, cy, rad, start_angle, total_sweep, 24);
+        self.poly(&bg_pts[..bg_len], LINE, 2.5 * scale);
 
         if !bypassed && (cur_angle - center_angle).abs() > 0.01 {
             let (a_start, a_end) = if cur_angle > center_angle {
@@ -483,12 +490,9 @@ impl Draw<'_> {
                 (cur_angle, center_angle)
             };
             let steps = (((a_end - a_start) / total_sweep * 24.0).ceil() as usize).max(2);
-            let mut val_pts = Vec::with_capacity(steps + 1);
-            for i in 0..=steps {
-                let a = a_start + (a_end - a_start) * (i as f32 / steps as f32);
-                val_pts.push((cx + rad * a.cos(), cy + rad * a.sin()));
-            }
-            self.poly(&val_pts, color, 2.5 * scale);
+            let (val_pts, val_len) =
+                arc_points(cx, cy, rad, a_start, a_end - a_start, steps);
+            self.poly(&val_pts[..val_len], color, 2.5 * scale);
         }
 
         self.circle(cx, cy, 13.0 * scale, rgb(28, 33, 40), true);

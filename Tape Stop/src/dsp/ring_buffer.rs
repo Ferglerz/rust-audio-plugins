@@ -1,4 +1,4 @@
-use crate::dsp::hermite::hermite_interpolate;
+use pleasant_dsp::interpolation::hermite_f32 as hermite_interpolate;
 
 /// 2^25 sample ring buffer (~33.55 million samples, over 12 minutes of audio at 44.1kHz).
 pub const BUFFER_SIZE: usize = 1 << 25;

@@ -197,9 +197,7 @@ impl TapeStopView {
         rect: (f32, f32, f32, f32),
         origin: (f32, f32),
     ) {
-        self.value_press = Some(pleasant_ui::pointer::ValuePress::new(target, rect, origin));
-        cx.focus();
-        cx.capture();
+        pleasant_ui::begin_value_press(cx, &mut self.value_press, target, rect, origin);
     }
 
     pub(super) fn start_edit(
@@ -247,7 +245,7 @@ impl TapeStopView {
     }
 
     pub(super) fn inside(px: f32, py: f32, rect: (f32, f32, f32, f32)) -> bool {
-        px >= rect.0 && px <= rect.0 + rect.2 && py >= rect.1 && py <= rect.1 + rect.3
+        pleasant_ui::point_in_rect(px, py, rect)
     }
 
     pub(super) fn knob_enabled(&self, id: KnobId) -> bool {
