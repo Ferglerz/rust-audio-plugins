@@ -339,7 +339,7 @@ impl Engine {
         if old.strum_enabled && !config.strum_enabled && config.mode == MANUAL {
             self.x_primed = false;
             for i in 0..self.voices.len() {
-                if self.voices[i].is_some_and(|voice| voice.owner == 0 && !voice.layer) {
+                if self.voices[i].is_some_and(|voice| voice.owner == LIVE_OWNER && !voice.layer) {
                     self.end_voice(i, 0.0, out);
                 }
             }
@@ -1038,7 +1038,7 @@ impl Engine {
             CHORD => {
                 for i in 0..self.voices.len() {
                     if self.voices[i]
-                        .is_some_and(|v| v.owner == 0 && !self.notes.as_slice().contains(&v.note))
+                        .is_some_and(|v| v.owner == LIVE_OWNER && !self.notes.as_slice().contains(&v.note))
                     {
                         let end = self.now.saturating_add(self.duration());
                         if let Some(voice) = self.voices[i].as_mut() {
@@ -1058,7 +1058,7 @@ impl Engine {
                         .voices
                         .iter_mut()
                         .flatten()
-                        .find(|v| v.owner == 0 && v.note == note)
+                        .find(|v| v.owner == LIVE_OWNER && v.note == note)
                     {
                         voice.off = u64::MAX;
                     } else {
@@ -1069,7 +1069,7 @@ impl Engine {
             AUTO => {
                 if self.config.strum_hold {
                     for i in 0..self.voices.len() {
-                        if self.voices[i].is_some_and(|v| v.owner == 0 && !v.layer) {
+                        if self.voices[i].is_some_and(|v| v.owner == LIVE_OWNER && !v.layer) {
                             self.end_voice(i, 0.0, out);
                         }
                     }

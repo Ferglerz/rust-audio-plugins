@@ -1,7 +1,7 @@
 //! Echo allocation never steals a dry voice or changes an occupied dry channel.
 use super::*;
 use crate::midi_fx::source;
-pub(super) const DELAY_OWNER: u8 = 6;
+pub(super) use super::DELAY_OWNER;
 impl Engine {
     pub(super) fn new_note_token(&mut self) -> u64 {
         let token = self.next_token;

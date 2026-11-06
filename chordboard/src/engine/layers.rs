@@ -276,7 +276,7 @@ impl Engine {
         // layer never cuts off an overlapping strum that is still ringing.
         for i in 0..self.voices.len() {
             if let Some(voice) = self.voices[i].as_mut() {
-                if voice.owner != 0 {
+                if voice.owner != LIVE_OWNER {
                     continue;
                 }
                 let was_layer = voice.layer;
@@ -348,7 +348,7 @@ impl Engine {
                     .voices
                     .iter()
                     .flatten()
-                    .any(|v| v.note as usize == note && v.owner == 0)
+                    .any(|v| v.note as usize == note && v.owner == LIVE_OWNER)
             {
                 self.allocate_voice(note as u8, self.strike_velocity(), self.now, true, out);
             }
@@ -364,7 +364,7 @@ impl Engine {
                         .voices
                         .iter()
                         .flatten()
-                        .any(|v| v.note == note && v.owner == 0);
+                        .any(|v| v.note == note && v.owner == LIVE_OWNER);
                     if !owned {
                         self.allocate_voice(note, self.strike_velocity(), self.now, true, out);
                     } else if self.config.gliss_ms > 0.0 {

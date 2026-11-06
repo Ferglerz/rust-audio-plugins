@@ -424,6 +424,42 @@ mod tests {
         assert_eq!(e.notes.len, 0);
     }
     #[test]
+    fn performance_arp_stop_keeps_delay_echo() {
+        let mut e = engine();
+        let mut delay = crate::midi_fx::DelaySettings {
+            enabled: true,
+            sync: false,
+            sources: crate::midi_fx::source::ARP,
+            ..crate::midi_fx::DelaySettings::default()
+        };
+        delay.taps[0].time = 10.0;
+        delay.taps[0].velocity = 1.0;
+        delay.taps[0].feedback = 0.0;
+        e.arp.data.midi_fx.delay = delay;
+        e.note_on(60, 60, 0, 0.8, Some(0), &mut |_| {});
+        e.advance(15, &mut |_, _| {});
+        assert!(
+            e.voices.iter().flatten().any(|v| v.owner == DELAY_OWNER),
+            "echo should be sounding before the arp stops"
+        );
+        assert!(e
+            .voices
+            .iter()
+            .flatten()
+            .any(|v| v.owner == arpeggiator::PERFORMANCE_ARP_OWNER));
+        e.note_off(60, 0.0, &mut |_| {});
+        e.advance(1, &mut |_, _| {});
+        assert!(!e
+            .voices
+            .iter()
+            .flatten()
+            .any(|v| v.owner == arpeggiator::PERFORMANCE_ARP_OWNER));
+        assert!(
+            e.voices.iter().flatten().any(|v| v.owner == DELAY_OWNER),
+            "stopping the live arp must not release delay echoes"
+        );
+    }
+    #[test]
     fn performance_arp_releases_old_output_channels_when_routing_changes() {
         let mut e = engine();
         e.note_on(60, 60, 0, 0.8, Some(0), &mut |_| {});

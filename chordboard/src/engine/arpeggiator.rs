@@ -2,8 +2,7 @@
 use super::*;
 use crate::arpeggiator::{ArpMode, Prepared, Settings, Step, StepState, Store, LOOPS, STEPS};
 use routing::{ARP_MOD_SOURCES, ARP_POSITION_SOURCE, PERF_MOD_SOURCES};
-pub const ARP_OWNER: u8 = 1;
-pub const PERFORMANCE_ARP_OWNER: u8 = 6;
+pub use super::{ARP_OWNER, PERFORMANCE_ARP_OWNER};
 pub fn pass_length(notes: usize, pattern: u8) -> usize {
     Engine::pattern_length(pattern, notes)
 }

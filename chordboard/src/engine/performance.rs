@@ -166,7 +166,7 @@ impl Engine {
         gate_step: Option<u64>,
         out: &mut impl FnMut(Out),
     ) {
-        self.strike_owned_with_gate(note, velocity, duration, gate_step, 0, out);
+        self.strike_owned_with_gate(note, velocity, duration, gate_step, LIVE_OWNER, out);
     }
     pub(super) fn strike_selection_root(&mut self, note: u8, out: &mut impl FnMut(Out)) {
         self.strike_owned_with_gate(
@@ -249,7 +249,7 @@ impl Engine {
         layer: bool,
         out: &mut impl FnMut(Out),
     ) {
-        self.allocate_owned_voice(note, velocity, off, layer, 0, None, out);
+        self.allocate_owned_voice(note, velocity, off, layer, LIVE_OWNER, None, out);
     }
     #[allow(clippy::too_many_arguments)]
     pub(super) fn allocate_owned_voice(
@@ -303,7 +303,7 @@ impl Engine {
             return;
         };
         self.end_voice(index, 0.0, out);
-        let channel = if !self.config.mpe && owner == 3 {
+        let channel = if !self.config.mpe && owner == BASS_OWNER {
             self.config.bass_channel
         } else {
             self.member(index % self.config.members.clamp(1, 15) as usize)
@@ -315,7 +315,7 @@ impl Engine {
         let owned = self.output_owned(channel, note);
         // A selection root may share this channel and pitch with a live strum.
         // Keep both owners, but give the gesture an audible attack.
-        let restrike = owner == 0
+        let restrike = owner == LIVE_OWNER
             && !layer
             && self.voices.iter().flatten().any(|voice| {
                 voice.channel == channel && voice.note == note && voice.owner == SELECT_ROOT_OWNER
