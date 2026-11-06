@@ -10,6 +10,7 @@ use nih_plug_vizia::{
 };
 use pleasant_ui::{
     draw::{Draw, EditorViewport},
+    load_font_once, point_in_rect, start_frame_timer,
     preferences::AppearanceStore,
     theme::{GOLD, LINE, MUTED, PANEL, TEAL, TEXT},
     FONT_JETBRAINS_MONO,
@@ -109,15 +110,11 @@ impl OpenWurliView {
         }
     }
 
-    fn hit(x: f32, y: f32, rect: (f32, f32, f32, f32)) -> bool {
-        x >= rect.0 && x <= rect.0 + rect.2 && y >= rect.1 && y <= rect.1 + rect.3
-    }
-
     fn knob_at(&self, x: f32, y: f32) -> Option<Knob> {
         Knob::ALL
             .iter()
             .copied()
-            .find(|knob| Self::hit(x, y, knob.rect()))
+            .find(|knob| point_in_rect(x, y, knob.rect()))
     }
 
     fn emit_once(cx: &mut EventContext, ptr: ParamPtr, norm: f32) {
@@ -212,9 +209,9 @@ impl View for OpenWurliView {
 
             match window_event {
                 WindowEvent::MouseDown(MouseButton::Left) => {
-                    if Self::hit(x, y, THEME_BUTTON) {
+                    if point_in_rect(x, y, THEME_BUTTON) {
                         prefs().toggle();
-                    } else if Self::hit(x, y, CPU_BUTTON) {
+                    } else if point_in_rect(x, y, CPU_BUTTON) {
                         self.end_drag(cx);
                         let next = if self.params.cpu_mode.value() == crate::params::CpuMode::Fast {
                             1.0
@@ -222,7 +219,7 @@ impl View for OpenWurliView {
                             0.0
                         };
                         Self::emit_once(cx, self.params.cpu_mode.as_ptr(), next);
-                    } else if Self::hit(x, y, EXTENDED_BUTTON) {
+                    } else if point_in_rect(x, y, EXTENDED_BUTTON) {
                         Self::emit_once(
                             cx,
                             self.params.extended_notes.as_ptr(),
@@ -232,7 +229,7 @@ impl View for OpenWurliView {
                                 1.0
                             },
                         );
-                    } else if Self::hit(x, y, SAG_BUTTON) {
+                    } else if point_in_rect(x, y, SAG_BUTTON) {
                         let next = if self.params.rail_sag.value() {
                             0.0
                         } else {
@@ -291,9 +288,7 @@ impl View for OpenWurliView {
         if bounds.w <= 0.0 || bounds.h <= 0.0 {
             return;
         }
-        if self.font.get().is_none() {
-            self.font.set(canvas.add_font_mem(FONT_JETBRAINS_MONO).ok());
-        }
+        load_font_once(canvas, &self.font, FONT_JETBRAINS_MONO);
         let Some(mut d) = Draw::new_fitted(
             canvas,
             prefs().light(),
@@ -363,12 +358,7 @@ pub fn create(params: Arc<OpenWurliUiParams>) -> Option<Box<dyn Editor>> {
                 hover: None,
             }
             .build(cx, |cx| {
-                let timer = cx.add_timer(Duration::from_millis(33), None, |cx, action| {
-                    if let TimerAction::Tick(_) = action {
-                        cx.needs_redraw();
-                    }
-                });
-                cx.start_timer(timer);
+                start_frame_timer(cx, Duration::from_millis(33), |cx| cx.needs_redraw());
             })
             .width(Stretch(1.0))
             .height(Stretch(1.0));

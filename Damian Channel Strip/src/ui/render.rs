@@ -6,16 +6,12 @@ impl StripView {
         let Some(scale) = view_scale(bounds) else {
             return;
         };
-        if self.font.get().is_none() {
-            self.font.set(canvas.add_font_mem(FONT_JETBRAINS_MONO).ok());
-        }
-        if self.signature.get().is_none() {
-            self.signature.set(
-                canvas
-                    .add_font_mem(include_bytes!("assets/Allura-Regular.ttf"))
-                    .ok(),
-            );
-        }
+        pleasant_ui::load_font_once(canvas, &self.font, FONT_JETBRAINS_MONO);
+        pleasant_ui::load_font_once(
+            canvas,
+            &self.signature,
+            include_bytes!("assets/Allura-Regular.ttf"),
+        );
         let mut d = Draw::new(
             canvas,
             preferences::light(),

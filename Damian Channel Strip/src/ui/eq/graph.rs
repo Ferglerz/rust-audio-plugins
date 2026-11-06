@@ -1015,7 +1015,7 @@ pub(in crate::ui) fn draw_dyn_range_stem(
 }
 
 pub(in crate::ui) fn inside(x: f32, y: f32, r: (f32, f32, f32, f32)) -> bool {
-    x >= r.0 && x <= r.0 + r.2 && y >= r.1 && y <= r.1 + r.3
+    pleasant_ui::point_in_rect(x, y, r)
 }
 
 pub(in crate::ui) fn plot_band(b: &Band, meters: &[(u64, f32)]) -> Band {

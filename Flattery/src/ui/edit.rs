@@ -8,9 +8,7 @@ impl FlatteryView {
         rect: (f32, f32, f32, f32),
         origin: (f32, f32),
     ) {
-        self.value_press = Some(pleasant_ui::pointer::ValuePress::new(target, rect, origin));
-        cx.focus();
-        cx.capture();
+        pleasant_ui::begin_value_press(cx, &mut self.value_press, target, rect, origin);
     }
 
     pub(super) fn start_edit(

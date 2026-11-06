@@ -16,21 +16,6 @@ pub fn app_appearance_path(app_name: &str) -> Option<PathBuf> {
     Some(base.join(app_name).join("appearance.txt"))
 }
 
-pub fn read_appearance(app_name: &str) -> bool {
-    app_appearance_path(app_name)
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .is_some_and(|s| s.trim() == "light")
-}
-
-pub fn write_appearance(app_name: &str, light: bool) {
-    if let Some(path) = app_appearance_path(app_name) {
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let _ = std::fs::write(path, if light { "light\n" } else { "dark\n" });
-    }
-}
-
 /// UI-only appearance preference, separate from host/preset state.
 pub struct AppearanceStore {
     app_name: &'static str,

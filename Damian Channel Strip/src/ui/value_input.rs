@@ -56,13 +56,6 @@ pub(super) fn parse_value(text: &str, target: ValueTarget) -> Option<f64> {
         ValueTarget::Band(2) | ValueTarget::Lift(2) => &[],
         _ => &[("db", 1.0)],
     };
-    let (number, multiplier) = suffixes
-        .iter()
-        .find_map(|(suffix, multiplier)| {
-            text.strip_suffix(suffix)
-                .map(|number| (number.trim(), *multiplier))
-        })
-        .unwrap_or((&text, 1.0));
-    let value = number.parse::<f64>().ok()? * multiplier;
+    let value = pleasant_ui::value_edit::parse_number_with_units(&text, suffixes)?;
     value.is_finite().then_some(value)
 }

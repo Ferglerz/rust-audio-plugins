@@ -1,3 +1,5 @@
+use nih_plug_vizia::vizia::prelude::EventContext;
+
 /// Cursor used for idle highlights.
 ///
 /// While a drag is active this is `None`, so other controls do not light up
@@ -83,12 +85,21 @@ impl<T> ValuePress<T> {
     }
 
     pub fn released_as_click(&mut self, x: f32, y: f32) -> bool {
-        !self.update(x, y)
-            && x >= self.rect.0
-            && x <= self.rect.0 + self.rect.2
-            && y >= self.rect.1
-            && y <= self.rect.1 + self.rect.3
+        !self.update(x, y) && crate::handles::point_in_rect(x, y, self.rect)
     }
+}
+
+/// Begin a readout press: track it in `slot`, focus, and capture the pointer.
+pub fn begin_value_press<T>(
+    cx: &mut EventContext,
+    slot: &mut Option<ValuePress<T>>,
+    target: T,
+    rect: (f32, f32, f32, f32),
+    origin: (f32, f32),
+) {
+    *slot = Some(ValuePress::new(target, rect, origin));
+    cx.focus();
+    cx.capture();
 }
 
 #[cfg(test)]

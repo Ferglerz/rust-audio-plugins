@@ -27,12 +27,7 @@ pub(super) fn create(params: Arc<FlatteryParams>, shared: Arc<Shared>) -> Option
                 graph_zoomed: false,
             }
             .build(cx, |cx| {
-                let timer = cx.add_timer(Duration::from_millis(16), None, |cx, action| {
-                    if let TimerAction::Tick(_) = action {
-                        cx.needs_redraw();
-                    }
-                });
-                cx.start_timer(timer);
+                start_frame_timer(cx, FRAME_INTERVAL, |cx| cx.needs_redraw());
             })
             .width(Stretch(1.0))
             .height(Stretch(1.0));

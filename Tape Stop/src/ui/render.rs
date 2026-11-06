@@ -6,9 +6,7 @@ impl TapeStopView {
         if bounds.w <= 0.0 || bounds.h <= 0.0 {
             return;
         }
-        if self.font.get().is_none() {
-            self.font.set(canvas.add_font_mem(FONT_JETBRAINS_MONO).ok());
-        }
+        load_font_once(canvas, &self.font, FONT_JETBRAINS_MONO);
 
         let Some(mut d) = Draw::new_fitted(
             canvas,

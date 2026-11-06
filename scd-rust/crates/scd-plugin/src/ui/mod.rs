@@ -37,13 +37,13 @@ use nih_plug_vizia::{
     widgets::{util::ModifiersExt, ParamEvent, RawParamEvent},
     ViziaTheming,
 };
-use pleasant_ui::{draw::Draw, theme::rgb, typed_char, ValueEdit};
+use pleasant_ui::{draw::Draw, start_frame_timer, theme::rgb, typed_char, ValueEdit, FRAME_INTERVAL};
 use scd_core::kit::stonehouse;
 use scd_core::{KitPieceId, MicChannel};
 use std::cell::Cell;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 pub const WINDOW_W: f32 = EDITOR_WIDTH as f32;
 pub const WINDOW_H: f32 = EDITOR_HEIGHT as f32;
@@ -333,18 +333,15 @@ impl ScdEditorView {
             kit_vu: Cell::new([0.0f32; KitPieceId::COUNT]),
         }
         .build(cx, |cx| {
-            let timer = cx.add_timer(Duration::from_millis(16), None, |cx, action| {
-                if let TimerAction::Tick(_) = action {
-                    let dirty = cx
-                        .get_view::<ScdEditorView>()
-                        .is_some_and(ScdEditorView::needs_idle_redraw);
-                    if dirty {
-                        cx.emit(NoteLearnPoll);
-                        cx.needs_redraw();
-                    }
+            start_frame_timer(cx, FRAME_INTERVAL, |cx| {
+                let dirty = cx
+                    .get_view::<ScdEditorView>()
+                    .is_some_and(ScdEditorView::needs_idle_redraw);
+                if dirty {
+                    cx.emit(NoteLearnPoll);
+                    cx.needs_redraw();
                 }
             });
-            cx.start_timer(timer);
         })
     }
 
