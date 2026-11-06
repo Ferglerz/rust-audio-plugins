@@ -3,26 +3,31 @@ use nih_plug_vizia::vizia::vg::{Baseline, Color, FontId, Paint};
 
 impl Draw<'_> {
     // femtovg falls back per word, not per glyph. Split SMuFL symbols explicitly.
-    fn text_runs<'t>(&self, text: &'t str) -> Vec<(&'t str, Option<FontId>)> {
-        let mut runs = Vec::new();
+    // Runs are visited in place: allocating a run list per text call would
+    // allocate on every redraw.
+    fn for_each_text_run(
+        text: &str,
+        font: Option<FontId>,
+        fallback_font: Option<FontId>,
+        mut visit: impl FnMut(&str, Option<FontId>),
+    ) {
         let mut start = 0;
-        let mut previous = self.font;
+        let mut previous = font;
         for (offset, ch) in text.char_indices() {
-            let font = if ('\u{e000}'..='\u{f8ff}').contains(&ch) {
-                self.fallback_font.or(self.font)
+            let run_font = if ('\u{e000}'..='\u{f8ff}').contains(&ch) {
+                fallback_font.or(font)
             } else {
-                self.font
+                font
             };
-            if offset > start && font != previous {
-                runs.push((&text[start..offset], previous));
+            if offset > start && run_font != previous {
+                visit(&text[start..offset], previous);
                 start = offset;
             }
-            previous = font;
+            previous = run_font;
         }
         if start < text.len() {
-            runs.push((&text[start..], previous));
+            visit(&text[start..], previous);
         }
-        runs
     }
 
     fn text_paint(&self, font: Option<FontId>, size: f32, color: Color) -> Paint {
@@ -36,17 +41,54 @@ impl Draw<'_> {
 
     /// Width in logical pixels, using the same runs as the drawing path.
     pub fn text_width(&self, text: &str, size: f32) -> f32 {
-        self.text_runs(text)
-            .into_iter()
-            .map(|(run, font)| {
-                let paint = self.text_paint(font, size, Color::rgb(0, 0, 0));
-                self.c
-                    .measure_text(0.0, 0.0, run, &paint)
-                    .map_or(run.chars().count() as f32 * size * 0.55, |m| {
-                        m.width() / self.s
-                    })
-            })
-            .sum()
+        let mut width = 0.0;
+        Self::for_each_text_run(text, self.font, self.fallback_font, |run, font| {
+            let paint = self.text_paint(font, size, Color::rgb(0, 0, 0));
+            width += self
+                .c
+                .measure_text(0.0, 0.0, run, &paint)
+                .map_or(run.chars().count() as f32 * size * 0.55, |m| {
+                    m.width() / self.s
+                });
+        });
+        width
+    }
+
+    /// Truncate `text` with an ellipsis so it fits `width` at `size`.
+    ///
+    /// Returns the original text when it already fits. The search measures
+    /// candidate prefixes plus the ellipsis instead of allocating a new
+    /// candidate string for every dropped character.
+    pub fn fit_text(&self, text: &str, width: f32, size: f32) -> String {
+        if self.text_width(text, size) <= width {
+            return text.to_string();
+        }
+        let ellipsis_width = self.text_width("…", size);
+        if ellipsis_width > width {
+            return "…".to_string();
+        }
+        // Byte offset just past each character; prefixes end at these offsets.
+        let ends: Vec<usize> = text
+            .char_indices()
+            .map(|(index, ch)| index + ch.len_utf8())
+            .collect();
+        let (mut lo, mut hi) = (0usize, ends.len());
+        while lo < hi {
+            let mid = (lo + hi).div_ceil(2);
+            if self.text_width(&text[..ends[mid - 1]], size) + ellipsis_width <= width {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        if lo == 0 {
+            return "…".to_string();
+        }
+        let end = ends[lo - 1];
+        let mut fitted = String::with_capacity(end + "…".len());
+        fitted.push_str(&text[..end]);
+        fitted.push('…');
+        fitted
     }
 
     fn draw_text_runs(
@@ -60,20 +102,24 @@ impl Draw<'_> {
     ) {
         let mut x = self.ox + (x + self.offset_x) * self.s;
         let y = self.oy + y * self.s;
-        for (run, font) in self.text_runs(text) {
-            let mut paint = self.text_paint(font, size, color);
+        let transformed = self.color(color);
+        let scale = self.s;
+        let canvas = &mut *self.c;
+        Self::for_each_text_run(text, self.font, self.fallback_font, |run, font| {
+            let mut paint = Paint::color(transformed);
+            if let Some(font) = font {
+                paint.set_font(&[font]);
+            }
+            paint.set_font_size(size * scale);
             if middle {
                 paint.set_text_baseline(Baseline::Middle);
             }
-            let width = self
-                .c
+            let width = canvas
                 .measure_text(0.0, 0.0, run, &paint)
-                .map_or(run.chars().count() as f32 * size * self.s * 0.55, |m| {
-                    m.width()
-                });
-            let _ = self.c.fill_text(x, y, run, &paint);
+                .map_or(run.chars().count() as f32 * size * scale * 0.55, |m| m.width());
+            let _ = canvas.fill_text(x, y, run, &paint);
             x += width;
-        }
+        });
     }
 
     pub fn text(&mut self, x: f32, y: f32, text: &str, size: f32, color: Color) {

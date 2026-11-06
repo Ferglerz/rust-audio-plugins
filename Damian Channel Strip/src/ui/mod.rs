@@ -43,13 +43,14 @@ use nih_plug_vizia::{
 };
 use pleasant_ui::{
     spectrum::smooth_bins,
+    start_frame_timer,
     theme::{rgb, BG, EQ_COLORS as BAND_COLORS, GOLD, LINE, MUTED, PANEL, TEAL, TEXT},
-    ButtonAnim, Draw, ValueEdit, FONT_JETBRAINS_MONO,
+    ButtonAnim, Draw, ValueEdit, FONT_JETBRAINS_MONO, FRAME_INTERVAL,
 };
 use std::{
     cell::{Cell, RefCell},
     sync::{atomic::Ordering, Arc},
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 pub const LIFT_COLOR: C = layout::LIFT_COLOR;
@@ -200,12 +201,7 @@ pub fn create(params: Arc<StripParams>, shared: Arc<Shared>) -> Option<Box<dyn E
                 band_bypass_anim: ButtonAnim::new(),
             }
             .build(cx, |cx| {
-                let timer = cx.add_timer(Duration::from_millis(16), None, |cx, action| {
-                    if let TimerAction::Tick(_) = action {
-                        cx.needs_redraw();
-                    }
-                });
-                cx.start_timer(timer);
+                start_frame_timer(cx, FRAME_INTERVAL, |cx| cx.needs_redraw());
             })
             .width(Stretch(1.0))
             .height(Stretch(1.0))

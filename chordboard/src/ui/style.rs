@@ -577,18 +577,7 @@ impl ChordboardView {
     }
 
     pub(super) fn fit_text(&self, d: &Draw, text: &str, width: f32, size: f32) -> String {
-        if self.text_width(d, text, size) <= width {
-            return text.to_string();
-        }
-        let mut fitted = text.to_string();
-        while !fitted.is_empty() {
-            fitted.pop();
-            let result = format!("{fitted}…");
-            if self.text_width(d, &result, size) <= width {
-                return result;
-            }
-        }
-        "…".into()
+        d.fit_text(text, width, size)
     }
 
     pub(super) fn display_value(&self, c: &Control) -> String {

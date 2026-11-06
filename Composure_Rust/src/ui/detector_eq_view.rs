@@ -161,15 +161,12 @@ impl DetectorEqView {
             response_cache: RefCell::new(ResponseCache::default()),
         }
         .build(cx, |cx| {
-            let timer = cx.add_timer(std::time::Duration::from_millis(16), None, |cx, action| {
-                if matches!(action, TimerAction::Tick(_)) {
-                    // Reuse this timer: the pinned Vizia can spin when starting a second
-                    // timer during construction. Auto's system reads are cached for a second.
-                    cx.emit(super::appearance::RefreshAppearance);
-                    cx.needs_redraw();
-                }
+            // Reuse this timer: the pinned Vizia can spin when starting a second
+            // timer during construction. Auto's system reads are cached for a second.
+            pleasant_ui::start_frame_timer(cx, pleasant_ui::FRAME_INTERVAL, |cx| {
+                cx.emit(super::appearance::RefreshAppearance);
+                cx.needs_redraw();
             });
-            cx.start_timer(timer);
         })
         .focusable(true)
     }

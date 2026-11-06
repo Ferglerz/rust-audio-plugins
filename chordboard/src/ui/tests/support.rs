@@ -1,5 +1,6 @@
 use super::super::*;
 use nih_plug_vizia::vizia::backend::BackendContext;
+pub(super) use std::time::Duration;
 use std::{cell::RefCell, rc::Rc};
 
 pub(super) type Changes = Rc<RefCell<Vec<(ParamPtr, f32)>>>;

@@ -125,10 +125,6 @@ impl Draw<'_> {
         self.text_middle(left + ICON_WIDTH + GAP, center_y, label, TEXT_SIZE, MUTED);
     }
 
-    pub fn button_left(&mut self, r: (f32, f32, f32, f32), label: &str, on: bool, color: Color) {
-        self.button_aligned(r, label, on, color, false);
-    }
-
     fn button_aligned(
         &mut self,
         r: (f32, f32, f32, f32),
@@ -167,16 +163,6 @@ impl Draw<'_> {
 
     pub fn button_tinted(&mut self, r: (f32, f32, f32, f32), label: &str, on: bool, color: Color) {
         self.button_tinted_aligned(r, label, on, color, true);
-    }
-
-    pub fn button_tinted_left(
-        &mut self,
-        r: (f32, f32, f32, f32),
-        label: &str,
-        on: bool,
-        color: Color,
-    ) {
-        self.button_tinted_aligned(r, label, on, color, false);
     }
 
     fn button_tinted_aligned(
@@ -548,17 +534,6 @@ impl Draw<'_> {
         color: Color,
     ) {
         self.draw_control(r, label, value, n, color, false);
-    }
-
-    pub fn control_bipolar(
-        &mut self,
-        r: (f32, f32, f32, f32),
-        label: &str,
-        value: &str,
-        n: f32,
-        color: Color,
-    ) {
-        self.draw_control(r, label, value, n, color, true);
     }
 
     fn draw_control(

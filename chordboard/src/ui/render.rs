@@ -6,18 +6,18 @@ impl ChordboardView {
             return;
         }
         if self.font.get().is_none() {
-            self.font.set(canvas.add_font_mem(FONT_JETBRAINS_MONO).ok());
+            pleasant_ui::load_font_once(canvas, &self.font, FONT_JETBRAINS_MONO);
             self.ui_font.set(self.font.get());
-            self.music_font.set(canvas.add_font_mem(music::FONT).ok());
-            self.icon_font.set(
-                canvas
-                    .add_font_mem(nih_plug_vizia::vizia::fonts::TABLER_ICONS)
-                    .ok(),
+            pleasant_ui::load_font_once(canvas, &self.music_font, music::FONT);
+            pleasant_ui::load_font_once(
+                canvas,
+                &self.icon_font,
+                nih_plug_vizia::vizia::fonts::TABLER_ICONS,
             );
-            self.bold_font.set(
-                canvas
-                    .add_font_mem(nih_plug_vizia::assets::fonts::NOTO_SANS_BOLD)
-                    .ok(),
+            pleasant_ui::load_font_once(
+                canvas,
+                &self.bold_font,
+                nih_plug_vizia::assets::fonts::NOTO_SANS_BOLD,
             );
         }
         let mut d = Draw::new(

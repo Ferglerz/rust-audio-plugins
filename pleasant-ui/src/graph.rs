@@ -51,22 +51,6 @@ pub trait AxisMapping {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct LinearAxis {
-    pub minimum: f64,
-    pub maximum: f64,
-}
-
-impl AxisMapping for LinearAxis {
-    fn value_to_position(&self, value: f64) -> f64 {
-        ((value - self.minimum) / (self.maximum - self.minimum).max(f64::EPSILON)).clamp(0.0, 1.0)
-    }
-
-    fn position_to_value(&self, position: f64) -> f64 {
-        self.minimum + position.clamp(0.0, 1.0) * (self.maximum - self.minimum)
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
 pub struct LogFrequencyAxis {
     pub minimum_hz: f64,
     pub maximum_hz: f64,
@@ -102,31 +86,6 @@ impl AxisMapping for FlatteryFrequencyAxis {
     fn position_to_value(&self, position: f64) -> f64 {
         flattery_pos_to_freq(position, self.minimum_hz, self.maximum_hz)
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum GraphAction<T> {
-    Begin(T),
-    Move(T),
-    Insert(T),
-    Delete(T),
-    End(T),
-}
-
-pub fn nearest_point(
-    points: impl IntoIterator<Item = (usize, f32, f32)>,
-    x: f32,
-    y: f32,
-    radius: f32,
-) -> Option<usize> {
-    points
-        .into_iter()
-        .filter_map(|(index, point_x, point_y)| {
-            let distance = (point_x - x).hypot(point_y - y);
-            (distance <= radius).then_some((index, distance))
-        })
-        .min_by(|left, right| left.1.total_cmp(&right.1))
-        .map(|(index, _)| index)
 }
 
 #[cfg(test)]

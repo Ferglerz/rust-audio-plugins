@@ -9,6 +9,12 @@ pub const fn rgb(r: u8, g: u8, b: u8) -> Color {
     }
 }
 
+/// Return `c` with its alpha replaced by `a`.
+pub fn with_alpha(mut c: Color, a: f32) -> Color {
+    c.a = a;
+    c
+}
+
 pub const BG: Color = rgb(19, 22, 27);
 pub const PANEL: Color = rgb(27, 31, 37);
 pub const LINE: Color = rgb(45, 50, 58);

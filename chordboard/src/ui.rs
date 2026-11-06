@@ -39,13 +39,13 @@ use nih_plug_vizia::{
     ViziaTheming,
 };
 use pleasant_ui::{
-    theme::{BG, COLORS, GOLD, LINE, MUTED, PANEL, TEAL, TEXT},
-    AppearanceStore, Draw, ValueEdit, FONT_JETBRAINS_MONO,
+    point_in_rect, start_frame_timer, theme::{with_alpha as alpha, BG, COLORS, GOLD, LINE, MUTED, PANEL, TEAL, TEXT},
+    AppearanceStore, Draw, ValueEdit, FONT_JETBRAINS_MONO, FRAME_INTERVAL,
 };
 use std::{
     cell::Cell,
     sync::{atomic::Ordering, Arc, OnceLock},
-    time::{Duration, Instant},
+    time::Instant,
 };
 const CODES: [Code; KEY_COUNT] = [
     Code::Digit1,
@@ -106,11 +106,7 @@ fn prefs() -> &'static AppearanceStore {
     PREFS.get_or_init(|| AppearanceStore::new("Chordboard"))
 }
 fn hit(r: Rect, x: f32, y: f32) -> bool {
-    (r.0..=r.0 + r.2).contains(&x) && (r.1..=r.1 + r.3).contains(&y)
-}
-fn alpha(mut color: Color, a: f32) -> Color {
-    color.a = a;
-    color
+    point_in_rect(x, y, r)
 }
 #[derive(Clone, Copy)]
 struct Tick;
@@ -1187,12 +1183,7 @@ pub fn create(params: Arc<ChordboardParams>, bridge: Arc<Bridge>) -> Option<Box<
             bridge.visible.store(true, Ordering::Relaxed);
             ChordboardView::new(params.clone(), bridge.clone(), context)
                 .build(cx, |cx| {
-                    let timer = cx.add_timer(Duration::from_millis(16), None, |cx, action| {
-                        if let TimerAction::Tick(_) = action {
-                            cx.emit(Tick);
-                        }
-                    });
-                    cx.start_timer(timer);
+                    start_frame_timer(cx, FRAME_INTERVAL, |cx| cx.emit(Tick));
                 })
                 .width(Stretch(1.0))
                 .height(Stretch(1.0))
