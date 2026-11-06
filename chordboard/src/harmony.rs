@@ -9,6 +9,7 @@ pub use globals::{
 pub use keyboard::*;
 pub use spelling::*;
 
+pub const VOICE_LEADING_NAMES: [&str; 3] = ["Nearest", "Furthest", "Off"];
 pub const QUALITY_NAMES: [&str; 12] = [
     "Major", "Minor", "7", "Maj7", "Min7", "Dim", "Aug", "6", "Min6", "Dim7", "Half dim", "Power",
 ];

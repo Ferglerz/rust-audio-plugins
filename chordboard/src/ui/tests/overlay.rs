@@ -69,15 +69,23 @@ fn global_transpose_reset_closes_editing_and_emits_zero() {
                 WindowEvent::MouseDown(MouseButton::Left)
             },
         );
-        assert_eq!(
-            changes.borrow().last().copied(),
-            Some((
-                view.params.transpose.as_ptr(),
-                view.params.transpose.preview_normalized(0)
-            ))
-        );
-        assert!(view.edit.is_none());
-        assert!(view.drag.is_none());
+        if double {
+            assert!(
+                changes.borrow().is_empty(),
+                "double-click edits the value instead of resetting it"
+            );
+            assert!(view.edit.is_some());
+        } else {
+            assert_eq!(
+                changes.borrow().last().copied(),
+                Some((
+                    view.params.transpose.as_ptr(),
+                    view.params.transpose.preview_normalized(0)
+                ))
+            );
+            assert!(view.edit.is_none());
+            assert!(view.drag.is_none());
+        }
     }
 }
 

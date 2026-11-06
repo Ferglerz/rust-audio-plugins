@@ -174,9 +174,10 @@ impl ChordboardView {
         }
     }
 
-    fn motion_targets(&self) -> Vec<(Rect, bool)> {
+    fn collect_motion_targets(&self, targets: &mut Vec<(Rect, bool)>) {
+        targets.clear();
         if self.fx_ui.open && !self.quick_midi.show {
-            let mut targets = self.arp_editor_button_rects();
+            targets.extend(self.arp_editor_button_rects());
             targets.extend([
                 (midi_fx::PROGRAMMING_TAB, false),
                 (midi_fx::PROGRAMMING_TRANSPORT, self.snapshot.arp_running),
@@ -192,19 +193,17 @@ impl ChordboardView {
                     .filter(|(_, r)| r.1 < HEADER_H)
                     .map(|(c, r)| (r, c.toggle && c.norm >= 0.5)),
             );
-            return targets;
+            return;
         }
         if let Some(menu) = self.menu {
-            return (0..menu.items().len())
-                .map(|i| {
-                    (
-                        self.menu_option_rect(menu, i),
-                        i == self.menu_selection(menu),
-                    )
-                })
-                .collect();
+            targets.extend((0..menu.items().len()).map(|i| {
+                (
+                    self.menu_option_rect(menu, i),
+                    i == self.menu_selection(menu),
+                )
+            }));
+            return;
         }
-        let mut targets = Vec::new();
         targets.extend(self.route_chips().into_iter().map(|(_, r)| (r, false)));
         let learn_switch = if self.fx_ui.open {
             midi_fx::FX_LEARN
@@ -353,15 +352,15 @@ impl ChordboardView {
             (midi_fx::PERFORMANCE_TAB, !self.programming),
             (midi_fx::FX_TAB, false),
         ]);
-        targets
     }
 
     pub(super) fn tick_motion(&mut self, dt: f32) -> bool {
-        let targets = self.motion_targets();
+        let mut targets = std::mem::take(&mut self.motion_scratch);
+        self.collect_motion_targets(&mut targets);
         let mut changed = false;
         self.motion
             .retain(|m| targets.iter().any(|(r, _)| *r == m.rect));
-        for (rect, selected) in targets {
+        for (rect, selected) in targets.iter().copied() {
             if !self.motion.iter().any(|m| m.rect == rect) {
                 self.motion.push(ControlMotion {
                     rect,
@@ -382,6 +381,7 @@ impl ChordboardView {
                 }
             }
         }
+        self.motion_scratch = targets;
         if let Some((_, time)) = &mut self.action_flash {
             *time = (*time - dt / 0.18).max(0.0);
             changed = true;
@@ -393,13 +393,12 @@ impl ChordboardView {
     }
 
     pub(super) fn flash_press(&mut self, x: f32, y: f32) {
-        if let Some((r, _)) = self
-            .motion_targets()
-            .into_iter()
-            .find(|(r, _)| hit(*r, x, y))
-        {
-            self.action_flash = Some((r, 1.0));
+        let mut targets = std::mem::take(&mut self.motion_scratch);
+        self.collect_motion_targets(&mut targets);
+        if let Some((r, _)) = targets.iter().find(|(r, _)| hit(*r, x, y)) {
+            self.action_flash = Some((*r, 1.0));
         }
+        self.motion_scratch = targets;
     }
 
     pub(super) fn hover_pointer(&self) -> Option<(f32, f32)> {
@@ -429,8 +428,34 @@ impl ChordboardView {
         self.paint_button(d, r, label, on, color, None);
     }
 
-    pub(super) fn button_tinted(&self, d: &mut Draw, r: Rect, label: &str, on: bool, color: Color) {
-        self.paint_button(d, r, label, on, color, None);
+    pub(super) fn draw_power_switch(
+        &self,
+        d: &mut Draw,
+        rect: Rect,
+        enabled: bool,
+        color: Color,
+        motion: Rect,
+    ) {
+        d.bypass_button(
+            rect,
+            !enabled,
+            color,
+            self.hover_amount(motion) > 0.01,
+            self.button_press_amount(motion),
+        );
+    }
+
+    pub(super) fn module_title(&self, d: &mut Draw, x: f32, top: f32, title: &str, color: Color) {
+        let font = d.font;
+        d.font = self.font.get();
+        d.text(
+            x,
+            module_title_y(top, MODULE_TITLE_SIZE),
+            title,
+            MODULE_TITLE_SIZE,
+            color,
+        );
+        d.font = font;
     }
 
     pub(super) fn touch_latch_button(&self, d: &mut Draw, r: Rect, on: bool, color: Color) {

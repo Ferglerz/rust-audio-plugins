@@ -254,7 +254,7 @@ impl ChordboardView {
         if self.snapshot.arp_running {
             self.bridge.send(Command::TrackerPause);
         } else {
-            let state = self.params.arpeggiator.snapshot();
+            let state = self.arp_state();
             let selected = self.arp_ui.edit_page.min(state.rows.len() - 1);
             Self::emit(cx, self.params.arp_enabled.as_ptr(), 1.0);
             self.bridge.send(Command::TrackerPlay(selected));
@@ -292,7 +292,7 @@ impl ChordboardView {
         {
             return false;
         }
-        let state = self.params.arpeggiator.snapshot();
+        let state = self.arp_state();
         self.tracker_scroll_target =
             (self.tracker_scroll_target - delta).clamp(0.0, max_scroll(&state.rows));
         if precise {
@@ -302,7 +302,7 @@ impl ChordboardView {
     }
 
     pub(super) fn tick_tracker_scroll(&mut self, dt: f32) -> bool {
-        let state = self.params.arpeggiator.snapshot();
+        let state = self.arp_state();
         let mut limit = max_scroll(&state.rows);
         let previous = self.tracker_scroll;
         if let Some(TrackerDrag::Block(mut drag)) = self.tracker_drag {
@@ -348,14 +348,8 @@ impl ChordboardView {
         let grid = grid_rect();
         self.surface(d, r);
         d.scissor(r.0, r.1, r.2, r.3);
-        d.text(
-            r.0 + 18.0,
-            module_title_y(r.1, MODULE_TITLE_SIZE),
-            "TRACKER",
-            MODULE_TITLE_SIZE,
-            TEAL,
-        );
-        let state = self.params.arpeggiator.snapshot();
+        self.module_title(d, r.0 + 18.0, r.1, "TRACKER", TEAL);
+        let state = self.arp_state();
         let rows = &state.rows;
         let origin = state.view_row_start();
         let selected = self.arp_ui.edit_page.min(rows.len() - 1);
@@ -373,7 +367,7 @@ impl ChordboardView {
         let duration = preview
             .filter(|drag| drag.from == selected)
             .map_or(rows[selected].duration, |drag| drag.duration);
-        d.text_middle(r.0 + 652.0, r.1 + 22.0, "LOOPS", TEXT_LABEL, MUTED);
+        d.text_middle(r.0 + 652.0, r.1 + 22.0, "Bars", TEXT_LABEL, MUTED);
         for (plus, label) in [(false, "−"), (true, "+")] {
             self.arp_button(d, duration_button(plus), label, false, TEAL);
         }
@@ -593,7 +587,7 @@ impl ChordboardView {
         let Some(mut drag) = self.tracker_drag else {
             return false;
         };
-        let state = self.params.arpeggiator.snapshot();
+        let state = self.arp_state();
         if !drag.valid(&state)
             || matches!(
                 event,
@@ -682,7 +676,7 @@ impl ChordboardView {
             return false;
         }
         if matches!(event, WindowEvent::MouseDown(MouseButton::Right)) {
-            let state = self.params.arpeggiator.snapshot();
+            let state = self.arp_state();
             let grid = grid_rect();
             if hit(column_header_rect(), x, y) || hit(grid, x, y) {
                 if let Some((index, _)) = blocks(&state.rows, self.tracker_scroll, state.view_row_start())
@@ -744,7 +738,7 @@ impl ChordboardView {
         }
         cx.focus();
         self.focused = true;
-        let state = self.params.arpeggiator.snapshot();
+        let state = self.arp_state();
         let rows = &state.rows;
         let origin = state.view_row_start();
         let selected = self.arp_ui.edit_page.min(rows.len() - 1);
@@ -847,7 +841,7 @@ impl ChordboardView {
                 self.reveal_tracker_selection();
                 // Keep the next blank column within reach after appending.
                 if append {
-                    let state = self.params.arpeggiator.snapshot();
+                    let state = self.arp_state();
                     self.tracker_scroll_target =
                         (row_start(&state.rows, state.rows.len()) + loop_width(&state.rows) - grid_rect().2)
                             .max(0.0);
@@ -882,7 +876,7 @@ impl ChordboardView {
     }
 
     fn reveal_tracker_selection(&mut self) {
-        let state = self.params.arpeggiator.snapshot();
+        let state = self.arp_state();
         let selected = self.arp_ui.edit_page.min(state.rows.len() - 1);
         let left = row_start_from(&state.rows, selected, state.view_row_start());
         let right = left + state.rows[selected].duration as f32 * loop_width(&state.rows);

@@ -733,17 +733,12 @@ impl ChordboardView {
     pub(super) fn draw_routes(&self, d: &mut Draw) {
         let route = self.params.routes[self.route_slot].route();
         let target = &TARGETS[route.target as usize];
-        d.font = self.font.get();
-        d.text(
-            Panel::Routes.rect().0 + 10.0,
-            module_title_y(Panel::Routes.rect().1, MODULE_TITLE_SIZE),
-            &self.selected_modulator.map_or_else(
-                || "MODULATION".into(),
-                |source| format!("{} ROUTES", SOURCES[source + 1].to_uppercase()),
-            ),
-            MODULE_TITLE_SIZE,
-            TEXT,
+        let title = self.selected_modulator.map_or_else(
+            || "MODULATION".to_string(),
+            |source| format!("{} ROUTES", SOURCES[source + 1].to_uppercase()),
         );
+        self.module_title(d, Panel::Routes.rect().0 + 10.0, Panel::Routes.rect().1, &title, TEXT);
+        d.font = self.font.get();
         self.button(d, ROUTE_CLEAR, "Clear", false, MUTED);
         for (slot, r) in self.editor_route_chips() {
             let assigned = self.params.routes[slot].route();
@@ -802,12 +797,10 @@ impl ChordboardView {
                 1.0,
             );
         }
-        let points: Vec<_> = (0..=48)
-            .map(|i| {
-                let input = i as f32 / 48.0;
-                (x + w * input, y + h * (1.0 - route.value(input)))
-            })
-            .collect();
+        let points = std::array::from_fn::<_, 49, _>(|i| {
+            let input = i as f32 / 48.0;
+            (x + w * input, y + h * (1.0 - route.value(input)))
+        });
         d.poly(&points, GOLD, 2.0);
         d.text_centered(x + w * 0.5, y - 10.0, "CONTOUR", TEXT_SMALL, MUTED);
         for (i, (nx, ny)) in self.route_nodes().into_iter().enumerate() {

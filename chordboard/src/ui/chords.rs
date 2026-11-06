@@ -2,7 +2,7 @@ use super::*;
 
 impl ChordboardView {
     pub(super) fn draw_gliss_direction(&self, d: &mut Draw) {
-        self.button(d, GLISS_DIRECTION, &format!("Direction: {} ▾", ARP_PATTERN_NAMES[self.params.gliss_direction.value() as usize]), self.menu == Some(Menu::GlissDirection), GOLD);
+        self.button(d, GLISS_DIRECTION, &format!("{} ▾", ARP_PATTERN_NAMES[self.params.gliss_direction.value() as usize]), self.menu == Some(Menu::GlissDirection), GOLD);
     }
 
     pub(super) fn draw_chord_latch(&self, d: &mut Draw) {
@@ -107,7 +107,7 @@ impl ChordboardView {
         d.font = self.ui_font.get();
         self.draw_chord_page_title(d, "CHORDS");
         self.draw_chord_latch(d);
-        self.button_tinted(
+        self.button(
             d,
             Menu::Key.trigger_rect(),
             &format!(
@@ -118,7 +118,7 @@ impl ChordboardView {
             matches!(self.menu, Some(Menu::Key | Menu::Scale)),
             GOLD,
         );
-        self.button_tinted(
+        self.button(
             d,
             ORDER,
             harmony::KEYBOARD_LAYOUTS[self.keyboard_layout() as usize],
@@ -129,7 +129,7 @@ impl ChordboardView {
             self.draw_control(d, &control, ROOT_ON_SELECT, GOLD);
         }
 
-        let row_chord = self.params.arpeggiator.snapshot().rows[self.arp_ui.edit_page].chord;
+        let row_chord = self.arp_state().rows[self.arp_ui.edit_page].chord;
         let gliss_disabled = d.disabled;
         d.disabled |= self.performance_arp_enabled();
         if let Some(c) = self.control("gliss_ms") {

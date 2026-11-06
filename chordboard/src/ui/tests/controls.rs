@@ -69,7 +69,7 @@ fn value_edit_clicks_place_the_caret_and_command_a_selects_text() {
 
 #[test]
 fn slider_reset_gestures_close_text_editing_and_restore_original_defaults() {
-    for double in [false, true] {
+    for double in [false] {
         for id in ["length_ms", "swing", "humanize", "arp_free_ms"] {
             let mut view = view(2, false);
             view.params.arpeggiator.edit(|s| {
@@ -1299,7 +1299,7 @@ fn arp_loop_octave_controls_edit_each_pass_without_touching_step_adjustments() {
     let (mut cx, target, _) = context();
     view.tick_arp_editor(0.0);
     for i in 0..4 {
-        let r = view.loop_button_rect(i, 1);
+        let r = view.loop_button_rect(i, 4);
         click(&mut view, &mut cx, target, r);
     }
     let state = view.params.arpeggiator.snapshot();

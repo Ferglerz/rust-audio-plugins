@@ -305,8 +305,7 @@ impl Default for ChordboardParams {
                 })),
             voice_leading: IntParam::new("Voice leading", 2, IntRange::Linear { min: 0, max: 2 })
                 .with_value_to_string(Arc::new(|v| {
-                    ["Nearest resolution", "Furthest dominant resolution", "Off"][v as usize]
-                        .to_string()
+                    crate::harmony::VOICE_LEADING_NAMES[v as usize].to_string()
                 })),
             inversion: IntParam::new("Inversion", 0, IntRange::Linear { min: 0, max: 11 }),
             base_inversion: IntParam::new(
@@ -509,7 +508,7 @@ impl Default for ChordboardParams {
             ),
             mpe: BoolParam::new("MPE output (legacy)", false).hide(),
             output_mode: IntParam::new("Output protocol", 2, IntRange::Linear { min: 0, max: 2 })
-                .with_value_to_string(Arc::new(|v| ["AUTO", "MPE", "REG"][v as usize].into())),
+                .with_value_to_string(Arc::new(|v| ["AUTO", "MPE", "MIDI"][v as usize].into())),
             detected_mpe: AtomicBool::new(false),
             upper: BoolParam::new("Upper MPE zone", false),
             members: IntParam::new("MPE members", 15, IntRange::Linear { min: 1, max: 15 }),

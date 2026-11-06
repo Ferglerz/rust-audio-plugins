@@ -7,12 +7,12 @@ impl ChordboardView {
 
     pub(super) fn draw_strum_power(&self, d: &mut Draw) {
         let bypass = strum_bypass_rect(self.expand_t());
-        d.bypass_button(
+        self.draw_power_switch(
+            d,
             bypass,
-            !self.params.strum_enabled.value(),
+            self.params.strum_enabled.value(),
             TEAL,
-            self.hover_amount(bypass) > 0.01,
-            self.button_press_amount(bypass),
+            bypass,
         );
     }
 
@@ -78,12 +78,15 @@ impl ChordboardView {
         self.draw_strum_power(d);
         let disabled = d.disabled;
         d.disabled = false;
-        d.font = self.font.get();
-        d.text(
+        self.module_title(
+            d,
             surface.0 + 48.0,
-            module_title_y(PERF_SURFACE.1, MODULE_TITLE_SIZE),
-            if self.params.strum_enabled.value() { "STRUMFIELD" } else { "STRUMFIELD · Off" },
-            MODULE_TITLE_SIZE,
+            PERF_SURFACE.1,
+            if self.params.strum_enabled.value() {
+                "STRUMFIELD"
+            } else {
+                "STRUMFIELD · Off"
+            },
             TEXT,
         );
         d.font = self.ui_font.get();
@@ -106,16 +109,7 @@ impl ChordboardView {
     }
 
     pub(super) fn draw_chord_page_title(&self, d: &mut Draw, title: &str) {
-        let font = d.font;
-        d.font = self.font.get();
-        d.text(
-            CHORDS_SURFACE.0 + 16.0,
-            module_title_y(CHORDS_SURFACE.1, MODULE_TITLE_SIZE),
-            title,
-            MODULE_TITLE_SIZE,
-            TEXT,
-        );
-        d.font = font;
+        self.module_title(d, CHORDS_SURFACE.0 + 16.0, CHORDS_SURFACE.1, title, TEXT);
     }
 
     pub(super) fn string_count(&self) -> usize {
@@ -290,14 +284,8 @@ impl ChordboardView {
 
     pub(super) fn draw_meters(&self, d: &mut Draw) {
         use crate::engine::routing::{bipolar_source, SOURCES};
+        self.module_title(d, MOD_SURFACE.0 + 10.0, MOD_SURFACE.1, "MODULATORS", TEXT);
         d.font = self.font.get();
-        d.text(
-            MOD_SURFACE.0 + 10.0,
-            module_title_y(MOD_SURFACE.1, MODULE_TITLE_SIZE),
-            "MODULATORS",
-            MODULE_TITLE_SIZE,
-            TEXT,
-        );
         for (i, label) in SOURCES[1..].iter().enumerate() {
             let label = match i {
                 6 => "Input velocity",

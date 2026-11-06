@@ -71,7 +71,7 @@ fn dragged_steps(drag: NoteDrag, x: f32, y: f32) -> [CustomStep; CUSTOM_STEPS] {
 }
 impl ChordboardView {
     fn custom_note_at(&self, x: f32, y: f32) -> Option<usize> {
-        let state = self.params.arpeggiator.snapshot();
+        let state = self.arp_state();
         let row = state.editor_row(self.arp_ui.edit_page, !self.programming);
         (0..CUSTOM_STEPS).rev().find(|&i| {
             hit(
@@ -82,17 +82,12 @@ impl ChordboardView {
         })
     }
     pub(super) fn draw_custom(&self, d: &mut Draw) {
-        let state = self.params.arpeggiator.snapshot();
+        let state = self.arp_state();
         let row = state.editor_row(self.arp_ui.edit_page, !self.programming);
         let r = CUSTOM_SURFACE;
+        let title = format!("CUSTOM PIANO ROLL · ROW {}", self.arp_ui.edit_page + 1);
+        self.module_title(d, r.0 + 24.0, r.1, &title, TEAL);
         d.font = self.ui_font.get();
-        d.text(
-            r.0 + 24.0,
-            r.1 + 29.0,
-            &format!("CUSTOM PIANO ROLL · ROW {}", self.arp_ui.edit_page + 1),
-            MODULE_TITLE_SIZE,
-            TEAL,
-        );
         for (i, label) in [
             "Rotate ←",
             "Rotate →",
@@ -210,8 +205,20 @@ impl ChordboardView {
                 2.0,
             );
         }
-        d.text(r.0 + 24.0, r.1 + r.3 - 36.0, "Drag notes to reorder / change degree & octave · Drag right edges for duration · Right-click toggles rest · Scroll a note for velocity", TEXT_LABEL, MUTED);
-        d.text(r.0 + 24.0, r.1 + r.3 - 16.0, "Seven chord-relative steps · Duration and velocity multiply the arp lane and global controls · Cmd/Ctrl-click restores a step", TEXT_LABEL, MUTED);
+        let footer = self.fit_text(
+            d,
+            "Drag notes to reorder / change degree and octave · Drag right edges for duration · Right-click toggles rest · Scroll a note for velocity",
+            r.2 - 48.0,
+            TEXT_LABEL,
+        );
+        d.text(r.0 + 24.0, r.1 + r.3 - 36.0, &footer, TEXT_LABEL, MUTED);
+        let footer = self.fit_text(
+            d,
+            "Seven chord-relative steps · Duration and velocity multiply the arp lane and global controls · Cmd/Ctrl-click restores a step",
+            r.2 - 48.0,
+            TEXT_LABEL,
+        );
+        d.text(r.0 + 24.0, r.1 + r.3 - 16.0, &footer, TEXT_LABEL, MUTED);
     }
     pub(super) fn custom_event(
         &mut self,
@@ -288,9 +295,7 @@ impl ChordboardView {
                         });
                     } else {
                         let steps = self
-                            .params
-                            .arpeggiator
-                            .snapshot()
+                            .arp_state()
                             .editor_row(row_index, !self.programming)
                             .settings
                             .custom;

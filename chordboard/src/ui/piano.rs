@@ -44,24 +44,19 @@ impl ChordboardView {
             let r = BASS_CONTAINER;
             d.rounded_rect(r.0, r.1, r.2, r.3, 6.0, alpha(BG, 0.45));
         }
-        d.bypass_button(
+        self.draw_power_switch(
+            d,
             BASS_BYPASS,
-            !self.params.bass_enabled.value(),
+            self.params.bass_enabled.value(),
             GOLD,
-            self.hover_amount(BASS_BYPASS) > 0.01,
-            self.button_press_amount(BASS_BYPASS),
+            BASS_BYPASS,
         );
         if !self.params.key_split.value() {
             let r = melody_container(self.params.mpe_enabled());
             d.rounded_rect(r.0, r.1, r.2, r.3, 6.0, alpha(BG, 0.45));
         }
-        d.bypass_button(
-            key_split_rect(self.params.mpe_enabled()),
-            !self.params.key_split.value(),
-            TEAL,
-            self.hover_amount(key_split_rect(self.params.mpe_enabled())) > 0.01,
-            self.button_press_amount(key_split_rect(self.params.mpe_enabled())),
-        );
+        let split = key_split_rect(self.params.mpe_enabled());
+        self.draw_power_switch(d, split, self.params.key_split.value(), TEAL, split);
     }
 
     pub(super) fn learn_highlight_color(&self) -> Color {
@@ -1047,7 +1042,7 @@ impl ChordboardView {
             );
         }
         if active || hover > 0.005 {
-            let label = ["Nearest", "Furthest", "Off"][mode.clamp(0, 2) as usize];
+            let label = crate::harmony::VOICE_LEADING_NAMES[mode.clamp(0, 2) as usize];
             let cx = if x + width + 122.0 <= PIANO_LEADING.0 + PIANO_LEADING.2 {
                 x + width + 64.0
             } else {
@@ -1135,11 +1130,11 @@ impl ChordboardView {
         ] {
             self.surface(d, r);
             let melody = label == "MELODY";
-            d.text(
+            self.module_title(
+                d,
                 r.0 + 10.0 + if melody || label == "BASS" { 30.0 } else { 0.0 },
-                module_title_y(r.1, MODULE_TITLE_SIZE),
+                r.1,
                 label,
-                MODULE_TITLE_SIZE,
                 if (melody && !self.params.key_split.value())
                     || (label == "BASS" && !self.params.bass_enabled.value())
                 {

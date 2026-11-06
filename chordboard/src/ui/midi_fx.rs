@@ -139,7 +139,7 @@ fn max_scroll(count: usize) -> f32 {
 }
 impl ChordboardView {
     fn effect_stack_offset(&self, effect: MidiFxId) -> f32 {
-        let state = self.params.arpeggiator.snapshot();
+        let state = self.arp_state();
         let index = state
             .midi_fx
             .order
@@ -199,7 +199,7 @@ impl ChordboardView {
     }
 
     pub(super) fn fx_midi_targets(&self) -> Vec<(usize, Rect)> {
-        let order = self.params.arpeggiator.snapshot().midi_fx.order;
+        let order = self.arp_state().midi_fx.order.clone();
         order.iter().enumerate().filter_map(|(index, &effect)| {
             let module = self.fx_ui.rect(index, &order);
             let (x, y, w, h) = arpeggiator::delay_power_rect();
@@ -233,7 +233,7 @@ impl ChordboardView {
         self.draw_tracker_transport(d, PROGRAMMING_TRANSPORT);
     }
     pub(super) fn draw_midi_fx(&self, d: &mut Draw) {
-        let mut state = self.params.arpeggiator.snapshot();
+        let mut state = (*self.arp_state()).clone();
         for effect in crate::midi_fx::EFFECTS {
             let target = crate::midi_learn::fx_power_target(effect);
             state.midi_fx.set_enabled(effect, crate::midi_learn::value(&self.params, target) != 0);
@@ -312,13 +312,7 @@ impl ChordboardView {
         self.fx_ui.value_drag = None;
     }
     fn fx_button(&self, d: &mut Draw, r: Rect, label: &str, on: bool) {
-        let hot = d.hover.is_some_and(|(x, y)| hit(r, x, y));
-        d.rect(r.0, r.1, r.2, r.3, alpha(if on { TEAL } else { TEXT },
-            if on { 0.18 } else if hot { 0.09 } else { 0.035 }));
-        d.line(r.0, r.1 + r.3, r.0 + r.2, r.1 + r.3, if on { TEAL } else { LINE }, 1.0);
-        let text = self.fit_text(d, label, r.2 - 12.0, 13.0);
-        d.text_centered(r.0 + r.2 * 0.5, r.1 + r.3 * 0.5 + 4.5,
-            &text, 13.0, if on { TEAL } else { TEXT });
+        self.button(d, r, label, on, TEAL);
     }
     fn draw_fx_sources(&self, d: &mut Draw, effect: MidiFxId, state: &MidiFxState, height: f32) {
         let first = source_rect(0);
@@ -346,7 +340,7 @@ impl ChordboardView {
                 controls.extend([
                     (control_rect(0, 0), FxValue::GateSteps, g.steps as f32, format!("Steps: {}  ↕", g.steps)),
                     (control_rect(1, 0), FxValue::GateRate, rate_index(g.rate) as f32,
-                        format!("Rate: {}  ↕", RATE_NAMES[rate_index(g.rate)])),
+                        format!("{}  ↕", RATE_NAMES[rate_index(g.rate)])),
                     (control_rect(2, 0), FxValue::GateLength, g.gate, format!("Gate: {:.0}%  ↕", g.gate * 100.0)),
                     (control_rect(0, 1), FxValue::GatePulses, g.pulses as f32, format!("Fill pulses: {}  ↕", g.pulses)),
                     (control_rect(1, 1), FxValue::GateRotation, g.rotation as f32, format!("Fill rotation: {}  ↕", g.rotation)),
@@ -433,7 +427,7 @@ impl ChordboardView {
     }
     fn fx_module_press(&mut self, cx: &mut EventContext, effect: MidiFxId, x: f32, y: f32, screen_y: f32) -> bool {
         self.cancel_arp_editor();
-        let state = self.params.arpeggiator.snapshot();
+        let state = self.arp_state();
         if hit(arpeggiator::delay_power_rect(), x, y) {
             self.toggle_fx_power(effect);
         } else if effect == MidiFxId::Harmonizer && hit(control_rect(0, 0), x, y) {
@@ -488,7 +482,7 @@ impl ChordboardView {
         });
     }
     pub(super) fn fx_button_rects(&self) -> Vec<(Rect, bool)> {
-        let state = self.params.arpeggiator.snapshot();
+        let state = self.arp_state();
         let mut buttons = Vec::new();
         for &effect in &state.midi_fx.order {
             let offset = self.effect_stack_offset(effect);
@@ -517,7 +511,7 @@ impl ChordboardView {
     }
     pub(super) fn fx_hint(&self, x: f32, y: f32) -> Option<String> {
         if !hit(VIEWPORT, x, y) { return None; }
-        let state = self.params.arpeggiator.snapshot();
+        let state = self.arp_state();
         let fx = &state.midi_fx;
         for (index, &effect) in fx.order.iter().enumerate() {
             let r = self.fx_ui.rect(index, &fx.order);
@@ -525,6 +519,11 @@ impl ChordboardView {
             let local_y = y - r.1 + DELAY_SURFACE.1;
             if hit(collapse_rect(), x, local_y) { return Some("Collapse / expand this MIDI FX module · Processing stays active".into()); }
             if hit(arpeggiator::delay_power_rect(), x, local_y) {
+                let screen_y = arpeggiator::delay_power_rect().1 + r.1 - DELAY_SURFACE.1;
+                let power_h = arpeggiator::delay_power_rect().3;
+                if screen_y < VIEWPORT.1 || screen_y + power_h > VIEWPORT.1 + VIEWPORT.3 {
+                    return Some("Scroll to bring this effect's power switch fully into view".into());
+                }
                 let action = if fx.enabled(effect) { "Bypass" } else { "Enable" };
                 return Some(if effect == MidiFxId::Delay {
                     format!("{action} MIDI Delay · Independent of arpeggiator power")
@@ -568,13 +567,13 @@ impl ChordboardView {
         if !self.fx_ui.open {
             return false;
         }
-        let order = self.params.arpeggiator.snapshot().midi_fx.order;
+        let order = self.arp_state().midi_fx.order.clone();
         self.fx_ui.tick(dt, &order)
     }
     fn scroll_fx(&mut self, cx: &mut EventContext, event: &WindowEvent, x: f32, y: f32) -> bool {
         if let WindowEvent::MouseScroll(_, dy) = event {
             if hit(VIEWPORT, x, y) {
-                let order = self.params.arpeggiator.snapshot().midi_fx.order;
+                let order = self.arp_state().midi_fx.order.clone();
                 self.fx_ui.scroll = (self.fx_ui.scroll - dy * 24.0).clamp(0.0, self.fx_ui.limit(&order));
                 cx.needs_redraw();
                 return true;
@@ -630,7 +629,7 @@ impl ChordboardView {
         if matches!(event, WindowEvent::KeyUp(_, _)) {
             return false;
         }
-        let order = self.params.arpeggiator.snapshot().midi_fx.order;
+        let order = self.arp_state().midi_fx.order.clone();
         let count = order.len();
         if let Some(mut drag) = self.fx_ui.value_drag {
             match event {
@@ -703,7 +702,7 @@ impl ChordboardView {
             }
         }
         if press && hit(VIEWPORT, x, y) {
-            let state = self.params.arpeggiator.snapshot();
+            let state = self.arp_state();
             if let Some((index, effect)) = state.midi_fx.order.iter().enumerate()
                 .find(|(index, _)| hit(self.fx_ui.rect(*index, &order), x, y)) {
                 let local_y = y - (self.fx_ui.rect(index, &state.midi_fx.order).1 - VIEWPORT.1);
