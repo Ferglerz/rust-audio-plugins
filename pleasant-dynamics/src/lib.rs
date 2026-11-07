@@ -9,4 +9,4 @@ pub use pse::{
     pse_time_to_times, seconds_to_pse_time_pos, Pse, PseSettings, PseTimeConstant,
     PSE_PEAK_RELEASES, PSE_RMS_TIMES, VOICE_THRESH_SHIFT_DB,
 };
-pub use wall::{tick_wall, WallSettings};
+pub use wall::{tick_wall, wall_lookahead_samples, Wall, WallSettings, WALL_LOOKAHEAD_SECONDS};

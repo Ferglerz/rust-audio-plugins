@@ -314,12 +314,16 @@ impl StripView {
     }
     pub(super) fn wall_knob_rect(&self, i: usize) -> (f32, f32, f32, f32) {
         let wx = self.wall_bounds().0;
-        let slots = stacked_knob_slots(wx, WALL_W, 2);
+        let slots = stacked_knob_slots(wx, WALL_W, 3);
         match i {
             16 => slots[0],
             17 => slots[1],
             _ => slots[0],
         }
+    }
+    pub(super) fn wall_lookahead_switch_rect(&self) -> (f32, f32, f32, f32) {
+        let wx = self.wall_bounds().0;
+        stacked_knob_slots(wx, WALL_W, 3)[2]
     }
     pub(super) fn global_rect(&self, i: usize) -> (f32, f32, f32, f32) {
         let dx = self.dyn_bounds().0;

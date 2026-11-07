@@ -7,7 +7,7 @@ The reusable audio layer lives in this repository so plugin adapters and library
 - `pleasant-dsp` contains numerical units, graph-axis math, spectrum helpers, biquad design/state, envelope coefficients, and interpolation.
 - `pleasant-curves` contains normalized editable Bézier geometry and analytic S-curves.
 - `pleasant-eq` depends on `pleasant-dsp` and contains prepared static, dynamic, oversampled, and linear-phase EQ processors.
-- `pleasant-dynamics` depends on `pleasant-dsp` and contains the vocal compressor, PSE, and wall saturation.
+- `pleasant-dynamics` depends on `pleasant-dsp` and contains the vocal compressor, PSE, and the WALL hybrid limiter (linked gain reduction, optional lookahead, optional Even/Odd colour, safety clip).
 - `pleasant-ui` may consume numerical and curve data. DSP crates never consume `pleasant-ui`.
 - Plugin crates own host parameter IDs, automation gestures, persistence keys, presets, routing, telemetry, and latency publication.
 
@@ -22,7 +22,7 @@ Sample-processing methods use prepared storage:
 - `OversampledEq::process`
 - `LinearPhaseEq::process_sample`
 - `VocalComp::tick`, `tick_comp`, and `tick_pse`
-- `tick_wall`
+- `Wall::process` (stateful hybrid limiter; `tick_wall` remains the stateless colour plus safety-clip path)
 
 Configuration publication must retain the last complete prepared state until a newer generation is ready. Meter and display updates may be dropped when their nonblocking destination is busy. Configuration updates must not be silently dropped.
 
