@@ -24,9 +24,12 @@ fn value_edit_clicks_place_the_caret_and_command_a_selects_text() {
         .expect("click inside the editor must not commit");
     assert_eq!((edit.cursor, edit.anchor), (0, 0));
     assert!(changes.borrow().is_empty());
-    BackendContext::new(&mut cx)
-        .modifiers()
-        .set(Modifiers::LOGO, true);
+    let command = if cfg!(target_os = "macos") {
+        Modifiers::LOGO
+    } else {
+        Modifiers::CTRL
+    };
+    BackendContext::new(&mut cx).modifiers().set(command, true);
     event(
         &mut view,
         &mut cx,
@@ -35,9 +38,7 @@ fn value_edit_clicks_place_the_caret_and_command_a_selects_text() {
         y,
         WindowEvent::KeyDown(Code::KeyA, None),
     );
-    BackendContext::new(&mut cx)
-        .modifiers()
-        .set(Modifiers::LOGO, false);
+    BackendContext::new(&mut cx).modifiers().set(command, false);
     assert_eq!(view.edit.as_ref().unwrap().selection(), 0..3);
     // Some host key paths supply a physical key without a character event.
     event(

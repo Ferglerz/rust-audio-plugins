@@ -291,6 +291,20 @@ impl ChordboardView {
         }
         let (x, y) = self.hover_pointer()?;
         if self.panel == Some(Panel::Custom) && hit(CUSTOM_SURFACE, x, y) {
+            const CUSTOM_HINTS: [&str; 6] = [
+                "Rotate the seven steps left",
+                "Rotate the seven steps right",
+                "Reverse the step order",
+                "Restore the default seven-step pattern",
+                "Move every step down one octave",
+                "Move every step up one octave",
+            ];
+            if let Some(index) = custom::custom_button_rects()
+                .iter()
+                .position(|rect| hit(*rect, x, y))
+            {
+                return Some(CUSTOM_HINTS[index].into());
+            }
             return Some("Drag blocks to move notes; drag their right edges for duration. Right-click for rest, scroll for velocity.".into());
         }
         if hit(midi_fx::PROGRAMMING_TRANSPORT, x, y)
@@ -510,9 +524,16 @@ impl ChordboardView {
             );
         }
 
+        if self.fx_ui.open && hit(midi_fx::FX_LEARN, x, y) {
+            return Some(if self.quick_midi.show {
+                "Finish learning".into()
+            } else {
+                "Learn a MIDI control for the effect under the pointer".into()
+            });
+        }
         if hit(LATCH, x, y) {
             return Some(
-                "Chord latch · Retain the complete chord and its added extensions · Click or tap Shift to toggle · Hold Shift to invert until release".into(),
+                "Latch the played chord · Shift toggles it · Hold Shift to invert until release".into(),
             );
         }
         if hit(strum_latch_rect(self.expand_t()), x, y) && self.manual_playing() {

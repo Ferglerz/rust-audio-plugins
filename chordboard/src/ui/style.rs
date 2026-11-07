@@ -17,7 +17,34 @@ pub(super) enum Icon {
     Touch,
     TuningFork,
     Glyph(&'static str),
+    /// Layered squares with a right arrow. Tabler has no single glyph for this.
+    Duplicate,
 }
+
+// Codepoints checked against the Tabler file bundled with this Vizia checkout.
+pub(super) const GLYPH_PLAY: &str = "\u{ed46}";
+pub(super) const GLYPH_VOLUME_OFF: &str = "\u{f1c3}";
+pub(super) const GLYPH_SKIP: &str = "\u{ed49}";
+pub(super) const GLYPH_REFRESH: &str = "\u{eb13}";
+pub(super) const GLYPH_REPEAT: &str = "\u{eb72}";
+pub(super) const GLYPH_PENCIL: &str = "\u{eb04}";
+pub(super) const GLYPH_CLOCK: &str = "\u{ea70}";
+pub(super) const GLYPH_SHUFFLE: &str = "\u{f000}";
+pub(super) const GLYPH_ROUTE: &str = "\u{eb17}";
+pub(super) const GLYPH_REPLACE: &str = "\u{ebc7}";
+pub(super) const GLYPH_COPY: &str = "\u{ea7a}";
+pub(super) const GLYPH_CLIPBOARD: &str = "\u{ea6f}";
+pub(super) const GLYPH_ROTATE: &str = "\u{eb16}";
+pub(super) const GLYPH_ROTATE_CW: &str = "\u{eb15}";
+pub(super) const GLYPH_SWAP: &str = "\u{edb2}";
+pub(super) const GLYPH_RESTORE: &str = "\u{fafd}";
+pub(super) const GLYPH_CHEVRONS_DOWN: &str = "\u{ea63}";
+pub(super) const GLYPH_CHEVRONS_UP: &str = "\u{ea66}";
+pub(super) const GLYPH_CHECK: &str = "\u{ea5e}";
+pub(super) const GLYPH_ARROWS_H: &str = "\u{eb59}";
+pub(super) const GLYPH_MINUS: &str = "\u{eaf2}";
+pub(super) const GLYPH_PLUS: &str = "\u{eb0b}";
+pub(super) const GLYPH_ARROWS_V: &str = "\u{eb5b}";
 
 pub(super) const MODULATOR_ICONS: [Icon; crate::engine::routing::SOURCE_COUNT] = [
     Icon::TuningFork,
@@ -38,6 +65,10 @@ pub(super) const MODULATOR_ICONS: [Icon; crate::engine::routing::SOURCE_COUNT] =
 
 impl Icon {
     pub(super) fn draw(self, d: &mut Draw, x: f32, y: f32, color: Color) {
+        self.draw_sized(d, x, y, 18.0, color);
+    }
+
+    pub(super) fn draw_sized(self, d: &mut Draw, x: f32, y: f32, size: f32, color: Color) {
         let line = |d: &mut Draw, a: (f32, f32), b: (f32, f32)| {
             d.line(x + a.0, y + a.1, x + b.0, y + b.1, color, 1.4);
         };
@@ -79,7 +110,7 @@ impl Icon {
                 if let Some(font) = d.icon_font {
                     let mut paint = Paint::color(d.color(color));
                     paint.set_font(&[font]);
-                    paint.set_font_size(18.0 * d.s);
+                    paint.set_font_size(size * d.s);
                     paint.set_text_align(Align::Center);
                     paint.set_text_baseline(Baseline::Middle);
                     let _ =
@@ -140,6 +171,13 @@ impl Icon {
             Self::Add => {
                 line(d, (-6.0, 0.0), (6.0, 0.0));
                 line(d, (0.0, -6.0), (0.0, 6.0));
+            }
+            Self::Duplicate => {
+                d.outline_rounded(x - 9.0, y - 1.5, 9.0, 9.0, 1.6, color, 1.3);
+                d.outline_rounded(x - 4.5, y - 6.0, 9.0, 9.0, 1.6, color, 1.3);
+                line(d, (5.5, 2.0), (10.5, 2.0));
+                line(d, (7.6, -0.4), (10.5, 2.0));
+                line(d, (7.6, 4.4), (10.5, 2.0));
             }
         }
     }
@@ -459,7 +497,7 @@ impl ChordboardView {
     }
 
     pub(super) fn touch_latch_button(&self, d: &mut Draw, r: Rect, on: bool, color: Color) {
-        self.paint_button(d, r, "Hover strum", on, color, Some(Icon::Touch));
+        self.paint_button(d, r, "", on, color, Some(Icon::Touch));
     }
 
     pub(super) fn icon_button(
@@ -601,7 +639,13 @@ impl ChordboardView {
         d.text_width(text, size)
     }
 
-    pub(super) fn fit_text(&self, d: &Draw, text: &str, width: f32, size: f32) -> String {
+    pub(super) fn fit_text<'a>(
+        &self,
+        d: &Draw,
+        text: &'a str,
+        width: f32,
+        size: f32,
+    ) -> std::borrow::Cow<'a, str> {
         d.fit_text(text, width, size)
     }
 

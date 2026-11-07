@@ -353,8 +353,16 @@ impl ChordboardView {
         let rows = &state.rows;
         let origin = state.view_row_start();
         let selected = self.arp_ui.edit_page.min(rows.len() - 1);
-        for (i, label) in ACTIONS.into_iter().enumerate() {
-            self.arp_button(d, action_rect(i), label, false, TEAL);
+        for (i, icon) in [
+            style::Icon::Duplicate,
+            style::Icon::Glyph(style::GLYPH_COPY),
+            style::Icon::Glyph(style::GLYPH_CLIPBOARD),
+            style::Icon::Trash,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            self.icon_button(d, action_rect(i), "", false, TEAL, icon);
         }
         let preview = match self.tracker_drag {
             Some(TrackerDrag::Block(drag))

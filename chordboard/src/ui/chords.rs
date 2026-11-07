@@ -32,14 +32,8 @@ impl ChordboardView {
             1.5,
         );
         d.font = self.bold_font.get();
-        style::Icon::Lock.draw(d, LATCH.0 + 15.0, LATCH.1 + 24.0, latch_color);
-        d.text_centered(
-            LATCH.0 + LATCH.2 * 0.5 + 9.0,
-            LATCH.1 + 28.0,
-            "Latch",
-            14.0,
-            latch_color,
-        );
+        let latch_icon = if latched { style::Icon::Lock } else { style::Icon::Unlock };
+        latch_icon.draw(d, LATCH.0 + LATCH.2 * 0.5, LATCH.1 + 22.0, latch_color);
         d.text_centered(
             LATCH.0 + LATCH.2 * 0.5,
             LATCH.1 + 45.0,

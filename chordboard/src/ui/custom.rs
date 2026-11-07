@@ -88,18 +88,25 @@ impl ChordboardView {
         let title = format!("CUSTOM PIANO ROLL · ROW {}", self.arp_ui.edit_page + 1);
         self.module_title(d, r.0 + 24.0, r.1, &title, TEAL);
         d.font = self.ui_font.get();
-        for (i, label) in [
-            "Rotate ←",
-            "Rotate →",
-            "Reverse",
-            "Reset",
-            "Octave ↓",
-            "Octave ↑",
+        for (i, glyph) in [
+            style::GLYPH_ROTATE,
+            style::GLYPH_ROTATE_CW,
+            style::GLYPH_SWAP,
+            style::GLYPH_RESTORE,
+            style::GLYPH_CHEVRONS_DOWN,
+            style::GLYPH_CHEVRONS_UP,
         ]
-        .iter()
+        .into_iter()
         .enumerate()
         {
-            self.button(d, action_rect(i), label, false, TEAL);
+            self.icon_button(
+                d,
+                action_rect(i),
+                "",
+                false,
+                TEAL,
+                style::Icon::Glyph(glyph),
+            );
         }
         let g = grid();
         let cell = g.2 / 8.0;

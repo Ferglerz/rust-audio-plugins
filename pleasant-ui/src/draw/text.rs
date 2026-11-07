@@ -1,5 +1,8 @@
-use super::Draw;
+use std::borrow::Cow;
+
 use nih_plug_vizia::vizia::vg::{Baseline, Color, FontId, Paint};
+
+use super::Draw;
 
 impl Draw<'_> {
     // femtovg falls back per word, not per glyph. Split SMuFL symbols explicitly.
@@ -56,16 +59,16 @@ impl Draw<'_> {
 
     /// Truncate `text` with an ellipsis so it fits `width` at `size`.
     ///
-    /// Returns the original text when it already fits. The search measures
+    /// Borrows the original text when it already fits. The search measures
     /// candidate prefixes plus the ellipsis instead of allocating a new
     /// candidate string for every dropped character.
-    pub fn fit_text(&self, text: &str, width: f32, size: f32) -> String {
+    pub fn fit_text<'a>(&self, text: &'a str, width: f32, size: f32) -> Cow<'a, str> {
         if self.text_width(text, size) <= width {
-            return text.to_string();
+            return Cow::Borrowed(text);
         }
         let ellipsis_width = self.text_width("…", size);
         if ellipsis_width > width {
-            return "…".to_string();
+            return Cow::Owned("…".to_string());
         }
         // Byte offset just past each character; prefixes end at these offsets.
         let ends: Vec<usize> = text
@@ -82,13 +85,13 @@ impl Draw<'_> {
             }
         }
         if lo == 0 {
-            return "…".to_string();
+            return Cow::Owned("…".to_string());
         }
         let end = ends[lo - 1];
         let mut fitted = String::with_capacity(end + "…".len());
         fitted.push_str(&text[..end]);
         fitted.push('…');
-        fitted
+        Cow::Owned(fitted)
     }
 
     fn draw_text_runs(

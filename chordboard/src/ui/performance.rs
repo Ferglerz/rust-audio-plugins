@@ -2,7 +2,7 @@ use super::*;
 
 impl ChordboardView {
     pub(super) fn draw_daw_alignment(&self, d: &mut Draw) {
-        self.icon_button(d, DAW_ALIGNMENT, "DAW align", self.params.daw_alignment.value(), GOLD, style::Icon::AlignedLoop);
+        self.icon_button(d, DAW_ALIGNMENT, "", self.params.daw_alignment.value(), GOLD, style::Icon::AlignedLoop);
     }
 
     pub(super) fn draw_strum_power(&self, d: &mut Draw) {
@@ -91,7 +91,15 @@ impl ChordboardView {
         );
         d.font = self.ui_font.get();
         self.draw_strum_octaves(d);
-        self.button(d, strum_chord_latch_rect(self.expand_t()), "Chord latch", self.params.strum_chord_latch.value(), TEAL);
+        let chord_latch = self.params.strum_chord_latch.value();
+        self.icon_button(
+            d,
+            strum_chord_latch_rect(self.expand_t()),
+            "",
+            chord_latch,
+            TEAL,
+            if chord_latch { style::Icon::Lock } else { style::Icon::Unlock },
+        );
         self.touch_latch_button(
             d,
             strum_latch_rect(self.expand_t()),

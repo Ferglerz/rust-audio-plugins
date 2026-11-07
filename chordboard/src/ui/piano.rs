@@ -24,11 +24,7 @@ impl ChordboardView {
         self.icon_button(
             d,
             melody_split_rect(self.params.mpe_enabled()),
-            if self.learning() == 6 {
-                "Cancel"
-            } else {
-                "Learn Split"
-            },
+            "",
             self.learning() == 6,
             if self.params.key_split.value() {
                 TEAL
@@ -424,7 +420,7 @@ impl ChordboardView {
         }
         if hit(melody_split_rect(self.params.mpe_enabled()), x, y) {
             return Some(
-                "Learn Melody split from the next MIDI note or click a keyboard key".into(),
+                "Learn the melody split from the next note you play · Click again to cancel".into(),
             );
         }
         if hit(affect_chords_rect(self.params.mpe_enabled()), x, y) {
@@ -464,7 +460,9 @@ impl ChordboardView {
             x,
             y,
         ) {
-            return Some("Learn Bass split from the next MIDI note or click a keyboard key".into());
+            return Some(
+                "Learn the bass split from the next note you play · Click again to cancel".into(),
+            );
         }
         if self.bass_marker().is_some_and(|r| hit(r, x, y)) {
             return Some("Drag the gold handle above the keys to set the bass boundary · Control keys always select quality · Set Bass above to Auto to follow the control octave".into());
@@ -1175,11 +1173,7 @@ impl ChordboardView {
             self.icon_button(
                 d,
                 r,
-                if self.learning() == 5 {
-                    "Cancel"
-                } else {
-                    "Learn Split"
-                },
+                "",
                 self.learning() == 5,
                 GOLD,
                 style::Icon::Learn,

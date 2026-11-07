@@ -212,9 +212,9 @@ impl ChordboardView {
 
     pub(super) fn draw_fx_learn_button(&self, d: &mut Draw) {
         if self.quick_midi.show {
-            self.button(d, FX_LEARN, "Done", false, GOLD);
+            self.icon_button(d, FX_LEARN, "", true, GOLD, style::Icon::Glyph(style::GLYPH_CHECK));
         } else {
-            self.icon_button(d, FX_LEARN, "Learn", false, GOLD, style::Icon::MidiDin);
+            self.icon_button(d, FX_LEARN, "", false, GOLD, style::Icon::MidiDin);
         }
     }
 

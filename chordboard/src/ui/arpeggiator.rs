@@ -1165,11 +1165,17 @@ impl ChordboardView {
     pub(in crate::ui) fn arp_editor_hint(&self, x: f32, y: f32) -> Option<String> {
         if self.fx_ui.open {
             let y = self.fx_delay_local_y(y);
+            if hit(delay_sync_rect(), x, y) {
+                return Some("Tempo sync locks delay time to the host clock · Off uses milliseconds".into());
+            }
+            if hit(ping_rect(), x, y) {
+                return Some("Ping pong · Alternate delay repeats left and right".into());
+            }
             if hit(delay_leading_rect(), x, y) {
-                return Some("Include sounding echoes in chord voice leading and apply its octave placement to repeats · Uses the keyboard's Nearest / Furthest mode; Off leaves pitches unchanged".into());
+                return Some("Voice leading · Include sounding echoes in chord voice leading and apply its octave placement to repeats · Uses the keyboard's Nearest / Furthest mode; Off leaves pitches unchanged".into());
             }
             if hit(delay_follow_rect(), x, y) {
-                return Some("Resolve each new repeat to the nearest tone of the active chord · Rechecks every feedback repeat · Keeps the captured pitch when no chord is active".into());
+                return Some("Follow chords · Move each echo to the nearest current chord tone · Equal distance resolves downward".into());
             }
             if hit(delay_time_rect(), x, y) {
                 return Some(
@@ -1227,6 +1233,9 @@ impl ChordboardView {
         if hit(mode_rect(), x, y) {
             return Some("Repeat this pattern · On: repeat continuously · Off: play once · DAW alignment is set in the tracker tempo area".into());
         }
+        if hit(sync_rect(), x, y) {
+            return Some("Sync the arp to the host clock · Off uses a free millisecond rate".into());
+        }
         if !self.programming && hit(loop_add_rect(), x, y) {
             return Some("Loops · + Loop adds a pass · Hover a loop and click × to remove that pass".into());
         }
@@ -1237,7 +1246,7 @@ impl ChordboardView {
             return Some("Paste into this row · Choose Complete row or Pattern only".into());
         }
         if hit(gate_rect(), x, y) {
-            return Some("Timing · Drag the ↔ handle sideways ±49% of the step interval · Available on every adjustment layer · Cmd/Ctrl-click resets".into());
+            return Some("Timing · Drag the arrow handle sideways ±49% of the step interval · Available on every adjustment layer · Cmd/Ctrl-click resets".into());
         }
         if hit(lock_length_rect(), x, y) {
             return Some("Lock Length · Keep a fixed number of clock steps despite chord complexity · Mute consumes time; Skip always removes time".into());
@@ -1258,11 +1267,31 @@ impl ChordboardView {
                 "Edit the row's seven Custom degree steps in place of the chordboard".into(),
             );
         }
-        if let Some((index, _)) = self.loop_header_at(x, y) {
-            return Some(format!(
-                "Loop {} · INV −/+ rotates voices down/up, atop global inversion · OCT −/+ shifts octaves · Scroll either control · Cmd/Ctrl-click resets",
-                index + 1
-            ));
+        if let Some((index, rect)) = self.loop_header_at(x, y) {
+            let state = self.arp_state();
+            let row = state.editor_row(self.arp_ui.edit_page, !self.programming);
+            let inversion = row.page.loops[index].inversion;
+            let octave = row.page.loops[index].octave;
+            if x < loop_header_button(rect, 0).0 {
+                return Some(format!("Loop {}", index + 1));
+            }
+            let octave_side = hit(loop_header_button(rect, 3), x, y)
+                || hit(loop_header_button(rect, 4), x, y)
+                || x >= rect.0 + 60.0 + 124.0;
+            if octave_side && !hit(loop_header_button(rect, 2), x, y) {
+                return Some(format!(
+                    "Octave −/+ · currently {octave:+} · shifts this loop · Scroll · Cmd/Ctrl-click resets"
+                ));
+            }
+            if hit(loop_header_button(rect, 0), x, y)
+                || hit(loop_header_button(rect, 1), x, y)
+                || x < rect.0 + 60.0 + 124.0
+            {
+                return Some(format!(
+                    "Inversion −/+ · currently {inversion:+} · rotates voices down or up, atop the global inversion · Scroll · Cmd/Ctrl-click resets"
+                ));
+            }
+            return Some(format!("Remove loop {}", index + 1));
         }
         if let Some(i) = (0..LANES.len()).find(|&i| hit(lane_rect(i), x, y)) {
             let lane = LANES[i];
@@ -2250,13 +2279,6 @@ impl ChordboardView {
     ) {
         self.icon_button(d, r, label, on, color, icon);
     }
-    fn arp_toggle(&self, d: &mut Draw, r: Rect, label: &str, on: bool, color: Color) {
-        self.button_surface(d, r, on, color);
-        d.circle(r.0 + 11.0, r.1 + r.3 * 0.5, 3.0, if on { color } else { MUTED }, on);
-        let label = self.fit_text(d, label, r.2 - 26.0, 13.0);
-        d.text_centered(r.0 + r.2 * 0.5 + 7.0, r.1 + r.3 * 0.5 + 4.5,
-            &label, 13.0, if on { color } else { TEXT });
-    }
 
     pub(super) fn draw_adjustment_knob(&self, d: &mut Draw, control: &Control, rect: Rect) {
         let routed = self.routed_control(control);
@@ -2416,7 +2438,6 @@ impl ChordboardView {
         d.rect(x, y - 8.0, 1.5, 16.0, color);
         d.rect(x + 4.0, y - 8.0, 3.0, 16.0, color);
         for dy in [-3.5, 3.5] { d.circle(x - 5.0, y + dy, 1.5, color, true); }
-        d.text_middle(x + 13.0, y, "Repeat", TEXT_LABEL, color);
         self.arp_button(
             d,
             order_rect(),
@@ -2446,7 +2467,7 @@ impl ChordboardView {
             d.c.restore();
             d.disabled = saved_disabled;
         }
-        self.arp_icon_button(d, sync_rect(), "Sync", p.arp_sync.value(), TEAL, style::Icon::Host);
+        self.arp_icon_button(d, sync_rect(), "", p.arp_sync.value(), TEAL, style::Icon::Host);
         if p.arp_sync.value() {
             self.arp_button(
                 d,
@@ -2486,25 +2507,27 @@ impl ChordboardView {
         for (x, symbol) in [(steps.0 + 12.0, "−"), (steps.0 + steps.2 - 12.0, "+")] {
             d.text_centered(x, steps.1 + steps.3 * 0.5 + 7.0, symbol, 20.0, TEXT);
         }
-        self.arp_button(
+        self.arp_icon_button(
             d,
             fill_rect(),
-            if settings.fill == Fill::Evolve {
-                "Fill: Evolve"
-            } else {
-                "Fill: Repeat"
-            },
+            "",
             settings.fill == Fill::Evolve,
             TEAL,
+            style::Icon::Glyph(if settings.fill == Fill::Evolve {
+                style::GLYPH_REFRESH
+            } else {
+                style::GLYPH_REPEAT
+            }),
         );
         d.disabled = disabled;
         if settings.pattern == 7 {
-            self.arp_button(
+            self.arp_icon_button(
                 d,
                 custom_edit_rect(),
-                "Edit Custom",
+                "",
                 self.panel == Some(Panel::Custom),
                 TEAL,
+                style::Icon::Glyph(style::GLYPH_PENCIL),
             );
         }
         for (i, lane) in LANES.iter().enumerate() {
@@ -2564,27 +2587,37 @@ impl ChordboardView {
             let label = self.fit_text(d, &text, 44.0, TEXT_LABEL);
             d.text_middle(r.0 + 8.0, r.1 + r.3 * 0.5, &label, TEXT_LABEL, TEXT);
             let start = r.0 + 60.0;
-            for (center, label) in [
-                (59.0, format!("Inv {:+}", page.loops[i].inversion)),
-                (176.0, format!("Oct {:+}", page.loops[i].octave)),
-            ] {
-                d.text_centered(start + center, r.1 + r.3 * 0.5 + 4.0, &label, TEXT_LABEL, TEXT);
-            }
-            for (button, label) in ["−", "+", "×", "−", "+"]
-                .into_iter()
-                .enumerate()
-            {
+            let inversion = format!("Inv {:+}", page.loops[i].inversion);
+            d.text_centered(
+                start + 59.0,
+                r.1 + r.3 * 0.5 + 4.0,
+                &inversion,
+                TEXT_LABEL,
+                TEXT,
+            );
+            style::Icon::Glyph(style::GLYPH_ARROWS_V).draw_sized(
+                d,
+                start + 176.0,
+                r.1 + r.3 * 0.5,
+                16.0,
+                TEXT,
+            );
+            for button in 0..5 {
                 if button != 2 || self.loop_remove_visible(i, count) {
-                    let button = loop_header_button(r, button);
-                    self.button_surface(d, button, false, color);
-                    let label = self.fit_text(d, label, button.2 - 6.0, 20.0);
-                    d.text_middle(
-                        button.0 + (button.2 - d.text_width(&label, 20.0)) * 0.5,
-                        button.1 + button.3 * 0.5,
-                        &label,
-                        20.0,
-                        TEXT,
-                    );
+                    let rect = loop_header_button(r, button);
+                    self.button_surface(d, rect, false, color);
+                    let cx = rect.0 + rect.2 * 0.5;
+                    let cy = rect.1 + rect.3 * 0.5;
+                    if button == 2 {
+                        d.text_middle(cx - d.text_width("×", 20.0) * 0.5, cy, "×", 20.0, TEXT);
+                    } else {
+                        let glyph = if button == 0 || button == 3 {
+                            style::GLYPH_MINUS
+                        } else {
+                            style::GLYPH_PLUS
+                        };
+                        style::Icon::Glyph(glyph).draw_sized(d, cx, cy, 14.0, TEXT);
+                    }
                 }
             }
             if !self.programming || self.snapshot.arp_row_index as usize == page_index {
@@ -2678,7 +2711,24 @@ impl ChordboardView {
             let handle_width = (layout.spacing - 2.0).clamp(8.0, 40.0);
             d.line(nominal, strip.1, nominal, strip.1 + strip.3, alpha(MUTED, 0.35), 1.0);
             d.rounded_rect(x - handle_width * 0.5, strip.1 + 2.0, handle_width, 18.0, 4.0, alpha(color, 0.18));
-            d.text_centered(x, strip.1 + 15.0, "↔", 13.0, color);
+            if handle_width >= 14.0 {
+                style::Icon::Glyph(style::GLYPH_ARROWS_H).draw_sized(
+                    d,
+                    x,
+                    strip.1 + 11.0,
+                    13.0,
+                    color,
+                );
+            } else {
+                d.line(
+                    x - handle_width * 0.25,
+                    strip.1 + 11.0,
+                    x + handle_width * 0.25,
+                    strip.1 + 11.0,
+                    color,
+                    1.2,
+                );
+            }
             if self.arp_ui.drag.is_some_and(|drag| matches!(drag.kind, DragKind::Timing) && drag.origin == i) {
                 self.string_readout(d, x, strip.1, strip, &format!("{:+}%", step.micro), TEXT);
             }
@@ -2696,21 +2746,18 @@ impl ChordboardView {
                 alpha(if active { GOLD } else { MUTED }, mute_opacity),
             );
             let r = layout.status(i);
-            let mark = match step.state {
-                StepState::Play => "Play",
-                StepState::Mute => "Mute",
-                StepState::Skip => "Skip",
+            let (glyph, mark, selected) = match step.state {
+                StepState::Play => (style::GLYPH_PLAY, TEAL, false),
+                StepState::Mute => (style::GLYPH_VOLUME_OFF, TEAL, true),
+                StepState::Skip => (style::GLYPH_SKIP, MUTED, true),
             };
-            self.arp_button(
+            self.button_surface(d, r, selected, mark);
+            style::Icon::Glyph(glyph).draw_sized(
                 d,
-                r,
+                r.0 + r.2 * 0.5,
+                r.1 + r.3 * 0.5,
+                14.0,
                 mark,
-                step.state != StepState::Play,
-                if step.state == StepState::Skip {
-                    MUTED
-                } else {
-                    TEAL
-                },
             );
         }
     }
@@ -2760,16 +2807,17 @@ impl ChordboardView {
             LINE,
             1.0,
         );
-        self.arp_toggle(
+        self.arp_icon_button(
             d,
             delay_sync_rect(),
-            if delay.sync {
-                "Tempo sync"
-            } else {
-                "Free · ms"
-            },
+            "",
             delay.sync,
             TEAL,
+            if delay.sync {
+                style::Icon::Host
+            } else {
+                style::Icon::Glyph(style::GLYPH_CLOCK)
+            },
         );
         self.arp_value(
             d,
@@ -2796,20 +2844,29 @@ impl ChordboardView {
             u.dropdown == Some(Dropdown::TapLane),
             GOLD,
         );
-        self.arp_toggle(d, ping_rect(), "Ping pong", delay.ping_pong, TEAL);
-        self.arp_toggle(
+        self.arp_icon_button(
+            d,
+            ping_rect(),
+            "",
+            delay.ping_pong,
+            TEAL,
+            style::Icon::Glyph(style::GLYPH_SHUFFLE),
+        );
+        self.arp_icon_button(
             d,
             delay_leading_rect(),
-            "Voice leading",
+            "",
             delay.voice_leading,
-            COLORS[1],
+            TEAL,
+            style::Icon::Glyph(style::GLYPH_ROUTE),
         );
-        self.arp_toggle(
+        self.arp_icon_button(
             d,
             delay_follow_rect(),
-            "Follow chords",
+            "",
             delay.follow_chords,
             TEAL,
+            style::Icon::Glyph(style::GLYPH_REPLACE),
         );
         self.draw_delay_pattern(d, delay);
         if self.arp_ui.dropdown == Some(Dropdown::TapLane) {
@@ -2926,10 +2983,24 @@ impl ChordboardView {
                     TEAL,
                 );
                 self.draw_arp_page_status(d, r, page);
-                self.arp_button(d, page_copy_rect(page), "Copy", false, TEAL);
+                self.arp_icon_button(
+                    d,
+                    page_copy_rect(page),
+                    "",
+                    false,
+                    TEAL,
+                    style::Icon::Glyph(style::GLYPH_COPY),
+                );
                 let disabled = d.disabled;
                 d.disabled |= self.arp_ui.clipboard.is_none();
-                self.arp_button(d, page_paste_rect(page), "Paste ▸", false, TEAL);
+                self.arp_icon_button(
+                    d,
+                    page_paste_rect(page),
+                    " ▾",
+                    false,
+                    TEAL,
+                    style::Icon::Glyph(style::GLYPH_CLIPBOARD),
+                );
                 d.disabled = disabled;
             }
             return;
