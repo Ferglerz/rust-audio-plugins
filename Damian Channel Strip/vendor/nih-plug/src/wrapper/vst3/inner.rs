@@ -36,6 +36,7 @@ pub(crate) struct WrapperInner<P: Vst3Plugin> {
     /// `ParamPtr`s are guaranteed to live at least as long as this object and we can interact with
     /// the `Params` object without having to acquire a lock on `plugin`.
     pub params: Arc<dyn Params>,
+    pub host_track_handler: Option<crate::context::track::HostTrackHandler>,
     /// The plugin's editor, if it has one. This object does not do anything on its own, but we need
     /// to instantiate this in advance so we don't need to lock the entire [`Plugin`] object when
     /// creating an editor. Wrapped in an `AtomicRefCell` because it needs to be initialized late.
@@ -201,6 +202,7 @@ impl<P: Vst3Plugin> WrapperInner<P> {
         // we'll calculate from the string ID specified by the plugin. These parameters should also
         // remain in the same order as the one returned by the plugin.
         let params = plugin.params();
+        let host_track_handler = plugin.host_track_handler();
         let param_id_hashes_ptrs_groups: Vec<_> = params
             .param_map()
             .into_iter()
@@ -278,6 +280,7 @@ impl<P: Vst3Plugin> WrapperInner<P> {
             plugin: Mutex::new(plugin),
             task_executor,
             params,
+            host_track_handler,
             // Initialized later as it needs a reference to the wrapper for the async executor
             editor: AtomicRefCell::new(None),
 

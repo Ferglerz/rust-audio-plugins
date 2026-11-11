@@ -3,6 +3,7 @@
 
 pub mod clap;
 pub mod state;
+mod reaper_track;
 pub(crate) mod util;
 
 #[cfg(feature = "standalone")]

@@ -54,6 +54,7 @@ Select the processing mode in the bottom bar. Mode and resolution are saved as h
   - Attack control (0.1 ms to 100 ms) and Release control (10 ms to 2000 ms).
   - Toggle buttons for Soft Knee, Auto Makeup, and Linked Stereo processing.
 - **Primary Source Enhancer (PSE)**:
+  - Optional Silero voice assistance lowers the threshold by up to 6 dB at full confidence and assistance, using the shared `pleasant-voice` detector. Assistance defaults to 0%.
   - Defaults to ZingZap’s RMS detector and C time constant (200 ms), with 10 dB depth, 3 dB hysteresis, and a 6 dB Hermite soft knee.
   - Right-click the PSE knob to replace the compressor strip with its detailed controls: Depth, Hysteresis, Knee, RMS/Peak detection, time constants A–F, and Listen SC. Use **Back** to return. These audio settings are saved with presets; appearance remains independent.
   - Single threshold knob: -80 dB (OFF) to -20 dB. The original gate parameter ID/range is retained for saved automation.

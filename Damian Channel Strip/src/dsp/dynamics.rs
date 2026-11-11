@@ -253,14 +253,12 @@ mod tests {
             ..PseSettings::default()
         };
 
-        // Threshold is -40 dB. Signal is at -42 dB.
-        // Without VAD assist: -42 dB is 2 dB below threshold -> closed (depth = 10 dB attenuation).
-        // With VAD assist (100% assist + 100% speech): threshold shifts down by 3 dB to -43 dB.
-        // -42 dB is now 1 dB above threshold (-43 dB) -> opens up (0 dB attenuation)!
+        // At full confidence, 6 dB assistance moves -40 dB to -46 dB.
+        // A -45 dB voice opens with assistance but stays closed without it.
         let settle_samples = (sr * 2.0) as usize;
         for _ in 0..settle_samples {
-            pse_no_vad.tick(db_gain(-42.0), -40.0, sr, s_no_vad);
-            pse_vad.tick(db_gain(-42.0), -40.0, sr, s_vad);
+            pse_no_vad.tick(db_gain(-45.0), -40.0, sr, s_no_vad);
+            pse_vad.tick(db_gain(-45.0), -40.0, sr, s_vad);
         }
         assert!(
             pse_no_vad.reduction_db < -9.5,

@@ -1,0 +1,23 @@
+[package]
+name = "automixer"
+version = "0.1.0"
+edition = "2021"
+authors = ["Fergler"]
+license = "GPL-3.0-or-later"
+description = "Linked gain-sharing microphone automixer with chorus protection"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+nih_plug_vizia = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+pleasant-ui = { path = "../pleasant-ui" }
+pleasant-dynamics = { path = "../pleasant-dynamics" }
+pleasant-voice = { path = "../pleasant-voice" }
+atomic_float = "1"
+
+[dev-dependencies]
+image = { version = "0.24", default-features = false, features = ["png"] }
+libc = "0.2"
+

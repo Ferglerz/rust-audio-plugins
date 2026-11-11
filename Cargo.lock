@@ -542,6 +542,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "automixer"
+version = "0.1.0"
+dependencies = [
+ "atomic_float 1.1.0",
+ "image",
+ "libc",
+ "nih_plug",
+ "nih_plug_vizia",
+ "pleasant-dynamics",
+ "pleasant-ui",
+ "pleasant-voice",
+]
+
+[[package]]
+name = "automixer-xtask"
+version = "0.1.0"
+dependencies = [
+ "nih_plug_xtask",
+]
+
+[[package]]
 name = "backtrace"
 version = "0.3.76"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1248,11 +1269,11 @@ dependencies = [
  "crossbeam-queue",
  "nih_plug",
  "nih_plug_vizia",
- "ort",
  "pleasant-dsp",
  "pleasant-dynamics",
  "pleasant-eq",
  "pleasant-ui",
+ "pleasant-voice",
  "rustfft",
  "serde",
  "serde_json",
@@ -1303,6 +1324,27 @@ name = "deranged"
 version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
+
+[[package]]
+name = "dereverb"
+version = "0.1.0"
+dependencies = [
+ "atomic_float 1.1.0",
+ "image",
+ "libc",
+ "nih_plug",
+ "nih_plug_vizia",
+ "ort",
+ "pleasant-ui",
+ "rustfft",
+]
+
+[[package]]
+name = "dereverb-xtask"
+version = "0.1.0"
+dependencies = [
+ "nih_plug_xtask",
+]
 
 [[package]]
 name = "derivative"
@@ -2202,6 +2244,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "libloading"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
+dependencies = [
+ "cfg-if",
+ "windows-link",
+]
+
+[[package]]
 name = "libm"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2983,6 +3035,7 @@ version = "2.0.0-rc.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4336a1e2b38848325241c72889086886004e589b7c74f335e60a8e8db5138a0b"
 dependencies = [
+ "libloading 0.9.0",
  "ndarray",
  "ort-sys",
  "smallvec",
@@ -3220,6 +3273,15 @@ dependencies = [
  "nih_plug",
  "nih_plug_vizia",
  "pleasant-dsp",
+]
+
+[[package]]
+name = "pleasant-voice"
+version = "0.1.0"
+dependencies = [
+ "atomic_float 1.1.0",
+ "crossbeam-queue",
+ "ort",
 ]
 
 [[package]]

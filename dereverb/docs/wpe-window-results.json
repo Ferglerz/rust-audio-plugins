@@ -1,0 +1,738 @@
+{
+  "voice_sha256": [
+    "a284612b46af0535f7e1873758c4387bb8369f6dbbe192ffdec1f171108f98dd",
+    "780e482b52f2c8a500356babf60178ce005449cc171a8537eb3ef2961eb3e855"
+  ],
+  "sample_rate": 48000,
+  "room_rt60_seconds": [
+    0,
+    0.25,
+    0.55,
+    0.9
+  ],
+  "warmup_excluded_seconds": 2,
+  "target": "Direct sound plus the first 35 ms of the impulse response",
+  "note": "Two metrics cannot prove perceptual equivalence. Lower tail dB and higher SI-SDR are better; clean speech measures collateral distortion.",
+  "results": [
+    {
+      "fixture": "v1-clean",
+      "window_ms": 0,
+      "memory_seconds": 0,
+      "sisdr": 330.869194717703,
+      "gain_db": 0.0,
+      "tail_db": -300.0,
+      "lsd": 0.0
+    },
+    {
+      "fixture": "v1-clean",
+      "window_ms": 20.0,
+      "memory_seconds": 0,
+      "sisdr": 9.368735784195364,
+      "gain_db": -0.32379950325379336,
+      "tail_db": -300.0,
+      "lsd": 4.809720618396929
+    },
+    {
+      "fixture": "v1-clean",
+      "window_ms": 15.0,
+      "memory_seconds": 0,
+      "sisdr": 10.453990092903814,
+      "gain_db": -0.2926243551482841,
+      "tail_db": -300.0,
+      "lsd": 4.494388594473283
+    },
+    {
+      "fixture": "v1-clean",
+      "window_ms": 10.0,
+      "memory_seconds": 0,
+      "sisdr": 11.257322440133578,
+      "gain_db": -0.29964864192678453,
+      "tail_db": -300.0,
+      "lsd": 4.027903395428159
+    },
+    {
+      "fixture": "v1-clean",
+      "window_ms": 7.5,
+      "memory_seconds": 0,
+      "sisdr": 11.93071649200014,
+      "gain_db": -0.25439172538618615,
+      "tail_db": -300.0,
+      "lsd": 3.771596496351842
+    },
+    {
+      "fixture": "v1-clean",
+      "window_ms": 5.0,
+      "memory_seconds": 0,
+      "sisdr": 13.041093468091718,
+      "gain_db": -0.21499857636238515,
+      "tail_db": -300.0,
+      "lsd": 3.4081456282213898
+    },
+    {
+      "fixture": "v1-clean",
+      "window_ms": 2.5,
+      "memory_seconds": 0,
+      "sisdr": 13.944862218117207,
+      "gain_db": -0.17892499862544492,
+      "tail_db": -300.0,
+      "lsd": 3.160782609348691
+    },
+    {
+      "fixture": "v1-clean",
+      "window_ms": 10.0,
+      "memory_seconds": 0.5,
+      "sisdr": 13.632204306029156,
+      "gain_db": -0.014203621206308421,
+      "tail_db": -300.0,
+      "lsd": 3.5888471813591316
+    },
+    {
+      "fixture": "v1-clean",
+      "window_ms": 5.0,
+      "memory_seconds": 0.5,
+      "sisdr": 15.246283704888945,
+      "gain_db": -0.0021996090547424527,
+      "tail_db": -300.0,
+      "lsd": 3.015005718428181
+    },
+    {
+      "fixture": "v1-clean",
+      "window_ms": 2.5,
+      "memory_seconds": 0.5,
+      "sisdr": 15.658364793631069,
+      "gain_db": -6.159696689445957e-05,
+      "tail_db": -300.0,
+      "lsd": 2.811004413080258
+    },
+    {
+      "fixture": "v1-small",
+      "window_ms": 0,
+      "memory_seconds": 0,
+      "sisdr": -0.1887174389598145,
+      "gain_db": -0.6163326852166942,
+      "tail_db": -63.724590401755904,
+      "lsd": 9.810700270930427
+    },
+    {
+      "fixture": "v1-small",
+      "window_ms": 20.0,
+      "memory_seconds": 0,
+      "sisdr": 1.6005566822773911,
+      "gain_db": -0.6552698469305757,
+      "tail_db": -53.65103135372725,
+      "lsd": 10.099186316384193
+    },
+    {
+      "fixture": "v1-small",
+      "window_ms": 15.0,
+      "memory_seconds": 0,
+      "sisdr": 1.4222716529164172,
+      "gain_db": -0.6254852984764342,
+      "tail_db": -53.19576415652448,
+      "lsd": 10.094239365149628
+    },
+    {
+      "fixture": "v1-small",
+      "window_ms": 10.0,
+      "memory_seconds": 0,
+      "sisdr": 1.0569535918485427,
+      "gain_db": -0.6982972171338402,
+      "tail_db": -54.998088646782584,
+      "lsd": 9.962996385863734
+    },
+    {
+      "fixture": "v1-small",
+      "window_ms": 7.5,
+      "memory_seconds": 0,
+      "sisdr": 0.6730834533517537,
+      "gain_db": -0.7314436598208612,
+      "tail_db": -56.80236943294208,
+      "lsd": 10.004782905284893
+    },
+    {
+      "fixture": "v1-small",
+      "window_ms": 5.0,
+      "memory_seconds": 0,
+      "sisdr": 0.5974289180396248,
+      "gain_db": -0.6737984914843282,
+      "tail_db": -56.59181762813213,
+      "lsd": 10.010468130506856
+    },
+    {
+      "fixture": "v1-small",
+      "window_ms": 2.5,
+      "memory_seconds": 0,
+      "sisdr": 0.4445443221536041,
+      "gain_db": -0.649057791338923,
+      "tail_db": -57.955432860884805,
+      "lsd": 10.058072199870265
+    },
+    {
+      "fixture": "v1-small",
+      "window_ms": 10.0,
+      "memory_seconds": 0.5,
+      "sisdr": 1.1461377491748816,
+      "gain_db": -0.5237052257001409,
+      "tail_db": -55.006470286061116,
+      "lsd": 9.87981746553427
+    },
+    {
+      "fixture": "v1-small",
+      "window_ms": 5.0,
+      "memory_seconds": 0.5,
+      "sisdr": 0.6254850686699375,
+      "gain_db": -0.5235945223432594,
+      "tail_db": -56.19518637158705,
+      "lsd": 9.962271443008582
+    },
+    {
+      "fixture": "v1-small",
+      "window_ms": 2.5,
+      "memory_seconds": 0.5,
+      "sisdr": 0.43388468258425994,
+      "gain_db": -0.5211232680446586,
+      "tail_db": -57.125371378098606,
+      "lsd": 10.005970679469948
+    },
+    {
+      "fixture": "v1-medium",
+      "window_ms": 0,
+      "memory_seconds": 0,
+      "sisdr": -0.0461037631844701,
+      "gain_db": -0.058310132713551885,
+      "tail_db": -43.846483525207745,
+      "lsd": 11.82416242725774
+    },
+    {
+      "fixture": "v1-medium",
+      "window_ms": 20.0,
+      "memory_seconds": 0,
+      "sisdr": 1.389342851266052,
+      "gain_db": -0.19853658841357605,
+      "tail_db": -41.90304413642559,
+      "lsd": 11.479275170072114
+    },
+    {
+      "fixture": "v1-medium",
+      "window_ms": 15.0,
+      "memory_seconds": 0,
+      "sisdr": 1.2216981407795475,
+      "gain_db": -0.20722337192530133,
+      "tail_db": -42.325099229370565,
+      "lsd": 11.478688601495886
+    },
+    {
+      "fixture": "v1-medium",
+      "window_ms": 10.0,
+      "memory_seconds": 0,
+      "sisdr": 1.1709632435686343,
+      "gain_db": -0.20877119064589,
+      "tail_db": -41.9562444856172,
+      "lsd": 11.521776575431732
+    },
+    {
+      "fixture": "v1-medium",
+      "window_ms": 7.5,
+      "memory_seconds": 0,
+      "sisdr": 0.796300553501317,
+      "gain_db": -0.2414330157103654,
+      "tail_db": -42.1310076492232,
+      "lsd": 11.593298908661794
+    },
+    {
+      "fixture": "v1-medium",
+      "window_ms": 5.0,
+      "memory_seconds": 0,
+      "sisdr": 0.8214504491299164,
+      "gain_db": -0.19249789712511015,
+      "tail_db": -41.965847296342986,
+      "lsd": 11.688985284388432
+    },
+    {
+      "fixture": "v1-medium",
+      "window_ms": 2.5,
+      "memory_seconds": 0,
+      "sisdr": 0.44793229411834157,
+      "gain_db": -0.20649970175865878,
+      "tail_db": -42.21507004464017,
+      "lsd": 11.814162048449873
+    },
+    {
+      "fixture": "v1-medium",
+      "window_ms": 10.0,
+      "memory_seconds": 0.5,
+      "sisdr": 1.1238892432760397,
+      "gain_db": -0.031779964558372766,
+      "tail_db": -41.779404928798655,
+      "lsd": 11.484802907954903
+    },
+    {
+      "fixture": "v1-medium",
+      "window_ms": 5.0,
+      "memory_seconds": 0.5,
+      "sisdr": 0.7976648737555649,
+      "gain_db": -0.03295312904831243,
+      "tail_db": -41.72730811826206,
+      "lsd": 11.683579923899936
+    },
+    {
+      "fixture": "v1-medium",
+      "window_ms": 2.5,
+      "memory_seconds": 0.5,
+      "sisdr": 0.42401280695323146,
+      "gain_db": -0.05756307906973479,
+      "tail_db": -41.91133240886281,
+      "lsd": 11.80934126351544
+    },
+    {
+      "fixture": "v1-large",
+      "window_ms": 0,
+      "memory_seconds": 0,
+      "sisdr": -0.3001731495832345,
+      "gain_db": -0.20727285072802615,
+      "tail_db": -39.742961570226996,
+      "lsd": 13.105456895111528
+    },
+    {
+      "fixture": "v1-large",
+      "window_ms": 20.0,
+      "memory_seconds": 0,
+      "sisdr": 1.250031275486103,
+      "gain_db": -0.27019504176972625,
+      "tail_db": -40.247857148814965,
+      "lsd": 12.774786451007847
+    },
+    {
+      "fixture": "v1-large",
+      "window_ms": 15.0,
+      "memory_seconds": 0,
+      "sisdr": 1.0436262051694876,
+      "gain_db": -0.3341417295167484,
+      "tail_db": -40.239588505233655,
+      "lsd": 12.798325479226978
+    },
+    {
+      "fixture": "v1-large",
+      "window_ms": 10.0,
+      "memory_seconds": 0,
+      "sisdr": 1.0379032380731672,
+      "gain_db": -0.22985270511700448,
+      "tail_db": -39.9762769843989,
+      "lsd": 12.827681466524377
+    },
+    {
+      "fixture": "v1-large",
+      "window_ms": 7.5,
+      "memory_seconds": 0,
+      "sisdr": 0.9186652316335733,
+      "gain_db": -0.20323416203731595,
+      "tail_db": -39.818671458068614,
+      "lsd": 12.891815437206422
+    },
+    {
+      "fixture": "v1-large",
+      "window_ms": 5.0,
+      "memory_seconds": 0,
+      "sisdr": 0.7596139477841641,
+      "gain_db": -0.18782465079986488,
+      "tail_db": -39.585542298049006,
+      "lsd": 13.001814201634021
+    },
+    {
+      "fixture": "v1-large",
+      "window_ms": 2.5,
+      "memory_seconds": 0,
+      "sisdr": 0.5845223400443711,
+      "gain_db": -0.1965559054863447,
+      "tail_db": -39.57230754999884,
+      "lsd": 13.101723607351904
+    },
+    {
+      "fixture": "v1-large",
+      "window_ms": 10.0,
+      "memory_seconds": 0.5,
+      "sisdr": 0.8939539086134147,
+      "gain_db": -0.08656032844273111,
+      "tail_db": -39.612301785130256,
+      "lsd": 12.833548768391733
+    },
+    {
+      "fixture": "v1-large",
+      "window_ms": 5.0,
+      "memory_seconds": 0.5,
+      "sisdr": 0.6276527554628719,
+      "gain_db": -0.08849343385707195,
+      "tail_db": -39.21059851070963,
+      "lsd": 13.01598035429786
+    },
+    {
+      "fixture": "v1-large",
+      "window_ms": 2.5,
+      "memory_seconds": 0.5,
+      "sisdr": 0.48764432520864887,
+      "gain_db": -0.106053260806286,
+      "tail_db": -39.24031970087845,
+      "lsd": 13.104313061958406
+    },
+    {
+      "fixture": "v2-clean",
+      "window_ms": 0,
+      "memory_seconds": 0,
+      "sisdr": 333.9145283739123,
+      "gain_db": 0.0,
+      "tail_db": -300.0,
+      "lsd": 0.0
+    },
+    {
+      "fixture": "v2-clean",
+      "window_ms": 20.0,
+      "memory_seconds": 0,
+      "sisdr": 13.621864163864906,
+      "gain_db": -0.08580894627566955,
+      "tail_db": -300.0,
+      "lsd": 5.068002858031646
+    },
+    {
+      "fixture": "v2-clean",
+      "window_ms": 15.0,
+      "memory_seconds": 0,
+      "sisdr": 14.156205316205735,
+      "gain_db": -0.09769622700272043,
+      "tail_db": -300.0,
+      "lsd": 4.810943665637961
+    },
+    {
+      "fixture": "v2-clean",
+      "window_ms": 10.0,
+      "memory_seconds": 0,
+      "sisdr": 14.706092861912008,
+      "gain_db": -0.11669896696958862,
+      "tail_db": -300.0,
+      "lsd": 4.290653564724643
+    },
+    {
+      "fixture": "v2-clean",
+      "window_ms": 7.5,
+      "memory_seconds": 0,
+      "sisdr": 15.406559452150594,
+      "gain_db": -0.13029610394076094,
+      "tail_db": -300.0,
+      "lsd": 4.006818153719381
+    },
+    {
+      "fixture": "v2-clean",
+      "window_ms": 5.0,
+      "memory_seconds": 0,
+      "sisdr": 15.757066963162103,
+      "gain_db": -0.12625355185645193,
+      "tail_db": -300.0,
+      "lsd": 3.722267292076258
+    },
+    {
+      "fixture": "v2-clean",
+      "window_ms": 2.5,
+      "memory_seconds": 0,
+      "sisdr": 16.90223259554991,
+      "gain_db": -0.07882268135422438,
+      "tail_db": -300.0,
+      "lsd": 3.4502429431196875
+    },
+    {
+      "fixture": "v2-clean",
+      "window_ms": 10.0,
+      "memory_seconds": 0.5,
+      "sisdr": 17.55879749179791,
+      "gain_db": 0.01214545386876345,
+      "tail_db": -300.0,
+      "lsd": 3.7692310621957232
+    },
+    {
+      "fixture": "v2-clean",
+      "window_ms": 5.0,
+      "memory_seconds": 0.5,
+      "sisdr": 17.75835794181002,
+      "gain_db": 0.005430294334552334,
+      "tail_db": -300.0,
+      "lsd": 3.292467011822478
+    },
+    {
+      "fixture": "v2-clean",
+      "window_ms": 2.5,
+      "memory_seconds": 0.5,
+      "sisdr": 17.811373564758842,
+      "gain_db": 0.022334851531656603,
+      "tail_db": -300.0,
+      "lsd": 3.1535219505310716
+    },
+    {
+      "fixture": "v2-small",
+      "window_ms": 0,
+      "memory_seconds": 0,
+      "sisdr": -1.6598340928350377,
+      "gain_db": -0.21236323409714897,
+      "tail_db": -64.56239604623151,
+      "lsd": 10.127068141942985
+    },
+    {
+      "fixture": "v2-small",
+      "window_ms": 20.0,
+      "memory_seconds": 0,
+      "sisdr": 0.3030316191676575,
+      "gain_db": -0.1566742528642488,
+      "tail_db": -52.49815080800193,
+      "lsd": 9.967337328784717
+    },
+    {
+      "fixture": "v2-small",
+      "window_ms": 15.0,
+      "memory_seconds": 0,
+      "sisdr": 0.06551176058054611,
+      "gain_db": -0.19291901144077844,
+      "tail_db": -53.48737041303008,
+      "lsd": 10.011188611312152
+    },
+    {
+      "fixture": "v2-small",
+      "window_ms": 10.0,
+      "memory_seconds": 0,
+      "sisdr": -0.0635608874408909,
+      "gain_db": -0.22942763865251314,
+      "tail_db": -53.578276400600366,
+      "lsd": 10.009485885777508
+    },
+    {
+      "fixture": "v2-small",
+      "window_ms": 7.5,
+      "memory_seconds": 0,
+      "sisdr": -0.3648038296069823,
+      "gain_db": -0.2585493900841091,
+      "tail_db": -55.21644805301744,
+      "lsd": 10.089430597165247
+    },
+    {
+      "fixture": "v2-small",
+      "window_ms": 5.0,
+      "memory_seconds": 0,
+      "sisdr": -0.6363301633289207,
+      "gain_db": -0.2403673370682009,
+      "tail_db": -56.73546692782736,
+      "lsd": 10.17694989182159
+    },
+    {
+      "fixture": "v2-small",
+      "window_ms": 2.5,
+      "memory_seconds": 0,
+      "sisdr": -1.110378132968162,
+      "gain_db": -0.1884761395394784,
+      "tail_db": -59.73399316550462,
+      "lsd": 10.291366410418952
+    },
+    {
+      "fixture": "v2-small",
+      "window_ms": 10.0,
+      "memory_seconds": 0.5,
+      "sisdr": -0.2329922787570703,
+      "gain_db": -0.16283036201517026,
+      "tail_db": -52.37084009508335,
+      "lsd": 9.920398635448443
+    },
+    {
+      "fixture": "v2-small",
+      "window_ms": 5.0,
+      "memory_seconds": 0.5,
+      "sisdr": -0.9144880573185988,
+      "gain_db": -0.17516372417024662,
+      "tail_db": -55.29675290098059,
+      "lsd": 10.13218192363903
+    },
+    {
+      "fixture": "v2-small",
+      "window_ms": 2.5,
+      "memory_seconds": 0.5,
+      "sisdr": -1.440528613480191,
+      "gain_db": -0.1459428115840325,
+      "tail_db": -58.3475674407238,
+      "lsd": 10.242087134216193
+    },
+    {
+      "fixture": "v2-medium",
+      "window_ms": 0,
+      "memory_seconds": 0,
+      "sisdr": -0.23387170324682705,
+      "gain_db": 0.11079958663387693,
+      "tail_db": -45.60479639490196,
+      "lsd": 11.388791516517458
+    },
+    {
+      "fixture": "v2-medium",
+      "window_ms": 20.0,
+      "memory_seconds": 0,
+      "sisdr": 1.7600683073872905,
+      "gain_db": 0.10846297324333898,
+      "tail_db": -44.54959128487471,
+      "lsd": 10.748075650594528
+    },
+    {
+      "fixture": "v2-medium",
+      "window_ms": 15.0,
+      "memory_seconds": 0,
+      "sisdr": 1.494354524181972,
+      "gain_db": 0.09594655999475392,
+      "tail_db": -45.51417457025916,
+      "lsd": 10.816979632430415
+    },
+    {
+      "fixture": "v2-medium",
+      "window_ms": 10.0,
+      "memory_seconds": 0,
+      "sisdr": 1.2904568538881642,
+      "gain_db": 0.04838613550428311,
+      "tail_db": -45.11195901687364,
+      "lsd": 10.907408676639767
+    },
+    {
+      "fixture": "v2-medium",
+      "window_ms": 7.5,
+      "memory_seconds": 0,
+      "sisdr": 0.9704274999410057,
+      "gain_db": 0.05569327306657958,
+      "tail_db": -45.460081161495765,
+      "lsd": 11.029263190247555
+    },
+    {
+      "fixture": "v2-medium",
+      "window_ms": 5.0,
+      "memory_seconds": 0,
+      "sisdr": 0.8317420966558569,
+      "gain_db": 0.03512508888833778,
+      "tail_db": -45.079200630066,
+      "lsd": 11.147568797133436
+    },
+    {
+      "fixture": "v2-medium",
+      "window_ms": 2.5,
+      "memory_seconds": 0,
+      "sisdr": 0.421772204632052,
+      "gain_db": 0.05226408960653885,
+      "tail_db": -45.3429355462451,
+      "lsd": 11.335390627828724
+    },
+    {
+      "fixture": "v2-medium",
+      "window_ms": 10.0,
+      "memory_seconds": 0.5,
+      "sisdr": 1.1367370437582394,
+      "gain_db": 0.08602468762475193,
+      "tail_db": -45.26504152994242,
+      "lsd": 10.88876638111001
+    },
+    {
+      "fixture": "v2-medium",
+      "window_ms": 5.0,
+      "memory_seconds": 0.5,
+      "sisdr": 0.609572654333421,
+      "gain_db": 0.07444366357640089,
+      "tail_db": -45.23380534820306,
+      "lsd": 11.151402639199322
+    },
+    {
+      "fixture": "v2-medium",
+      "window_ms": 2.5,
+      "memory_seconds": 0.5,
+      "sisdr": 0.19083899912092459,
+      "gain_db": 0.09297075207318985,
+      "tail_db": -45.42863624227287,
+      "lsd": 11.337464044853753
+    },
+    {
+      "fixture": "v2-large",
+      "window_ms": 0,
+      "memory_seconds": 0,
+      "sisdr": 0.2849440596268623,
+      "gain_db": -0.15660260110639038,
+      "tail_db": -38.89905205785839,
+      "lsd": 12.131418421236093
+    },
+    {
+      "fixture": "v2-large",
+      "window_ms": 20.0,
+      "memory_seconds": 0,
+      "sisdr": 1.8225933483440868,
+      "gain_db": -0.036708962914803585,
+      "tail_db": -38.763204187188606,
+      "lsd": 11.637972510653016
+    },
+    {
+      "fixture": "v2-large",
+      "window_ms": 15.0,
+      "memory_seconds": 0,
+      "sisdr": 1.6489948701578094,
+      "gain_db": -0.06835179253712512,
+      "tail_db": -38.87591644581676,
+      "lsd": 11.682018171123008
+    },
+    {
+      "fixture": "v2-large",
+      "window_ms": 10.0,
+      "memory_seconds": 0,
+      "sisdr": 1.5295247049307363,
+      "gain_db": -0.0743773774562448,
+      "tail_db": -38.926128824639264,
+      "lsd": 11.747663526458371
+    },
+    {
+      "fixture": "v2-large",
+      "window_ms": 7.5,
+      "memory_seconds": 0,
+      "sisdr": 1.3850519689138885,
+      "gain_db": -0.10358100847907922,
+      "tail_db": -38.8241001620987,
+      "lsd": 11.835884668641585
+    },
+    {
+      "fixture": "v2-large",
+      "window_ms": 5.0,
+      "memory_seconds": 0,
+      "sisdr": 0.9727577408276528,
+      "gain_db": -0.11758534409114153,
+      "tail_db": -38.86739780224979,
+      "lsd": 11.969038032291527
+    },
+    {
+      "fixture": "v2-large",
+      "window_ms": 2.5,
+      "memory_seconds": 0,
+      "sisdr": 0.6397891252244616,
+      "gain_db": -0.14201078868213504,
+      "tail_db": -38.80576796645198,
+      "lsd": 12.08146939478445
+    },
+    {
+      "fixture": "v2-large",
+      "window_ms": 10.0,
+      "memory_seconds": 0.5,
+      "sisdr": 1.3900480739724086,
+      "gain_db": -0.03169637308371992,
+      "tail_db": -38.77648614961137,
+      "lsd": 11.763722031549163
+    },
+    {
+      "fixture": "v2-large",
+      "window_ms": 5.0,
+      "memory_seconds": 0.5,
+      "sisdr": 0.8390543851148504,
+      "gain_db": -0.0675517649221231,
+      "tail_db": -38.74870126336297,
+      "lsd": 11.984393145740922
+    },
+    {
+      "fixture": "v2-large",
+      "window_ms": 2.5,
+      "memory_seconds": 0.5,
+      "sisdr": 0.48787482228810375,
+      "gain_db": -0.1179139563213526,
+      "tail_db": -38.77807482622619,
+      "lsd": 12.093216265494497
+    }
+  ]
+}

@@ -1,3 +1,4 @@
+use crate::context::track::HostTrackUpdate;
 use std::borrow::Borrow;
 use std::ffi::c_void;
 use std::mem::{self, MaybeUninit};
@@ -8,7 +9,9 @@ use std::sync::Arc;
 use vst3_com::vst::{DataEvent, IProcessContextRequirementsFlags, ProcessModes};
 use vst3_sys::base::{kInvalidArgument, kNoInterface, kResultFalse, kResultOk, tresult, TBool};
 use vst3_sys::base::{IBStream, IPluginBase};
+use vst3_sys::interfaces::IUnknown;
 use vst3_sys::utils::SharedVstPtr;
+use vst3_sys::vst::{kChannelNameKey, IAttributeList, IInfoListener};
 use vst3_sys::vst::{
     kNoParamId, kNoParentUnitId, kNoProgramListId, kRootUnitId, Event, EventTypes, IAudioProcessor,
     IComponent, IEditController, IEventList, IMidiMapping, INoteExpressionController,
@@ -16,7 +19,7 @@ use vst3_sys::vst::{
     LegacyMidiCCOutEvent, NoteExpressionTypeInfo, NoteExpressionValueDescription, NoteOffEvent,
     NoteOnEvent, ParameterFlags, PolyPressureEvent, ProgramListInfo, TChar, UnitInfo,
 };
-use vst3_sys::VST3;
+use vst3_sys::{com_interface, VST3};
 use widestring::U16CStr;
 
 use super::inner::{ProcessEvent, WrapperInner};
@@ -38,6 +41,20 @@ use crate::wrapper::util::{clamp_input_event_timing, clamp_output_event_timing, 
 // Alias needed for the VST3 attribute macro
 use vst3_sys as vst3_com;
 
+// REAPER SDK: sdk/reaper_vst3_interfaces.h.
+#[com_interface("79655E36-77EE-4267-A573-FEF74912C27C")]
+pub trait IReaperHostApplication: IUnknown {
+    unsafe fn get_reaper_api(&self, name: *const std::ffi::c_char) -> *mut c_void;
+    unsafe fn get_reaper_parent(&self, selector: u32) -> *mut c_void;
+    unsafe fn reaper_extended(
+        &self,
+        selector: u32,
+        a: *mut c_void,
+        b: *mut c_void,
+        c: *mut c_void,
+    ) -> *mut c_void;
+}
+
 #[VST3(implements(
     IComponent,
     IEditController,
@@ -45,15 +62,36 @@ use vst3_sys as vst3_com;
     IMidiMapping,
     INoteExpressionController,
     IProcessContextRequirements,
-    IUnitInfo
+    IUnitInfo,
+    IInfoListener
 ))]
 pub struct Wrapper<P: Vst3Plugin> {
     inner: Arc<WrapperInner<P>>,
+    reaper_host: parking_lot::Mutex<Option<VstPtr<dyn IReaperHostApplication>>>,
 }
 
 impl<P: Vst3Plugin> Wrapper<P> {
     pub fn new() -> Box<Self> {
-        Self::allocate(WrapperInner::new())
+        Self::allocate(WrapperInner::new(), parking_lot::Mutex::new(None))
+    }
+
+    // Called only from the documented VST3 control-thread entry points.
+    unsafe fn refresh_reaper_track(&self) {
+        let Some(handler) = &self.inner.host_track_handler else {
+            return;
+        };
+        let host = self
+            .reaper_host
+            .lock()
+            .as_ref()
+            .map(|host| (**host).clone());
+        if let Some(host) = host {
+            super::super::reaper_track::publish(
+                host.get_reaper_parent(1),
+                |name| host.get_reaper_api(name.as_ptr()),
+                handler,
+            );
+        }
     }
 }
 
@@ -64,12 +102,46 @@ impl<P: Vst3Plugin> Drop for Wrapper<P> {
 }
 
 impl<P: Vst3Plugin> IPluginBase for Wrapper<P> {
-    unsafe fn initialize(&self, _context: *mut c_void) -> tresult {
-        // We currently don't need or allow any initialization logic
+    unsafe fn initialize(&self, context: *mut c_void) -> tresult {
+        if self.inner.host_track_handler.is_some() {
+            if let Some(context) = vst3_sys::VstPtr::<dyn IUnknown>::shared(context.cast()) {
+                *self.reaper_host.lock() = context
+                    .cast::<dyn IReaperHostApplication>()
+                    .map(VstPtr::from);
+            }
+            self.refresh_reaper_track();
+        }
         kResultOk
     }
 
     unsafe fn terminate(&self) -> tresult {
+        self.reaper_host.lock().take();
+        kResultOk
+    }
+}
+
+impl<P: Vst3Plugin> IInfoListener for Wrapper<P> {
+    unsafe fn set_channel_context_infos(&self, list: *mut c_void) -> tresult {
+        let Some(handler) = &self.inner.host_track_handler else {
+            return kResultFalse;
+        };
+        if let Some(list) = vst3_sys::RawVstPtr::<dyn IAttributeList>::new(list.cast()) {
+            let mut name = [0i16; 128];
+            if list.get_string(
+                kChannelNameKey,
+                name.as_mut_ptr(),
+                mem::size_of_val(&name) as u32,
+            ) == kResultOk
+            {
+                let name = name
+                    .iter()
+                    .take_while(|&&c| c != 0)
+                    .map(|&c| c as u16)
+                    .collect::<Vec<_>>();
+                handler(HostTrackUpdate::Name(Some(String::from_utf16_lossy(&name))));
+            }
+        }
+        self.refresh_reaper_track();
         kResultOk
     }
 }
@@ -373,6 +445,10 @@ impl<P: Vst3Plugin> IComponent for Wrapper<P> {
         // custom channel layout overrides we need to initialize here.
         match (state != 0, self.inner.current_buffer_config.load()) {
             (true, Some(buffer_config)) => {
+                self.refresh_reaper_track();
+                if let Some(handler) = &self.inner.host_track_handler {
+                    handler(HostTrackUpdate::Prepare);
+                }
                 // Before initializing the plugin, make sure all smoothers are set the the default values
                 for param in self.inner.param_by_hash.values() {
                     param.update_smoother(buffer_config.sample_rate, true);
@@ -691,6 +767,7 @@ impl<P: Vst3Plugin> IEditController for Wrapper<P> {
     }
 
     unsafe fn create_view(&self, _name: vst3_sys::base::FIDString) -> *mut c_void {
+        self.refresh_reaper_track();
         // Without specialization this is the least redundant way to check if the plugin has an
         // editor. The default implementation returns a None here.
         match self.inner.editor.borrow().as_ref() {

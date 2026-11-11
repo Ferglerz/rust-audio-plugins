@@ -2,7 +2,7 @@ use pleasant_dsp::units::linear_to_db_with_floor;
 
 pub const PSE_RMS_TIMES: [f64; 6] = [0.050, 0.100, 0.200, 0.750, 1.500, 3.000];
 pub const PSE_PEAK_RELEASES: [f64; 6] = [0.020, 0.200, 1.000, 2.000, 5.000, 30.000];
-pub const VOICE_THRESH_SHIFT_DB: f64 = 3.0;
+pub const VOICE_THRESH_SHIFT_DB: f64 = 6.0;
 
 pub fn pse_time_to_times(position: f64, peak: bool) -> (f64, f64) {
     let position = position.clamp(0.0, 5.0);
@@ -218,5 +218,38 @@ mod tests {
         for (index, seconds) in PSE_RMS_TIMES.into_iter().enumerate() {
             assert!((seconds_to_pse_time_pos(seconds) - index as f64).abs() < 1.0e-10);
         }
+    }
+
+    #[test]
+    fn voice_assist_opens_speech_six_db_below_the_base_threshold() {
+        let mut plain = Pse::default();
+        let mut assisted = Pse::default();
+        let settings = PseSettings {
+            depth: 18.0,
+            knee: 0.01,
+            hysteresis: 0.0,
+            time: 0.0,
+            speech_env: 1.0,
+            ..PseSettings::default()
+        };
+        let input = 10.0_f64.powf(-45.0 / 20.0);
+        for _ in 0..96_000 {
+            plain.process(input, -40.0, 48_000.0, settings);
+            assisted.process(
+                input,
+                -40.0,
+                48_000.0,
+                PseSettings {
+                    vad_assist: 1.0,
+                    ..settings
+                },
+            );
+        }
+        assert!(plain.reduction_db.abs() > 17.9);
+        assert!(
+            assisted.reduction_db.abs() < 0.1,
+            "6 dB assist should open a voice at -45 dBFS: {}",
+            assisted.reduction_db
+        );
     }
 }

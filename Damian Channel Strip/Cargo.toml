@@ -25,4 +25,4 @@ pleasant-dsp = { path = "../pleasant-dsp" }
 pleasant-dynamics = { path = "../pleasant-dynamics" }
 pleasant-eq = { path = "../pleasant-eq" }
 pleasant-ui = { path = "../pleasant-ui" }
-ort = { version = "2.0.0-rc.13", default-features = true }
+pleasant-voice = { path = "../pleasant-voice" }

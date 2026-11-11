@@ -47,6 +47,10 @@ use clap_sys::ext::render::{
 use clap_sys::ext::state::{clap_plugin_state, CLAP_EXT_STATE};
 use clap_sys::ext::tail::{clap_plugin_tail, CLAP_EXT_TAIL};
 use clap_sys::ext::thread_check::{clap_host_thread_check, CLAP_EXT_THREAD_CHECK};
+use clap_sys::ext::track_info::{
+    clap_host_track_info, clap_plugin_track_info, clap_track_info, CLAP_EXT_TRACK_INFO,
+    CLAP_EXT_TRACK_INFO_COMPAT, CLAP_TRACK_INFO_HAS_TRACK_NAME,
+};
 use clap_sys::ext::voice_info::{
     clap_host_voice_info, clap_plugin_voice_info, clap_voice_info, CLAP_EXT_VOICE_INFO,
     CLAP_VOICE_INFO_SUPPORTS_OVERLAPPING_NOTES,
@@ -80,6 +84,7 @@ use std::time::Duration;
 use super::context::{WrapperGuiContext, WrapperInitContext, WrapperProcessContext};
 use super::descriptor::PluginDescriptor;
 use super::util::ClapPtr;
+use crate::context::track::{HostTrackHandler, HostTrackUpdate};
 use crate::event_loop::{BackgroundThread, EventLoop, MainThreadExecutor, TASK_QUEUE_CAPACITY};
 use crate::midi::MidiResult;
 use crate::prelude::{
@@ -165,6 +170,7 @@ pub struct Wrapper<P: ClapPlugin> {
 
     // We'll query all of the host's extensions upfront
     host_callback: ClapPtr<clap_host>,
+    host_track_handler: Option<HostTrackHandler>,
 
     clap_plugin_audio_ports_config: clap_plugin_audio_ports_config,
 
@@ -449,6 +455,7 @@ impl<P: ClapPlugin> Wrapper<P> {
         // we'll calculate from the string ID specified by the plugin. These parameters should also
         // remain in the same order as the one returned by the plugin.
         let params = plugin.params();
+        let host_track_handler = plugin.host_track_handler();
         let param_id_hashes_ptrs_groups: Vec<_> = params
             .param_map()
             .into_iter()
@@ -538,6 +545,7 @@ impl<P: ClapPlugin> Wrapper<P> {
             plugin: Mutex::new(plugin),
             task_executor,
             params,
+            host_track_handler,
             // Initialized later as it needs a reference to the wrapper for the async executor
             editor: AtomicRefCell::new(None),
             editor_handle: Mutex::new(None),
@@ -1854,6 +1862,71 @@ impl<P: ClapPlugin> Wrapper<P> {
         success
     }
 
+    // CLAP guarantees these entry points run on the host main thread.
+    unsafe fn refresh_host_track(&self) {
+        let Some(handler) = &self.host_track_handler else {
+            return;
+        };
+        let host = &self.host_callback;
+        if let Some(info) = query_host_extension::<clap_host_track_info>(host, CLAP_EXT_TRACK_INFO)
+            .or_else(|| {
+                query_host_extension::<clap_host_track_info>(host, CLAP_EXT_TRACK_INFO_COMPAT)
+            })
+        {
+            let mut data: clap_track_info = mem::zeroed();
+            if let Some(get) = info.get {
+                let name = if get(&**host, &mut data)
+                    && data.flags & CLAP_TRACK_INFO_HAS_TRACK_NAME != 0
+                {
+                    let end = data
+                        .name
+                        .iter()
+                        .position(|&c| c == 0)
+                        .unwrap_or(data.name.len());
+                    let bytes = std::slice::from_raw_parts(data.name.as_ptr().cast::<u8>(), end);
+                    Some(String::from_utf8_lossy(bytes).into_owned())
+                } else {
+                    None
+                };
+                handler(HostTrackUpdate::Name(name));
+            }
+        }
+
+        #[repr(C)]
+        struct ReaperPluginInfo {
+            version: i32,
+            main_window: *mut c_void,
+            register: Option<unsafe extern "C" fn(*const c_char, *mut c_void) -> i32>,
+            get_func: Option<unsafe extern "C" fn(*const c_char) -> *mut c_void>,
+        }
+        if let Some(reaper) =
+            query_host_extension::<ReaperPluginInfo>(host, c"cockos.reaper_extension")
+        {
+            if let Some(get_func) = reaper.get_func {
+                let context = get_func(c"clap_get_reaper_context".as_ptr());
+                if !context.is_null() {
+                    let parent: unsafe extern "C" fn(*const clap_host, i32) -> *mut c_void =
+                        mem::transmute(context);
+                    super::super::reaper_track::publish(
+                        parent(&**host, 1),
+                        |name| get_func(name.as_ptr()),
+                        handler,
+                    );
+                }
+            }
+        }
+    }
+
+    unsafe extern "C" fn host_track_changed(plugin: *const clap_plugin) {
+        check_null_ptr!((), plugin, (*plugin).plugin_data);
+        let wrapper = &*((*plugin).plugin_data as *const Self);
+        wrapper.refresh_host_track();
+    }
+
+    const TRACK_INFO: clap_plugin_track_info = clap_plugin_track_info {
+        changed: Some(Self::host_track_changed),
+    };
+
     unsafe extern "C" fn init(plugin: *const clap_plugin) -> bool {
         check_null_ptr!(false, plugin, (*plugin).plugin_data);
         let wrapper = &*((*plugin).plugin_data as *const Self);
@@ -1874,6 +1947,7 @@ impl<P: ClapPlugin> Wrapper<P> {
             CLAP_EXT_THREAD_CHECK,
         );
 
+        wrapper.refresh_host_track();
         true
     }
 
@@ -1894,6 +1968,10 @@ impl<P: ClapPlugin> Wrapper<P> {
         check_null_ptr!(false, plugin, (*plugin).plugin_data);
         let wrapper = &*((*plugin).plugin_data as *const Self);
 
+        wrapper.refresh_host_track();
+        if let Some(handler) = &wrapper.host_track_handler {
+            handler(HostTrackUpdate::Prepare);
+        }
         let audio_io_layout = wrapper.current_audio_io_layout.load();
         let buffer_config = BufferConfig {
             sample_rate: sample_rate as f32,
@@ -2334,6 +2412,10 @@ impl<P: ClapPlugin> Wrapper<P> {
             &wrapper.clap_plugin_audio_ports_config as *const _ as *const c_void
         } else if id == CLAP_EXT_AUDIO_PORTS {
             &wrapper.clap_plugin_audio_ports as *const _ as *const c_void
+        } else if (id == CLAP_EXT_TRACK_INFO || id == CLAP_EXT_TRACK_INFO_COMPAT)
+            && wrapper.host_track_handler.is_some()
+        {
+            &Self::TRACK_INFO as *const _ as *const c_void
         } else if id == CLAP_EXT_GUI && wrapper.editor.borrow().is_some() {
             // Only report that we support this extension if the plugin has an editor
             &wrapper.clap_plugin_gui as *const _ as *const c_void
@@ -2661,6 +2743,7 @@ impl<P: ClapPlugin> Wrapper<P> {
         check_null_ptr!(false, plugin, (*plugin).plugin_data);
         let wrapper = &*((*plugin).plugin_data as *const Self);
 
+        wrapper.refresh_host_track();
         let editor_handle = wrapper.editor_handle.lock();
         if editor_handle.is_none() {
             true

@@ -151,6 +151,11 @@ pub trait Plugin: Default + Send + 'static {
     /// Queried only once immediately after the plugin instance is created.
     fn params(&self) -> Arc<dyn Params>;
 
+    /// Opt into track metadata from hosts that expose it.
+    fn host_track_handler(&self) -> Option<crate::context::track::HostTrackHandler> {
+        None
+    }
+
     /// Returns an extension struct for interacting with the plugin's editor, if it has one. Later
     /// the host may call [`Editor::spawn()`] to create an editor instance. To read the current
     /// parameter values, you will need to clone and move the `Arc` containing your `Params` object

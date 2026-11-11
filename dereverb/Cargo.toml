@@ -1,0 +1,23 @@
+[package]
+name = "dereverb"
+version = "0.1.0"
+edition = "2021"
+authors = ["Fergler"]
+license = "GPL-3.0-or-later"
+description = "Neural voice dereverberation with Pleasant UI"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+nih_plug_vizia = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+pleasant-ui = { path = "../pleasant-ui" }
+atomic_float = "1"
+rustfft = "6"
+# Match the bundled 1.23.2 runtime; never download a second runtime at build time.
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic", "api-23"] }
+libc = "0.2"
+
+[dev-dependencies]
+image = { version = "0.24", default-features = false, features = ["png"] }

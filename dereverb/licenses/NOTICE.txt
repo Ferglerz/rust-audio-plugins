@@ -1,0 +1,31 @@
+Dereverb embeds DPDFNet2's 48 kHz high-resolution model.
+Copyright 2025 CEVA, Inc. and contributors. Apache License 2.0.
+Model project: https://github.com/ceva-ip/DPDFNet
+
+The Live model is a modified graph derived by Fergler from the original model.
+It retains the original encoder/magnitude-decoder weights, removes deep filtering,
+and changes spectrum alignment to one frame. It is not an upstream model release.
+Reproduction: scripts/export-live-model.py. The model remains Apache-2.0 licensed.
+
+The Rust STFT, recurrent-state, and spectral-strength integration was adapted from
+the user-provided JenyaDereverb2 source by Jenya Audio / jenyanepoimannykh-it:
+https://github.com/jenyanepoimannykh-it/dereverb-vst3
+
+ONNX Runtime 1.23.2: Copyright (c) Microsoft Corporation. MIT License.
+See ONNX-Runtime.txt and ONNX-ThirdPartyNotices.txt for complete notices.
+
+The Rust plugin, NIH-plug integration, and Pleasant UI use GPL-3.0-or-later.
+
+NARA-WPE online weighted prediction error algorithm:
+Copyright (c) 2018 Communications Engineering Group, Paderborn University. MIT License.
+https://github.com/fgnt/nara_wpe/tree/5fbfc3639274e5a70dffcf08e20615a38c372ebb
+The native Rust single-channel port derives from online_wpe_step. It adds silent-history
+freezing, explicit Hermitian covariance updates, bounded inverse covariance, and numerical
+recovery. The short-window path retains physical prediction lags and smooths learned
+complex filter coefficients over 0.5 seconds; this is a local modification, not an upstream
+feature. The Python package is not required or included. See NARA-WPE.txt for the licence.
+
+DTLN speech denoising models: Copyright (c) 2020 Nils L. Westhausen. MIT License.
+https://github.com/breizhn/DTLN/tree/1de1f15a8b5b7e1c44905618ff2ef70ca8277fbc
+The bundled models are the original pretrained_model/model_1.onnx and model_2.onnx
+exports. See DTLN-MIT.txt for the license.

@@ -15,3 +15,9 @@ name = "Chordboard"
 
 [fundament]
 name = "Fundament"
+
+[dereverb]
+name = "Dereverb"
+
+[automixer]
+name = "Automixer"

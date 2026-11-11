@@ -1,0 +1,10 @@
+Silero VAD v6.2.1, Copyright (c) 2020-present Silero Team.
+https://github.com/snakers4/silero-vad
+
+ONNX Runtime, Copyright (c) Microsoft Corporation.
+https://github.com/microsoft/onnxruntime
+
+The microphone gain-sharing design was informed by leafac Automixer,
+Copyright (c) 2023 Leandro Facchinetti, MIT licensed.
+https://github.com/leafac/reaper
+Automixer is an independent Rust implementation.

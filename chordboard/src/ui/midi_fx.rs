@@ -11,7 +11,7 @@ pub(super) const VIEWPORT: Rect = (16.0, 92.0, W - 32.0, MODULE_BOTTOM - 92.0);
 const GRIP_W: f32 = 28.0;
 const GAP: f32 = 12.0;
 pub(super) const SOURCE_COLUMN_W: f32 = 174.0;
-const SOURCE_NAMES: [&str; 5] = ["Arp", "Manual Strum", "Chords", "Bass", "Melody"];
+const SOURCE_NAMES: [&str; 5] = ["Arp", "Strum", "Chords", "Bass", "Melody"];
 const RATES: [f32; 9] = [0.0625, 0.125, 1.0 / 6.0, 0.25, 1.0 / 3.0, 0.5, 1.0, 2.0, 4.0];
 const RATE_NAMES: [&str; 9] = ["1/64", "1/32", "1/16 T", "1/16", "1/8 T", "1/8", "1/4", "1/2", "1/1"];
 
@@ -292,7 +292,12 @@ impl ChordboardView {
                 }
                 self.draw_fx_sources(d, *effect, &state.midi_fx, r.3);
             }
-            self.fx_button(d, collapse_rect(), if collapsed { "▾" } else { "▴" }, false);
+            let button = collapse_rect();
+            self.fx_button(d, button, "", false);
+            let x = button.0 + button.2 * 0.5;
+            let y = button.1 + button.3 * 0.5;
+            let rise = if collapsed { -4.0 } else { 4.0 };
+            d.poly(&[(x - 8.0, y + rise), (x, y - rise), (x + 8.0, y + rise)], TEXT, 2.5);
             d.oy = oy;
             d.hover = hover;
         }
