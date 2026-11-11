@@ -39,13 +39,14 @@ use nih_plug_vizia::{
     ViziaTheming,
 };
 use pleasant_ui::{
-    theme::{BG, COLORS, GOLD, LINE, MUTED, PANEL, TEAL, TEXT},
-    AppearanceStore, Draw, ValueEdit, FONT_JETBRAINS_MONO,
+    point_in_rect, start_frame_timer, theme::{with_alpha as alpha, BG, COLORS, GOLD, LINE, MUTED, PANEL, TEAL, TEXT},
+    AppearanceStore, Draw, ValueEdit, FONT_JETBRAINS_MONO, FRAME_INTERVAL,
 };
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
+    rc::Rc,
     sync::{atomic::Ordering, Arc, OnceLock},
-    time::{Duration, Instant},
+    time::Instant,
 };
 const CODES: [Code; KEY_COUNT] = [
     Code::Digit1,
@@ -106,11 +107,7 @@ fn prefs() -> &'static AppearanceStore {
     PREFS.get_or_init(|| AppearanceStore::new("Chordboard"))
 }
 fn hit(r: Rect, x: f32, y: f32) -> bool {
-    (r.0..=r.0 + r.2).contains(&x) && (r.1..=r.1 + r.3).contains(&y)
-}
-fn alpha(mut color: Color, a: f32) -> Color {
-    color.a = a;
-    color
+    point_in_rect(x, y, r)
 }
 #[derive(Clone, Copy)]
 struct Tick;
@@ -216,6 +213,11 @@ struct ChordboardView {
     mapping_signature: [u32; 2],
     pub(super) show_bass_split: bool,
     pub(super) voicing_pulse: f32,
+    arp_frame: RefCell<Option<Rc<crate::arpeggiator::State>>>,
+    cycle_cache: RefCell<Vec<(usize, [i16; crate::arpeggiator::STEPS], usize)>>,
+    drawing: Cell<bool>,
+    note_names: RefCell<[Option<String>; 128]>,
+    motion_scratch: Vec<(Rect, bool)>,
 }
 impl Drop for ChordboardView {
     fn drop(&mut self) {
@@ -308,7 +310,25 @@ impl ChordboardView {
             mapping_signature: [0; 2],
             show_bass_split: true,
             voicing_pulse: 0.0,
+            arp_frame: RefCell::new(None),
+            cycle_cache: RefCell::new(Vec::new()),
+            drawing: Cell::new(false),
+            note_names: RefCell::new([const { None }; 128]),
+            motion_scratch: Vec::new(),
         }
+    }
+    fn draw_cache(&self) -> DrawCache<'_> {
+        self.drawing.set(true);
+        *self.arp_frame.borrow_mut() = Some(Rc::new(self.params.arpeggiator.snapshot()));
+        self.cycle_cache.borrow_mut().clear();
+        self.note_names.borrow_mut().fill(None);
+        DrawCache(self)
+    }
+    fn arp_state(&self) -> Rc<crate::arpeggiator::State> {
+        if let Some(state) = self.arp_frame.borrow().as_ref() {
+            return Rc::clone(state);
+        }
+        Rc::new(self.params.arpeggiator.snapshot())
     }
     fn control(&self, id: &str) -> Option<Control> {
         if matches!(id, "swing" | "humanize") {
@@ -695,12 +715,22 @@ impl ChordboardView {
         )
     }
     fn note_name(&self, note: u8) -> String {
-        harmony::note_name_in_key(
+        let index = note as usize;
+        if self.drawing.get() {
+            if let Some(name) = &self.note_names.borrow()[index] {
+                return name.clone();
+            }
+        }
+        let name = harmony::note_name_in_key(
             note,
             self.params.key.value() as u8,
             self.params.scale.value() as u8,
             self.params.key_spelling.value(),
-        )
+        );
+        if self.drawing.get() {
+            self.note_names.borrow_mut()[index] = Some(name.clone());
+        }
+        name
     }
     fn named_chord(&self, chord: SavedChord) -> String {
         harmony::chord_name_in_key(
@@ -1174,6 +1204,15 @@ impl View for ChordboardView {
         self.render(cx, canvas);
     }
 }
+struct DrawCache<'a>(&'a ChordboardView);
+impl Drop for DrawCache<'_> {
+    fn drop(&mut self) {
+        self.0.drawing.set(false);
+        *self.0.arp_frame.borrow_mut() = None;
+        self.0.cycle_cache.borrow_mut().clear();
+    }
+}
+
 pub(crate) fn initial_editor_size() -> (u32, u32) {
     (EDITOR_W as u32, H as u32)
 }
@@ -1187,12 +1226,7 @@ pub fn create(params: Arc<ChordboardParams>, bridge: Arc<Bridge>) -> Option<Box<
             bridge.visible.store(true, Ordering::Relaxed);
             ChordboardView::new(params.clone(), bridge.clone(), context)
                 .build(cx, |cx| {
-                    let timer = cx.add_timer(Duration::from_millis(16), None, |cx, action| {
-                        if let TimerAction::Tick(_) = action {
-                            cx.emit(Tick);
-                        }
-                    });
-                    cx.start_timer(timer);
+                    start_frame_timer(cx, FRAME_INTERVAL, |cx| cx.emit(Tick));
                 })
                 .width(Stretch(1.0))
                 .height(Stretch(1.0))

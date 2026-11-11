@@ -2,8 +2,7 @@
 use super::*;
 use crate::arpeggiator::{ArpMode, Prepared, Settings, Step, StepState, Store, LOOPS, STEPS};
 use routing::{ARP_MOD_SOURCES, ARP_POSITION_SOURCE, PERF_MOD_SOURCES};
-pub const ARP_OWNER: u8 = 1;
-pub const PERFORMANCE_ARP_OWNER: u8 = 6;
+pub use super::{ARP_OWNER, PERFORMANCE_ARP_OWNER};
 pub fn pass_length(notes: usize, pattern: u8) -> usize {
     Engine::pattern_length(pattern, notes)
 }
@@ -124,6 +123,7 @@ impl Default for Runtime {
     }
 }
 /// The displayed cycle is exactly the played cycle, including repeated occurrences.
+#[cfg(test)]
 pub fn cycle_notes(notes: Notes, settings: Settings, mut seed: u32) -> ([u8; STEPS], usize) {
     let mut strings = [0; 96];
     let mut count = 0;
@@ -144,26 +144,6 @@ pub fn cycle_notes(notes: Notes, settings: Settings, mut seed: u32) -> ([u8; STE
     }
     (result, len)
 }
-/// Each loop traverses the selected ordering at its own octave, with stable step slots.
-pub fn loop_cycle_notes(
-    notes: Notes,
-    settings: Settings,
-    octaves: [i8; LOOPS],
-    mut seed: u32,
-) -> ([i16; STEPS], usize) {
-    let mut result = [0; STEPS];
-    if notes.len == 0 {
-        return (result, 0);
-    }
-    let pass_len = Engine::pattern_length(settings.pattern, notes.len);
-    let len = (pass_len * settings.octaves.clamp(1, LOOPS as u8) as usize).min(STEPS);
-    for (step, slot) in result.iter_mut().enumerate().take(len) {
-        let index = ordering::index(settings.pattern, step % pass_len, notes.len, &mut seed);
-        *slot = notes.values[index] as i16 + octaves[step / pass_len] as i16 * 12;
-    }
-    (result, len)
-}
-
 /// A locked loop measures clock slots, independently of harmony or ordering.
 pub fn settings_pass_length(notes: usize, settings: Settings) -> usize {
     if settings.lock_length {
@@ -236,6 +216,29 @@ pub fn program_cycle(
         }
     }
     (result, len)
+}
+
+pub(super) fn apply_arp_playback(
+    config: &mut Config,
+    settings: crate::arpeggiator::Settings,
+    page: &crate::arpeggiator::Page,
+    swing: f32,
+    humanize: f32,
+) {
+    config.arp_mode = match settings.mode {
+        ArpMode::Once => ArpMode::Once,
+        _ if config.daw_alignment => ArpMode::AlignedLoop,
+        ArpMode::AlignedLoop => ArpMode::SyncLoop,
+        mode => mode,
+    };
+    config.arp_pattern = settings.pattern;
+    config.arp_octaves = settings.octaves.min(page.initialized);
+    config.arp_loop_octaves = page.octaves();
+    config.arp_sync = settings.sync;
+    config.arp_free_ms = settings.free_ms;
+    config.rate = settings.rate;
+    config.swing = swing;
+    config.humanize = humanize;
 }
 
 impl Engine {

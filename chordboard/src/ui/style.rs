@@ -17,7 +17,34 @@ pub(super) enum Icon {
     Touch,
     TuningFork,
     Glyph(&'static str),
+    /// Layered squares with a right arrow. Tabler has no single glyph for this.
+    Duplicate,
 }
+
+// Codepoints checked against the Tabler file bundled with this Vizia checkout.
+pub(super) const GLYPH_PLAY: &str = "\u{ed46}";
+pub(super) const GLYPH_VOLUME_OFF: &str = "\u{f1c3}";
+pub(super) const GLYPH_SKIP: &str = "\u{ed49}";
+pub(super) const GLYPH_REFRESH: &str = "\u{eb13}";
+pub(super) const GLYPH_REPEAT: &str = "\u{eb72}";
+pub(super) const GLYPH_PENCIL: &str = "\u{eb04}";
+pub(super) const GLYPH_CLOCK: &str = "\u{ea70}";
+pub(super) const GLYPH_SHUFFLE: &str = "\u{f000}";
+pub(super) const GLYPH_ROUTE: &str = "\u{eb17}";
+pub(super) const GLYPH_REPLACE: &str = "\u{ebc7}";
+pub(super) const GLYPH_COPY: &str = "\u{ea7a}";
+pub(super) const GLYPH_CLIPBOARD: &str = "\u{ea6f}";
+pub(super) const GLYPH_ROTATE: &str = "\u{eb16}";
+pub(super) const GLYPH_ROTATE_CW: &str = "\u{eb15}";
+pub(super) const GLYPH_SWAP: &str = "\u{edb2}";
+pub(super) const GLYPH_RESTORE: &str = "\u{fafd}";
+pub(super) const GLYPH_CHEVRONS_DOWN: &str = "\u{ea63}";
+pub(super) const GLYPH_CHEVRONS_UP: &str = "\u{ea66}";
+pub(super) const GLYPH_CHECK: &str = "\u{ea5e}";
+pub(super) const GLYPH_ARROWS_H: &str = "\u{eb59}";
+pub(super) const GLYPH_MINUS: &str = "\u{eaf2}";
+pub(super) const GLYPH_PLUS: &str = "\u{eb0b}";
+pub(super) const GLYPH_ARROWS_V: &str = "\u{eb5b}";
 
 pub(super) const MODULATOR_ICONS: [Icon; crate::engine::routing::SOURCE_COUNT] = [
     Icon::TuningFork,
@@ -38,6 +65,10 @@ pub(super) const MODULATOR_ICONS: [Icon; crate::engine::routing::SOURCE_COUNT] =
 
 impl Icon {
     pub(super) fn draw(self, d: &mut Draw, x: f32, y: f32, color: Color) {
+        self.draw_sized(d, x, y, 18.0, color);
+    }
+
+    pub(super) fn draw_sized(self, d: &mut Draw, x: f32, y: f32, size: f32, color: Color) {
         let line = |d: &mut Draw, a: (f32, f32), b: (f32, f32)| {
             d.line(x + a.0, y + a.1, x + b.0, y + b.1, color, 1.4);
         };
@@ -79,7 +110,7 @@ impl Icon {
                 if let Some(font) = d.icon_font {
                     let mut paint = Paint::color(d.color(color));
                     paint.set_font(&[font]);
-                    paint.set_font_size(18.0 * d.s);
+                    paint.set_font_size(size * d.s);
                     paint.set_text_align(Align::Center);
                     paint.set_text_baseline(Baseline::Middle);
                     let _ =
@@ -141,6 +172,13 @@ impl Icon {
                 line(d, (-6.0, 0.0), (6.0, 0.0));
                 line(d, (0.0, -6.0), (0.0, 6.0));
             }
+            Self::Duplicate => {
+                d.outline_rounded(x - 9.0, y - 1.5, 9.0, 9.0, 1.6, color, 1.3);
+                d.outline_rounded(x - 4.5, y - 6.0, 9.0, 9.0, 1.6, color, 1.3);
+                line(d, (5.5, 2.0), (10.5, 2.0));
+                line(d, (7.6, -0.4), (10.5, 2.0));
+                line(d, (7.6, 4.4), (10.5, 2.0));
+            }
         }
     }
 }
@@ -174,9 +212,10 @@ impl ChordboardView {
         }
     }
 
-    fn motion_targets(&self) -> Vec<(Rect, bool)> {
+    fn collect_motion_targets(&self, targets: &mut Vec<(Rect, bool)>) {
+        targets.clear();
         if self.fx_ui.open && !self.quick_midi.show {
-            let mut targets = self.arp_editor_button_rects();
+            targets.extend(self.arp_editor_button_rects());
             targets.extend([
                 (midi_fx::PROGRAMMING_TAB, false),
                 (midi_fx::PROGRAMMING_TRANSPORT, self.snapshot.arp_running),
@@ -192,19 +231,17 @@ impl ChordboardView {
                     .filter(|(_, r)| r.1 < HEADER_H)
                     .map(|(c, r)| (r, c.toggle && c.norm >= 0.5)),
             );
-            return targets;
+            return;
         }
         if let Some(menu) = self.menu {
-            return (0..menu.items().len())
-                .map(|i| {
-                    (
-                        self.menu_option_rect(menu, i),
-                        i == self.menu_selection(menu),
-                    )
-                })
-                .collect();
+            targets.extend((0..menu.items().len()).map(|i| {
+                (
+                    self.menu_option_rect(menu, i),
+                    i == self.menu_selection(menu),
+                )
+            }));
+            return;
         }
-        let mut targets = Vec::new();
         targets.extend(self.route_chips().into_iter().map(|(_, r)| (r, false)));
         let learn_switch = if self.fx_ui.open {
             midi_fx::FX_LEARN
@@ -353,15 +390,15 @@ impl ChordboardView {
             (midi_fx::PERFORMANCE_TAB, !self.programming),
             (midi_fx::FX_TAB, false),
         ]);
-        targets
     }
 
     pub(super) fn tick_motion(&mut self, dt: f32) -> bool {
-        let targets = self.motion_targets();
+        let mut targets = std::mem::take(&mut self.motion_scratch);
+        self.collect_motion_targets(&mut targets);
         let mut changed = false;
         self.motion
             .retain(|m| targets.iter().any(|(r, _)| *r == m.rect));
-        for (rect, selected) in targets {
+        for (rect, selected) in targets.iter().copied() {
             if !self.motion.iter().any(|m| m.rect == rect) {
                 self.motion.push(ControlMotion {
                     rect,
@@ -382,6 +419,7 @@ impl ChordboardView {
                 }
             }
         }
+        self.motion_scratch = targets;
         if let Some((_, time)) = &mut self.action_flash {
             *time = (*time - dt / 0.18).max(0.0);
             changed = true;
@@ -393,13 +431,12 @@ impl ChordboardView {
     }
 
     pub(super) fn flash_press(&mut self, x: f32, y: f32) {
-        if let Some((r, _)) = self
-            .motion_targets()
-            .into_iter()
-            .find(|(r, _)| hit(*r, x, y))
-        {
-            self.action_flash = Some((r, 1.0));
+        let mut targets = std::mem::take(&mut self.motion_scratch);
+        self.collect_motion_targets(&mut targets);
+        if let Some((r, _)) = targets.iter().find(|(r, _)| hit(*r, x, y)) {
+            self.action_flash = Some((*r, 1.0));
         }
+        self.motion_scratch = targets;
     }
 
     pub(super) fn hover_pointer(&self) -> Option<(f32, f32)> {
@@ -429,12 +466,38 @@ impl ChordboardView {
         self.paint_button(d, r, label, on, color, None);
     }
 
-    pub(super) fn button_tinted(&self, d: &mut Draw, r: Rect, label: &str, on: bool, color: Color) {
-        self.paint_button(d, r, label, on, color, None);
+    pub(super) fn draw_power_switch(
+        &self,
+        d: &mut Draw,
+        rect: Rect,
+        enabled: bool,
+        color: Color,
+        motion: Rect,
+    ) {
+        d.bypass_button(
+            rect,
+            !enabled,
+            color,
+            self.hover_amount(motion) > 0.01,
+            self.button_press_amount(motion),
+        );
+    }
+
+    pub(super) fn module_title(&self, d: &mut Draw, x: f32, top: f32, title: &str, color: Color) {
+        let font = d.font;
+        d.font = self.font.get();
+        d.text(
+            x,
+            module_title_y(top, MODULE_TITLE_SIZE),
+            title,
+            MODULE_TITLE_SIZE,
+            color,
+        );
+        d.font = font;
     }
 
     pub(super) fn touch_latch_button(&self, d: &mut Draw, r: Rect, on: bool, color: Color) {
-        self.paint_button(d, r, "Hover strum", on, color, Some(Icon::Touch));
+        self.paint_button(d, r, "", on, color, Some(Icon::Touch));
     }
 
     pub(super) fn icon_button(
@@ -576,19 +639,14 @@ impl ChordboardView {
         d.text_width(text, size)
     }
 
-    pub(super) fn fit_text(&self, d: &Draw, text: &str, width: f32, size: f32) -> String {
-        if self.text_width(d, text, size) <= width {
-            return text.to_string();
-        }
-        let mut fitted = text.to_string();
-        while !fitted.is_empty() {
-            fitted.pop();
-            let result = format!("{fitted}…");
-            if self.text_width(d, &result, size) <= width {
-                return result;
-            }
-        }
-        "…".into()
+    pub(super) fn fit_text<'a>(
+        &self,
+        d: &Draw,
+        text: &'a str,
+        width: f32,
+        size: f32,
+    ) -> std::borrow::Cow<'a, str> {
+        d.fit_text(text, width, size)
     }
 
     pub(super) fn display_value(&self, c: &Control) -> String {

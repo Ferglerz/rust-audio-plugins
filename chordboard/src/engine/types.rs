@@ -7,7 +7,19 @@ pub const CHORD: u8 = 0;
 pub const AUTO: u8 = 1;
 pub const MANUAL: u8 = 2;
 pub const ARP: u8 = 3;
-pub(super) const SELECT_ROOT_OWNER: u8 = 5;
+
+/// Live strum, chord, and layer voices.
+pub const LIVE_OWNER: u8 = 0;
+/// Tracker arpeggiator voices.
+pub const ARP_OWNER: u8 = 1;
+/// Non-MPE bass voices use the bass channel.
+pub const BASS_OWNER: u8 = 3;
+/// Selection-root gesture, kept beside a live strum on the same pitch.
+pub const SELECT_ROOT_OWNER: u8 = 5;
+/// Live keyboard arpeggiator. Distinct from the tracker arp and from delay echoes.
+pub const PERFORMANCE_ARP_OWNER: u8 = 6;
+/// Delay echoes. Must not alias any dry voice owner.
+pub const DELAY_OWNER: u8 = 7;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Config {

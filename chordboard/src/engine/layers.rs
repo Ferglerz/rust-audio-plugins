@@ -43,6 +43,7 @@ impl Engine {
         out: &mut impl FnMut(Out),
     ) {
         if let Some(channel) = self.bass[input][note].take() {
+            self.touch_owned_notes();
             self.release_fx_source(Self::bass_delay_token(input, note), out);
             if !self.fx.active() && !self.output_owned(channel, note as u8) {
                 out(Out::Off(channel, note as u8, velocity));
@@ -64,6 +65,7 @@ impl Engine {
         if self.down[id] == pressed {
             return;
         }
+        self.touch_owned_notes();
         self.down[id] = pressed;
         if pressed {
             let channel = self.config.bass_channel;
@@ -143,6 +145,7 @@ impl Engine {
             return;
         }
         if pressed && self.fx.active() && self.melody[channel as usize][note as usize] && !self.down[id] {
+            self.touch_owned_notes();
             self.melody[channel as usize][note as usize] = false;
             self.release_fx_source(Self::melody_delay_token(channel, note), out);
         }
@@ -154,6 +157,7 @@ impl Engine {
             self.reclaim_delay_channel(channel, out);
         }
         let already_owned = self.output_owned(channel, note);
+        self.touch_owned_notes();
         self.melody[channel as usize][note as usize] = pressed;
         self.down[id] = pressed;
         if pressed {
@@ -224,6 +228,7 @@ impl Engine {
     }
 
     pub(super) fn stop_melody(&mut self, out: &mut impl FnMut(Out)) {
+        self.touch_owned_notes();
         for channel in 0..16 {
             for note in 0..128 {
                 if self.melody[channel][note] {
@@ -276,7 +281,7 @@ impl Engine {
         // layer never cuts off an overlapping strum that is still ringing.
         for i in 0..self.voices.len() {
             if let Some(voice) = self.voices[i].as_mut() {
-                if voice.owner != 0 {
+                if voice.owner != LIVE_OWNER {
                     continue;
                 }
                 let was_layer = voice.layer;
@@ -348,7 +353,7 @@ impl Engine {
                     .voices
                     .iter()
                     .flatten()
-                    .any(|v| v.note as usize == note && v.owner == 0)
+                    .any(|v| v.note as usize == note && v.owner == LIVE_OWNER)
             {
                 self.allocate_voice(note as u8, self.strike_velocity(), self.now, true, out);
             }
@@ -364,7 +369,7 @@ impl Engine {
                         .voices
                         .iter()
                         .flatten()
-                        .any(|v| v.note == note && v.owner == 0);
+                        .any(|v| v.note == note && v.owner == LIVE_OWNER);
                     if !owned {
                         self.allocate_voice(note, self.strike_velocity(), self.now, true, out);
                     } else if self.config.gliss_ms > 0.0 {

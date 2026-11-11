@@ -1,4 +1,5 @@
 use super::*;
+use std::time::Duration;
 
 #[test]
 fn view_scale_rejects_empty_and_non_finite_bounds() {

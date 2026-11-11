@@ -334,9 +334,8 @@ impl ChordboardView {
         {
             return true;
         }
-        let reset_press = matches!(event, WindowEvent::MouseDoubleClick(MouseButton::Left))
-            || matches!(event, WindowEvent::MouseDown(MouseButton::Left))
-                && cx.modifiers().intersects(Modifiers::CTRL | Modifiers::LOGO);
+        let reset_press = matches!(event, WindowEvent::MouseDown(MouseButton::Left))
+            && cx.modifiers().intersects(Modifiers::CTRL | Modifiers::LOGO);
         if reset_press
             && !self.quick_midi.show
             && self.menu.is_none()

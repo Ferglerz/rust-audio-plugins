@@ -15,15 +15,15 @@ use nih_plug_vizia::{
 };
 use pleasant_ui::{
     draw::{ButtonAnim, Draw, EditorViewport},
+    load_font_once, start_frame_timer,
     preferences::AppearanceStore,
     theme::{rgb, COLORS, GOLD, LINE, MUTED, PANEL, TEAL, TEXT},
     value_edit::{parse_number_with_units, ValueEdit},
-    FONT_JETBRAINS_MONO,
+    FONT_JETBRAINS_MONO, FRAME_INTERVAL,
 };
 use std::{
     cell::Cell,
     sync::{atomic::Ordering, Arc, OnceLock},
-    time::Duration,
 };
 
 mod controls;
@@ -155,13 +155,10 @@ pub fn create(
                 pad_binding: None,
             }
             .build(cx, |cx| {
-                let timer = cx.add_timer(Duration::from_millis(16), None, |cx, action| {
-                    if let TimerAction::Tick(_) = action {
-                        cx.emit(PerformanceTick);
-                        cx.needs_redraw();
-                    }
+                start_frame_timer(cx, FRAME_INTERVAL, |cx| {
+                    cx.emit(PerformanceTick);
+                    cx.needs_redraw();
                 });
-                cx.start_timer(timer);
             })
             .width(Stretch(1.0))
             .height(Stretch(1.0));

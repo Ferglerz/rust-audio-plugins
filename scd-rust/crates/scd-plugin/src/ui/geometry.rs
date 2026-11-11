@@ -319,7 +319,7 @@ impl ScdEditorView {
     }
 
     pub(super) fn hit(px: f32, py: f32, x: f32, y: f32, w: f32, h: f32) -> bool {
-        (x..=x + w).contains(&px) && (y..=y + h).contains(&py)
+        pleasant_ui::point_in_rect(px, py, (x, y, w, h))
     }
 
     pub(super) fn fader_pos_at(y: f32) -> f32 {

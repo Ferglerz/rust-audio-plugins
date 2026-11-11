@@ -6,18 +6,18 @@ impl ChordboardView {
             return;
         }
         if self.font.get().is_none() {
-            self.font.set(canvas.add_font_mem(FONT_JETBRAINS_MONO).ok());
+            pleasant_ui::load_font_once(canvas, &self.font, FONT_JETBRAINS_MONO);
             self.ui_font.set(self.font.get());
-            self.music_font.set(canvas.add_font_mem(music::FONT).ok());
-            self.icon_font.set(
-                canvas
-                    .add_font_mem(nih_plug_vizia::vizia::fonts::TABLER_ICONS)
-                    .ok(),
+            pleasant_ui::load_font_once(canvas, &self.music_font, music::FONT);
+            pleasant_ui::load_font_once(
+                canvas,
+                &self.icon_font,
+                nih_plug_vizia::vizia::fonts::TABLER_ICONS,
             );
-            self.bold_font.set(
-                canvas
-                    .add_font_mem(nih_plug_vizia::assets::fonts::NOTO_SANS_BOLD)
-                    .ok(),
+            pleasant_ui::load_font_once(
+                canvas,
+                &self.bold_font,
+                nih_plug_vizia::assets::fonts::NOTO_SANS_BOLD,
             );
         }
         let mut d = Draw::new(
@@ -31,6 +31,7 @@ impl ChordboardView {
         .with_hover(self.hover_pointer());
         d.fallback_font = self.music_font.get();
         d.icon_font = self.icon_font.get();
+        let _draw_cache = self.draw_cache();
         d.rounded_rect(-CONTENT_X, 0.0, EDITOR_W, H, 0.0, BG);
         d.rounded_rect(-CONTENT_X, 0.0, EDITOR_W, 76.0, 0.0, PANEL);
         d.line(-CONTENT_X, 75.0, W, 75.0, LINE, 1.0);
@@ -56,9 +57,10 @@ impl ChordboardView {
                 self.draw_fx_learn_button(&mut d);
             }
         }
-        for (control, rect) in self.base_controls() {
+        let base_controls = self.base_controls();
+        for (control, rect) in &base_controls {
             if rect.1 < HEADER_H {
-                self.draw_control(&mut d, &control, rect, GOLD);
+                self.draw_control(&mut d, control, *rect, GOLD);
             }
         }
         if self.fx_ui.open {
@@ -80,7 +82,6 @@ impl ChordboardView {
             self.draw_learn_overlay(&mut d);
             return;
         }
-        let base_controls = self.base_controls();
         let panel_controls = self.panel_controls();
         let hint = self.hover_hint(if self.panel.is_some() {
             &panel_controls
@@ -213,17 +214,17 @@ impl ChordboardView {
         d.disabled = !self.params.strum_enabled.value();
         self.draw_pad(d);
         d.font = self.ui_font.get();
+        let base_controls = self.base_controls();
         if expand == 0.0 {
-            for (c, r) in self.base_controls() {
+            for (c, r) in &base_controls {
                 if r.0 >= PAD.0 && r.1 >= PAD.1 && r.1 < PAD.1 + PAD.3 {
-                    self.draw_control(d, &c, r, GOLD);
+                    self.draw_control(d, c, *r, GOLD);
                 }
             }
         }
         d.offset_x = 0.0;
         d.reset_scissor();
         d.disabled = false;
-        let base_controls = self.base_controls();
         for (c, r) in &base_controls {
             if r.1 < HEADER_H || globals::is_global(c.id) || matches!(c.id, "swing" | "humanize") {
                 continue;
@@ -253,7 +254,7 @@ impl ChordboardView {
 
     pub(super) fn draw_modules(&self, d: &mut Draw) {
         self.surface(d, GLOBAL_SURFACE);
-        d.text(GLOBAL_SURFACE.0 + 18.0, module_title_y(GLOBAL_SURFACE.1, MODULE_TITLE_SIZE), "GLOBAL", MODULE_TITLE_SIZE, GOLD);
+        self.module_title(d, GLOBAL_SURFACE.0 + 18.0, GLOBAL_SURFACE.1, "GLOBAL", GOLD);
         for (id, r) in arp_controls() {
             if let Some(c) = self.control(id) { self.draw_control(d, &c, r, GOLD); }
         }
@@ -290,6 +291,20 @@ impl ChordboardView {
         }
         let (x, y) = self.hover_pointer()?;
         if self.panel == Some(Panel::Custom) && hit(CUSTOM_SURFACE, x, y) {
+            const CUSTOM_HINTS: [&str; 6] = [
+                "Rotate the seven steps left",
+                "Rotate the seven steps right",
+                "Reverse the step order",
+                "Restore the default seven-step pattern",
+                "Move every step down one octave",
+                "Move every step up one octave",
+            ];
+            if let Some(index) = custom::custom_button_rects()
+                .iter()
+                .position(|rect| hit(*rect, x, y))
+            {
+                return Some(CUSTOM_HINTS[index].into());
+            }
             return Some("Drag blocks to move notes; drag their right edges for duration. Right-click for rest, scroll for velocity.".into());
         }
         if hit(midi_fx::PROGRAMMING_TRANSPORT, x, y)
@@ -302,6 +317,17 @@ impl ChordboardView {
             }.into());
         }
         if self.tracker_visible() && hit(TRACKER_SURFACE, x, y) {
+            if let Some(index) = (0..tracker::ACTIONS.len()).find(|&i| hit(tracker::action_rect(i), x, y)) {
+                return Some(match index {
+                    0 => "Duplicate the selected tracker entry",
+                    1 => "Copy the selected tracker entry",
+                    2 => "Paste onto the selected tracker entry",
+                    _ => "Delete the selected tracker entry",
+                }.into());
+            }
+            if hit(tracker::duration_button(false), x, y) || hit(tracker::duration_button(true), x, y) {
+                return Some("Bars · How many times this entry plays before the next column".into());
+            }
             return Some("Right-click a chord column to make it the visual one without changing playback · Click the blank column to add · Hover between columns to insert · Drag to move".into());
         }
         if !self.programming && hit(strum_chord_latch_rect(self.expand_t()), x, y) {
@@ -498,9 +524,16 @@ impl ChordboardView {
             );
         }
 
+        if self.fx_ui.open && hit(midi_fx::FX_LEARN, x, y) {
+            return Some(if self.quick_midi.show {
+                "Finish learning".into()
+            } else {
+                "Learn a MIDI control for the effect under the pointer".into()
+            });
+        }
         if hit(LATCH, x, y) {
             return Some(
-                "Chord latch · Retain the complete chord and its added extensions · Click or tap Shift to toggle · Hold Shift to invert until release".into(),
+                "Latch the played chord · Shift toggles it · Hold Shift to invert until release".into(),
             );
         }
         if hit(strum_latch_rect(self.expand_t()), x, y) && self.manual_playing() {
@@ -549,7 +582,7 @@ impl ChordboardView {
             .iter()
             .any(|(c, r)| c.id == "voice_leading" && hit(*r, x, y))
         {
-            return Some("Click: Nearest resolution / Furthest dominant resolution / Off · Furthest uses larger motion on V–I; otherwise nearest".into());
+            return Some("Click: Nearest / Furthest / Off · Furthest uses larger motion on V–I; otherwise nearest".into());
         }
         if controls
             .iter()
@@ -730,7 +763,7 @@ impl ChordboardView {
             self.button(
                 d,
                 rect,
-                ["Nearest", "Furthest dominant", "Off"][self
+                crate::harmony::VOICE_LEADING_NAMES[self
                     .routed_plain("voice_leading")
                     .unwrap_or(self.params.voice_leading.value() as f32)
                     as usize],

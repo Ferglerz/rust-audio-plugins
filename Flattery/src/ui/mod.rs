@@ -31,16 +31,16 @@ use nih_plug_vizia::{
 };
 use pleasant_ui::{
     draw::Draw,
+    load_font_once, start_frame_timer,
     math::{flattery_freq_to_pos, flattery_pos_to_freq},
     preferences::AppearanceStore,
     theme::{BG, COLORS, GOLD, LINE, MUTED, PANEL, TEAL, TEXT},
     value_edit::{parse_number_with_units, slider_value_rect, ValueEdit},
-    FONT_JETBRAINS_MONO,
+    FONT_JETBRAINS_MONO, FRAME_INTERVAL,
 };
 use std::{
     cell::Cell,
     sync::{atomic::Ordering, Arc, OnceLock},
-    time::Duration,
 };
 
 static PREFS: OnceLock<AppearanceStore> = OnceLock::new();

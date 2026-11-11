@@ -92,6 +92,10 @@ pub struct Engine {
     pub cc_known: [[bool; 128]; 16],
     cc_lsb_seen: [u32; 16],
     pub needs_setup: bool,
+    /// Set when output ownership changes. The cache is the block-start snapshot.
+    owned_notes_dirty: bool,
+    pub(crate) owned_notes_cache: Box<[[bool; 128]; 16]>,
+    delay_map_cache: Option<Box<(delay_output::DelayMapKey, [u8; 128])>>,
     pub rng: u32,
     pub tempo: f64,
     pub playing: bool,
@@ -184,6 +188,9 @@ impl Default for Engine {
             cc_known: [[false; 128]; 16],
             cc_lsb_seen: [0; 16],
             needs_setup: true,
+            owned_notes_dirty: true,
+            owned_notes_cache: Box::new([[false; 128]; 16]),
+            delay_map_cache: None,
             rng: 0x43484f52,
             tempo: 120.0,
             playing: false,
@@ -194,6 +201,103 @@ impl Default for Engine {
     }
 }
 impl Engine {
+    /// Refresh the block-start ownership snapshot. Later mutations only mark it dirty.
+    pub(crate) fn refresh_owned_note_cache(&mut self) {
+        if self.fx.notes_changed {
+            self.owned_notes_dirty = true;
+            self.fx.notes_changed = false;
+        }
+        if self.owned_notes_dirty {
+            self.owned_notes_cache = Box::new(self.owned_output_notes());
+            self.owned_notes_dirty = false;
+        }
+    }
+    pub(super) fn touch_owned_notes(&mut self) {
+        self.owned_notes_dirty = true;
+    }
+    /// Apply the active arp page onto a host config. Returns the initialized loop count.
+    pub(super) fn overlay_arp_settings(&self, config: &mut Config) -> u8 {
+        let tracker_row = config
+            .tracker_enabled
+            .then(|| self.arp.data.rows.get(self.arp.row_index))
+            .flatten();
+        // Tracker row indices can exceed the legacy bank's eight pages. Select
+        // the source before indexing: map_or eagerly evaluates its fallback.
+        let (settings, page) = if let Some(row) = tracker_row {
+            if row.enabled {
+                (row.settings, row.page)
+            } else {
+                (
+                    self.arp.data.performance.settings,
+                    self.arp.data.performance.page,
+                )
+            }
+        } else {
+            let index = self.arp.active.min(7) as usize;
+            (config.arp_settings[index], self.arp.data.pages[index])
+        };
+        let settings = self
+            .arp
+            .timing
+            .map_or(settings, |timing| timing.apply(settings));
+        config.arp_loop_octaves = page.octaves();
+        // Host automation may expose a loop before its background initialization completes.
+        config.arp_octaves = config.arp_octaves.min(page.initialized);
+        if config.arp_enabled {
+            let swing = if config.tracker_enabled {
+                self.host_config.swing
+            } else {
+                settings.swing
+            };
+            let humanize = if config.tracker_enabled {
+                self.host_config.humanize
+            } else {
+                settings.humanize
+            };
+            arpeggiator::apply_arp_playback(config, settings, &page, swing, humanize);
+        }
+        page.initialized
+    }
+    pub(super) fn publish_source_overrides(
+        &mut self,
+        previous_sources: [Option<f32>; routing::SOURCE_COUNT],
+        out: &mut impl FnMut(Out),
+    ) {
+        if previous_sources == self.source_overrides {
+            return;
+        }
+        // Restore a removed controller route even if its live baseline is unknown.
+        for channel in 0..16 {
+            if self
+                .newest_voice(channel)
+                .is_none_or(|v| v.owner == delay_output::DELAY_OWNER)
+                || self.melody_channel(channel)
+            {
+                continue;
+            }
+            for (index, cc) in [(1, 1), (2, 11), (3, 2)] {
+                if previous_sources[index].is_some() && self.source_overrides[index].is_none() {
+                    let value = self.controller_baseline(cc) as f32 / 127.0;
+                    if self.fx.active() {
+                        for voice in self.voices.iter().flatten().filter(|v| v.channel == channel) {
+                            self.fx.controller(voice.token, cc, value, out);
+                        }
+                    } else {
+                        out(Out::Cc(channel, cc, value));
+                    }
+                }
+            }
+        }
+        if self.config.routed_x.is_none()
+            && (self.source_overrides[7].is_some() || previous_sources[7].is_some())
+        {
+            self.position_value(self.source_overrides[7].unwrap_or(self.sources[7]), 0, out);
+        }
+        if self.source_overrides[8].is_some() || previous_sources[8].is_some() {
+            self.position_value(self.source_overrides[8].unwrap_or(self.sources[8]), 1, out);
+        }
+        self.fan_expression(out);
+    }
     pub fn configure(&mut self, config: Config, out: &mut impl FnMut(Out)) {
         self.configure_inner(config, true, out);
     }
@@ -242,45 +346,11 @@ impl Engine {
                 }
             }
         }
-        let tracker_row = config
-            .tracker_enabled
-            .then(|| self.arp.data.rows.get(self.arp.row_index))
-            .flatten();
-        // Tracker row indices can exceed the legacy bank's eight pages. Select
-        // the source before indexing: map_or eagerly evaluates its fallback.
-        let (settings, page) = if let Some(row) = tracker_row {
-            if row.enabled { (row.settings, row.page) } else { (self.arp.data.performance.settings, self.arp.data.performance.page) }
-        } else {
-            let page = self.arp.active.min(7) as usize;
-            (config.arp_settings[page], self.arp.data.pages[page])
-        };
-        let settings = self
-            .arp
-            .timing
-            .map_or(settings, |timing| timing.apply(settings));
-        config.arp_loop_octaves = page.octaves();
-        // Host automation may expose a loop before its background initialization completes.
-        // Play only initialized data until that control-thread publication arrives.
-        config.arp_octaves = config.arp_octaves.min(page.initialized);
-        if config.arp_enabled {
-            config.arp_mode = match settings.mode {
-                crate::arpeggiator::ArpMode::Once => crate::arpeggiator::ArpMode::Once,
-                _ if config.daw_alignment => crate::arpeggiator::ArpMode::AlignedLoop,
-                crate::arpeggiator::ArpMode::AlignedLoop => crate::arpeggiator::ArpMode::SyncLoop,
-                mode => mode,
-            };
-            config.arp_pattern = settings.pattern;
-            config.arp_octaves = settings.octaves.min(page.initialized);
-            config.arp_sync = settings.sync;
-            config.arp_free_ms = settings.free_ms;
-            config.rate = settings.rate;
-            config.swing = if config.tracker_enabled { self.host_config.swing } else { settings.swing };
-            config.humanize = if config.tracker_enabled { self.host_config.humanize } else { settings.humanize };
-        }
+        let initialized = self.overlay_arp_settings(&mut config);
         let unrouted_config = config;
         self.prepare_route_smoothing();
         self.apply_routes(&mut config);
-        config.arp_octaves = config.arp_octaves.clamp(1, page.initialized);
+        config.arp_octaves = config.arp_octaves.clamp(1, initialized);
         self.source_overrides = self.resolved_source_overrides();
         if config.bass_enabled && config.key_split && config.bass_boundary() >= 0 {
             let (bass, melody) = ordered_splits(config.bass_boundary() as u8, config.split_note);
@@ -339,7 +409,7 @@ impl Engine {
         if old.strum_enabled && !config.strum_enabled && config.mode == MANUAL {
             self.x_primed = false;
             for i in 0..self.voices.len() {
-                if self.voices[i].is_some_and(|voice| voice.owner == 0 && !voice.layer) {
+                if self.voices[i].is_some_and(|voice| voice.owner == LIVE_OWNER && !voice.layer) {
                     self.end_voice(i, 0.0, out);
                 }
             }
@@ -446,37 +516,7 @@ impl Engine {
         {
             self.sync_layers(out);
         }
-        if previous_sources != self.source_overrides {
-            // Restore a removed controller route even if its live baseline is unknown.
-            for channel in 0..16 {
-                if self
-                    .newest_voice(channel)
-                    .is_none_or(|v| v.owner == delay_output::DELAY_OWNER)
-                    || self.melody_channel(channel)
-                {
-                    continue;
-                }
-                for (index, cc) in [(1, 1), (2, 11), (3, 2)] {
-                    if previous_sources[index].is_some() && self.source_overrides[index].is_none() {
-                        let value = self.controller_baseline(cc) as f32 / 127.0;
-                        if self.fx.active() {
-                            for voice in self.voices.iter().flatten().filter(|v| v.channel == channel) {
-                                self.fx.controller(voice.token, cc, value, out);
-                            }
-                        } else { out(Out::Cc(channel, cc, value)); }
-                    }
-                }
-            }
-            if self.config.routed_x.is_none()
-                && (self.source_overrides[7].is_some() || previous_sources[7].is_some())
-            {
-                self.position_value(self.source_overrides[7].unwrap_or(self.sources[7]), 0, out);
-            }
-            if self.source_overrides[8].is_some() || previous_sources[8].is_some() {
-                self.position_value(self.source_overrides[8].unwrap_or(self.sources[8]), 1, out);
-            }
-            self.fan_expression(out);
-        }
+        self.publish_source_overrides(previous_sources, out);
         if route
             && self
                 .melody
@@ -1038,7 +1078,7 @@ impl Engine {
             CHORD => {
                 for i in 0..self.voices.len() {
                     if self.voices[i]
-                        .is_some_and(|v| v.owner == 0 && !self.notes.as_slice().contains(&v.note))
+                        .is_some_and(|v| v.owner == LIVE_OWNER && !self.notes.as_slice().contains(&v.note))
                     {
                         let end = self.now.saturating_add(self.duration());
                         if let Some(voice) = self.voices[i].as_mut() {
@@ -1058,7 +1098,7 @@ impl Engine {
                         .voices
                         .iter_mut()
                         .flatten()
-                        .find(|v| v.owner == 0 && v.note == note)
+                        .find(|v| v.owner == LIVE_OWNER && v.note == note)
                     {
                         voice.off = u64::MAX;
                     } else {
@@ -1069,7 +1109,7 @@ impl Engine {
             AUTO => {
                 if self.config.strum_hold {
                     for i in 0..self.voices.len() {
-                        if self.voices[i].is_some_and(|v| v.owner == 0 && !v.layer) {
+                        if self.voices[i].is_some_and(|v| v.owner == LIVE_OWNER && !v.layer) {
                             self.end_voice(i, 0.0, out);
                         }
                     }

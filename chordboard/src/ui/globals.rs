@@ -217,7 +217,7 @@ impl ChordboardView {
 
     fn draw_complexity_ring(&self, d: &mut Draw, layout: &KnobLayout, norm: f32, color: Color) {
         let chord = SavedChord::decode(self.snapshot.captured)
-            .or_else(|| self.params.arpeggiator.snapshot().rows[self.arp_ui.edit_page].chord);
+            .or_else(|| self.arp_state().rows[self.arp_ui.edit_page].chord);
         let steps = chord.map(|chord| {
             complexity_steps(
                 chord,
@@ -301,15 +301,7 @@ impl ChordboardView {
             let binding = &self.params.quick_midi[target];
             let mapping = crate::engine::Mapping::decode(binding.mapping.load(Ordering::Acquire));
             let armed = self.bridge.quick_learn.load(Ordering::Acquire) == target as u32 + 1;
-            let label = if armed {
-                "Play note / CC…".into()
-            } else {
-                match mapping.kind {
-                    midi::NOTE => format!("Note {} · Ch {}", mapping.number, mapping.channel + 1),
-                    1 => format!("CC{} Ch{}", mapping.number, mapping.channel + 1),
-                    _ => "Unassigned".into(),
-                }
-            };
+            let label = super::midi_learn::format_mapping(mapping, armed);
             // Color the entire knob face, not a separate Learn button.
             {
                 let layout = knob_layout(global_rect(id));
@@ -346,13 +338,7 @@ impl ChordboardView {
             );
             if mapping.kind == 1 && !armed {
                 let step = binding.step_cc.load(Ordering::Relaxed);
-                self.button(
-                    d,
-                    mode_rect(index),
-                    if step { "STEP" } else { "VALUE" },
-                    step,
-                    GOLD,
-                );
+                self.draw_step_mode(d, mode_rect(index), step);
             }
             if mapping.kind != 0 || armed {
                 self.close_icon(d, clear_rect(index), GOLD, false);

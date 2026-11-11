@@ -75,20 +75,13 @@ impl Engine {
         config.tracker_enabled = false;
         config.arp_page = 0;
         config.arp_enabled = program.enabled;
-        config.arp_mode = match settings.mode {
-            crate::arpeggiator::ArpMode::Once => crate::arpeggiator::ArpMode::Once,
-            _ if config.daw_alignment => crate::arpeggiator::ArpMode::AlignedLoop,
-            crate::arpeggiator::ArpMode::AlignedLoop => crate::arpeggiator::ArpMode::SyncLoop,
-            mode => mode,
-        };
-        config.arp_pattern = settings.pattern;
-        config.arp_octaves = settings.octaves.min(program.page.initialized);
-        config.arp_loop_octaves = program.page.octaves();
-        config.arp_sync = settings.sync;
-        config.arp_free_ms = settings.free_ms;
-        config.rate = settings.rate;
-        config.swing = self.host_config.swing;
-        config.humanize = self.host_config.humanize;
+        arpeggiator::apply_arp_playback(
+            &mut config,
+            settings,
+            &program.page,
+            self.host_config.swing,
+            self.host_config.humanize,
+        );
         self.apply_routes(&mut config);
         self.source_overrides = self.resolved_source_overrides();
         self.config = config;
@@ -422,6 +415,42 @@ mod tests {
             &mut |_| {},
         );
         assert_eq!(e.notes.len, 0);
+    }
+    #[test]
+    fn performance_arp_stop_keeps_delay_echo() {
+        let mut e = engine();
+        let mut delay = crate::midi_fx::DelaySettings {
+            enabled: true,
+            sync: false,
+            sources: crate::midi_fx::source::ARP,
+            ..crate::midi_fx::DelaySettings::default()
+        };
+        delay.taps[0].time = 10.0;
+        delay.taps[0].velocity = 1.0;
+        delay.taps[0].feedback = 0.0;
+        e.arp.data.midi_fx.delay = delay;
+        e.note_on(60, 60, 0, 0.8, Some(0), &mut |_| {});
+        e.advance(15, &mut |_, _| {});
+        assert!(
+            e.voices.iter().flatten().any(|v| v.owner == DELAY_OWNER),
+            "echo should be sounding before the arp stops"
+        );
+        assert!(e
+            .voices
+            .iter()
+            .flatten()
+            .any(|v| v.owner == arpeggiator::PERFORMANCE_ARP_OWNER));
+        e.note_off(60, 0.0, &mut |_| {});
+        e.advance(1, &mut |_, _| {});
+        assert!(!e
+            .voices
+            .iter()
+            .flatten()
+            .any(|v| v.owner == arpeggiator::PERFORMANCE_ARP_OWNER));
+        assert!(
+            e.voices.iter().flatten().any(|v| v.owner == DELAY_OWNER),
+            "stopping the live arp must not release delay echoes"
+        );
     }
     #[test]
     fn performance_arp_releases_old_output_channels_when_routing_changes() {

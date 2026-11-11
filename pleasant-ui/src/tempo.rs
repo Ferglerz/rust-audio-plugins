@@ -33,10 +33,9 @@ pub enum Hit {
 
 impl Header {
     pub fn hit(self, x: f32, y: f32) -> Option<Hit> {
-        let inside = |r: Rect| x >= r.0 && x <= r.0 + r.2 && y >= r.1 && y <= r.1 + r.3;
-        if inside(self.source) {
+        if crate::point_in_rect(x, y, self.source) {
             Some(Hit::Source)
-        } else if inside(self.bpm) {
+        } else if crate::point_in_rect(x, y, self.bpm) {
             Some(Hit::Bpm)
         } else {
             None

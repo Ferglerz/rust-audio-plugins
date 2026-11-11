@@ -130,16 +130,7 @@ pub(super) const ARP_RATES: [(&str, f32); 8] = [
     ("1/8T", 1.0 / 3.0),
     ("1/16T", 1.0 / 6.0),
 ];
-pub(super) const ARP_PATTERN_NAMES: [&str; 8] = [
-    "Up",
-    "Down",
-    "Up / Down",
-    "Up in 3rds",
-    "Down in 3rds",
-    "As played",
-    "Random",
-    "Custom",
-];
+pub(super) use crate::arpeggiator::PATTERN_NAMES as ARP_PATTERN_NAMES;
 // Shared timing controls live in the Global module.
 pub(super) fn arp_controls() -> [(&'static str, Rect); 2] {
     [
@@ -238,7 +229,7 @@ pub(super) fn key_rect(index: usize) -> Rect {
     )
 }
 // Minimum readable size for hints and secondary labels at the native window size.
-pub(super) const TEXT_SMALL: f32 = 13.0;
+pub(super) const TEXT_SMALL: f32 = 11.0;
 pub(super) const TEXT_LABEL: f32 = 13.0;
 pub(super) fn memory_rect(i: usize) -> Rect {
     (
@@ -470,7 +461,7 @@ pub(super) fn key_split_rect(mpe: bool) -> Rect {
     (r.0 + 10.0, module_header_mid(r.1) - 12.0, 24.0, 24.0)
 }
 fn keyboard_channel_rect(r: Rect) -> Rect {
-    (r.0 + r.2 - 76.0, module_header_mid(r.1) - 14.0, 64.0, 28.0)
+    (r.0 + r.2 - 100.0, module_header_mid(r.1) - 14.0, 88.0, 28.0)
 }
 pub(super) fn output_protocol_rect(_mpe: bool, _i: usize) -> Rect {
     MPE

@@ -35,6 +35,17 @@ impl Default for QuickMidiUi {
     }
 }
 
+pub(super) fn format_mapping(mapping: crate::engine::Mapping, armed: bool) -> String {
+    if armed {
+        return "Play note / CC…".into();
+    }
+    match mapping.kind {
+        midi::NOTE => format!("Note {} · Ch {}", mapping.number, mapping.channel + 1),
+        1 => format!("CC {} · Ch {}", mapping.number, mapping.channel + 1),
+        _ => "Unassigned".into(),
+    }
+}
+
 pub(super) fn switch_rect() -> Rect {
     (
         MOD_SURFACE.0 + MOD_SURFACE.2 - 38.0,
@@ -372,14 +383,8 @@ impl ChordboardView {
             style::Icon::Loop,
             style::Icon::Touch,
         ];
+        self.module_title(d, MOD_SURFACE.0 + 10.0, MOD_SURFACE.1, "LEARN", GOLD);
         d.font = self.font.get();
-        d.text(
-            MOD_SURFACE.0 + 10.0,
-            module_title_y(MOD_SURFACE.1, MODULE_TITLE_SIZE),
-            "LEARN",
-            MODULE_TITLE_SIZE,
-            GOLD,
-        );
         self.button(d, exit_rect(), "Done", false, GOLD);
         for i in VISIBLE_TARGETS {
             let label = target_label(i);
@@ -416,35 +421,23 @@ impl ChordboardView {
             );
             icons.get(i).copied().unwrap_or(style::Icon::Learn).draw(d, r.0 + 15.0, r.1 + 16.0, GOLD);
             d.text(r.0 + 29.0, r.1 + 20.0, label, TEXT_SMALL, GOLD);
-            let source = if armed {
-                "Play note / CC…".into()
-            } else if mapping.kind == midi::NOTE {
-                format!("Note {} · Ch {}", mapping.number, mapping.channel + 1)
-            } else if mapping.kind == 1 {
-                format!("CC{} Ch{}", mapping.number, mapping.channel + 1)
+            let source = format_mapping(mapping, armed);
+            let step_room = if mapping.kind == 1 && !armed && i != midi::ROOT {
+                70.0
             } else {
-                "Unassigned".into()
+                8.0
             };
+            let source = self.fit_text(d, &source, (r.2 - step_room).max(0.0), TEXT_SMALL);
             d.text(
                 r.0 + 8.0,
                 r.1 + 39.0,
                 &source,
-                if mapping.kind == 1 && !armed {
-                    10.0
-                } else {
-                    TEXT_SMALL
-                },
+                TEXT_SMALL,
                 if armed { GOLD } else { MUTED },
             );
             if mapping.kind == 1 && !armed && i != midi::ROOT {
                 let step = self.params.quick_midi[i].step_cc.load(Ordering::Relaxed);
-                self.button(
-                    d,
-                    mode_rect(i),
-                    if step { "STEP" } else { "VALUE" },
-                    step,
-                    GOLD,
-                );
+                self.draw_step_mode(d, mode_rect(i), step);
             }
             if i == midi::ROOT {
                 d.text(r.0 + 8.0, r.1 + r.3 - 9.0, "Hold + play notes", 10.0, TEXT);
@@ -464,6 +457,10 @@ impl ChordboardView {
         d.font = self.ui_font.get();
     }
 
+    pub(super) fn draw_step_mode(&self, d: &mut Draw, rect: Rect, step: bool) {
+        self.button(d, rect, if step { "STEP" } else { "VALUE" }, step, GOLD);
+    }
+
     pub(super) fn midi_learn_status(&self) -> String {
         let armed = self.bridge.quick_learn.load(Ordering::Acquire);
         if let Some(index) = armed.checked_sub(1).filter(|i| (*i as usize) < COUNT) {
@@ -472,11 +469,7 @@ impl ChordboardView {
         } else if let Some((target, _)) = self.pointer.and_then(|(x, y)|
             self.surface_midi_targets().into_iter().find(|(_, r)| hit(*r, x, y))) {
             let mapping = crate::engine::Mapping::decode(self.params.quick_midi[target].mapping.load(Ordering::Acquire));
-            let source = match mapping.kind {
-                midi::NOTE => format!("Note {} · Ch {}", mapping.number, mapping.channel + 1),
-                1 => format!("CC{} · Ch {}", mapping.number, mapping.channel + 1),
-                _ => "Unassigned".into(),
-            };
+            let source = format_mapping(mapping, false);
             format!("{} · {} · Click to learn · Right-click to clear", target_label(target), source)
         } else if let Some((x, y)) = self.pointer {
             if let Some(hint) = self.quick_midi_hint(x, y) {

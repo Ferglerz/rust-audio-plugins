@@ -1,6 +1,8 @@
 //! Expand Envelope into the curve space with a quarter-second quintic animation.
 use super::*;
-use std::time::{Duration, Instant};
+use std::time::Instant;
+#[cfg(test)]
+use std::time::Duration;
 
 pub(super) const CURVE_HEADER_H: f32 = 32.0;
 fn header_height(_mode: u8) -> f32 {
@@ -55,10 +57,8 @@ impl Model for GraphPages {
 }
 
 pub(super) fn build_model(cx: &mut Context) {
-    let timer = cx.add_timer(Duration::from_millis(16), None, |cx, action| {
-        if matches!(action, TimerAction::Tick(_)) {
-            cx.emit(PageEvent::Tick);
-        }
+    let timer = pleasant_ui::frame_timer(cx, pleasant_ui::FRAME_INTERVAL, |cx| {
+        cx.emit(PageEvent::Tick);
     });
     GraphPages {
         progress: 0.0,

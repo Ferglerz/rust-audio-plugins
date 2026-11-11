@@ -110,7 +110,7 @@ impl Engine {
             && (self.arp.data.midi_fx.delay.follow_chords
                 || self.arp.data.midi_fx.delay.voice_leading)
         {
-            ctx.delay_map = std::array::from_fn(|n| self.delay_note(n as u8));
+            ctx.delay_map = self.cached_delay_map();
         }
         self.fx.flush(ctx, out);
         let serial = self.fx.output_serial();
