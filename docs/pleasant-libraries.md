@@ -22,7 +22,7 @@ Sample-processing methods use prepared storage:
 - `OversampledEq::process`
 - `LinearPhaseEq::process_sample`
 - `VocalComp::tick`, `tick_comp`, and `tick_pse`
-- `Wall::process` (stateful hybrid limiter; `tick_wall` remains the stateless colour plus safety-clip path)
+- `Wall::process` (stateful hybrid limiter with ADAA anti-aliased colour and safety waveshapers; `tick_wall` remains the stateless, non-anti-aliased colour plus safety-clip path)
 
 Configuration publication must retain the last complete prepared state until a newer generation is ready. Meter and display updates may be dropped when their nonblocking destination is busy. Configuration updates must not be silently dropped.
 

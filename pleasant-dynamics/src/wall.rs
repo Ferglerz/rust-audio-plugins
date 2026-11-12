@@ -1,6 +1,8 @@
 //! Hybrid limiter: stereo-linked gain reduction in front of a transparent
 //! safety clipper. Optional Even/Odd saturation runs before the limiter so
-//! colour can be driven without giving up the ceiling.
+//! colour can be driven without giving up the ceiling. Both waveshapers
+//! run through first-order antiderivative anti-aliasing in [`Wall`], so
+//! generated harmonics stay in band instead of folding below Nyquist.
 
 pub const WALL_LOOKAHEAD_SECONDS: f64 = 0.0015;
 const RELEASE_SECONDS: f64 = 0.080;
@@ -77,6 +79,39 @@ fn colour(input: [f64; 2], settings: WallSettings) -> [f64; 2] {
     ]
 }
 
+fn log_cosh(value: f64) -> f64 {
+    let magnitude = value.abs();
+    magnitude + (-2.0 * magnitude).exp().ln_1p() - std::f64::consts::LN_2
+}
+
+/// Antiderivative of `colour_sample`. First-order antiderivative
+/// anti-aliasing (ADAA) divides the difference of this function between
+/// consecutive samples by the sample difference, which replaces the
+/// instantaneous waveshape with its exact average over the interval and
+/// strongly suppresses harmonics that would fold back below Nyquist.
+fn colour_antiderivative(input: f64, even: f64, odd: f64, ceiling: f64) -> f64 {
+    let normalized = input / ceiling;
+    (1.0 - odd) * input * input * 0.5
+        + odd * ceiling * ceiling * log_cosh(normalized)
+        + even * ceiling * ceiling * (normalized - normalized.tanh())
+}
+
+fn colour_sample_adaa(input: f64, previous: f64, even: f64, odd: f64, ceiling: f64) -> f64 {
+    // No colour is the identity function. ADAA of the identity would be a
+    // two-sample average, so the transparent path must stay exact.
+    if even == 0.0 && odd == 0.0 {
+        return input;
+    }
+    let difference = input - previous;
+    if (difference / ceiling).abs() < 1.0e-4 {
+        colour_sample((input + previous) * 0.5, even, odd, ceiling)
+    } else {
+        (colour_antiderivative(input, even, odd, ceiling)
+            - colour_antiderivative(previous, even, odd, ceiling))
+            / difference
+    }
+}
+
 /// Exact identity at and below the knee. Above the knee a tanh tail approaches
 /// the ceiling asymptotically, so the result never exceeds the ceiling.
 fn safety_sample(input: f64, ceiling: f64) -> f64 {
@@ -96,13 +131,47 @@ fn safety(input: [f64; 2], ceiling: f64) -> [f64; 2] {
     ]
 }
 
+/// Antiderivative of `safety_sample` (an even function, like the safety
+/// curve's integral from silence), for ADAA on the gained signal.
+fn safety_antiderivative(input: f64, ceiling: f64) -> f64 {
+    let magnitude = input.abs();
+    let knee = SAFETY_KNEE * ceiling;
+    if magnitude <= knee {
+        input * input * 0.5
+    } else {
+        SAFETY_KNEE * ceiling * magnitude - 0.5 * knee * knee
+            + (1.0 - SAFETY_KNEE)
+                * (1.0 - SAFETY_KNEE)
+                * ceiling
+                * ceiling
+                * log_cosh((magnitude - knee) / ((1.0 - SAFETY_KNEE) * ceiling))
+    }
+}
+
+fn safety_sample_adaa(input: f64, previous: f64, ceiling: f64) -> f64 {
+    let knee = SAFETY_KNEE * ceiling;
+    // Below the knee the safety curve is the identity, and ADAA of the
+    // identity would average two samples. Stay exact there.
+    if input.abs() <= knee && previous.abs() <= knee {
+        return input;
+    }
+    let difference = input - previous;
+    if (difference / ceiling).abs() < 1.0e-4 {
+        safety_sample((input + previous) * 0.5, ceiling)
+    } else {
+        (safety_antiderivative(input, ceiling) - safety_antiderivative(previous, ceiling))
+            / difference
+    }
+}
+
 fn one_pole(current: f64, target: f64, seconds: f64, sample_rate: f64) -> f64 {
     let coefficient = (-1.0 / (sample_rate * seconds.max(1.0e-6))).exp();
     coefficient * current + (1.0 - coefficient) * target
 }
 
-/// Stateless colour plus safety clip. Stateful limiting lives in [`Wall`];
-/// this remains for one-shot use where no gain history exists.
+/// Stateless colour plus safety clip, without anti-aliasing. Stateful
+/// limiting lives in [`Wall`], which runs both waveshapers through ADAA;
+/// this remains for one-shot use where no sample history exists.
 pub fn tick_wall(input: [f64; 2], settings: WallSettings) -> [f64; 2] {
     if !settings.on {
         return input;
@@ -117,6 +186,9 @@ pub struct Wall {
     gain: f64,
     mode_mix: f64,
     initialized: bool,
+    previous_colour_input: [f64; 2],
+    previous_live_input: [f64; 2],
+    previous_delayed_input: [f64; 2],
 }
 
 impl Default for Wall {
@@ -133,6 +205,9 @@ impl Wall {
             gain: 1.0,
             mode_mix: 0.0,
             initialized: false,
+            previous_colour_input: [0.0; 2],
+            previous_live_input: [0.0; 2],
+            previous_delayed_input: [0.0; 2],
         }
     }
 
@@ -141,6 +216,9 @@ impl Wall {
         self.position = 0;
         self.gain = 1.0;
         self.initialized = false;
+        self.previous_colour_input = [0.0; 2];
+        self.previous_live_input = [0.0; 2];
+        self.previous_delayed_input = [0.0; 2];
     }
 
     pub fn latency_samples(&self, settings: WallSettings) -> usize {
@@ -170,6 +248,9 @@ impl Wall {
             self.position = 0;
             self.gain = 1.0;
             self.initialized = false;
+            self.previous_colour_input = [0.0; 2];
+            self.previous_live_input = [0.0; 2];
+            self.previous_delayed_input = [0.0; 2];
         }
     }
 
@@ -206,25 +287,32 @@ impl Wall {
         // The ring always runs. The detector reads the live (future) sample;
         // the delayed candidate reads the sample leaving the ring. Toggling
         // lookahead crossfades between the two candidates.
+        let ceiling = settings.ceiling();
         let future = if settings.on {
-            colour(input, settings)
+            let even = settings.even_amount();
+            let odd = settings.odd_amount();
+            [
+                colour_sample_adaa(input[0], self.previous_colour_input[0], even, odd, ceiling),
+                colour_sample_adaa(input[1], self.previous_colour_input[1], even, odd, ceiling),
+            ]
         } else {
             input
         };
+        self.previous_colour_input = input;
         let delayed = self.delay[self.position];
         self.delay[self.position] = future;
         self.position = (self.position + 1) % self.delay.len();
 
         if !settings.on {
             self.gain = one_pole(self.gain, 1.0, RELEASE_SECONDS, sample_rate);
+            self.previous_live_input = input;
+            self.previous_delayed_input = delayed;
             let live = input;
             return [
                 live[0] + self.mode_mix * (delayed[0] - live[0]),
                 live[1] + self.mode_mix * (delayed[1] - live[1]),
             ];
         }
-
-        let ceiling = settings.ceiling();
         // Lookahead gain must target the loudest sample still in the ring,
         // not the newest sample alone. Otherwise gain modulation follows a
         // future phase and lands on the wrong delayed sample.
@@ -254,8 +342,16 @@ impl Wall {
 
         let gained_live = [future[0] * self.gain, future[1] * self.gain];
         let gained_delayed = [delayed[0] * self.gain, delayed[1] * self.gain];
-        let live = safety(gained_live, ceiling);
-        let delayed_out = safety(gained_delayed, ceiling);
+        let live = [
+            safety_sample_adaa(gained_live[0], self.previous_live_input[0], ceiling),
+            safety_sample_adaa(gained_live[1], self.previous_live_input[1], ceiling),
+        ];
+        let delayed_out = [
+            safety_sample_adaa(gained_delayed[0], self.previous_delayed_input[0], ceiling),
+            safety_sample_adaa(gained_delayed[1], self.previous_delayed_input[1], ceiling),
+        ];
+        self.previous_live_input = gained_live;
+        self.previous_delayed_input = gained_delayed;
         [
             sanitize(live[0] + self.mode_mix * (delayed_out[0] - live[0])),
             sanitize(live[1] + self.mode_mix * (delayed_out[1] - live[1])),
@@ -399,8 +495,12 @@ mod tests {
             "gain must already fall before the delayed peak emerges, got {} dB",
             wall.reduction_db()
         );
+        // ADAA averages the safety curve across the first emerging step,
+        // so that one sample sits mid-ramp and the next is fully limited.
         let emerged = wall.process([2.0, 2.0], active, SR);
-        assert!(emerged[0] > 0.9 && emerged[0] <= 1.0);
+        assert!(emerged[0] > 0.4 && emerged[0] <= 1.0);
+        let settled = wall.process([2.0, 2.0], active, SR);
+        assert!(settled[0] > 0.9 && settled[0] <= 1.0);
     }
 
     #[test]
@@ -466,5 +566,78 @@ mod tests {
         assert!(harmonic(even, 2) > 0.01);
         assert!(harmonic(odd, 2) < 1.0e-12);
         assert!(harmonic(odd, 3) / harmonic(odd, 1) > harmonic(base, 3) / harmonic(base, 1));
+    }
+
+    #[test]
+    fn antiderivatives_match_the_waveshaper_derivatives() {
+        let ceiling = 0.5;
+        for (even, odd) in [(0.0, 1.0), (1.0, 0.0), (0.7, 0.4)] {
+            for input in [-1.2, -0.3, 0.05, 0.8] {
+                let step = 1.0e-6;
+                let numeric = (colour_antiderivative(input + step, even, odd, ceiling)
+                    - colour_antiderivative(input - step, even, odd, ceiling))
+                    / (2.0 * step);
+                let expected = colour_sample(input, even, odd, ceiling);
+                assert!(
+                    (numeric - expected).abs() < 1.0e-5,
+                    "colour antiderivative at {input}: {numeric} != {expected}"
+                );
+            }
+        }
+        for input in [-1.5, -0.4, 0.2, 1.1] {
+            let ceiling = 1.0;
+            let step = 1.0e-6;
+            let numeric = (safety_antiderivative(input + step, ceiling)
+                - safety_antiderivative(input - step, ceiling))
+                / (2.0 * step);
+            let expected = safety_sample(input, ceiling);
+            assert!(
+                (numeric - expected).abs() < 1.0e-5,
+                "safety antiderivative at {input}: {numeric} != {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn adaa_colour_aliases_less_than_the_naive_waveshaper() {
+        fn component(samples: &[f64], frequency: f64) -> f64 {
+            let mut real = 0.0;
+            let mut imag = 0.0;
+            for (index, sample) in samples.iter().enumerate() {
+                let phase = std::f64::consts::TAU * frequency * index as f64 / SR;
+                real += sample * phase.cos();
+                imag += sample * phase.sin();
+            }
+            real.hypot(imag) / samples.len() as f64
+        }
+        // 7 kHz at 48 kHz: even harmonics at 28/42/56 kHz fold to
+        // 20/6/8 kHz, none of which are harmonics of the source. Folded
+        // energy there is pure aliasing. Amplitude and ceiling keep the gained signal
+        // below the safety knee, so only the colour stage is measured.
+        let active = WallSettings {
+            even: 100.0,
+            ..settings(0.0)
+        };
+        let mut wall = Wall::new(SR);
+        let mut naive = Vec::with_capacity(48_000);
+        let mut antialiased = Vec::with_capacity(48_000);
+        for index in 0..48_000 {
+            let input = 0.3 * (std::f64::consts::TAU * 7_000.0 * index as f64 / SR).sin();
+            naive.push(tick_wall([input, input], active)[0]);
+            antialiased.push(wall.process([input, input], active, SR)[0]);
+        }
+        // Measure the steady-state second half only.
+        let naive = &naive[24_000..];
+        let antialiased = &antialiased[24_000..];
+        for alias_frequency in [20_000.0, 8_000.0, 6_000.0] {
+            let naive_alias = component(naive, alias_frequency);
+            let adaa_alias = component(antialiased, alias_frequency);
+            assert!(
+                adaa_alias < naive_alias * 0.5,
+                "alias at {alias_frequency} Hz: ADAA {adaa_alias} must be well below naive {naive_alias}"
+            );
+        }
+        // The wanted second harmonic must survive anti-aliasing.
+        assert!(component(antialiased, 14_000.0) > 0.005);
     }
 }
