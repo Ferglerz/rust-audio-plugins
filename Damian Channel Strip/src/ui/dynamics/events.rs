@@ -250,6 +250,11 @@ impl StripView {
                 {
                     return true;
                 }
+                if inside(x, y, self.wall_lookahead_switch_rect()) {
+                    self.toggle(cx, &self.params.wall_lookahead);
+                    cx.needs_redraw();
+                    return true;
+                }
             }
         }
         false

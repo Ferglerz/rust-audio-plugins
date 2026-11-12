@@ -144,7 +144,7 @@ fn visible_spectrum_matches_original_window_fft_and_peak_hold() {
 }
 
 #[test]
-fn wall_clips_with_zero_harmonics_in_the_audio_path() {
+fn wall_limits_with_zero_harmonics_in_the_audio_path() {
     let mut engine = Engine::new(isolated_shared(), 48000.0);
     let settings = CompSettings {
         wall: crate::dsp::WallSettings {
@@ -154,15 +154,50 @@ fn wall_clips_with_zero_harmonics_in_the_audio_path() {
         ..CompSettings::default()
     };
     let ceiling = 10.0_f64.powf(-12.0 / 20.0);
+    // Below the ceiling the zero-harmonic limiter is transparent.
+    let quiet = [0.4 * ceiling, -0.2 * ceiling];
+    let output = engine.tick(
+        quiet, settings, false, false, false, false, false, false, false,
+    );
+    assert_eq!(output, quiet);
     for input in [[0.8, -0.4], [-2.0, 2.0], [0.0, 0.0]] {
         let output = engine.tick(
             input, settings, false, false, false, false, false, false, false,
         );
         for channel in 0..2 {
-            let expected = ceiling * (input[channel] / ceiling).tanh();
-            assert!((output[channel] - expected).abs() < 1.0e-12);
+            assert!(
+                output[channel].is_finite() && output[channel].abs() <= ceiling + 1.0e-12,
+                "output {output:?} exceeds ceiling {ceiling}"
+            );
         }
     }
+}
+
+#[test]
+fn wall_lookahead_reports_and_applies_its_latency_in_the_audio_path() {
+    let mut engine = Engine::new(isolated_shared(), 48000.0);
+    let base_latency = engine.latency();
+    let settings = CompSettings {
+        wall: crate::dsp::WallSettings {
+            threshold: -12.0,
+            lookahead: true,
+            ..Default::default()
+        },
+        ..CompSettings::default()
+    };
+    let lookahead = crate::dsp::wall_lookahead_samples(48000.0);
+    let mut outputs = Vec::new();
+    for index in 0..lookahead + 1 {
+        let input = if index == 0 { [0.1, 0.1] } else { [0.0, 0.0] };
+        outputs.push(engine.tick(
+            input, settings, false, false, false, false, false, false, false,
+        ));
+    }
+    assert_eq!(engine.latency(), base_latency + lookahead as u32);
+    assert!(outputs[..lookahead]
+        .iter()
+        .all(|output| *output == [0.0, 0.0]));
+    assert_eq!(outputs[lookahead], [0.1, 0.1]);
 }
 
 #[test]

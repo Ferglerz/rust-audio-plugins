@@ -133,6 +133,7 @@ impl Plugin for Damian {
                     odd: self.params.wall_odd.smoothed.next() as f64,
                     threshold: -(self.params.wall_threshold.smoothed.next() as f64),
                     on: self.params.wall_on.value(),
+                    lookahead: self.params.wall_lookahead.value(),
                 },
                 dry: self.params.dry.smoothed.next() as f64 / 100.0,
                 wet: self.params.wet.smoothed.next() as f64 / 100.0,

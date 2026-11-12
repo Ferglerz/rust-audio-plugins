@@ -84,6 +84,8 @@ pub struct StripParams {
     pub wall_odd: FloatParam,
     #[id = "wall_threshold"]
     pub wall_threshold: FloatParam,
+    #[id = "wall_lookahead"]
+    pub wall_lookahead: BoolParam,
     #[id = "dry"]
     pub dry: FloatParam,
     #[id = "wet"]
@@ -314,6 +316,7 @@ impl Default for StripParams {
                         .filter(|v| v.is_finite())
                         .map(|v| -v)
                 })),
+            wall_lookahead: BoolParam::new("WALL lookahead", false),
             dry: param("Dry level", 0.0, 0.0, 100.0, " %"),
             wet: param("Wet level", 100.0, 0.0, 100.0, " %"),
             output_gain: param("Output gain", 0.0, -12.0, 12.0, " dB")

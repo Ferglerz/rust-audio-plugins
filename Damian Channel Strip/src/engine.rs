@@ -1,8 +1,8 @@
 use crate::{
     band::Band,
     dsp::{
-        gain_db, tick_wall, BandInputMeters, BandRuntime, CompSettings, VocalComp,
-        DYNAMIC_BAND_METER_RESERVE,
+        gain_db, wall_lookahead_samples, BandInputMeters, BandRuntime, CompSettings, VocalComp,
+        Wall, DYNAMIC_BAND_METER_RESERVE,
     },
     lift::{LiftBand, LiftProcessor, LIFT_ID_BASE, LIFT_LATENCY},
     processing::{Config, ProcessingMode},
@@ -231,6 +231,34 @@ impl Drop for Shared {
         }
     }
 }
+/// Fixed stereo delay used to keep dry and solo paths sample-aligned with
+/// the WALL lookahead path.
+struct StereoDelay {
+    buffer: Vec<[f64; 2]>,
+    position: usize,
+}
+
+impl StereoDelay {
+    fn new(samples: usize) -> Self {
+        Self {
+            buffer: vec![[0.0; 2]; samples.max(1)],
+            position: 0,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.buffer.fill([0.0; 2]);
+        self.position = 0;
+    }
+
+    fn process(&mut self, input: [f64; 2]) -> [f64; 2] {
+        let delayed = self.buffer[self.position];
+        self.buffer[self.position] = input;
+        self.position = (self.position + 1) % self.buffer.len();
+        delayed
+    }
+}
+
 pub struct Engine {
     shared: Arc<Shared>,
     bank: Box<Bank>,
@@ -267,6 +295,11 @@ pub struct Engine {
     sc_eq_mix: f64,
     lift_mix: f64,
     wall_mix: f64,
+    wall: Wall,
+    wall_lookahead: bool,
+    wall_base_delay: StereoDelay,
+    dry_delay: StereoDelay,
+    solo_delay: StereoDelay,
     vad: SpeechVad,
     speech_env: f32,
     dyn_gr_scratch: Vec<(u64, f32)>,
@@ -375,6 +408,11 @@ impl Engine {
             sc_eq_mix: 1.0,
             lift_mix: 1.0,
             wall_mix: 1.0,
+            wall: Wall::new(sr),
+            wall_lookahead: false,
+            wall_base_delay: StereoDelay::new(wall_lookahead_samples(sr)),
+            dry_delay: StereoDelay::new(wall_lookahead_samples(sr)),
+            solo_delay: StereoDelay::new(wall_lookahead_samples(sr)),
             vad,
             speech_env: 0.0,
             dyn_gr_scratch: aux.dyn_gr_scratch,
@@ -409,6 +447,10 @@ impl Engine {
         self.in_peak = 0.0;
         self.out_peak = 0.0;
         self.wall_peak = 0.0;
+        self.wall.reset();
+        self.wall_base_delay.reset();
+        self.dry_delay.reset();
+        self.solo_delay.reset();
         self.solo_filters = [crate::dsp::Cascade::default(); 2];
         self.solo_mix = 0.0;
         self.solo_topology = None;
@@ -443,7 +485,12 @@ impl Engine {
         } else {
             0
         };
-        self.bank.config.latency(self.sr) as u32 + lift_latency
+        let wall_latency = if self.wall_lookahead {
+            wall_lookahead_samples(self.sr) as u32
+        } else {
+            0
+        };
+        self.bank.config.latency(self.sr) as u32 + lift_latency + wall_latency
     }
     pub fn sync(&mut self) {
         if !self.shared.retired_aux.is_full() {
@@ -604,6 +651,7 @@ impl Engine {
         self.sc_eq_mix += k * (f64::from(sc_eq_on) - self.sc_eq_mix);
         self.lift_mix += k * (f64::from(lift_on) - self.lift_mix);
         self.wall_mix += k * (f64::from(settings.wall.on) - self.wall_mix);
+        self.wall_lookahead = settings.wall.lookahead;
         self.comp_mix += k * (f64::from(comp_on) - self.comp_mix);
         self.comp_pre_mix += k * (f64::from(comp_pre) - self.comp_pre_mix);
         self.bypass_mix += k * (f64::from(bypass) - self.bypass_mix);
@@ -740,10 +788,26 @@ impl Engine {
         };
 
         self.wall_peak = self.wall_peak.max(x[0].abs()).max(x[1].abs());
-        let clipped = tick_wall(x, settings.wall);
+        let clipped = self.wall.process(x, settings.wall, self.sr);
+        let base_delayed = self.wall_base_delay.process(x);
+        let base = if settings.wall.lookahead {
+            base_delayed
+        } else {
+            x
+        };
         for i in 0..2 {
-            x[i] += self.wall_mix * (clipped[i] - x[i]);
+            x[i] = base[i] + self.wall_mix * (clipped[i] - base[i]);
         }
+
+        // Dry and solo enter the final mixes after the WALL stage, so both
+        // take the same lookahead delay as the limited path.
+        let dry_delayed = self.dry_delay.process(dry);
+        let solo_delayed = self.solo_delay.process(solo_sample.unwrap_or([0.0; 2]));
+        let (dry, solo_sample) = if settings.wall.lookahead {
+            (dry_delayed, solo_sample.map(|_| solo_delayed))
+        } else {
+            (dry, solo_sample)
+        };
 
         let out_gain = 10.0_f64.powf(settings.output_gain / 20.0);
         for i in 0..2 {

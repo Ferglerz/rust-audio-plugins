@@ -615,11 +615,43 @@ impl StripView {
                         wall_bypassed,
                     );
                 }
+                draw_wall_lookahead_switch(
+                    &mut d,
+                    self.wall_lookahead_switch_rect(),
+                    self.params.wall_lookahead.value(),
+                    wall_bypassed,
+                );
             }
         }
         d.reset_scissor();
         d.offset_x = 0.0;
 
         (comp_bypassed, is_pre)
+    }
+}
+
+/// OpenWurli-style toggle: label above a pill switch, state text beside it.
+fn draw_wall_lookahead_switch(d: &mut Draw, rect: (f32, f32, f32, f32), on: bool, bypassed: bool) {
+    let (x, y, w, _) = rect;
+    let color = if bypassed { MUTED } else { WALL_COLOR };
+    d.text_centered(x + w * 0.5, y + 10.0, "LOOKAHEAD", 9.0, TEXT);
+    d.rounded_rect(
+        x + 18.0,
+        y + 21.0,
+        28.0,
+        13.0,
+        6.5,
+        if on { color } else { LINE },
+    );
+    d.circle(x + if on { 39.5 } else { 24.5 }, y + 27.5, 4.5, TEXT, true);
+    d.text(
+        x + 55.0,
+        y + 31.0,
+        if on { "ON" } else { "OFF" },
+        9.0,
+        if on { color } else { MUTED },
+    );
+    if d.is_hovered(rect) {
+        d.line(x + 18.0, y + 39.0, x + w - 13.0, y + 39.0, color, 1.0);
     }
 }

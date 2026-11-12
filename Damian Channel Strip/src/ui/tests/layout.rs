@@ -596,10 +596,21 @@ fn dynamics_routing_and_layout_geometry() {
     let even_r = view.wall_knob_rect(16);
     let odd_r = view.wall_knob_rect(17);
     assert!(even_r.2 > 90.0);
-    assert!(even_r.3 > 160.0);
+    assert!(even_r.3 > 100.0);
     assert_eq!(even_r.0, odd_r.0);
     assert!(odd_r.1 > even_r.1 + even_r.3 - 1.0);
     assert!(inside(even_r.0 + 8.0, even_r.1 + 8.0, view.wall_bounds()));
+    let lookahead_r = view.wall_lookahead_switch_rect();
+    assert!(lookahead_r.1 > odd_r.1 + odd_r.3 - 1.0);
+    assert!(inside(
+        lookahead_r.0 + 8.0,
+        lookahead_r.1 + 8.0,
+        view.wall_bounds()
+    ));
+    assert!(
+        lookahead_r.1 + 42.0 <= view.wall_bounds().1 + view.wall_bounds().3,
+        "lookahead switch must fit inside the WALL module"
+    );
     let wall_cog = view.wall_cog_button_rect();
     assert_eq!(wall_cog.1, cog.1);
     assert_eq!(
