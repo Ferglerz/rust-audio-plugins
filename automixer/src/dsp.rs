@@ -7,7 +7,8 @@ use std::sync::atomic::Ordering;
 #[derive(Clone, Copy)]
 pub struct Settings {
     pub amount: f32,
-    pub cap: f32,
+    pub voice_cap: f32,
+    pub other_cap: f32,
     pub voices: usize,
     pub threshold: f32,
     pub hold_ms: f32,
@@ -18,12 +19,21 @@ impl Settings {
     pub fn from_params(p: &SharedParams) -> Self {
         Self {
             amount: p.amount.value() * 0.01,
-            cap: p.cap.value(),
+            voice_cap: p.cap.value(),
+            other_cap: p.other_cap.value(),
             voices: p.voices.value() as usize,
             threshold: p.threshold.value(),
             hold_ms: p.hold.value(),
             fade_ms: p.fade.value(),
             assist: p.assist.value() * 0.01,
+        }
+    }
+
+    pub fn cap(&self, voice: bool) -> f32 {
+        if voice {
+            self.voice_cap
+        } else {
+            self.other_cap
         }
     }
 }
@@ -79,6 +89,11 @@ impl Chorus {
                 self.active = false;
             }
         }
+    }
+
+    pub fn clear(&mut self) {
+        self.active = false;
+        self.quiet_ms = 0.0;
     }
 }
 
@@ -198,10 +213,15 @@ impl Engine {
         mic: usize,
         speech: f32,
         bypass: bool,
+        voice: bool,
         settings: Settings,
     ) {
         let dt_ms = self.control_interval as f32 / self.sample_rate * 1000.0;
-        let threshold = assisted_threshold(settings.threshold, settings.assist, speech);
+        let threshold = if voice {
+            assisted_threshold(settings.threshold, settings.assist, speech)
+        } else {
+            settings.threshold
+        };
         self.activity
             .update(self.input_db(), threshold, dt_ms, settings.hold_ms);
         let desired_weight = network.params.mics[mic].effective_weight();
@@ -210,7 +230,7 @@ impl Engine {
         if bypass {
             slot.withdraw();
         } else {
-            slot.publish(own, self.activity.active);
+            slot.publish(own, self.activity.active, voice);
         }
         let snapshot = self
             .observer
@@ -218,9 +238,22 @@ impl Engine {
         self.active_count = snapshot.active;
         self.members = snapshot.members;
         self.conflict = snapshot.conflicts & (1 << mic) != 0;
-        self.share_target = share_reduction(own, snapshot.total, settings.cap);
-        self.chorus
-            .update(snapshot.active, settings.voices, dt_ms, settings.hold_ms);
+        let total = if voice {
+            snapshot.voice_total
+        } else {
+            snapshot.other_total
+        };
+        self.share_target = share_reduction(own, total, settings.cap(voice));
+        if voice {
+            self.chorus.update(
+                snapshot.voice_active,
+                settings.voices,
+                dt_ms,
+                settings.hold_ms,
+            );
+        } else {
+            self.chorus.clear();
+        }
         slot.input_db.store(self.input_db(), Ordering::Relaxed);
         slot.output_db
             .store(self.input_db() - self.reduction, Ordering::Relaxed);
@@ -244,12 +277,16 @@ impl Engine {
         );
     }
 
-    pub fn gain(&mut self, settings: Settings, bypass: bool) -> f32 {
+    pub fn gain(&mut self, settings: Settings, voice_group: bool, bypass: bool) -> f32 {
+        let cap = settings.cap(voice_group);
         let fade_samples = settings.fade_ms * 0.001 * self.sample_rate;
-        let chorus = self
-            .chorus_mix
-            .tick(self.chorus.active as u8 as f32, fade_samples);
-        let voice = self
+        let chorus_target = if voice_group {
+            self.chorus.active as u8 as f32
+        } else {
+            0.0
+        };
+        let chorus = self.chorus_mix.tick(chorus_target, fade_samples);
+        let open = self
             .voice_mix
             .tick(self.activity.active as u8 as f32, fade_samples);
         let amount = self.amount.tick(settings.amount, fade_samples);
@@ -263,12 +300,12 @@ impl Engine {
             self.closing_coeff
         };
         self.share_current += (self.share_target - self.share_current) * coefficient;
-        // In chorus mode, ONLY active microphones fade open. Quiet microphones
-        // approach the reduction cap even though gain sharing has faded out.
-        let chorus_reduction = settings.cap * (1.0 - voice);
+        // Chorus applies only to the Voice group. Active voice mics fade open.
+        // Quiet voice mics approach Voice GR. Other mics keep their own share.
+        let chorus_reduction = cap * (1.0 - open);
         self.reduction =
             (amount * engaged * ((1.0 - chorus) * self.share_current + chorus * chorus_reduction))
-                .clamp(0.0, settings.cap);
+                .clamp(0.0, cap);
         10.0_f32.powf(-self.reduction / 20.0)
     }
 }

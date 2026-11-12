@@ -18,13 +18,21 @@ pub struct Automixer {
 
 impl Default for Automixer {
     fn default() -> Self {
-        let network = network::shared_network();
+        Self::new(&network::shared_network())
+    }
+}
+
+impl Automixer {
+    fn new(network: &Arc<network::Network>) -> Self {
         let registration = network.register();
         let params = Arc::new(params::AutomixerParams::new(
             network.params.clone(),
             registration.slot().cloned(),
             registration.token,
         ));
+        if let Some(slot) = registration.slot() {
+            slot.bind_editor_params(registration.token, &params);
+        }
         Self {
             current_mic: params.mic_index(),
             params,
@@ -106,8 +114,12 @@ impl Plugin for Automixer {
         self.sample_rate = config.sample_rate;
         self.engine = dsp::Engine::new(config.sample_rate, config.max_buffer_size);
         self.vad.set_sample_rate(config.sample_rate as f64);
-        self.vad
-            .start_worker_enabled(self.params.shared.assist.value() > 0.0);
+        let mic = self.params.mic_index();
+        self.vad.start_worker_enabled(
+            self.params.shared.assist.value() > 0.0
+                && !self.params.bypassed()
+                && self.params.shared.mics[mic].is_voice(),
+        );
         context.set_latency_samples(0);
         self.reset();
         true
@@ -139,8 +151,14 @@ impl Plugin for Automixer {
             self.reset();
             self.current_mic = mic;
         }
-        let bypass = self.params.bypass.value();
-        self.vad.set_enabled(settings.assist > 0.0 && !bypass);
+        let bypass = self.params.bypassed();
+        let voice = self.params.shared.mics[mic].is_voice();
+        if bypass {
+            if let Some(slot) = self.registration.slot() {
+                slot.withdraw();
+            }
+        }
+        self.vad.set_enabled(settings.assist > 0.0 && !bypass && voice);
         let samples = buffer.samples();
         let channels = buffer.channels().max(1) as f64;
         let mut next_event = context.next_event();
@@ -176,15 +194,18 @@ impl Plugin for Automixer {
                         &self.registration.network,
                         slot,
                         mic,
-                        self.vad.speech_env(),
+                        if voice { self.vad.speech_env() } else { 0.0 },
                         bypass,
+                        voice,
                         settings,
                     );
                 }
             }
-            let gain = self
-                .engine
-                .gain(settings, bypass || self.registration.index.is_none());
+            let gain = self.engine.gain(
+                settings,
+                voice,
+                bypass || self.registration.index.is_none(),
+            );
             for sample in frame.iter_mut() {
                 *sample *= gain;
             }

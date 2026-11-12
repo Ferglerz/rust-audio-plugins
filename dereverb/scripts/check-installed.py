@@ -5,6 +5,7 @@ No third-party Python packages. Exercises plugin lifecycle, parameter flushing,
 variable block sizes, real inference, resampling, and host latency reporting.
 """
 import ctypes as c
+import json
 import math
 from pathlib import Path
 import sys
@@ -129,6 +130,7 @@ def main():
     assert info.name == b"Strength" and (info.min, info.max, info.default) == (0, 1, 1)
     guard = parameters[b"Transient Guard"]
     assert (guard.min, guard.max, guard.default) == (0, 1, 1)
+    assert not guard.flags & 1, "Transient Guard must be continuous"
     quality = parameters[b"Quality"]
     assert quality.name == b"Quality" and (quality.min, quality.max, quality.default) == (0, 1, 0)
     assert not quality.flags & (1 << 5), "Quality must not be automatable"
@@ -236,7 +238,7 @@ def main():
         assert len({round(level, 1) for level in wet_levels[:4]}) == 4, (rate, wet_levels)
         plugin.stop(plugin_ptr)
         plugin.deactivate(plugin_ptr)
-    curve_values = {b"Engine": 2, b"Transient Guard": 1, b"Level reference": 1, b"Weight: quietest": 0.05,
+    curve_values = {b"Engine": 2, b"Transient Guard": 0.37, b"Level reference": 1, b"Weight: quietest": 0.05,
                     b"Weight: quiet": 0.2, b"Weight: middle": 0.4,
                     b"Weight: loud": 0.8, b"Weight: loudest": 1.0}
     for name, value in curve_values.items():
@@ -271,9 +273,19 @@ def main():
     for name, expected in curve_values.items():
         assert get_value(plugin_ptr, parameters[name].id, c.byref(restored))
         assert abs(restored.value - expected) < 1e-6, f"{name!r}: curve preset state did not restore"
+    # NIH-plug accepts plain JSON even when it saves compressed state.
+    for old, expected in [(True, 1.0), (False, 0.0)]:
+        legacy = {"params": {"transient_guard": {"bool": old}}, "fields": {}}
+        payload = json.dumps(legacy).encode()
+        saved[:] = len(payload).to_bytes(8, "little") + payload
+        offset = 0
+        assert state.load(plugin_ptr, c.byref(reader))
+        assert get_value(plugin_ptr, guard.id, c.byref(restored)) and restored.value == expected, (
+            f"Legacy Transient Guard {old} did not restore as {expected}"
+        )
     plugin.destroy(plugin_ptr)
     entry.deinit()
-    print("Installed CLAP live mode switching, fixed latency, preset restore, variable blocks, DPDFNet, NARA-WPE, and DTLN verified.")
+    print("Installed CLAP live mode switching, fixed latency, preset restore (including legacy Transient Guard), variable blocks, DPDFNet, NARA-WPE, and DTLN verified.")
 
 
 if __name__ == "__main__":

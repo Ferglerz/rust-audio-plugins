@@ -12,7 +12,7 @@ use nih_plug_vizia::{
 };
 use pleasant_ui::{
     draw::{Draw, EditorViewport, KnobLayout},
-    graph::{nearest_point, Viewport},
+    graph::Viewport,
     param,
     pointer::ValuePress,
     preferences::AppearanceStore,
@@ -104,21 +104,20 @@ impl DereverbView {
     }
     fn node_at(&self, point: (f32, f32)) -> Option<usize> {
         let viewport = Viewport::from_tuple(CURVE);
-        nearest_point(
-            self.params
-                .weighting()
-                .nodes
-                .iter()
-                .enumerate()
-                .map(|(i, &y)| {
-                    let (x, y) = viewport.from_normalized(i as f32 / (NODES - 1) as f32, y);
-                    (i, x, y)
-                }),
-            point.0,
-            point.1,
-            13.0,
-        )
+        self.params
+            .weighting()
+            .nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &weight)| {
+                let (x, y) = viewport.from_normalized(i as f32 / (NODES - 1) as f32, weight);
+                let distance = (x - point.0).hypot(y - point.1);
+                (distance <= 13.0).then_some((i, distance))
+            })
+            .min_by(|left, right| left.1.total_cmp(&right.1))
+            .map(|(index, _)| index)
     }
+
     fn set_curve(&mut self, cx: &mut EventContext, nodes: [f32; NODES]) {
         self.end_drag(cx);
         for (parameter, value) in self.params.weights().into_iter().zip(nodes) {

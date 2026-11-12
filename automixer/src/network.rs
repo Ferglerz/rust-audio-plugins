@@ -1,7 +1,7 @@
 //! A fixed, atomic meter bus. No audio-thread allocation, locking, or waiting.
 //! Shared parameter objects also belong to every wrapper's parameter map, so
 //! editing any strip from any editor uses a valid host automation gesture.
-use crate::params::SharedParams;
+use crate::params::{AutomixerParams, SharedParams};
 use atomic_float::AtomicF32;
 use nih_plug::context::track::HardwareInput;
 use std::sync::{
@@ -28,6 +28,8 @@ pub struct Slot {
     pub owner: AtomicU64,
     pub mic: AtomicUsize,
     pub labels: Mutex<TrackLabels>,
+    // Only editors use this binding. The audio thread owns its params directly.
+    editor_params: Mutex<Option<(u64, Weak<AutomixerParams>)>>,
     pub assigned: AtomicBool,
     // Sequence in high word; active bit + positive weighted RMS in low word.
     pub signal: AtomicU64,
@@ -40,6 +42,8 @@ pub struct Slot {
     pub speech: AtomicF32,
     pub vad_ready: AtomicBool,
     pub active: AtomicBool,
+    /// Group used for the latest publish. Voice and Other share gain separately.
+    pub voice: AtomicBool,
     pub state: AtomicU32,
 }
 
@@ -49,6 +53,7 @@ impl Default for Slot {
             owner: AtomicU64::new(0),
             mic: AtomicUsize::new(0),
             labels: Mutex::default(),
+            editor_params: Mutex::default(),
             assigned: AtomicBool::new(false),
             signal: AtomicU64::new(0),
             sequence: AtomicU32::new(1),
@@ -60,15 +65,31 @@ impl Default for Slot {
             speech: AtomicF32::new(0.0),
             vad_ready: AtomicBool::new(false),
             active: AtomicBool::new(false),
+            voice: AtomicBool::new(true),
             state: AtomicU32::new(WAITING),
         }
     }
 }
 
 impl Slot {
-    pub fn publish(&self, weighted_rms: f32, active: bool) {
+    pub fn bind_editor_params(&self, owner: u64, params: &Arc<AutomixerParams>) {
+        *self.editor_params.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some((owner, Arc::downgrade(params)));
+    }
+
+    pub fn editor_params(&self, owner: u64) -> Option<Arc<AutomixerParams>> {
+        let binding = self.editor_params.lock().unwrap_or_else(|e| e.into_inner());
+        let (bound_owner, params) = binding.as_ref()?;
+        if *bound_owner != owner || self.owner.load(Ordering::Acquire) != owner {
+            return None;
+        }
+        params.upgrade()
+    }
+
+    pub fn publish(&self, weighted_rms: f32, active: bool, voice: bool) {
         let seq = self.sequence.fetch_add(1, Ordering::Relaxed).max(1);
         let value = weighted_rms.clamp(1e-12, 1e12).to_bits() | ((active as u32) << 31);
+        self.voice.store(voice, Ordering::Relaxed);
         self.signal
             .store(((seq as u64) << 32) | value as u64, Ordering::Release);
     }
@@ -300,7 +321,10 @@ impl Default for Observer {
 #[derive(Default, Debug)]
 pub struct MixSnapshot {
     pub total: f32,
+    pub voice_total: f32,
+    pub other_total: f32,
     pub active: usize,
+    pub voice_active: usize,
     pub members: usize,
     pub conflicts: u64,
 }
@@ -333,8 +357,16 @@ impl Observer {
                 continue;
             }
             let word = signal as u32;
-            result.total += f32::from_bits(word & 0x7fff_ffff);
-            result.active += (word >> 31) as usize;
+            let level = f32::from_bits(word & 0x7fff_ffff);
+            let active = (word >> 31) as usize;
+            result.total += level;
+            result.active += active;
+            if slot.voice.load(Ordering::Relaxed) {
+                result.voice_total += level;
+                result.voice_active += active;
+            } else {
+                result.other_total += level;
+            }
             result.members += 1;
         }
         result

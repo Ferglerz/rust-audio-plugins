@@ -540,6 +540,17 @@ impl Draw<'_> {
         self.draw_control(r, label, value, n, color, false);
     }
 
+    pub fn control_bipolar(
+        &mut self,
+        r: (f32, f32, f32, f32),
+        label: &str,
+        value: &str,
+        n: f32,
+        color: Color,
+    ) {
+        self.draw_control(r, label, value, n, color, true);
+    }
+
     fn draw_control(
         &mut self,
         r: (f32, f32, f32, f32),

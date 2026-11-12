@@ -6,7 +6,7 @@ use crate::{
 };
 use std::collections::VecDeque;
 
-fn settings() -> Settings {
+fn default_settings() -> Settings {
     Settings::from_params(&SharedParams::default())
 }
 
@@ -76,6 +76,7 @@ fn run_engines(
     let mut gains = vec![1.0; engines.len()];
     for _ in 0..samples {
         for (i, engine) in engines.iter_mut().enumerate() {
+            let voice = true;
             if engine.analyze((levels[i] as f64).powi(2)) {
                 let registration = &registrations[i];
                 engine.control(
@@ -84,13 +85,14 @@ fn run_engines(
                     registration.initial_mic,
                     0.0,
                     false,
+                    voice,
                     settings,
                 );
             }
-            gains[i] = engine.gain(settings, false);
+            gains[i] = engine.gain(settings, voice, false);
             assert!(gains[i].is_finite() && gains[i] <= 1.0);
             assert!(
-                engine.reduction <= settings.cap + 1e-5,
+                engine.reduction <= settings.voice_cap + 1e-5,
                 "cap breached: {}",
                 engine.reduction
             );
@@ -108,7 +110,7 @@ fn chorus_opens_active_mics_but_keeps_quiet_mics_capped_then_restores_sharing() 
         voices: 2,
         fade_ms: 100.0,
         hold_ms: 100.0,
-        ..settings()
+        ..default_settings()
     };
     let gains = run_engines(
         &mut engines,
@@ -165,11 +167,11 @@ fn reduction_cap_holds_during_cap_changes_and_fades_do_not_jump() {
     let mut engines = vec![Engine::default(), Engine::default()];
     let mut settings = Settings {
         voices: 0,
-        cap: 30.0,
-        ..settings()
+        voice_cap: 30.0,
+        ..default_settings()
     };
     run_engines(&mut engines, &registrations, &[1e-8, 0.1], settings, 48_000);
-    settings.cap = 6.0;
+    settings.voice_cap = 6.0;
     let gains = run_engines(&mut engines, &registrations, &[1e-8, 0.1], settings, 48_000);
     assert!((gains[0] - 10.0_f32.powf(-6.0 / 20.0)).abs() < 0.001);
     let mut ramp = dsp::Ramp::default();
@@ -179,31 +181,195 @@ fn reduction_cap_holds_during_cap_changes_and_fades_do_not_jump() {
     assert!(ramp.tick(0.0, 1000.0) > 0.998);
 }
 
+fn run_grouped(
+    engines: &mut [Engine],
+    registrations: &[network::Registration],
+    levels: &[f32],
+    voice: &[bool],
+    speech: &[f32],
+    settings: Settings,
+    samples: usize,
+) -> Vec<f32> {
+    let mut gains = vec![1.0; engines.len()];
+    for _ in 0..samples {
+        for (i, engine) in engines.iter_mut().enumerate() {
+            if engine.analyze((levels[i] as f64).powi(2)) {
+                let registration = &registrations[i];
+                engine.control(
+                    &registration.network,
+                    registration.slot().unwrap(),
+                    registration.initial_mic,
+                    speech[i],
+                    false,
+                    voice[i],
+                    settings,
+                );
+            }
+            gains[i] = engine.gain(settings, voice[i], false);
+        }
+    }
+    gains
+}
+
+#[test]
+fn groups_share_separately_and_keep_their_own_caps() {
+    let network = Arc::new(Network::default());
+    let registrations: Vec<_> = (0..4).map(|_| network.register()).collect();
+    let mut engines: Vec<_> = (0..4).map(|_| Engine::default()).collect();
+    let settings = Settings {
+        voices: 0,
+        voice_cap: 12.0,
+        other_cap: 6.0,
+        ..default_settings()
+    };
+    let gains = run_grouped(
+        &mut engines,
+        &registrations,
+        &[0.1, 1e-8, 0.1, 1e-8],
+        &[true, true, false, false],
+        &[0.0; 4],
+        settings,
+        48_000,
+    );
+    assert!(
+        (gains[0] - 1.0).abs() < 0.02,
+        "loud voice stays near unity: {}",
+        gains[0]
+    );
+    assert!(
+        (gains[1] - 10.0_f32.powf(-12.0 / 20.0)).abs() < 0.02,
+        "quiet voice uses the voice cap: {}",
+        gains[1]
+    );
+    assert!(
+        (gains[2] - 1.0).abs() < 0.02,
+        "loud other stays near unity: {}",
+        gains[2]
+    );
+    assert!(
+        (gains[3] - 10.0_f32.powf(-6.0 / 20.0)).abs() < 0.02,
+        "quiet other uses the other cap: {}",
+        gains[3]
+    );
+}
+
+#[test]
+fn chorus_and_voice_assist_apply_only_to_the_voice_group() {
+    let network = Arc::new(Network::default());
+    let registrations: Vec<_> = (0..4).map(|_| network.register()).collect();
+    let mut engines: Vec<_> = (0..4).map(|_| Engine::default()).collect();
+    let settings = Settings {
+        voices: 1,
+        fade_ms: 80.0,
+        hold_ms: 80.0,
+        voice_cap: 60.0,
+        other_cap: 60.0,
+        ..default_settings()
+    };
+    let gains = run_grouped(
+        &mut engines,
+        &registrations,
+        &[0.1; 4],
+        &[true, false, false, false],
+        &[0.0; 4],
+        settings,
+        48_000,
+    );
+    assert!(
+        !engines[0].chorus.active,
+        "other mics must not be counted toward chorus"
+    );
+    assert!((gains[0] - 1.0).abs() < 0.02, "solo voice: {}", gains[0]);
+    for gain in &gains[1..] {
+        assert!(
+            (gain - 1.0 / 3.0).abs() < 0.02,
+            "other mics keep sharing: {gain}"
+        );
+    }
+
+    let network = Arc::new(Network::default());
+    let registrations: Vec<_> = (0..4).map(|_| network.register()).collect();
+    let mut engines: Vec<_> = (0..4).map(|_| Engine::default()).collect();
+    let settings = Settings {
+        voices: 1,
+        fade_ms: 80.0,
+        hold_ms: 80.0,
+        ..default_settings()
+    };
+    let gains = run_grouped(
+        &mut engines,
+        &registrations,
+        &[0.1; 4],
+        &[true, true, false, false],
+        &[0.0; 4],
+        settings,
+        48_000,
+    );
+    assert!(engines[0].chorus.active);
+    assert!(!engines[2].chorus.active);
+    assert!(
+        (gains[0] - 1.0).abs() < 1e-3 && (gains[1] - 1.0).abs() < 1e-3,
+        "active voice mics open in chorus: {gains:?}"
+    );
+    assert!(
+        (gains[2] - 0.5).abs() < 0.02 && (gains[3] - 0.5).abs() < 0.02,
+        "other mics stay shared during chorus: {gains:?}"
+    );
+
+    let network = Arc::new(Network::default());
+    let registrations: Vec<_> = (0..2).map(|_| network.register()).collect();
+    let mut engines = vec![Engine::default(), Engine::default()];
+    let settings = Settings {
+        voices: 0,
+        assist: 1.0,
+        threshold: -40.0,
+        ..default_settings()
+    };
+    let level = 10.0_f32.powf(-43.0 / 20.0);
+    run_grouped(
+        &mut engines,
+        &registrations,
+        &[level, level],
+        &[true, false],
+        &[1.0, 1.0],
+        settings,
+        48_000,
+    );
+    assert!(
+        engines[0].activity.active,
+        "voice assist must lower the voice threshold"
+    );
+    assert!(
+        !engines[1].activity.active,
+        "other mics must keep the plain threshold"
+    );
+}
+
 #[test]
 fn inactive_dropped_stalled_and_duplicate_instances_do_not_steal_gain() {
     let network = Arc::new(Network::default());
     let a = network.register();
     let b = network.register();
     let mut observer = Observer::default();
-    a.slot().unwrap().publish(0.2, true);
-    b.slot().unwrap().publish(0.1, true);
+    a.slot().unwrap().publish(0.2, true, true);
+    b.slot().unwrap().publish(0.1, true, true);
     let mix = observer.read(&network, 240, 480);
     assert_eq!((mix.members, mix.active), (2, 2));
     b.slot().unwrap().withdraw();
     assert_eq!(observer.read(&network, 240, 480).active, 1);
-    b.slot().unwrap().publish(0.1, true);
+    b.slot().unwrap().publish(0.1, true, true);
     observer.read(&network, 240, 480);
     for _ in 0..3 {
-        a.slot().unwrap().publish(0.2, true);
+        a.slot().unwrap().publish(0.2, true, true);
         observer.read(&network, 240, 480);
     }
-    a.slot().unwrap().publish(0.2, true);
+    a.slot().unwrap().publish(0.2, true, true);
     assert_eq!(
         observer.read(&network, 240, 480).members,
         1,
         "stalled peer must expire"
     );
-    b.slot().unwrap().publish(0.1, true);
+    b.slot().unwrap().publish(0.1, true, true);
     assert_eq!(
         observer.read(&network, 240, 480).members,
         2,
@@ -219,7 +385,7 @@ fn inactive_dropped_stalled_and_duplicate_instances_do_not_steal_gain() {
         "duplicate identities must be excluded"
     );
     drop(b);
-    a.slot().unwrap().publish(0.2, true);
+    a.slot().unwrap().publish(0.2, true, true);
     assert_eq!(observer.read(&network, 240, 480).members, 1);
 }
 
@@ -284,20 +450,146 @@ impl ProcessContext<Automixer> for Context {
 }
 
 fn plugin(network: &Arc<Network>) -> Automixer {
-    let registration = network.register();
-    let params = Arc::new(AutomixerParams::new(
-        network.params.clone(),
-        registration.slot().cloned(),
-        registration.token,
-    ));
-    Automixer {
-        current_mic: params.mic_index(),
-        params,
-        registration,
-        engine: Engine::default(),
-        vad: pleasant_voice::SpeechVad::new(48_000.0),
-        sample_rate: 48_000.0,
+    Automixer::new(network)
+}
+
+#[test]
+fn strip_bypass_follows_the_instance_and_rejects_a_stale_slot_owner() {
+    let network = Arc::new(Network::default());
+    let local = plugin(&network);
+    let remote = plugin(&network);
+    let slot = remote.registration.slot().unwrap().clone();
+    let owner = remote.registration.token;
+
+    slot.editor_params(owner).unwrap().toggle_strip_bypass();
+    assert!(
+        remote.params.bypassed(),
+        "remote strip can be bypassed before audio"
+    );
+    assert!(
+        !local.params.bypassed(),
+        "the editor's own mic stays engaged"
+    );
+    assert!(
+        !remote.params.bypass.value(),
+        "the DAW parameter is independent"
+    );
+
+    slot.mic.store(5, Ordering::Release);
+    assert_eq!(remote.params.mic_index(), 5);
+    assert!(
+        remote.params.bypassed(),
+        "bypass follows the track when renumbered"
+    );
+    let saved = remote.params.serialize_fields();
+    drop(remote);
+
+    let restored = plugin(&network);
+    assert!(Arc::ptr_eq(restored.registration.slot().unwrap(), &slot));
+    assert!(!restored.params.bypassed(), "a new owner starts engaged");
+    assert!(
+        slot.editor_params(owner).is_none(),
+        "a stale click cannot hit the new owner"
+    );
+    restored.params.deserialize_fields(&saved);
+    assert!(
+        restored.params.bypassed(),
+        "project state restores strip bypass"
+    );
+}
+
+#[test]
+fn strip_bypass_ramps_and_withdraws_only_its_mic_while_meters_and_midi_continue() {
+    const FRAMES: usize = 240;
+    const LEVEL: f32 = 0.1;
+
+    fn process(plugin: &mut Automixer, context: &mut Context) -> [f32; FRAMES] {
+        let mut samples = [LEVEL; FRAMES];
+        let mut buffer = Buffer::default();
+        // SAFETY: the slice covers every frame and outlives the buffer.
+        unsafe { buffer.set_slices(FRAMES, |slices| slices.push(&mut samples)) };
+        plugin.process(
+            &mut buffer,
+            &mut AuxiliaryBuffers {
+                inputs: &mut [],
+                outputs: &mut [],
+            },
+            context,
+        );
+        samples
     }
+
+    let network = Arc::new(Network::default());
+    let mut a = plugin(&network);
+    let mut b = plugin(&network);
+    let b_slot = b.registration.slot().unwrap().clone();
+    let mut context = Context {
+        input: VecDeque::new(),
+        output: Vec::new(),
+    };
+    for _ in 0..140 {
+        process(&mut a, &mut context);
+        process(&mut b, &mut context);
+    }
+    let steady = process(&mut b, &mut context)[FRAMES - 1];
+    assert!(
+        (steady - 0.05).abs() < 1e-4,
+        "equal mics share gain before bypass"
+    );
+
+    b_slot
+        .editor_params(b.registration.token)
+        .unwrap()
+        .toggle_strip_bypass();
+    let midi = NoteEvent::MidiCC {
+        timing: 21,
+        channel: 0,
+        cc: 119,
+        value: 0.5,
+    };
+    context.input.push_back(midi);
+    let transition = process(&mut b, &mut context);
+    assert!(
+        (transition[0] - steady).abs() < 1e-3,
+        "first bypass sample is continuous"
+    );
+    assert!(transition[FRAMES - 1] > transition[0] && transition[FRAMES - 1] < LEVEL);
+    assert_eq!(context.output, vec![midi]);
+    process(&mut a, &mut context);
+    let mix = network.monitor(network.now_ms());
+    assert_eq!((mix.members, mix.active), (1, 1));
+    assert_eq!((a.engine.members, a.engine.active_count), (1, 1));
+
+    for _ in 0..3 {
+        process(&mut b, &mut context);
+    }
+    assert!((process(&mut b, &mut context)[0] - LEVEL).abs() < 1e-6);
+    assert!((b_slot.input_db.load(Ordering::Relaxed) + 20.0).abs() < 1e-3);
+    assert!((b_slot.output_db.load(Ordering::Relaxed) + 20.0).abs() < 1e-3);
+    assert!(b_slot.reduction_db.load(Ordering::Relaxed) < 1e-3);
+
+    b.params.toggle_strip_bypass();
+    let transition = process(&mut b, &mut context);
+    assert!(
+        (transition[0] - LEVEL).abs() < 1e-3,
+        "re-entry starts at unity"
+    );
+    assert!(transition[FRAMES - 1] < transition[0]);
+    let mix = network.monitor(network.now_ms());
+    assert_eq!((mix.members, mix.active), (2, 2));
+
+    let mut params =
+        AutomixerParams::new(network.params.clone(), Some(b_slot), b.registration.token);
+    params.bypass = BoolParam::new("Bypass this microphone", true).make_bypass();
+    b.params = Arc::new(params);
+    b.params.toggle_strip_bypass();
+    b.params.toggle_strip_bypass();
+    assert!(
+        !b.params.strip_bypassed() && b.params.bypassed(),
+        "the DAW still holds bypass"
+    );
+    process(&mut b, &mut context);
+    assert_eq!(network.monitor(network.now_ms()).members, 1);
 }
 
 #[test]
@@ -364,7 +656,7 @@ fn identities_are_reused_without_retaining_a_stale_meter() {
     assert!(network.register().index.is_none());
     let removed = registrations.remove(12);
     let mic = removed.initial_mic;
-    removed.slot().unwrap().publish(1.0, true);
+    removed.slot().unwrap().publish(1.0, true, true);
     drop(removed);
     let replacement = network.register();
     assert_eq!(replacement.initial_mic, mic);
@@ -380,7 +672,7 @@ fn monitor_follows_remote_instances_even_when_local_audio_stops() {
     let local = network.register();
     let remote = network.register();
     let slot = remote.slot().unwrap();
-    slot.publish(0.1, true);
+    slot.publish(0.1, true, true);
     slot.active.store(true, Ordering::Relaxed);
     slot.chorus_mix.store(0.6, Ordering::Relaxed);
     slot.updated_ms.store(1000, Ordering::Relaxed);

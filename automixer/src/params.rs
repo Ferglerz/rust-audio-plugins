@@ -2,7 +2,7 @@ use crate::network::{Network, Slot, CAPACITY};
 use nih_plug::prelude::*;
 use nih_plug_vizia::ViziaState;
 use std::sync::{
-    atomic::{AtomicI32, AtomicU32, Ordering},
+    atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering},
     Arc, Mutex,
 };
 
@@ -10,6 +10,16 @@ pub fn float(name: &str, default: f32, min: f32, max: f32, unit: &'static str) -
     FloatParam::new(name, default, FloatRange::Linear { min, max })
         .with_unit(unit)
         .with_value_to_string(formatters::v2s_f32_rounded(1))
+}
+
+#[derive(Enum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MicGroup {
+    #[name = "Voice"]
+    #[id = "voice"]
+    Voice,
+    #[name = "Other"]
+    #[id = "other"]
+    Other,
 }
 
 #[derive(Params)]
@@ -20,6 +30,8 @@ pub struct MicParams {
     pub midi_channel: IntParam,
     #[id = "midicc"]
     pub midi_cc: IntParam,
+    #[id = "group"]
+    pub group: EnumParam<MicGroup>,
     #[persist = "midi-weight"]
     pub midi_value: Arc<AtomicI32>,
     #[persist = "mic-name"]
@@ -42,18 +54,38 @@ impl MicParams {
                 reset.store(-1, Ordering::Relaxed);
             })),
             midi_channel: IntParam::new(
-                "MIDI channel (0 = off)",
+                "MIDI channel",
                 1,
                 IntRange::Linear { min: 0, max: 16 },
-            ),
+            )
+            .with_value_to_string(Arc::new(|value| {
+                if value == 0 {
+                    "Off".into()
+                } else {
+                    value.to_string()
+                }
+            }))
+            .with_string_to_value(Arc::new(|value| {
+                let value = value.trim();
+                if value.eq_ignore_ascii_case("off") {
+                    Some(0)
+                } else {
+                    value.parse().ok()
+                }
+            })),
             midi_cc: IntParam::new(
                 "Weight CC",
                 20 + index as i32,
                 IntRange::Linear { min: 0, max: 119 },
             ),
+            group: EnumParam::new(&format!("Mic {} group", index + 1), MicGroup::Voice),
             midi_value,
             name: Mutex::new(format!("MIC {:02}", index + 1)),
         }
+    }
+
+    pub fn is_voice(&self) -> bool {
+        self.group.value() == MicGroup::Voice
     }
 
     pub fn effective_weight(&self) -> f32 {
@@ -83,6 +115,8 @@ pub struct SharedParams {
     pub amount: FloatParam,
     #[id = "cap"]
     pub cap: FloatParam,
+    #[id = "ocap"]
+    pub other_cap: FloatParam,
     #[id = "voices"]
     pub voices: IntParam,
     #[id = "thresh"]
@@ -100,8 +134,9 @@ pub struct SharedParams {
 impl Default for SharedParams {
     fn default() -> Self {
         Self {
-            amount: float("All microphones: amount", 100.0, 0.0, 100.0, " %"),
-            cap: float("Maximum gain reduction", 18.0, 0.0, 60.0, " dB"),
+            amount: float("Automix amount", 100.0, 0.0, 100.0, " %"),
+            cap: float("Voice max gain reduction", 18.0, 0.0, 60.0, " dB"),
+            other_cap: float("Other max gain reduction", 18.0, 0.0, 60.0, " dB"),
             voices: IntParam::new(
                 "Chorus above N (0 = off)",
                 3,
@@ -146,6 +181,8 @@ pub struct AutomixerParams {
     slot: Option<Arc<Slot>>,
     #[id = "bypass"]
     pub bypass: BoolParam,
+    #[persist = "strip-bypass"]
+    strip_bypass: AtomicBool,
     #[nested(group = "Linked mixer")]
     pub shared: Arc<SharedParams>,
 }
@@ -190,8 +227,21 @@ impl AutomixerParams {
                 }
             })),
             bypass: BoolParam::new("Bypass this microphone", false).make_bypass(),
+            strip_bypass: AtomicBool::new(false),
             shared,
         }
+    }
+
+    pub fn strip_bypassed(&self) -> bool {
+        self.strip_bypass.load(Ordering::Relaxed)
+    }
+
+    pub fn toggle_strip_bypass(&self) {
+        self.strip_bypass.fetch_xor(true, Ordering::Relaxed);
+    }
+
+    pub fn bypassed(&self) -> bool {
+        self.bypass.value() || self.strip_bypassed()
     }
 
     pub fn prepare_mic_assignment(&self, network: &Network, index: usize, token: u64) {
