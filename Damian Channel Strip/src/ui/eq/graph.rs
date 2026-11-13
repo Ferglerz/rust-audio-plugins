@@ -97,6 +97,7 @@ pub(in crate::ui) fn update_eq_response_cache_into(
     cache.update(coefficients, frequencies, eq_sr);
 }
 
+#[cfg(test)]
 pub(in crate::ui) fn update_eq_response_cache(
     cache: &mut pleasant_eq::ResponseCache,
     bands: &[Band],
