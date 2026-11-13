@@ -45,6 +45,7 @@ pub fn for_each_span_off_baseline(
     }
 }
 
+#[cfg(test)]
 pub fn spans_off_baseline(
     points: &[(f32, f32)],
     baseline: f32,
