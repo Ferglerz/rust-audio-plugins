@@ -394,7 +394,7 @@ mod tests {
                 let screen_x = viewport.x + (rect.0 + rect.2 * 0.5) * viewport.scale;
                 let screen_y = viewport.y + (rect.1 + rect.3 * 0.5) * viewport.scale;
                 let local = viewport.to_local(screen_x, screen_y);
-                assert!(OpenWurliView::hit(local.0, local.1, rect));
+                assert!(point_in_rect(local.0, local.1, rect));
                 assert_eq!(view.knob_at(local.0, local.1), None);
                 assert!(viewport.x + (rect.0 + rect.2) * viewport.scale <= width);
                 assert!(viewport.y + (rect.1 + rect.3) * viewport.scale <= height);
