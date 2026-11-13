@@ -105,34 +105,32 @@ impl StripView {
         }
         self.sync_band_dyn_page();
     }
-    pub(super) fn find_band(&self, id: u64) -> Option<Band> {
+    fn bank_for_id(&self, id: u64) -> Option<&std::sync::Mutex<Vec<Band>>> {
         if id >= LIFT_ID_BASE {
             None
         } else if id >= SC_EQ_ID_BASE {
-            self.params
-                .sc_eq_bands
-                .lock()
-                .unwrap()
-                .iter()
-                .find(|b| b.id == id)
-                .cloned()
+            Some(&self.params.sc_eq_bands)
         } else if id >= EQ2_ID_BASE {
-            self.params
-                .eq2_bands
-                .lock()
-                .unwrap()
-                .iter()
-                .find(|b| b.id == id)
-                .cloned()
+            Some(&self.params.eq2_bands)
         } else {
-            self.params
-                .bands
-                .lock()
-                .unwrap()
-                .iter()
-                .find(|b| b.id == id)
-                .cloned()
+            Some(&self.params.bands)
         }
+    }
+    fn bank_for_page(&self, page: usize) -> Option<(&std::sync::Mutex<Vec<Band>>, u64)> {
+        match page {
+            EQ_PAGE_2 => Some((&self.params.eq2_bands, EQ2_ID_BASE)),
+            EQ_PAGE_SC => Some((&self.params.sc_eq_bands, SC_EQ_ID_BASE)),
+            EQ_PAGE_LIFT => None,
+            _ => Some((&self.params.bands, 0)),
+        }
+    }
+    pub(super) fn find_band(&self, id: u64) -> Option<Band> {
+        self.bank_for_id(id)?
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|b| b.id == id)
+            .cloned()
     }
     pub(super) fn start_eq_page(&mut self, page: usize) {
         self.anim_start.set(self.anim_progress.get());
@@ -144,12 +142,8 @@ impl StripView {
         self.edit = None;
     }
     pub(super) fn clone_page_bands(&self) -> Vec<Band> {
-        match self.active_eq.get() {
-            EQ_PAGE_2 => self.params.eq2_bands.lock().unwrap().clone(),
-            EQ_PAGE_SC => self.params.sc_eq_bands.lock().unwrap().clone(),
-            EQ_PAGE_LIFT => Vec::new(),
-            _ => self.params.bands.lock().unwrap().clone(),
-        }
+        self.bank_for_page(self.active_eq.get())
+            .map_or_else(Vec::new, |(bank, _)| bank.lock().unwrap().clone())
     }
     pub(super) fn find_threshold_hit(&self, x: f32, y: f32, bands: &[Band]) -> Option<u64> {
         if self.active_eq.get() == EQ_PAGE_SC || self.active_eq.get() == EQ_PAGE_LIFT {
@@ -238,16 +232,10 @@ impl StripView {
         let Some(id) = self.selected else {
             return;
         };
-        if id >= LIFT_ID_BASE {
+        let Some(bank) = self.bank_for_id(id) else {
             return;
-        }
-        let mut bands = if id >= SC_EQ_ID_BASE {
-            self.params.sc_eq_bands.lock().unwrap()
-        } else if id >= EQ2_ID_BASE {
-            self.params.eq2_bands.lock().unwrap()
-        } else {
-            self.params.bands.lock().unwrap()
         };
+        let mut bands = bank.lock().unwrap();
         if let Some(b) = bands.iter_mut().find(|b| b.id == id) {
             f(b);
             b.sanitize();
@@ -285,21 +273,12 @@ impl StripView {
         }
     }
     pub(super) fn create_band(&mut self, x: f32, y: f32, curve: bool, dynamic: bool) {
-        if self.active_eq.get() == EQ_PAGE_LIFT {
+        let page = self.active_eq.get();
+        let Some((bank, id_base)) = self.bank_for_page(page) else {
             self.create_lift_band(x, y);
             return;
-        }
-        let page = self.active_eq.get();
-        let id_base = match page {
-            EQ_PAGE_2 => EQ2_ID_BASE,
-            EQ_PAGE_SC => SC_EQ_ID_BASE,
-            _ => 0,
         };
-        let mut bands = match page {
-            EQ_PAGE_2 => self.params.eq2_bands.lock().unwrap(),
-            EQ_PAGE_SC => self.params.sc_eq_bands.lock().unwrap(),
-            _ => self.params.bands.lock().unwrap(),
-        };
+        let mut bands = bank.lock().unwrap();
         let id = bands.iter().map(|b| b.id).max().unwrap_or(id_base) + 1;
         let shape = infer_shape((x - self.gx()) / self.gw(), (y - GY) / GH, curve);
         bands.push(Band {
@@ -796,22 +775,14 @@ impl StripView {
     }
     pub(super) fn delete(&mut self) {
         if let Some(id) = self.selected {
-            if id >= LIFT_ID_BASE {
+            if let Some(bank) = self.bank_for_id(id) {
+                bank.lock().unwrap().retain(|b| b.id != id);
+            } else {
                 self.params
                     .lift_bands
                     .lock()
                     .unwrap()
                     .retain(|b| b.id != id);
-            } else if id >= SC_EQ_ID_BASE {
-                self.params
-                    .sc_eq_bands
-                    .lock()
-                    .unwrap()
-                    .retain(|b| b.id != id);
-            } else if id >= EQ2_ID_BASE {
-                self.params.eq2_bands.lock().unwrap().retain(|b| b.id != id);
-            } else {
-                self.params.bands.lock().unwrap().retain(|b| b.id != id);
             }
             if self.shared.solo_id.load(Ordering::Relaxed) == id {
                 self.shared.solo_id.store(0, Ordering::Relaxed);
