@@ -116,13 +116,48 @@ impl Route {
         (self.min + (self.max - self.min) * shape).clamp(0.0, 1.0)
     }
 }
+#[derive(Clone, Copy)]
+enum Format {
+    Plain,
+    Names(&'static [&'static str]),
+    OnOff,
+    Ms,
+    SignedOct,
+    SignedSt,
+    St,
+    OneBased,
+    SignedPercentDiv75,
+    Percent,
+}
+
+const Y_TARGET_NAMES: &[&str] = &[
+    "Velocity",
+    "Gate",
+    "Pressure",
+    "Timbre",
+    "Bend",
+    "Custom CC",
+];
+const FILTER_NAMES: &[&str] = &[
+    "All",
+    "Bass",
+    "Top",
+    "Bass + Top",
+    "Odd tones",
+    "Even tones",
+];
+
 pub struct Target {
     pub name: &'static str,
     pub id: &'static str,
     pub min: f32,
     pub max: f32,
     pub discrete: bool,
+    get: Option<fn(&Config) -> f32>,
+    set: fn(&mut Config, f32),
+    format: Format,
 }
+fn noop_set(_: &mut Config, _: f32) {}
 // Indices are saved in host state. Append destinations; never reorder this list.
 pub const TARGETS: &[Target] = &[
     Target {
@@ -131,6 +166,9 @@ pub const TARGETS: &[Target] = &[
         min: 3.0,
         max: 12.0,
         discrete: true,
+        get: Some(|c| c.strings as f32),
+        set: |c, v| c.strings = v as u8,
+        format: Format::Plain,
     },
     Target {
         name: "Voicing",
@@ -138,6 +176,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: (crate::harmony::VOICING_NAMES.len() - 1) as f32,
         discrete: true,
+        get: Some(|c| c.spread as f32),
+        set: |c, v| c.spread = v as u8,
+        format: Format::Names(&crate::harmony::VOICING_NAMES),
     },
     Target {
         name: "Quality",
@@ -145,6 +186,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 11.0,
         discrete: true,
+        get: Some(|c| c.quality as f32),
+        set: |c, v| c.quality = v as u8,
+        format: Format::Names(&crate::harmony::QUALITY_NAMES),
     },
     Target {
         name: "Inversion",
@@ -152,6 +196,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 11.0,
         discrete: true,
+        get: Some(|c| c.inversion as f32),
+        set: |c, v| c.inversion = v as u8,
+        format: Format::Plain,
     },
     Target {
         name: "Transpose",
@@ -159,6 +206,9 @@ pub const TARGETS: &[Target] = &[
         min: -24.0,
         max: 24.0,
         discrete: true,
+        get: Some(|c| c.transpose as f32),
+        set: |c, v| c.transpose = v as i8,
+        format: Format::SignedSt,
     },
     Target {
         name: "Velocity",
@@ -166,6 +216,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.01,
         max: 1.0,
         discrete: false,
+        get: Some(|c| c.velocity),
+        set: |c, v| c.velocity = v,
+        format: Format::Percent,
     },
     Target {
         name: "Note length",
@@ -173,6 +226,9 @@ pub const TARGETS: &[Target] = &[
         min: 20.0,
         max: 3000.0,
         discrete: false,
+        get: Some(|c| c.length_ms),
+        set: |c, v| c.length_ms = v,
+        format: Format::Ms,
     },
     Target {
         name: "Rate (free)",
@@ -180,6 +236,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 1500.0,
         discrete: false,
+        get: Some(|c| c.strum_ms),
+        set: |c, v| c.strum_ms = v,
+        format: Format::Ms,
     },
     Target {
         name: "Rate tempo sync",
@@ -187,6 +246,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 1.0,
         discrete: true,
+        get: Some(|c| c.strum_sync as u8 as f32),
+        set: |c, v| c.strum_sync = v >= 0.5,
+        format: Format::OnOff,
     },
     Target {
         name: "Sweep beats",
@@ -194,6 +256,12 @@ pub const TARGETS: &[Target] = &[
         min: 0.0625,
         max: 2.0,
         discrete: false,
+        get: Some(|c| c.strum_beats),
+        set: |c, v| {
+            c.strum_beats = v;
+            c.rate = v;
+        },
+        format: Format::Plain,
     },
     Target {
         name: "Direction",
@@ -201,6 +269,12 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 4.0,
         discrete: true,
+        get: Some(|c| c.direction as f32),
+        set: |c, v| {
+            c.direction = v as u8;
+            c.arp_pattern = v as u8;
+        },
+        format: Format::Names(&crate::arpeggiator::STRUM_DIRECTION_NAMES),
     },
     Target {
         name: "Velocity contour",
@@ -208,6 +282,9 @@ pub const TARGETS: &[Target] = &[
         min: -1.0,
         max: 1.0,
         discrete: false,
+        get: Some(|c| c.contour),
+        set: |c, v| c.contour = v,
+        format: Format::Percent,
     },
     Target {
         name: "Arp pattern",
@@ -215,6 +292,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 6.0,
         discrete: true,
+        get: Some(|c| c.arp_pattern as f32),
+        set: |c, v| c.arp_pattern = v as u8,
+        format: Format::Names(&crate::arpeggiator::PATTERN_NAMES),
     },
     Target {
         name: "Rate (synced)",
@@ -222,6 +302,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0625,
         max: 2.0,
         discrete: false,
+        get: Some(|c| c.rate),
+        set: |c, v| c.rate = v,
+        format: Format::Plain,
     },
     Target {
         name: "Gate",
@@ -229,6 +312,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.05,
         max: 1.0,
         discrete: false,
+        get: Some(|c| c.gate),
+        set: |c, v| c.gate = v,
+        format: Format::Percent,
     },
     Target {
         name: "Swing",
@@ -236,6 +322,9 @@ pub const TARGETS: &[Target] = &[
         min: -0.75,
         max: 0.75,
         discrete: false,
+        get: Some(|c| c.swing),
+        set: |c, v| c.swing = v,
+        format: Format::SignedPercentDiv75,
     },
     Target {
         name: "Octaves",
@@ -243,6 +332,9 @@ pub const TARGETS: &[Target] = &[
         min: 1.0,
         max: 4.0,
         discrete: true,
+        get: Some(|c| c.octaves as f32),
+        set: |c, v| c.octaves = v as u8,
+        format: Format::Plain,
     },
     Target {
         name: "Humanize",
@@ -250,6 +342,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 1.0,
         discrete: false,
+        get: Some(|c| c.humanize),
+        set: |c, v| c.humanize = v,
+        format: Format::Percent,
     },
     Target {
         name: "Root on select",
@@ -257,6 +352,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 1.0,
         discrete: true,
+        get: Some(|c| c.root_on_select as u8 as f32),
+        set: |c, v| c.root_on_select = v >= 0.5,
+        format: Format::OnOff,
     },
     Target {
         name: "Latch",
@@ -264,6 +362,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 1.0,
         discrete: true,
+        get: Some(|c| c.latch as u8 as f32),
+        set: |c, v| c.latch = v >= 0.5,
+        format: Format::OnOff,
     },
     Target {
         name: "Auto strum hold",
@@ -271,6 +372,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 1.0,
         discrete: true,
+        get: Some(|c| c.strum_hold as u8 as f32),
+        set: |c, v| c.strum_hold = v >= 0.5,
+        format: Format::OnOff,
     },
     Target {
         name: "Note filter",
@@ -278,6 +382,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 5.0,
         discrete: true,
+        get: Some(|c| c.filter as f32),
+        set: |c, v| c.filter = v as u8,
+        format: Format::Names(FILTER_NAMES),
     },
     Target {
         name: "Arp repeat",
@@ -285,6 +392,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 3.0,
         discrete: true,
+        get: Some(|c| c.arp_mode as u8 as f32),
+        set: |c, v| c.arp_mode = crate::arpeggiator::ArpMode::from_index(v as u8),
+        format: Format::Names(&crate::arpeggiator::MODE_NAMES),
     },
     Target {
         name: "Y destination",
@@ -292,6 +402,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 5.0,
         discrete: true,
+        get: Some(|c| c.y_target as f32),
+        set: |c, v| c.y_target = v as u8,
+        format: Format::Names(Y_TARGET_NAMES),
     },
     Target {
         name: "Y CC",
@@ -299,6 +412,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 119.0,
         discrete: true,
+        get: Some(|c| c.y_cc as f32),
+        set: |c, v| c.y_cc = v as u8,
+        format: Format::Plain,
     },
     Target {
         name: "Reverse X",
@@ -306,6 +422,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 1.0,
         discrete: true,
+        get: Some(|c| c.x_reverse as u8 as f32),
+        set: |c, v| c.x_reverse = v >= 0.5,
+        format: Format::OnOff,
     },
     Target {
         name: "Reverse Y",
@@ -313,6 +432,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 1.0,
         discrete: true,
+        get: Some(|c| c.y_reverse as u8 as f32),
+        set: |c, v| c.y_reverse = v >= 0.5,
+        format: Format::OnOff,
     },
     Target {
         name: "X minimum",
@@ -320,6 +442,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 0.99,
         discrete: false,
+        get: Some(|c| c.x_min),
+        set: |c, v| c.x_min = v,
+        format: Format::Plain,
     },
     Target {
         name: "X maximum",
@@ -327,6 +452,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.01,
         max: 1.0,
         discrete: false,
+        get: Some(|c| c.x_max),
+        set: |c, v| c.x_max = v,
+        format: Format::Plain,
     },
     Target {
         name: "Y minimum",
@@ -334,6 +462,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 0.99,
         discrete: false,
+        get: Some(|c| c.y_min),
+        set: |c, v| c.y_min = v,
+        format: Format::Plain,
     },
     Target {
         name: "Y maximum",
@@ -341,6 +472,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.01,
         max: 1.0,
         discrete: false,
+        get: Some(|c| c.y_max),
+        set: |c, v| c.y_max = v,
+        format: Format::Plain,
     },
     Target {
         name: "MPE members",
@@ -348,6 +482,9 @@ pub const TARGETS: &[Target] = &[
         min: 1.0,
         max: 15.0,
         discrete: true,
+        get: Some(|c| c.members as f32),
+        set: |c, v| c.members = v as u8,
+        format: Format::Plain,
     },
     Target {
         name: "Member bend",
@@ -355,6 +492,9 @@ pub const TARGETS: &[Target] = &[
         min: 1.0,
         max: 96.0,
         discrete: false,
+        get: Some(|c| c.bend_range),
+        set: |c, v| c.bend_range = v,
+        format: Format::St,
     },
     Target {
         name: "Master bend",
@@ -362,6 +502,9 @@ pub const TARGETS: &[Target] = &[
         min: 1.0,
         max: 24.0,
         discrete: false,
+        get: Some(|c| c.master_range),
+        set: |c, v| c.master_range = v,
+        format: Format::St,
     },
     Target {
         name: "Output channel",
@@ -369,6 +512,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 15.0,
         discrete: true,
+        get: Some(|c| c.output_channel as f32),
+        set: |c, v| c.output_channel = v as u8,
+        format: Format::OneBased,
     },
     Target {
         name: "Bass channel",
@@ -376,6 +522,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 15.0,
         discrete: true,
+        get: Some(|c| c.bass_channel as f32),
+        set: |c, v| c.bass_channel = v as u8,
+        format: Format::OneBased,
     },
     Target {
         name: "Upper channel",
@@ -383,6 +532,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 15.0,
         discrete: true,
+        get: Some(|c| c.upper_channel as f32),
+        set: |c, v| c.upper_channel = v as u8,
+        format: Format::OneBased,
     },
     Target {
         name: "Strings played",
@@ -390,6 +542,9 @@ pub const TARGETS: &[Target] = &[
         min: 1.0,
         max: 12.0,
         discrete: true,
+        get: Some(|c| c.strings_played as f32),
+        set: |c, v| c.strings_played = v as u8,
+        format: Format::Plain,
     },
     Target {
         name: "Strumfield position",
@@ -397,6 +552,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 1.0,
         discrete: false,
+        get: Some(|c| c.routed_x.unwrap_or(0.0)),
+        set: |c, v| c.routed_x = Some(v),
+        format: Format::Plain,
     },
     Target {
         name: "Arp page",
@@ -404,6 +562,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 7.0,
         discrete: true,
+        get: Some(|c| c.arp_page as f32),
+        set: |c, v| c.arp_page = v as u8,
+        format: Format::OneBased,
     },
     Target {
         name: "Pitch wheel",
@@ -411,6 +572,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 1.0,
         discrete: false,
+        get: None,
+        set: noop_set,
+        format: Format::Plain,
     },
     Target {
         name: "Modwheel",
@@ -418,6 +582,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 1.0,
         discrete: false,
+        get: None,
+        set: noop_set,
+        format: Format::Plain,
     },
     Target {
         name: "Expression",
@@ -425,6 +592,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 1.0,
         discrete: false,
+        get: None,
+        set: noop_set,
+        format: Format::Plain,
     },
     Target {
         name: "Breath",
@@ -432,6 +602,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 1.0,
         discrete: false,
+        get: None,
+        set: noop_set,
+        format: Format::Plain,
     },
     Target {
         name: "Pressure",
@@ -439,6 +612,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 1.0,
         discrete: false,
+        get: None,
+        set: noop_set,
+        format: Format::Plain,
     },
     Target {
         name: "Timbre",
@@ -446,6 +622,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 1.0,
         discrete: false,
+        get: None,
+        set: noop_set,
+        format: Format::Plain,
     },
     Target {
         name: "Input velocity",
@@ -453,6 +632,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 1.0,
         discrete: false,
+        get: None,
+        set: noop_set,
+        format: Format::Plain,
     },
     Target {
         name: "Strum X",
@@ -460,6 +642,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 1.0,
         discrete: false,
+        get: None,
+        set: noop_set,
+        format: Format::Plain,
     },
     Target {
         name: "Strum Y",
@@ -467,6 +652,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 1.0,
         discrete: false,
+        get: None,
+        set: noop_set,
+        format: Format::Plain,
     },
     Target {
         name: "Tracker Mod 1",
@@ -474,6 +662,9 @@ pub const TARGETS: &[Target] = &[
         min: -1.0,
         max: 1.0,
         discrete: false,
+        get: None,
+        set: noop_set,
+        format: Format::Plain,
     },
     Target {
         name: "Tracker Mod 2",
@@ -481,6 +672,9 @@ pub const TARGETS: &[Target] = &[
         min: -1.0,
         max: 1.0,
         discrete: false,
+        get: None,
+        set: noop_set,
+        format: Format::Plain,
     },
     Target {
         name: "Arp position",
@@ -488,6 +682,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 1.0,
         discrete: false,
+        get: None,
+        set: noop_set,
+        format: Format::Plain,
     },
     Target {
         name: "Arp loop length",
@@ -495,6 +692,9 @@ pub const TARGETS: &[Target] = &[
         min: 1.0,
         max: 4.0,
         discrete: true,
+        get: Some(|c| c.arp_octaves as f32),
+        set: |c, v| c.arp_octaves = v as u8,
+        format: Format::Plain,
     },
     Target {
         name: "Arp sync",
@@ -502,6 +702,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 1.0,
         discrete: true,
+        get: Some(|c| c.arp_sync as u8 as f32),
+        set: |c, v| c.arp_sync = v >= 0.5,
+        format: Format::OnOff,
     },
     Target {
         name: "Arp rate (free)",
@@ -509,6 +712,9 @@ pub const TARGETS: &[Target] = &[
         min: 1.0,
         max: 1500.0,
         discrete: false,
+        get: Some(|c| c.arp_free_ms),
+        set: |c, v| c.arp_free_ms = v,
+        format: Format::Ms,
     },
     Target {
         name: "Arp loop 1 octave",
@@ -516,6 +722,9 @@ pub const TARGETS: &[Target] = &[
         min: -4.0,
         max: 4.0,
         discrete: true,
+        get: Some(|c| c.arp_loop_octaves[0] as f32),
+        set: |c, v| c.arp_loop_octaves[0] = v as i8,
+        format: Format::SignedOct,
     },
     Target {
         name: "Arp loop 2 octave",
@@ -523,6 +732,9 @@ pub const TARGETS: &[Target] = &[
         min: -4.0,
         max: 4.0,
         discrete: true,
+        get: Some(|c| c.arp_loop_octaves[1] as f32),
+        set: |c, v| c.arp_loop_octaves[1] = v as i8,
+        format: Format::SignedOct,
     },
     Target {
         name: "Arp loop 3 octave",
@@ -530,6 +742,9 @@ pub const TARGETS: &[Target] = &[
         min: -4.0,
         max: 4.0,
         discrete: true,
+        get: Some(|c| c.arp_loop_octaves[2] as f32),
+        set: |c, v| c.arp_loop_octaves[2] = v as i8,
+        format: Format::SignedOct,
     },
     Target {
         name: "Arp loop 4 octave",
@@ -537,6 +752,9 @@ pub const TARGETS: &[Target] = &[
         min: -4.0,
         max: 4.0,
         discrete: true,
+        get: Some(|c| c.arp_loop_octaves[3] as f32),
+        set: |c, v| c.arp_loop_octaves[3] = v as i8,
+        format: Format::SignedOct,
     },
     Target {
         name: "Base inversion",
@@ -544,6 +762,9 @@ pub const TARGETS: &[Target] = &[
         min: -12.0,
         max: 12.0,
         discrete: true,
+        get: Some(|c| c.base_inversion as f32),
+        set: |c, v| c.base_inversion = v as i8,
+        format: Format::Plain,
     },
     Target {
         name: "Complexity",
@@ -551,6 +772,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 5.0,
         discrete: true,
+        get: Some(|c| c.complexity as f32),
+        set: |c, v| c.complexity = v as u8,
+        format: Format::Plain,
     },
     Target {
         name: "Global voicing",
@@ -558,6 +782,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 5.0,
         discrete: true,
+        get: Some(|c| c.voicing_override as f32),
+        set: |c, v| c.voicing_override = v as u8,
+        format: Format::Plain,
     },
     Target {
         name: "Gate scale",
@@ -565,6 +792,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.01,
         max: 2.0,
         discrete: false,
+        get: Some(|c| c.gate_scale),
+        set: |c, v| c.gate_scale = v,
+        format: Format::Percent,
     },
     Target {
         name: "Velocity scale",
@@ -572,6 +802,9 @@ pub const TARGETS: &[Target] = &[
         min: 0.0,
         max: 2.0,
         discrete: false,
+        get: Some(|c| c.velocity_scale),
+        set: |c, v| c.velocity_scale = v,
+        format: Format::Percent,
     },
     Target {
         name: "Perf Mod 1",
@@ -579,6 +812,9 @@ pub const TARGETS: &[Target] = &[
         min: -1.0,
         max: 1.0,
         discrete: false,
+        get: None,
+        set: noop_set,
+        format: Format::Plain,
     },
     Target {
         name: "Perf Mod 2",
@@ -586,6 +822,9 @@ pub const TARGETS: &[Target] = &[
         min: -1.0,
         max: 1.0,
         discrete: false,
+        get: None,
+        set: noop_set,
+        format: Format::Plain,
     },
 ];
 pub fn maximum_for_routes(id: &str, base: f32, routes: &[Route]) -> f32 {
@@ -609,62 +848,10 @@ pub fn maximum_for_routes(id: &str, base: f32, routes: &[Route]) -> f32 {
 }
 impl Target {
     fn normalized(&self, c: &Config) -> f32 {
-        let v = match self.id {
-            "arp_page" => c.arp_page as f32,
-            "arp_octaves" => c.arp_octaves as f32,
-            "arp_loop_1_octave" => c.arp_loop_octaves[0] as f32,
-            "arp_loop_2_octave" => c.arp_loop_octaves[1] as f32,
-            "arp_loop_3_octave" => c.arp_loop_octaves[2] as f32,
-            "arp_loop_4_octave" => c.arp_loop_octaves[3] as f32,
-
-            "arp_sync" => c.arp_sync as u8 as f32,
-            "arp_free_ms" => c.arp_free_ms,
-            "strings" => c.strings as f32,
-            "strings_played" => c.strings_played as f32,
-            "x" => c.routed_x.unwrap_or(0.0),
-            "spread" => c.spread as f32,
-            "quality" => c.quality as f32,
-            "inversion" => c.inversion as f32,
-            "base_inversion" => c.base_inversion as f32,
-            "complexity" => c.complexity as f32,
-            "voicing_override" => c.voicing_override as f32,
-            "gate_scale" => c.gate_scale,
-            "velocity_scale" => c.velocity_scale,
-            "transpose" => c.transpose as f32,
-            "velocity" => c.velocity,
-            "length_ms" => c.length_ms,
-            "strum_ms" => c.strum_ms,
-            "strum_sync" => c.strum_sync as u8 as f32,
-            "strum_beats" => c.strum_beats,
-            "strum_hold" => c.strum_hold as u8 as f32,
-            "direction" => c.direction as f32,
-            "contour" => c.contour,
-            "arp_pattern" => c.arp_pattern as f32,
-            "rate" => c.rate,
-            "gate" => c.gate,
-            "swing" => c.swing,
-            "octaves" => c.octaves as f32,
-            "humanize" => c.humanize,
-            "root_on_select" => c.root_on_select as u8 as f32,
-            "latch" => c.latch as u8 as f32,
-            "filter" => c.filter as f32,
-            "arp_mode" => c.arp_mode as u8 as f32,
-            "y_target" => c.y_target as f32,
-            "y_cc" => c.y_cc as f32,
-            "x_reverse" => c.x_reverse as u8 as f32,
-            "y_reverse" => c.y_reverse as u8 as f32,
-            "x_min" => c.x_min,
-            "x_max" => c.x_max,
-            "y_min" => c.y_min,
-            "y_max" => c.y_max,
-            "members" => c.members as f32,
-            "bend_range" => c.bend_range,
-            "master_range" => c.master_range,
-            "output_channel" => c.output_channel as f32,
-            "bass_channel" => c.bass_channel as f32,
-            "upper_channel" => c.upper_channel as f32,
-            _ => self.min,
+        let Some(get) = self.get else {
+            return 0.0;
         };
+        let v = get(c);
         ((v - self.min) / (self.max - self.min)).clamp(0.0, 1.0)
     }
     pub fn source_index(&self) -> Option<usize> {
@@ -716,113 +903,22 @@ impl Target {
     }
     pub fn label(&self, norm: f32) -> String {
         let v = self.plain(norm);
-        match self.id {
-            "spread" => crate::harmony::VOICING_NAMES[v as usize].into(),
-            "quality" => crate::harmony::QUALITY_NAMES[v as usize].into(),
-            "arp_mode" => crate::arpeggiator::MODE_NAMES[v as usize].into(),
-            "direction" => crate::arpeggiator::STRUM_DIRECTION_NAMES[v as usize].into(),
-            "arp_pattern" => crate::arpeggiator::PATTERN_NAMES
-                [v as usize]
-                .into(),
-            "y_target" => [
-                "Velocity",
-                "Gate",
-                "Pressure",
-                "Timbre",
-                "Bend",
-                "Custom CC",
-            ][v as usize]
-                .into(),
-            "filter" => [
-                "All",
-                "Bass",
-                "Top",
-                "Bass + Top",
-                "Odd tones",
-                "Even tones",
-            ][v as usize]
-                .into(),
-            "arp_sync" | "strum_sync" | "strum_hold" | "root_on_select" | "latch" | "x_reverse"
-            | "y_reverse" => if v >= 0.5 { "On" } else { "Off" }.into(),
-            "length_ms" | "strum_ms" | "arp_free_ms" => format!("{v:.0} ms"),
-            "arp_loop_1_octave" | "arp_loop_2_octave" | "arp_loop_3_octave"
-            | "arp_loop_4_octave" => format!("{v:+.0} oct"),
-            "transpose" => format!("{v:+.0} st"),
-            "bend_range" | "master_range" => format!("{v:.0} st"),
-            "arp_page" => format!("{:.0}", v + 1.0),
-            "output_channel" | "bass_channel" | "upper_channel" => format!("{:.0}", v + 1.0),
-            "swing" => format!("{:+.0}%", v / 0.75 * 100.0),
-            "velocity" | "velocity_scale" | "gate_scale" | "humanize" | "gate" | "contour" => {
-                format!("{:.0}%", v * 100.0)
-            }
-            _ if self.discrete => format!("{v:.0}"),
-            _ => format!("{v:.2}"),
+        match self.format {
+            Format::Names(names) => names[v as usize].into(),
+            Format::OnOff => if v >= 0.5 { "On" } else { "Off" }.into(),
+            Format::Ms => format!("{v:.0} ms"),
+            Format::SignedOct => format!("{v:+.0} oct"),
+            Format::SignedSt => format!("{v:+.0} st"),
+            Format::St => format!("{v:.0} st"),
+            Format::OneBased => format!("{:.0}", v + 1.0),
+            Format::SignedPercentDiv75 => format!("{:+.0}%", v / 0.75 * 100.0),
+            Format::Percent => format!("{:.0}%", v * 100.0),
+            Format::Plain if self.discrete => format!("{v:.0}"),
+            Format::Plain => format!("{v:.2}"),
         }
     }
     fn apply(&self, c: &mut Config, norm: f32) {
-        let v = self.plain(norm);
-        match self.id {
-            "arp_page" => c.arp_page = v as u8,
-            "arp_octaves" => c.arp_octaves = v as u8,
-            "arp_loop_1_octave" => c.arp_loop_octaves[0] = v as i8,
-            "arp_loop_2_octave" => c.arp_loop_octaves[1] = v as i8,
-            "arp_loop_3_octave" => c.arp_loop_octaves[2] = v as i8,
-            "arp_loop_4_octave" => c.arp_loop_octaves[3] = v as i8,
-
-            "arp_sync" => c.arp_sync = v >= 0.5,
-            "arp_free_ms" => c.arp_free_ms = v,
-            "strings" => c.strings = v as u8,
-            "strings_played" => c.strings_played = v as u8,
-            "x" => c.routed_x = Some(v),
-            "spread" => c.spread = v as u8,
-            "quality" => c.quality = v as u8,
-            "inversion" => c.inversion = v as u8,
-            "base_inversion" => c.base_inversion = v as i8,
-            "complexity" => c.complexity = v as u8,
-            "voicing_override" => c.voicing_override = v as u8,
-            "gate_scale" => c.gate_scale = v,
-            "velocity_scale" => c.velocity_scale = v,
-            "transpose" => c.transpose = v as i8,
-            "velocity" => c.velocity = v,
-            "length_ms" => c.length_ms = v,
-            "strum_ms" => c.strum_ms = v,
-            "strum_sync" => c.strum_sync = v >= 0.5,
-            "strum_beats" => {
-                c.strum_beats = v;
-                c.rate = v;
-            }
-            "strum_hold" => c.strum_hold = v >= 0.5,
-            "direction" => {
-                c.direction = v as u8;
-                c.arp_pattern = v as u8;
-            }
-            "contour" => c.contour = v,
-            "arp_pattern" => c.arp_pattern = v as u8,
-            "rate" => c.rate = v,
-            "gate" => c.gate = v,
-            "swing" => c.swing = v,
-            "octaves" => c.octaves = v as u8,
-            "humanize" => c.humanize = v,
-            "root_on_select" => c.root_on_select = v >= 0.5,
-            "latch" => c.latch = v >= 0.5,
-            "filter" => c.filter = v as u8,
-            "arp_mode" => c.arp_mode = crate::arpeggiator::ArpMode::from_index(v as u8),
-            "y_target" => c.y_target = v as u8,
-            "y_cc" => c.y_cc = v as u8,
-            "x_reverse" => c.x_reverse = v >= 0.5,
-            "y_reverse" => c.y_reverse = v >= 0.5,
-            "x_min" => c.x_min = v,
-            "x_max" => c.x_max = v,
-            "y_min" => c.y_min = v,
-            "y_max" => c.y_max = v,
-            "members" => c.members = v as u8,
-            "bend_range" => c.bend_range = v,
-            "master_range" => c.master_range = v,
-            "output_channel" => c.output_channel = v as u8,
-            "bass_channel" => c.bass_channel = v as u8,
-            "upper_channel" => c.upper_channel = v as u8,
-            _ => {}
-        }
+        (self.set)(c, self.plain(norm));
     }
 }
 impl Engine {
@@ -1687,6 +1783,36 @@ mod tests {
             (c.x_min, c.x_max, c.y_min, c.y_max)
         );
         assert!(route(2, "x").active());
+    }
+
+    #[test]
+    fn every_target_round_trips_apply_normalized_and_formats_labels() {
+        for target in TARGETS {
+            for norm in [0.0_f32, 0.25, 0.5, 0.75, 1.0] {
+                let label = target.label(norm);
+                assert!(!label.is_empty(), "empty label for {}", target.id);
+                let mut config = Config::default();
+                target.apply(&mut config, norm);
+                if target.source_index().is_some() {
+                    assert_eq!(target.normalized(&config), 0.0);
+                    continue;
+                }
+                let expected = ((target.plain(norm) - target.min) / (target.max - target.min))
+                    .clamp(0.0, 1.0);
+                let got = target.normalized(&config);
+                assert!(
+                    (got - expected).abs() < 1.0e-5,
+                    "round-trip mismatch for {} at norm={norm}: got {got}, expected {expected}",
+                    target.id
+                );
+                if target.id == "strum_beats" {
+                    assert_eq!(config.rate, target.plain(norm));
+                }
+                if target.id == "direction" {
+                    assert_eq!(config.arp_pattern, target.plain(norm) as u8);
+                }
+            }
+        }
     }
 }
 
