@@ -343,41 +343,40 @@ impl MidiFxState {
         move_item(&mut self.order, from, to);
     }
 
-    pub fn sources(&self, id: MidiFxId) -> u8 {
+    fn slot(&self, id: MidiFxId) -> (u8, bool) {
         match id {
-            MidiFxId::Harmonizer => self.harmonizer.sources,
-            MidiFxId::RhythmGate => self.rhythm_gate.sources,
-            MidiFxId::VoiceSplitter => self.voice_splitter.sources,
-            MidiFxId::Delay => self.delay.sources,
+            MidiFxId::Harmonizer => (self.harmonizer.sources, self.harmonizer.enabled),
+            MidiFxId::RhythmGate => (self.rhythm_gate.sources, self.rhythm_gate.enabled),
+            MidiFxId::VoiceSplitter => (self.voice_splitter.sources, self.voice_splitter.enabled),
+            MidiFxId::Delay => (self.delay.sources, self.delay.enabled),
         }
+    }
+
+    fn slot_mut(&mut self, id: MidiFxId) -> (&mut u8, &mut bool) {
+        match id {
+            MidiFxId::Harmonizer => (&mut self.harmonizer.sources, &mut self.harmonizer.enabled),
+            MidiFxId::RhythmGate => (&mut self.rhythm_gate.sources, &mut self.rhythm_gate.enabled),
+            MidiFxId::VoiceSplitter => {
+                (&mut self.voice_splitter.sources, &mut self.voice_splitter.enabled)
+            }
+            MidiFxId::Delay => (&mut self.delay.sources, &mut self.delay.enabled),
+        }
+    }
+
+    pub fn sources(&self, id: MidiFxId) -> u8 {
+        self.slot(id).0
     }
 
     pub fn set_sources(&mut self, id: MidiFxId, sources: u8) {
-        let sources = sources & source::ALL;
-        match id {
-            MidiFxId::Harmonizer => self.harmonizer.sources = sources,
-            MidiFxId::RhythmGate => self.rhythm_gate.sources = sources,
-            MidiFxId::VoiceSplitter => self.voice_splitter.sources = sources,
-            MidiFxId::Delay => self.delay.sources = sources,
-        }
+        *self.slot_mut(id).0 = sources & source::ALL;
     }
 
     pub fn enabled(&self, id: MidiFxId) -> bool {
-        match id {
-            MidiFxId::Harmonizer => self.harmonizer.enabled,
-            MidiFxId::RhythmGate => self.rhythm_gate.enabled,
-            MidiFxId::VoiceSplitter => self.voice_splitter.enabled,
-            MidiFxId::Delay => self.delay.enabled,
-        }
+        self.slot(id).1
     }
 
     pub fn set_enabled(&mut self, id: MidiFxId, enabled: bool) {
-        match id {
-            MidiFxId::Harmonizer => self.harmonizer.enabled = enabled,
-            MidiFxId::RhythmGate => self.rhythm_gate.enabled = enabled,
-            MidiFxId::VoiceSplitter => self.voice_splitter.enabled = enabled,
-            MidiFxId::Delay => self.delay.enabled = enabled,
-        }
+        *self.slot_mut(id).1 = enabled;
     }
 }
 
