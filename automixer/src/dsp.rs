@@ -135,6 +135,8 @@ pub struct Engine {
     pub members: usize,
     pub conflict: bool,
     pub reduction: f32,
+    last_reduction: f32,
+    last_gain: f32,
     sample_rate: f32,
     envelope: f64,
     envelope_coeff: f64,
@@ -168,6 +170,8 @@ impl Engine {
             members: 0,
             conflict: false,
             reduction: 0.0,
+            last_reduction: 0.0,
+            last_gain: 1.0,
             sample_rate,
             envelope: 0.0,
             envelope_coeff: (-1.0 / (sample_rate as f64 * 0.015)).exp(),
@@ -306,6 +310,10 @@ impl Engine {
         self.reduction =
             (amount * engaged * ((1.0 - chorus) * self.share_current + chorus * chorus_reduction))
                 .clamp(0.0, cap);
-        10.0_f32.powf(-self.reduction / 20.0)
+        if self.reduction.to_bits() != self.last_reduction.to_bits() {
+            self.last_reduction = self.reduction;
+            self.last_gain = 10.0_f32.powf(-self.reduction / 20.0);
+        }
+        self.last_gain
     }
 }
