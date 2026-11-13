@@ -126,12 +126,13 @@ impl ChordboardView {
                 Menu::KeyboardParam("output_channel") => COLORS[1],
                 _ => TEAL,
             };
-            for (i, label) in menu.items().iter().enumerate() {
+            for i in 0..menu.item_count() {
                 let r = self.menu_option_rect(menu, i);
+                let raw = menu.label(i);
                 let label = if menu == Menu::Key {
-                    music::label(label)
+                    std::borrow::Cow::Owned(music::label(&raw))
                 } else {
-                    label.clone()
+                    raw
                 };
                 let allowed = self.route_menu_allowed(menu, i);
                 if matches!(menu, Menu::ArpPattern | Menu::GlissDirection) {
