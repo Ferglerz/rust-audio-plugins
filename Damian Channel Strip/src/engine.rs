@@ -266,6 +266,10 @@ pub struct Engine {
     transition: usize,
     pending_aux: Option<Box<AuxBuffers>>,
     sr: f64,
+    k_10ms: f64,
+    k_8ms: f64,
+    last_output_gain_db: f64,
+    last_output_gain: f64,
     comp: VocalComp,
     fft: Arc<dyn Fft<f32>>,
     samples: Vec<Complex<f32>>,
@@ -287,6 +291,7 @@ pub struct Engine {
     solo_filters: [crate::dsp::Cascade; 2],
     solo_mix: f64,
     solo_topology: Option<(u64, crate::band::Shape, u8)>,
+    solo_coeffs: Option<(Band, crate::dsp::BandCoeffs)>,
     lift: LiftProcessor,
     lift_bands: Vec<LiftBand>,
     lift_scratch: Vec<LiftBand>,
@@ -371,6 +376,10 @@ impl Engine {
             transition: 0,
             pending_aux: None,
             sr,
+            k_10ms: 1.0 - (-1.0 / (sr * 0.010)).exp(),
+            k_8ms: 1.0 - (-1.0 / (sr * 0.008)).exp(),
+            last_output_gain_db: 0.0,
+            last_output_gain: 1.0,
             comp: VocalComp::new(),
             fft,
             samples: vec![Complex::default(); 2048],
@@ -400,6 +409,7 @@ impl Engine {
             solo_filters: [crate::dsp::Cascade::default(); 2],
             solo_mix: 0.0,
             solo_topology: None,
+            solo_coeffs: None,
             lift: LiftProcessor::new(),
             lift_bands,
             lift_scratch: aux.lift_scratch,
@@ -454,6 +464,7 @@ impl Engine {
         self.solo_filters = [crate::dsp::Cascade::default(); 2];
         self.solo_mix = 0.0;
         self.solo_topology = None;
+        self.solo_coeffs = None;
         self.lift.reset();
         for b in &mut self.sc_eq_bands {
             b.reset();
@@ -633,6 +644,40 @@ impl Engine {
             tap[1] + self.sc_eq_mix * (sc_filtered[1] - tap[1]),
         ]
     }
+    fn publish_dynamics(
+        &self,
+        gr: f64,
+        sc_level: f64,
+        comp_on: bool,
+        bypass: bool,
+        wall_on: bool,
+    ) {
+        self.shared.sc_level.store(
+            if comp_on && !bypass {
+                (sc_level as f32).max(-90.0)
+            } else {
+                -90.0
+            },
+            Ordering::Relaxed,
+        );
+        self.shared.gr.store(
+            (gr * self.comp_mix * (1.0 - self.bypass_mix)) as f32,
+            Ordering::Relaxed,
+        );
+        self.shared.gr_uncapped.store(
+            (self.comp.uncapped_gr() * self.comp_mix * (1.0 - self.bypass_mix)) as f32,
+            Ordering::Relaxed,
+        );
+        self.shared.wall_level.store(
+            if wall_on && !bypass {
+                (gain_db(self.wall_peak) as f32).max(-90.0)
+            } else {
+                -90.0
+            },
+            Ordering::Relaxed,
+        );
+    }
+
     pub fn tick(
         &mut self,
         input: [f64; 2],
@@ -645,7 +690,7 @@ impl Engine {
         comp_pre: bool,
         bypass: bool,
     ) -> [f64; 2] {
-        let k = 1.0 - (-1.0 / (self.sr * 0.010)).exp();
+        let k = self.k_10ms;
         smooth_eq_bypass(&mut self.eq1_mix, eq_on, k);
         smooth_eq_bypass(&mut self.eq2_mix, eq2_on, k);
         self.sc_eq_mix += k * (f64::from(sc_eq_on) - self.sc_eq_mix);
@@ -719,13 +764,15 @@ impl Engine {
         }
         let lift_active = self.lift_bands.iter().any(|b| b.enabled);
         let (lift_out, eq_delayed, dry_delayed) = self.lift.tick(dry, x, &self.lift_bands, self.sr);
-        for i in 0..8 {
-            self.shared.lift_band_gr[i].store(self.lift.band_gr[i], Ordering::Relaxed);
-        }
-        for i in 0..256 {
-            self.shared.lift_bin_gr[i].store(self.lift.bin_gr[i], Ordering::Relaxed);
-            self.shared.lift_bin_gr_uncapped[i]
-                .store(self.lift.bin_gr_uncapped[i], Ordering::Relaxed);
+        if self.lift.take_hop_updated() {
+            for i in 0..8 {
+                self.shared.lift_band_gr[i].store(self.lift.band_gr[i], Ordering::Relaxed);
+            }
+            for i in 0..256 {
+                self.shared.lift_bin_gr[i].store(self.lift.bin_gr[i], Ordering::Relaxed);
+                self.shared.lift_bin_gr_uncapped[i]
+                    .store(self.lift.bin_gr_uncapped[i], Ordering::Relaxed);
+            }
         }
         if lift_active {
             for i in 0..2 {
@@ -735,8 +782,7 @@ impl Engine {
         }
         let solo_id = self.shared.solo_id.load(Ordering::Relaxed);
         let is_solo = solo_id != 0;
-        let k_solo = 1.0 - (-1.0 / (self.sr * 0.008)).exp();
-        self.solo_mix += k_solo * (f64::from(is_solo) - self.solo_mix);
+        self.solo_mix += self.k_8ms * (f64::from(is_solo) - self.solo_mix);
 
         let is_lift_solo = is_solo && solo_id >= LIFT_ID_BASE;
         let solo_sample = if is_lift_solo {
@@ -759,7 +805,14 @@ impl Engine {
                         self.solo_filters = [crate::dsp::Cascade::default(); 2];
                         self.solo_topology = Some(topology);
                     }
-                    crate::dsp::BandCoeffs::make(&audition, self.sr)
+                    match &self.solo_coeffs {
+                        Some((cached, coeffs)) if *cached == audition => *coeffs,
+                        _ => {
+                            let coeffs = crate::dsp::BandCoeffs::make(&audition, self.sr);
+                            self.solo_coeffs = Some((audition, coeffs));
+                            coeffs
+                        }
+                    }
                 })
                 .map(|c| {
                     [
@@ -809,7 +862,11 @@ impl Engine {
             (dry, solo_sample)
         };
 
-        let out_gain = 10.0_f64.powf(settings.output_gain / 20.0);
+        if settings.output_gain.to_bits() != self.last_output_gain_db.to_bits() {
+            self.last_output_gain_db = settings.output_gain;
+            self.last_output_gain = 10.0_f64.powf(settings.output_gain / 20.0);
+        }
+        let out_gain = self.last_output_gain;
         for i in 0..2 {
             x[i] *= out_gain;
         }
@@ -824,6 +881,8 @@ impl Engine {
         }
         if !is_solo && self.solo_mix < 0.0001 {
             self.solo_filters = [crate::dsp::Cascade::default(); 2];
+            self.solo_topology = None;
+            self.solo_coeffs = None;
         }
         self.in_peak = self.in_peak.max(input[0].abs()).max(input[1].abs());
         self.out_peak = self.out_peak.max(x[0].abs()).max(x[1].abs());
@@ -838,6 +897,7 @@ impl Engine {
                 Complex::new(sample as f32 * self.window[self.spectrum_position], 0.0);
             self.spectrum_position += 1;
         }
+        const _: () = assert!(2048 % 256 == 0);
         self.position += 1;
         if self.position.is_multiple_of(256) {
             self.band_input.sync(
@@ -851,33 +911,10 @@ impl Engine {
             if let Ok(mut slot) = self.shared.dyn_band_input.try_lock() {
                 std::mem::swap(&mut *slot, &mut self.dyn_input_scratch);
             }
-            self.shared.sc_level.store(
-                if comp_on && !bypass {
-                    (sc_level as f32).max(-90.0)
-                } else {
-                    -90.0
-                },
-                Ordering::Relaxed,
-            );
-            self.shared.gr.store(
-                (gr * self.comp_mix * (1.0 - self.bypass_mix)) as f32,
-                Ordering::Relaxed,
-            );
-            self.shared.gr_uncapped.store(
-                (self.comp.uncapped_gr() * self.comp_mix * (1.0 - self.bypass_mix)) as f32,
-                Ordering::Relaxed,
-            );
+            self.publish_dynamics(gr, sc_level, comp_on, bypass, settings.wall.on);
             self.shared
                 .pse_gr
                 .store((pse_gr * (1.0 - self.bypass_mix)) as f32, Ordering::Relaxed);
-            self.shared.wall_level.store(
-                if settings.wall.on && !bypass {
-                    (gain_db(self.wall_peak) as f32).max(-90.0)
-                } else {
-                    -90.0
-                },
-                Ordering::Relaxed,
-            );
         }
         if self.spectrum_position == 2048 {
             self.spectrum_position = 0;
@@ -907,22 +944,6 @@ impl Engine {
             self.shared
                 .output
                 .store(gain_db(self.out_peak) as f32, Ordering::Relaxed);
-            self.shared.gr.store(
-                (gr * self.comp_mix * (1.0 - self.bypass_mix)) as f32,
-                Ordering::Relaxed,
-            );
-            self.shared.gr_uncapped.store(
-                (self.comp.uncapped_gr() * self.comp_mix * (1.0 - self.bypass_mix)) as f32,
-                Ordering::Relaxed,
-            );
-            self.shared.sc_level.store(
-                if comp_on && !bypass {
-                    (sc_level as f32).max(-90.0)
-                } else {
-                    -90.0
-                },
-                Ordering::Relaxed,
-            );
             self.shared.band_gr.store(band_gr as f32, Ordering::Relaxed);
             self.dyn_gr_scratch.clear();
             if self.bank.config.mode != ProcessingMode::LinearPhase {
@@ -939,14 +960,6 @@ impl Engine {
             if let Ok(mut slot) = self.shared.dyn_gr_uncapped.try_lock() {
                 std::mem::swap(&mut *slot, &mut self.dyn_gr_scratch);
             }
-            self.shared.wall_level.store(
-                if settings.wall.on && !bypass {
-                    (gain_db(self.wall_peak) as f32).max(-90.0)
-                } else {
-                    -90.0
-                },
-                Ordering::Relaxed,
-            );
             self.in_peak = 0.0;
             self.out_peak = 0.0;
             self.wall_peak = 0.0;

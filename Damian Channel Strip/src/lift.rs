@@ -129,6 +129,7 @@ pub struct LiftProcessor {
     pub bin_gr: [f32; 256],
     /// Uncapped per-bin GR so the UI can draw overflow past range.
     pub bin_gr_uncapped: [f32; 256],
+    hop_updated: bool,
 }
 
 impl Default for LiftProcessor {
@@ -176,6 +177,7 @@ impl LiftProcessor {
             band_gr: [0.0; 8],
             bin_gr: [0.0; 256],
             bin_gr_uncapped: [0.0; 256],
+            hop_updated: false,
         }
     }
 
@@ -190,6 +192,13 @@ impl LiftProcessor {
         self.dry_delay.reset();
         self.bin_gr = [0.0; 256];
         self.bin_gr_uncapped = [0.0; 256];
+        self.hop_updated = true;
+    }
+
+    pub fn take_hop_updated(&mut self) -> bool {
+        let updated = self.hop_updated;
+        self.hop_updated = false;
+        updated
     }
 
     /// Ticks one stereo sample through the parallel FFT compressor.
@@ -204,8 +213,7 @@ impl LiftProcessor {
         let eq_delayed = self.eq_delay.tick(eq_in);
         let dry_delayed = self.dry_delay.tick(dry_in);
 
-        let active_bands: Vec<&LiftBand> = bands.iter().filter(|b| b.enabled).collect();
-        if active_bands.is_empty() {
+        if !bands.iter().any(|b| b.enabled) {
             let lift_out = [
                 self.out_buf[0][self.out_pos] as f64,
                 self.out_buf[1][self.out_pos] as f64,
@@ -227,7 +235,8 @@ impl LiftProcessor {
         self.hop_count += 1;
         if self.hop_count >= LIFT_HOP_SIZE {
             self.hop_count = 0;
-            self.process_hop(&active_bands, sr);
+            self.process_hop(bands, sr);
+            self.hop_updated = true;
         }
 
         let lift_out = [
@@ -241,9 +250,26 @@ impl LiftProcessor {
         (lift_out, eq_delayed, dry_delayed)
     }
 
-    fn process_hop(&mut self, bands: &[&LiftBand], sr: f64) {
+    fn process_hop(&mut self, bands: &[LiftBand], sr: f64) {
         let num_bins = LIFT_FFT_SIZE / 2 + 1;
         let dt = LIFT_HOP_SIZE as f64 / sr;
+
+        let mut active_bands: [Option<&LiftBand>; 8] = [None; 8];
+        let mut active_count = 0usize;
+        let mut att_ks = [0.0_f32; 8];
+        let mut rel_ks = [0.0_f32; 8];
+        let mut parallel_gains = [0.0_f64; 8];
+        for b in bands.iter().filter(|b| b.enabled).take(8) {
+            active_bands[active_count] = Some(b);
+            att_ks[active_count] = (-dt / (b.attack * 0.001)).exp() as f32;
+            rel_ks[active_count] = (-dt / (b.release * 0.001)).exp() as f32;
+            parallel_gains[active_count] = if b.gain <= -99.5 {
+                0.0
+            } else {
+                10.0_f64.powf(b.gain / 20.0)
+            };
+            active_count += 1;
+        }
 
         let mut band_gr_accum = [0.0_f64; 8];
         let mut band_weight_accum = [0.0_f64; 8];
@@ -268,16 +294,19 @@ impl LiftProcessor {
                 let mut bin_max_gr = 0.0_f32;
                 let mut bin_max_uncapped = 0.0_f32;
 
-                for (b_idx, b) in bands.iter().take(8).enumerate() {
+                for (b_idx, slot) in active_bands[..active_count].iter().enumerate() {
+                    let b = slot.unwrap();
                     let w = filter_influence(b.shape, b.freq, b.q, b.order, f_bin, sr);
                     if w <= 1e-4 {
                         continue;
                     }
 
-                    let att_k = (-dt / (b.attack * 0.001)).exp() as f32;
-                    let rel_k = (-dt / (b.release * 0.001)).exp() as f32;
                     let env = &mut self.env[ch][k];
-                    let k_coeff = if mag > *env { att_k } else { rel_k };
+                    let k_coeff = if mag > *env {
+                        att_ks[b_idx]
+                    } else {
+                        rel_ks[b_idx]
+                    };
                     *env = k_coeff * *env + (1.0 - k_coeff) * mag;
 
                     let level_db = 20.0 * ((*env / 512.0).max(1e-6)).log10() as f64;
@@ -291,12 +320,7 @@ impl LiftProcessor {
                     let gr_db = unlimited.min(b.range);
 
                     let comp_gain = 10.0_f64.powf(-gr_db / 20.0);
-                    let parallel_gain = if b.gain <= -99.5 {
-                        0.0
-                    } else {
-                        10.0_f64.powf(b.gain / 20.0)
-                    };
-                    combined_gain += (w * comp_gain * parallel_gain) as f32;
+                    combined_gain += (w * comp_gain * parallel_gains[b_idx]) as f32;
 
                     band_gr_accum[b_idx] += gr_db * w;
                     band_weight_accum[b_idx] += w;
