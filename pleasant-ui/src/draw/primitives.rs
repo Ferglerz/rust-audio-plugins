@@ -11,36 +11,58 @@ pub(super) fn trace_rest_px(stroke_width: f32) -> f32 {
 
 /// Pieces of `points` that leave `baseline` by more than `rest_px`.
 /// Endpoints sit on the rest boundary so a flat rest line is not stroked or filled.
+pub fn for_each_span_off_baseline(
+    points: &[(f32, f32)],
+    baseline: f32,
+    rest_px: f32,
+    mut f: impl FnMut(Option<(f32, f32)>, &[(f32, f32)], Option<(f32, f32)>),
+) {
+    if points.len() < 2 {
+        return;
+    }
+    let off = |y: f32| (y - baseline).abs() > rest_px;
+    let mut run_start: Option<usize> = None;
+    for (i, p) in points.iter().enumerate() {
+        if off(p.1) {
+            if run_start.is_none() {
+                run_start = Some(i);
+            }
+        } else if let Some(s) = run_start.take() {
+            let start = (s > 0).then(|| rest_boundary(points[s - 1], points[s], baseline, rest_px));
+            let body = &points[s..i];
+            let end = Some(rest_boundary(points[i - 1], *p, baseline, rest_px));
+            if start.is_some() as usize + body.len() + 1 >= 2 {
+                f(start, body, end);
+            }
+        }
+    }
+    if let Some(s) = run_start {
+        let start = (s > 0).then(|| rest_boundary(points[s - 1], points[s], baseline, rest_px));
+        let body = &points[s..];
+        if start.is_some() as usize + body.len() >= 2 {
+            f(start, body, None);
+        }
+    }
+}
+
 pub fn spans_off_baseline(
     points: &[(f32, f32)],
     baseline: f32,
     rest_px: f32,
 ) -> Vec<Vec<(f32, f32)>> {
-    if points.len() < 2 {
-        return Vec::new();
-    }
-    let off = |y: f32| (y - baseline).abs() > rest_px;
     let mut spans = Vec::new();
-    let mut span: Vec<(f32, f32)> = Vec::new();
-    for i in 0..points.len() {
-        let p = points[i];
-        if off(p.1) {
-            if span.is_empty() && i > 0 {
-                span.push(rest_boundary(points[i - 1], p, baseline, rest_px));
-            }
+    for_each_span_off_baseline(points, baseline, rest_px, |start, body, end| {
+        let mut span =
+            Vec::with_capacity(start.is_some() as usize + body.len() + end.is_some() as usize);
+        if let Some(p) = start {
             span.push(p);
-        } else if !span.is_empty() {
-            span.push(rest_boundary(points[i - 1], p, baseline, rest_px));
-            if span.len() >= 2 {
-                spans.push(std::mem::take(&mut span));
-            } else {
-                span.clear();
-            }
         }
-    }
-    if span.len() >= 2 {
+        span.extend_from_slice(body);
+        if let Some(p) = end {
+            span.push(p);
+        }
         spans.push(span);
-    }
+    });
     spans
 }
 
@@ -103,37 +125,77 @@ impl Draw<'_> {
         self.c.stroke_path(&p, &paint);
     }
 
-    /// Stroke `points`, omitting runs that sit on `baseline`.
-    pub fn poly_above(&mut self, points: &[(f32, f32)], baseline: f32, color: Color, width: f32) {
-        for span in spans_off_baseline(points, baseline, trace_rest_px(width)) {
-            self.poly(&span, color, width);
+    fn span_stroke_path(
+        &self,
+        start: Option<(f32, f32)>,
+        body: &[(f32, f32)],
+        end: Option<(f32, f32)>,
+    ) -> Path {
+        let mut p = Path::new();
+        let mut started = false;
+        for (x, y) in start
+            .into_iter()
+            .chain(body.iter().copied())
+            .chain(end.into_iter())
+        {
+            let px = self.ox + (x + self.offset_x) * self.s;
+            let py = self.oy + y * self.s;
+            if !started {
+                p.move_to(px, py);
+                started = true;
+            } else {
+                p.line_to(px, py);
+            }
         }
+        p
     }
 
-    pub fn area(&mut self, points: &[(f32, f32)], bottom: f32, color: Color) {
-        for span in spans_off_baseline(points, bottom, TRACE_REST_PX) {
-            self.fill_area(&span, bottom, color);
-        }
-    }
-
-    fn fill_area(&mut self, points: &[(f32, f32)], bottom: f32, color: Color) {
-        if points.is_empty() {
-            return;
-        }
+    fn span_area_path(
+        &self,
+        start: Option<(f32, f32)>,
+        body: &[(f32, f32)],
+        end: Option<(f32, f32)>,
+        bottom: f32,
+    ) -> Option<Path> {
+        let first = start.or_else(|| body.first().copied()).or(end)?;
+        let last = end.or_else(|| body.last().copied()).or(start)?;
         let mut p = Path::new();
         p.move_to(
-            self.ox + (points[0].0 + self.offset_x) * self.s,
+            self.ox + (first.0 + self.offset_x) * self.s,
             self.oy + bottom * self.s,
         );
-        for (x, y) in points {
+        for (x, y) in start
+            .into_iter()
+            .chain(body.iter().copied())
+            .chain(end.into_iter())
+        {
             p.line_to(self.ox + (x + self.offset_x) * self.s, self.oy + y * self.s);
         }
         p.line_to(
-            self.ox + (points.last().unwrap().0 + self.offset_x) * self.s,
+            self.ox + (last.0 + self.offset_x) * self.s,
             self.oy + bottom * self.s,
         );
         p.close();
-        self.c.fill_path(&p, &Paint::color(self.color(color)));
+        Some(p)
+    }
+
+    /// Stroke `points`, omitting runs that sit on `baseline`.
+    pub fn poly_above(&mut self, points: &[(f32, f32)], baseline: f32, color: Color, width: f32) {
+        let mut paint = Paint::color(self.color(color));
+        paint.set_line_width(width * self.s);
+        for_each_span_off_baseline(points, baseline, trace_rest_px(width), |start, body, end| {
+            let p = self.span_stroke_path(start, body, end);
+            self.c.stroke_path(&p, &paint);
+        });
+    }
+
+    pub fn area(&mut self, points: &[(f32, f32)], bottom: f32, color: Color) {
+        let paint = Paint::color(self.color(color));
+        for_each_span_off_baseline(points, bottom, TRACE_REST_PX, |start, body, end| {
+            if let Some(p) = self.span_area_path(start, body, end, bottom) {
+                self.c.fill_path(&p, &paint);
+            }
+        });
     }
 
     /// Shared EQ handle: solid node with an optional full selection ring.
@@ -409,9 +471,19 @@ impl Draw<'_> {
         c2: Color,
         width: f32,
     ) {
-        for span in spans_off_baseline(points, baseline, trace_rest_px(width)) {
-            self.poly_gradient_span(&span, sx, ex, c1, c2, width);
-        }
+        let mut paint = Paint::linear_gradient(
+            self.ox + (sx + self.offset_x) * self.s,
+            self.oy,
+            self.ox + (ex + self.offset_x) * self.s,
+            self.oy,
+            self.color(c1),
+            self.color(c2),
+        );
+        paint.set_line_width(width * self.s);
+        for_each_span_off_baseline(points, baseline, trace_rest_px(width), |start, body, end| {
+            let p = self.span_stroke_path(start, body, end);
+            self.c.stroke_path(&p, &paint);
+        });
     }
 
     pub fn area_gradient_span(
@@ -423,36 +495,6 @@ impl Draw<'_> {
         c1: Color,
         c2: Color,
     ) {
-        for span in spans_off_baseline(points, bottom, TRACE_REST_PX) {
-            self.fill_area_gradient(&span, bottom, sx, ex, c1, c2);
-        }
-    }
-
-    fn fill_area_gradient(
-        &mut self,
-        points: &[(f32, f32)],
-        bottom: f32,
-        sx: f32,
-        ex: f32,
-        c1: Color,
-        c2: Color,
-    ) {
-        if points.is_empty() {
-            return;
-        }
-        let mut p = Path::new();
-        p.move_to(
-            self.ox + (points[0].0 + self.offset_x) * self.s,
-            self.oy + bottom * self.s,
-        );
-        for (x, y) in points {
-            p.line_to(self.ox + (x + self.offset_x) * self.s, self.oy + y * self.s);
-        }
-        p.line_to(
-            self.ox + (points.last().unwrap().0 + self.offset_x) * self.s,
-            self.oy + bottom * self.s,
-        );
-        p.close();
         let paint = Paint::linear_gradient(
             self.ox + (sx + self.offset_x) * self.s,
             self.oy,
@@ -461,7 +503,11 @@ impl Draw<'_> {
             self.color(c1),
             self.color(c2),
         );
-        self.c.fill_path(&p, &paint);
+        for_each_span_off_baseline(points, bottom, TRACE_REST_PX, |start, body, end| {
+            if let Some(p) = self.span_area_path(start, body, end, bottom) {
+                self.c.fill_path(&p, &paint);
+            }
+        });
     }
 }
 
@@ -500,6 +546,30 @@ mod tests {
         assert!(spans[1].iter().any(|p| (p.1 - 6.0).abs() < 1.0e-4));
         for span in &spans {
             assert!(span.iter().all(|p| p.1 + 1.0e-4 >= 1.0));
+        }
+    }
+
+    #[test]
+    fn span_callback_matches_vec_output_across_edge_cases() {
+        let cases: [&[(f32, f32)]; 4] = [
+            &[],
+            &[(0.0, 10.0)],
+            &[(0.0, 8.0), (10.0, 0.0), (20.0, 0.2), (30.0, 6.0)],
+            &[(0.0, 0.0), (10.0, 5.0), (20.0, 0.0), (30.0, -4.0), (40.0, 0.0)],
+        ];
+        for points in cases {
+            let expected = spans_off_baseline(points, 0.0, 1.0);
+            let mut got = Vec::new();
+            for_each_span_off_baseline(points, 0.0, 1.0, |start, body, end| {
+                got.push(
+                    start
+                        .into_iter()
+                        .chain(body.iter().copied())
+                        .chain(end)
+                        .collect::<Vec<_>>(),
+                );
+            });
+            assert_eq!(got, expected);
         }
     }
 }

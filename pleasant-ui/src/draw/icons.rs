@@ -1,6 +1,44 @@
 use super::Draw;
 use crate::theme::{LINE, MUTED, PANEL, TEXT};
 use nih_plug_vizia::vizia::vg::{Color, Paint, Path};
+use std::sync::OnceLock;
+
+fn palette_outline() -> &'static [(f32, f32); 57] {
+    static OUTLINE: OnceLock<[(f32, f32); 57]> = OnceLock::new();
+    OUTLINE.get_or_init(|| {
+        let seed = [
+            (-1.0_f32, -7.0_f32),
+            (-5.0, -5.5),
+            (-7.0, -2.0),
+            (-7.0, 2.0),
+            (-4.5, 5.5),
+            (0.0, 7.0),
+            (4.5, 5.5),
+            (6.5, 2.5),
+            (6.0, 0.5),
+            (3.0, 0.5),
+            (1.5, -1.0),
+            (2.0, -3.0),
+            (5.0, -4.0),
+            (4.0, -6.0),
+        ];
+        // Subdivide and round each corner twice: 56 short segments keep the
+        // silhouette and thumb recess legible without the coarse polygon edges.
+        let mut points = seed.to_vec();
+        for _ in 0..2 {
+            let mut rounded = Vec::with_capacity(points.len() * 2);
+            for i in 0..points.len() {
+                let (ax, ay) = points[i];
+                let (bx, by) = points[(i + 1) % points.len()];
+                rounded.push((0.75 * ax + 0.25 * bx, 0.75 * ay + 0.25 * by));
+                rounded.push((0.25 * ax + 0.75 * bx, 0.25 * ay + 0.75 * by));
+            }
+            points = rounded;
+        }
+        points.push(points[0]);
+        points.try_into().expect("57 palette outline points")
+    })
+}
 
 impl Draw<'_> {
     /// Small response diagram for filter-shape choices, with a common 0 dB guide.
@@ -17,13 +55,11 @@ impl Draw<'_> {
         let mut guide = color;
         guide.a *= 0.25;
         self.line(x, ordinate(0.0), x + w, ordinate(0.0), guide, 0.8);
-        let points: Vec<_> = (0..=32)
-            .map(|i| {
-                let t = i as f32 / 32.0;
-                let freq = 100.0 * 100.0_f64.powf(t as f64);
-                (x + w * t, ordinate(coeff.response_db(freq, 48000.0)))
-            })
-            .collect();
+        let points: [(f32, f32); 33] = std::array::from_fn(|i| {
+            let t = i as f32 / 32.0;
+            let freq = 100.0 * 100.0_f64.powf(t as f64);
+            (x + w * t, ordinate(coeff.response_db(freq, 48000.0)))
+        });
         self.poly(&points, color, 1.4);
     }
 
@@ -35,16 +71,15 @@ impl Draw<'_> {
         scale: f32,
         line_width: f32,
     ) {
-        let mut points = Vec::new();
         let r = 5.5 * scale;
         let top_gap = 6.5 * scale;
         let bot_gap = 1.0 * scale;
-        for i in 0..=16 {
+        let points: [(f32, f32); 17] = std::array::from_fn(|i| {
             let angle = -std::f32::consts::FRAC_PI_2
                 + 0.8
                 + (std::f32::consts::TAU - 1.6) * i as f32 / 16.0;
-            points.push((cx + r * angle.cos(), cy + r * angle.sin()));
-        }
+            (cx + r * angle.cos(), cy + r * angle.sin())
+        });
         self.poly(&points, color, line_width);
         self.line(cx, cy - top_gap, cx, cy - bot_gap, color, line_width);
     }
@@ -55,38 +90,9 @@ impl Draw<'_> {
 
     /// Outline painter's palette, drawn as geometry so it works with every font.
     pub fn palette_icon(&mut self, cx: f32, cy: f32, color: Color) {
-        let points = [
-            (-1.0, -7.0),
-            (-5.0, -5.5),
-            (-7.0, -2.0),
-            (-7.0, 2.0),
-            (-4.5, 5.5),
-            (0.0, 7.0),
-            (4.5, 5.5),
-            (6.5, 2.5),
-            (6.0, 0.5),
-            (3.0, 0.5),
-            (1.5, -1.0),
-            (2.0, -3.0),
-            (5.0, -4.0),
-            (4.0, -6.0),
-            (-1.0, -7.0),
-        ];
-        // Subdivide and round each corner twice: 56 short segments keep the
-        // silhouette and thumb recess legible without the coarse polygon edges.
-        let mut points = points[..points.len() - 1].to_vec();
-        for _ in 0..2 {
-            let mut rounded = Vec::with_capacity(points.len() * 2);
-            for i in 0..points.len() {
-                let (ax, ay) = points[i];
-                let (bx, by) = points[(i + 1) % points.len()];
-                rounded.push((0.75 * ax + 0.25 * bx, 0.75 * ay + 0.25 * by));
-                rounded.push((0.25 * ax + 0.75 * bx, 0.25 * ay + 0.75 * by));
-            }
-            points = rounded;
-        }
-        points.push(points[0]);
-        let points: Vec<_> = points.iter().map(|&(x, y)| (cx + x, cy + y)).collect();
+        let outline = palette_outline();
+        let points: [(f32, f32); 57] =
+            std::array::from_fn(|i| (cx + outline[i].0, cy + outline[i].1));
         self.poly(&points, color, 1.2);
         for (x, y) in [(-2.0, -4.0), (-4.0, -1.0), (-3.0, 3.0), (1.0, 4.0)] {
             self.circle(cx + x, cy + y, 1.0, color, true);
@@ -100,16 +106,14 @@ impl Draw<'_> {
 
     /// Raised index finger and open touch rings, legible at toolbar size.
     pub fn touch_icon(&mut self, cx: f32, cy: f32, color: Color) {
-        for radius in [3.5, 5.5] {
-            let points: Vec<_> = (0..=28)
-                .map(|i| {
-                    let angle = 2.5 + 4.4 * i as f32 / 28.0;
-                    (
-                        cx - 2.0 + radius * angle.cos(),
-                        cy - 4.0 + radius * angle.sin(),
-                    )
-                })
-                .collect();
+        for radius in [3.5_f32, 5.5] {
+            let points: [(f32, f32); 29] = std::array::from_fn(|i| {
+                let angle = 2.5 + 4.4 * i as f32 / 28.0;
+                (
+                    cx - 2.0 + radius * angle.cos(),
+                    cy - 4.0 + radius * angle.sin(),
+                )
+            });
             self.poly(&points, color, 1.1);
         }
         let x = |v: f32| self.ox + (cx + v + self.offset_x) * self.s;
@@ -137,11 +141,10 @@ impl Draw<'_> {
     }
 
     pub fn headphones(&mut self, cx: f32, cy: f32, color: Color) {
-        let mut points = Vec::new();
-        for i in 0..=12 {
+        let points: [(f32, f32); 13] = std::array::from_fn(|i| {
             let angle = std::f32::consts::PI + std::f32::consts::PI * i as f32 / 12.0;
-            points.push((cx + 6.0 * angle.cos(), cy + 1.0 + 6.0 * angle.sin()));
-        }
+            (cx + 6.0 * angle.cos(), cy + 1.0 + 6.0 * angle.sin())
+        });
         self.poly(&points, color, 1.4);
         self.rect(cx - 7.5, cy, 3.0, 6.0, color);
         self.rect(cx + 4.5, cy, 3.0, 6.0, color);
