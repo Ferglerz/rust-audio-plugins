@@ -1,4 +1,6 @@
-mod arpeggiator;
+mod arp_editor;
+use arp_editor as arpeggiator;
+use arp_editor::delay_editor;
 mod chords;
 mod custom;
 mod events;
