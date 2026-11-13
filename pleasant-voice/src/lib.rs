@@ -3,7 +3,6 @@
 //! Audio thread: LPF + resample to 16 kHz, push into a lock-free ring, read
 //! smoothed `speech_env`. Worker thread owns the ONNX session.
 
-use std::f64::consts::PI;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -11,6 +10,7 @@ use std::time::Duration;
 
 use atomic_float::AtomicF32;
 use crossbeam_queue::ArrayQueue;
+use pleasant_dsp::filters::{BiquadCoefficients, BiquadKind, TransposedDirectForm2};
 
 /// Official Silero VAD ONNX (v6.2.1).
 /// SHA-256: 1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3
@@ -25,62 +25,14 @@ const LPF_HZ: f64 = 7500.0;
 const ATTACK_SECS: f32 = 0.005;
 const RELEASE_SECS: f32 = 0.100;
 
-#[derive(Clone, Copy, Debug)]
-pub struct VadBiquad {
-    pub b0: f64,
-    pub b1: f64,
-    pub b2: f64,
-    pub a1: f64,
-    pub a2: f64,
-    s1: f64,
-    s2: f64,
-}
-
-impl Default for VadBiquad {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl VadBiquad {
-    pub const fn new() -> Self {
-        Self {
-            b0: 1.0,
-            b1: 0.0,
-            b2: 0.0,
-            a1: 0.0,
-            a2: 0.0,
-            s1: 0.0,
-            s2: 0.0,
-        }
-    }
-
-    #[inline(always)]
-    pub fn process_sample(&mut self, sample: f64) -> f64 {
-        let out = self.b0 * sample + self.s1;
-        self.s1 = self.b1 * sample - self.a1 * out + self.s2;
-        self.s2 = self.b2 * sample - self.a2 * out;
-        out
-    }
-
-    pub fn set_lowpass(&mut self, freq: f64, q: f64, sample_rate: f64) {
-        let w0 = 2.0 * PI * freq / sample_rate;
-        let alpha = w0.sin() / (2.0 * q.max(0.1));
-        let cos_w0 = w0.cos();
-
-        let a0_inv = 1.0 / (1.0 + alpha);
-        let b_scale = ((1.0 - cos_w0) * 0.5) * a0_inv;
-        self.b0 = b_scale;
-        self.b1 = (1.0 - cos_w0) * a0_inv;
-        self.b2 = b_scale;
-        self.a1 = (-2.0 * cos_w0) * a0_inv;
-        self.a2 = (1.0 - alpha) * a0_inv;
-    }
-
-    pub fn reset(&mut self) {
-        self.s1 = 0.0;
-        self.s2 = 0.0;
-    }
+fn design_vad_lowpass(sample_rate: f64) -> BiquadCoefficients {
+    BiquadCoefficients::design(
+        BiquadKind::HighCut,
+        LPF_HZ,
+        0.0,
+        std::f64::consts::FRAC_1_SQRT_2,
+        sample_rate,
+    )
 }
 
 struct VadShared {
@@ -123,7 +75,8 @@ impl VadShared {
 
 pub struct SpeechVad {
     sample_rate: f64,
-    lpf: VadBiquad,
+    lpf: TransposedDirectForm2,
+    lpf_coeffs: BiquadCoefficients,
     frac: f64,
     prev: f32,
     speech_env: f32,
@@ -134,11 +87,10 @@ pub struct SpeechVad {
 impl SpeechVad {
     pub fn new(sample_rate: f64) -> Self {
         let sr = sample_rate.max(8000.0);
-        let mut lpf = VadBiquad::new();
-        lpf.set_lowpass(LPF_HZ, std::f64::consts::FRAC_1_SQRT_2, sr);
         Self {
             sample_rate: sr,
-            lpf,
+            lpf: TransposedDirectForm2::default(),
+            lpf_coeffs: design_vad_lowpass(sr),
             frac: 0.0,
             prev: 0.0,
             speech_env: 0.0,
@@ -151,8 +103,7 @@ impl SpeechVad {
         let sr = sample_rate.max(8000.0);
         if (self.sample_rate - sr).abs() > 0.1 {
             self.sample_rate = sr;
-            self.lpf
-                .set_lowpass(LPF_HZ, std::f64::consts::FRAC_1_SQRT_2, sr);
+            self.lpf_coeffs = design_vad_lowpass(sr);
             self.lpf.reset();
             self.frac = 0.0;
             self.prev = 0.0;
@@ -228,7 +179,7 @@ impl SpeechVad {
             return;
         }
         let step = VAD_SAMPLE_RATE / self.sample_rate;
-        let y = self.lpf.process_sample(x as f64) as f32;
+        let y = self.lpf.process(x as f64, self.lpf_coeffs) as f32;
         self.frac += step;
         while self.frac >= 1.0 {
             self.frac -= 1.0;
@@ -475,13 +426,13 @@ mod tests {
     #[test]
     fn vad_biquad_lowpass_attenuates_high_frequencies() {
         let sr = 48000.0;
-        let mut filter = VadBiquad::new();
-        filter.set_lowpass(7500.0, std::f64::consts::FRAC_1_SQRT_2, sr);
+        let coeffs = design_vad_lowpass(sr);
+        let mut filter = TransposedDirectForm2::default();
 
         let mut peak_low = 0.0_f64;
         for i in 0..480 {
-            let s = (2.0 * PI * 1000.0 * i as f64 / sr).sin();
-            let y = filter.process_sample(s);
+            let s = (2.0 * std::f64::consts::PI * 1000.0 * i as f64 / sr).sin();
+            let y = filter.process(s, coeffs);
             if i > 200 {
                 peak_low = peak_low.max(y.abs());
             }
@@ -491,8 +442,8 @@ mod tests {
         filter.reset();
         let mut peak_high = 0.0_f64;
         for i in 0..480 {
-            let s = (2.0 * PI * 18000.0 * i as f64 / sr).sin();
-            let y = filter.process_sample(s);
+            let s = (2.0 * std::f64::consts::PI * 18000.0 * i as f64 / sr).sin();
+            let y = filter.process(s, coeffs);
             if i > 200 {
                 peak_high = peak_high.max(y.abs());
             }
