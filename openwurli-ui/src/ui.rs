@@ -11,15 +11,10 @@ use nih_plug_vizia::{
 use pleasant_ui::{
     draw::{Draw, EditorViewport},
     load_font_once, point_in_rect, start_frame_timer,
-    preferences::AppearanceStore,
     theme::{GOLD, LINE, MUTED, PANEL, TEAL, TEXT},
     FONT_JETBRAINS_MONO,
 };
-use std::{
-    cell::Cell,
-    sync::{Arc, OnceLock},
-    time::Duration,
-};
+use std::{cell::Cell, sync::Arc, time::Duration};
 
 const WIDTH: f32 = 720.0;
 const HEIGHT: f32 = 550.0;
@@ -30,11 +25,7 @@ const EXTENDED_BUTTON: (f32, f32, f32, f32) = (551.0, 384.0, 104.0, 42.0);
 const SAG_BUTTON: (f32, f32, f32, f32) = (551.0, 440.0, 104.0, 42.0);
 const THEME_BUTTON: (f32, f32, f32, f32) = (601.0, 21.0, 80.0, 30.0);
 
-static PREFS: OnceLock<AppearanceStore> = OnceLock::new();
-
-fn prefs() -> &'static AppearanceStore {
-    PREFS.get_or_init(|| AppearanceStore::new("OpenWurli UI"))
-}
+pleasant_ui::appearance_store!("OpenWurli UI");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Knob {

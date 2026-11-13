@@ -11,15 +11,17 @@ use nih_plug_vizia::{
 };
 use pleasant_ui::{
     draw::{Draw, EditorViewport},
-    param,
+    load_font_once, param,
     pointer::ValuePress,
+    point_in_rect,
     readout::{self, EditAction, PressAction},
+    start_frame_timer,
     value_edit::ValueEdit,
-    AppearanceStore, FONT_JETBRAINS_MONO, GOLD, LINE, MUTED, PANEL, TEAL, TEXT,
+    FONT_JETBRAINS_MONO, GOLD, LINE, MUTED, PANEL, TEAL, TEXT,
 };
 use std::{
     cell::Cell,
-    sync::{atomic::Ordering, Arc, OnceLock},
+    sync::{atomic::Ordering, Arc},
     time::Duration,
 };
 
@@ -34,9 +36,6 @@ const ROW: f32 = 22.0;
 const CHANNELS: i32 = 17;
 const CC_COUNT: i32 = 120;
 const CC_VISIBLE: i32 = 12;
-fn inside(p: (f32, f32), r: Rect) -> bool {
-    p.0 >= r.0 && p.0 <= r.0 + r.2 && p.1 >= r.1 && p.1 <= r.1 + r.3
-}
 fn channel_label(value: i32) -> String {
     if value == 0 {
         "Off".into()
@@ -44,10 +43,7 @@ fn channel_label(value: i32) -> String {
         value.to_string()
     }
 }
-fn prefs() -> &'static AppearanceStore {
-    static PREFS: OnceLock<AppearanceStore> = OnceLock::new();
-    PREFS.get_or_init(|| AppearanceStore::new("Automixer"))
-}
+pleasant_ui::appearance_store!("Automixer");
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Control {
@@ -251,7 +247,7 @@ impl AutomixerView {
             .get()
             .into_iter()
             .flatten()
-            .find(|button| inside(point, button.rect))
+            .find(|button| point_in_rect(point.0, point.1, button.rect))
     }
     fn toggle_bypass_at(&self, point: (f32, f32)) -> bool {
         let Some(button) = self.bypass_at(point) else {
@@ -362,7 +358,7 @@ impl AutomixerView {
         let (_, count, visible) = Self::menu_spec(menu.kind);
         let rows = visible.min(count);
         let body = Self::menu_body(menu.kind, rows);
-        if !inside(point, body) {
+        if !point_in_rect(point.0, point.1, body) {
             return None;
         }
         let row = ((point.1 - (body.1 + 4.0)) / ROW) as i32;
@@ -409,7 +405,7 @@ impl AutomixerView {
     }
     fn group_at(&self, point: (f32, f32)) -> Option<usize> {
         self.visible().into_iter().find_map(|(slot, rect)| {
-            inside(point, Self::group_rect(rect))
+            point_in_rect(point.0, point.1, Self::group_rect(rect))
                 .then(|| self.network.slots[slot].mic.load(Ordering::Acquire))
         })
     }
@@ -484,33 +480,37 @@ impl AutomixerView {
                             self.choose_menu(cx, index);
                         }
                         self.menu = None;
-                    } else if inside(point, THEME) {
+                    } else if point_in_rect(point.0, point.1, THEME) {
                         prefs().toggle();
                     } else if self.toggle_bypass_at(point) {
-                    } else if inside(point, PREVIOUS) {
+                    } else if point_in_rect(point.0, point.1, PREVIOUS) {
                         self.change_page(false);
-                    } else if inside(point, NEXT) {
+                    } else if point_in_rect(point.0, point.1, NEXT) {
                         self.change_page(true);
-                    } else if inside(point, Self::channel_rect()) {
+                    } else if point_in_rect(point.0, point.1, Self::channel_rect()) {
                         let mic = self.selected.min(CAPACITY - 1);
                         self.open_menu(MenuKind::Channel(mic));
-                    } else if inside(point, Self::cc_rect()) {
+                    } else if point_in_rect(point.0, point.1, Self::cc_rect()) {
                         let mic = self.selected.min(CAPACITY - 1);
                         self.open_menu(MenuKind::Cc(mic));
                     } else if let Some(mic) = self.group_at(point) {
                         self.selected = mic;
                         self.group_press = Some(mic);
                     } else {
-                        if let Some((slot, _)) =
-                            self.visible().into_iter().find(|(_, r)| inside(point, *r))
+                        if let Some((slot, _)) = self
+                            .visible()
+                            .into_iter()
+                            .find(|(_, r)| point_in_rect(point.0, point.1, *r))
                         {
                             self.selected = self.network.slots[slot].mic.load(Ordering::Acquire);
                         }
-                        if let Some((id, r)) =
-                            self.controls().into_iter().find(|(_, r)| inside(point, *r))
+                        if let Some((id, r)) = self
+                            .controls()
+                            .into_iter()
+                            .find(|(_, r)| point_in_rect(point.0, point.1, *r))
                         {
                             let value_rect = Self::value_rect(r);
-                            if inside(point, value_rect) {
+                            if point_in_rect(point.0, point.1, value_rect) {
                                 self.press = Some(ValuePress::new(id, value_rect, point));
                             } else {
                                 let initial = self.normalized(id);
@@ -528,7 +528,7 @@ impl AutomixerView {
                     if let Some((slot, r)) = self
                         .visible()
                         .into_iter()
-                        .find(|(_, r)| inside(point, Self::name_rect(*r)))
+                        .find(|(_, r)| point_in_rect(point.0, point.1, Self::name_rect(*r)))
                     {
                         let mic = self.network.slots[slot].mic.load(Ordering::Acquire);
                         let name = self.params.shared.mics[mic]
@@ -538,8 +538,10 @@ impl AutomixerView {
                             .clone();
                         self.edit =
                             Some(ValueEdit::new(Target::Name(mic), Self::name_rect(r), name));
-                    } else if let Some((id, _)) =
-                        self.controls().into_iter().find(|(_, r)| inside(point, *r))
+                    } else if let Some((id, _)) = self
+                        .controls()
+                        .into_iter()
+                        .find(|(_, r)| point_in_rect(point.0, point.1, *r))
                     {
                         self.prepare_edit(id, self.parameter(id).default());
                         param::set_normalized_once(
@@ -566,9 +568,9 @@ impl AutomixerView {
                 WindowEvent::MouseScroll(_, dy) if self.drag.is_none() => {
                     let mic = self.selected.min(CAPACITY - 1);
                     let fine = cx.modifiers().shift();
-                    let list = if inside(point, Self::channel_rect()) {
+                    let list = if point_in_rect(point.0, point.1, Self::channel_rect()) {
                         Some(&self.params.shared.mics[mic].midi_channel)
-                    } else if inside(point, Self::cc_rect()) {
+                    } else if point_in_rect(point.0, point.1, Self::cc_rect()) {
                         Some(&self.params.shared.mics[mic].midi_cc)
                     } else {
                         None
@@ -582,8 +584,10 @@ impl AutomixerView {
                         };
                         let ptr = param.as_ptr();
                         param::set_normalized_once(cx, ptr, next);
-                    } else if let Some((id, _)) =
-                        self.controls().into_iter().find(|(_, r)| inside(point, *r))
+                    } else if let Some((id, _)) = self
+                        .controls()
+                        .into_iter()
+                        .find(|(_, r)| point_in_rect(point.0, point.1, *r))
                     {
                         let value = self.parameter(id).step(
                             self.normalized(id),
@@ -988,7 +992,10 @@ impl AutomixerView {
         for row in 0..rows {
             let index = menu.scroll + row;
             let item = Self::menu_row(body, row);
-            if d.hover.is_some_and(|point| inside(point, item)) || index == current {
+            if d.hover
+                .is_some_and(|point| point_in_rect(point.0, point.1, item))
+                || index == current
+            {
                 d.rect(item.0, item.1, item.2, item.3, LINE);
             }
             let label = if matches!(menu.kind, MenuKind::Channel(_)) && index == 0 {
@@ -1027,7 +1034,7 @@ impl AutomixerView {
         }
         if self
             .hover
-            .is_some_and(|p| inside(p, Self::value_rect(rect)))
+            .is_some_and(|p| point_in_rect(p.0, p.1, Self::value_rect(rect)))
         {
             d.value_underline(Self::value_rect(rect), rect.1 + 18.0, GOLD);
         }
@@ -1051,19 +1058,23 @@ impl AutomixerView {
         if self.group_at(point).is_some() {
             return "Voice mics share with each other. Chorus and voice assist apply only to them. Other mics share separately, with their own max GR.";
         }
-        if inside(point, THEME) {
+        if point_in_rect(point.0, point.1, THEME) {
             return "Cycle Dark, Light, and Auto appearance.";
         }
-        if inside(point, PREVIOUS) || inside(point, NEXT) {
+        if point_in_rect(point.0, point.1, PREVIOUS) || point_in_rect(point.0, point.1, NEXT) {
             return "Browse the linked microphone strips.";
         }
-        if inside(point, Self::channel_rect()) {
+        if point_in_rect(point.0, point.1, Self::channel_rect()) {
             return "MIDI channel for the selected microphone. Click to open the list. Off ignores cues. Scroll to step while the list is closed.";
         }
-        if inside(point, Self::cc_rect()) {
+        if point_in_rect(point.0, point.1, Self::cc_rect()) {
             return "Weight CC for the selected microphone, 0-119. Click to open the list. The latest cue replaces the weight. Scroll to step while closed.";
         }
-        if let Some((id, _)) = self.controls().into_iter().find(|(_, r)| inside(point, *r)) {
+        if let Some((id, _)) = self
+            .controls()
+            .into_iter()
+            .find(|(_, r)| point_in_rect(point.0, point.1, *r))
+        {
             return match id {
                 Control::Amount => "Automix depth for every microphone. 0% is unity gain. 100% applies the full computed reduction, including quiet voice mics during chorus.",
                 Control::VoiceCap => "Maximum reduction for Voice microphones, in sharing and in chorus. 0 dB keeps every voice mic at unity.",
@@ -1091,17 +1102,10 @@ impl View for AutomixerView {
         pleasant_ui::value_edit::sync_text_input(cx, editing, self.edit.is_some());
     }
     fn draw(&self, cx: &mut DrawContext, canvas: &mut Canvas) {
-        if self.font.get().is_none() {
-            self.font.set(canvas.add_font_mem(FONT_JETBRAINS_MONO).ok());
-        }
+        let font = load_font_once(canvas, &self.font, FONT_JETBRAINS_MONO);
         let b = cx.bounds();
-        if let Some(mut d) = Draw::new_fitted(
-            canvas,
-            prefs().light(),
-            (b.x, b.y, b.w, b.h),
-            SIZE,
-            self.font.get(),
-        ) {
+        if let Some(mut d) = Draw::new_fitted(canvas, prefs().light(), (b.x, b.y, b.w, b.h), SIZE, font)
+        {
             self.paint(&mut d);
         }
     }
@@ -1118,12 +1122,7 @@ pub fn create(
         move |cx, _| {
             AutomixerView::new(params.clone(), network.clone(), local_slot)
                 .build(cx, |cx| {
-                    let timer = cx.add_timer(Duration::from_millis(33), None, |cx, action| {
-                        if let TimerAction::Tick(_) = action {
-                            cx.needs_redraw();
-                        }
-                    });
-                    cx.start_timer(timer);
+                    start_frame_timer(cx, Duration::from_millis(33), |cx| cx.needs_redraw());
                 })
                 .width(Stretch(1.0))
                 .height(Stretch(1.0));

@@ -10,7 +10,8 @@ use nih_plug_vizia::widgets::util::ModifiersExt;
 use pleasant_eq::{BandCoefficients, BandSettings, EqShape, ResponseCache};
 use pleasant_ui::theme::EQ_COLORS as COLORS;
 use pleasant_ui::{
-    pointer::ValuePress, ButtonAnim, Draw, ValueEdit, GOLD, LINE, MUTED, PANEL, TEXT,
+    pointer::ValuePress, point_in_rect, ButtonAnim, Draw, ValueEdit, GOLD, LINE, MUTED, PANEL,
+    TEXT,
 };
 
 use super::display::UiDisplay;
@@ -36,7 +37,7 @@ const SHAPE_MENU: (f32, f32, f32, f32) = (
     MENU_ROW_H * DetectorShape::ALL.len() as f32,
 );
 fn menu_shape(point: (f32, f32)) -> Option<DetectorShape> {
-    if !contains(SHAPE_MENU, point) {
+    if !point_in_rect(point.0, point.1, SHAPE_MENU) {
         return None;
     }
     DetectorShape::ALL
@@ -91,9 +92,6 @@ pub struct DetectorEqView {
     response_cache: RefCell<ResponseCache>,
 }
 
-fn contains(r: (f32, f32, f32, f32), p: (f32, f32)) -> bool {
-    p.0 >= r.0 && p.0 <= r.0 + r.2 && p.1 >= r.1 && p.1 <= r.1 + r.3
-}
 fn frequency_x(frequency: f32) -> f32 {
     GRAPH.0 + GRAPH.2 * (frequency.clamp(20.0, 20_000.0) / 20.0).ln() / 1000.0_f32.ln()
 }
@@ -254,7 +252,7 @@ impl DetectorEqView {
         let node = self.selected?;
         self.fields(node)
             .into_iter()
-            .find(|field| contains(field_rect(*field, &self.fields(node)), p))
+            .find(|field| point_in_rect(p.0, p.1, field_rect(*field, &self.fields(node))))
             .map(|field| Target { node, field })
     }
     fn begin_node(&mut self, cx: &mut EventContext, node: Node, p: (f32, f32)) {
@@ -522,7 +520,7 @@ impl View for DetectorEqView {
                         BYPASS_RECT,
                         !b.enabled.value(),
                         color,
-                        self.hover.is_some_and(|p| contains(BYPASS_RECT, p)),
+                        self.hover.is_some_and(|p| point_in_rect(p.0, p.1, BYPASS_RECT)),
                         self.bypass_anim.step(),
                     );
                 }
@@ -537,7 +535,7 @@ impl View for DetectorEqView {
             for field in self.fields(node) {
                 let target = Target { node, field };
                 let r = field_rect(field, &self.fields(node));
-                let highlighted = self.hover.is_some_and(|p| contains(r, p))
+                let highlighted = self.hover.is_some_and(|p| point_in_rect(p.0, p.1, r))
                     || self.press.as_ref().is_some_and(|p| p.press.rect == r);
                 if highlighted {
                     d.outline(r, color);
@@ -633,7 +631,7 @@ impl View for DetectorEqView {
                         return;
                     }
                     if let Some(edit) = self.edit.as_mut() {
-                        if contains(edit.rect, point) {
+                        if point_in_rect(point.0, point.1, edit.rect) {
                             edit.handle_mouse_down(point.0);
                             cx.needs_redraw();
                             nih_plug_vizia::consume_window_event(cx, e, meta);
@@ -644,8 +642,10 @@ impl View for DetectorEqView {
                             return;
                         }
                     }
-                    if contains(LISTEN_RECT, point) || contains(SIDECHAIN_RECT, point) {
-                        let param = if contains(LISTEN_RECT, point) {
+                    if point_in_rect(point.0, point.1, LISTEN_RECT)
+                        || point_in_rect(point.0, point.1, SIDECHAIN_RECT)
+                    {
+                        let param = if point_in_rect(point.0, point.1, LISTEN_RECT) {
                             &self.params.sc_adjust_preview
                         } else {
                             &self.params.use_sidechain
@@ -674,20 +674,20 @@ impl View for DetectorEqView {
                         .selected
                         .filter(|_| point.1 >= ACTIONS_Y && point.1 <= ACTIONS_Y + 28.0)
                     {
-                        if contains(REMOVE_RECT, point) {
+                        if point_in_rect(point.0, point.1, REMOVE_RECT) {
                             self.remove(cx, node);
                         } else if let Node::Band(i) = node {
                             let b = &self.params.detector_eq[i];
-                            if contains(SHAPE_RECT, point) {
+                            if point_in_rect(point.0, point.1, SHAPE_RECT) {
                                 self.shape_menu = true;
                                 cx.focus();
                                 cx.capture();
-                            } else if contains(BYPASS_RECT, point) {
+                            } else if point_in_rect(point.0, point.1, BYPASS_RECT) {
                                 self.bypass_anim.trigger_click();
                                 set_once(cx, &b.enabled, if b.enabled.value() { 0.0 } else { 1.0 });
                             }
                         }
-                    } else if contains(GRAPH, point) {
+                    } else if point_in_rect(point.0, point.1, GRAPH) {
                         self.create(cx, point);
                         cx.focus();
                     } else {

@@ -13,16 +13,17 @@ use nih_plug_vizia::{
 use pleasant_ui::{
     draw::{Draw, EditorViewport, KnobLayout},
     graph::Viewport,
-    param,
+    load_font_once, param,
     pointer::ValuePress,
-    preferences::AppearanceStore,
+    point_in_rect,
     readout::{self, EditAction, PressAction},
+    start_frame_timer,
     value_edit::ValueEdit,
     FONT_JETBRAINS_MONO, GOLD, LINE, MUTED, PANEL, TEAL,
 };
 use std::{
     cell::Cell,
-    sync::{atomic::Ordering, Arc, OnceLock},
+    sync::{atomic::Ordering, Arc},
     time::Duration,
 };
 
@@ -50,13 +51,7 @@ const TRANSIENT_GUARD: Rect = (600.0, 517.0, 164.0, 34.0);
 const GUARD_TRACK_LEFT: f32 = TRANSIENT_GUARD.0 + 4.0;
 const GUARD_TRACK_WIDTH: f32 = TRANSIENT_GUARD.2 - 8.0;
 const LOUDER_BUTTON: Rect = (680.0, 370.0, 84.0, 28.0);
-fn inside(point: (f32, f32), r: Rect) -> bool {
-    point.0 >= r.0 && point.0 <= r.0 + r.2 && point.1 >= r.1 && point.1 <= r.1 + r.3
-}
-fn prefs() -> &'static AppearanceStore {
-    static STORE: OnceLock<AppearanceStore> = OnceLock::new();
-    STORE.get_or_init(|| AppearanceStore::new("Dereverb"))
-}
+pleasant_ui::appearance_store!("Dereverb");
 fn value_rect() -> Rect {
     KnobLayout::new(KNOB).value_rect(KNOB.0 + 20.0, KNOB.2 - 40.0)
 }
@@ -196,17 +191,23 @@ impl DereverbView {
                         self.curve_drag =
                             Some((index, point.1, parameter.unmodulated_normalized_value()));
                         cx.capture();
-                    } else if inside(point, RELATIVE) || inside(point, ABSOLUTE) {
+                    } else if point_in_rect(point.0, point.1, RELATIVE)
+                        || point_in_rect(point.0, point.1, ABSOLUTE)
+                    {
                         param::set_normalized_once(
                             cx,
                             self.params.level_mode.as_ptr(),
-                            if inside(point, RELATIVE) { 0.0 } else { 1.0 },
+                            if point_in_rect(point.0, point.1, RELATIVE) {
+                                0.0
+                            } else {
+                                1.0
+                            },
                         );
-                    } else if inside(point, FLAT) {
+                    } else if point_in_rect(point.0, point.1, FLAT) {
                         self.set_curve(cx, [1.0; NODES]);
-                    } else if inside(point, LOUDER_BUTTON) {
+                    } else if point_in_rect(point.0, point.1, LOUDER_BUTTON) {
                         self.set_curve(cx, LOUDER);
-                    } else if inside(point, TRANSIENT_GUARD) {
+                    } else if point_in_rect(point.0, point.1, TRANSIENT_GUARD) {
                         self.end_drag(cx);
                         let guard = &self.params.transient_guard;
                         param::begin(cx, guard.as_ptr());
@@ -220,11 +221,11 @@ impl DereverbView {
                         };
                         self.guard_drag = Some((point.0, value));
                         cx.capture();
-                    } else if inside(point, THEME) {
+                    } else if point_in_rect(point.0, point.1, THEME) {
                         prefs().toggle();
                     } else if let Some((_, _, engine)) = ENGINE_BUTTONS
                         .iter()
-                        .find(|(rect, _, _)| inside(point, *rect))
+                        .find(|(rect, _, _)| point_in_rect(point.0, point.1, *rect))
                     {
                         self.end_drag(cx);
                         param::set_normalized_once(
@@ -233,10 +234,11 @@ impl DereverbView {
                             self.params.engine.preview_normalized(*engine),
                         );
                     } else if self.params.engine.value().has_quality()
-                        && (inside(point, LIVE) || inside(point, HIGH_QUALITY))
+                        && (point_in_rect(point.0, point.1, LIVE)
+                            || point_in_rect(point.0, point.1, HIGH_QUALITY))
                     {
                         self.end_drag(cx);
-                        let quality = if inside(point, LIVE) {
+                        let quality = if point_in_rect(point.0, point.1, LIVE) {
                             Quality::Live
                         } else {
                             Quality::HighQuality
@@ -246,10 +248,10 @@ impl DereverbView {
                             self.params.quality.as_ptr(),
                             self.params.quality.preview_normalized(quality),
                         );
-                    } else if inside(point, value_rect()) {
+                    } else if point_in_rect(point.0, point.1, value_rect()) {
                         self.press = Some(ValuePress::new((), value_rect(), point));
                         cx.capture();
-                    } else if inside(point, KNOB) {
+                    } else if point_in_rect(point.0, point.1, KNOB) {
                         param::begin(cx, self.params.strength.as_ptr());
                         self.drag = Some((
                             point.0,
@@ -311,7 +313,7 @@ impl DereverbView {
                     );
                 }
                 WindowEvent::MouseDoubleClick(MouseButton::Left)
-                    if inside(point, TRANSIENT_GUARD) =>
+                    if point_in_rect(point.0, point.1, TRANSIENT_GUARD) =>
                 {
                     self.end_drag(cx);
                     let guard = &self.params.transient_guard;
@@ -322,7 +324,8 @@ impl DereverbView {
                     );
                 }
                 WindowEvent::MouseScroll(_, dy)
-                    if inside(point, TRANSIENT_GUARD) && self.guard_drag.is_none() =>
+                    if point_in_rect(point.0, point.1, TRANSIENT_GUARD)
+                        && self.guard_drag.is_none() =>
                 {
                     let guard = &self.params.transient_guard;
                     let step = if cx.modifiers().shift() { 0.001 } else { 0.01 };
@@ -332,11 +335,15 @@ impl DereverbView {
                         guard.unmodulated_normalized_value() + dy * step,
                     );
                 }
-                WindowEvent::MouseDoubleClick(MouseButton::Left) if inside(point, KNOB) => {
+                WindowEvent::MouseDoubleClick(MouseButton::Left)
+                    if point_in_rect(point.0, point.1, KNOB) =>
+                {
                     self.end_drag(cx);
                     param::set_normalized_once(cx, self.params.strength.as_ptr(), 1.0);
                 }
-                WindowEvent::MouseScroll(_, dy) if inside(point, KNOB) && self.drag.is_none() => {
+                WindowEvent::MouseScroll(_, dy)
+                    if point_in_rect(point.0, point.1, KNOB) && self.drag.is_none() =>
+                {
                     let step = if cx.modifiers().shift() { 0.001 } else { 0.01 };
                     param::set_normalized_once(
                         cx,
@@ -356,17 +363,10 @@ impl DereverbView {
         });
     }
     fn render(&self, cx: &mut DrawContext, canvas: &mut Canvas) {
-        if self.font.get().is_none() {
-            self.font.set(canvas.add_font_mem(FONT_JETBRAINS_MONO).ok());
-        }
+        let font = load_font_once(canvas, &self.font, FONT_JETBRAINS_MONO);
         let b = cx.bounds();
-        let Some(mut d) = Draw::new_fitted(
-            canvas,
-            prefs().light(),
-            (b.x, b.y, b.w, b.h),
-            SIZE,
-            self.font.get(),
-        ) else {
+        let Some(mut d) = Draw::new_fitted(canvas, prefs().light(), (b.x, b.y, b.w, b.h), SIZE, font)
+        else {
             return;
         };
         self.paint(&mut d);
@@ -451,7 +451,7 @@ impl DereverbView {
         );
         if let Some(edit) = &self.edit {
             d.value_edit(edit, GOLD);
-        } else if self.hover.is_some_and(|p| inside(p, value_rect())) {
+        } else if self.hover.is_some_and(|p| point_in_rect(p.0, p.1, value_rect())) {
             d.value_underline(value_rect(), KnobLayout::new(KNOB).value_y, GOLD);
         }
         let change = (input_power > 0.0).then(|| 10.0 * (output_power / input_power).log10());
@@ -530,49 +530,57 @@ impl DereverbView {
                 .chars()
                 .take(105)
                 .collect::<String>()
-        } else if self.hover.is_some_and(|p| inside(p, THEME)) {
+        } else if self.hover.is_some_and(|p| point_in_rect(p.0, p.1, THEME)) {
             "Cycle Dark, Light, and Auto appearance.".into()
-        } else if self.hover.is_some_and(|p| inside(p, DPDFNET)) {
+        } else if self.hover.is_some_and(|p| point_in_rect(p.0, p.1, DPDFNET)) {
             "DPDFNet: neural voice restoration with Live and High Quality modes.".into()
-        } else if self.hover.is_some_and(|p| inside(p, NARA_WPE)) {
+        } else if self.hover.is_some_and(|p| point_in_rect(p.0, p.1, NARA_WPE)) {
             "NARA-WPE: adaptive late reverb reduction. The filter learns from the incoming audio."
                 .into()
-        } else if self.hover.is_some_and(|p| inside(p, DTLN)) {
+        } else if self.hover.is_some_and(|p| point_in_rect(p.0, p.1, DTLN)) {
             "DTLN: speech denoising. At full strength, wet audio is limited to about 8 kHz.".into()
-        } else if engine == EngineKind::NaraWpe && self.hover.is_some_and(|p| inside(p, LIVE)) {
+        } else if engine == EngineKind::NaraWpe
+            && self.hover.is_some_and(|p| point_in_rect(p.0, p.1, LIVE))
+        {
             "10 ms analysis window. A half-second average of the learned filter steadies removal."
                 .into()
         } else if engine == EngineKind::NaraWpe
-            && self.hover.is_some_and(|p| inside(p, HIGH_QUALITY))
+            && self.hover.is_some_and(|p| point_in_rect(p.0, p.1, HIGH_QUALITY))
         {
             "20 ms analysis window with finer frequency resolution and faster filter response."
                 .into()
-        } else if neural && self.hover.is_some_and(|p| inside(p, LIVE)) {
+        } else if neural && self.hover.is_some_and(|p| point_in_rect(p.0, p.1, LIVE)) {
             "Live uses lighter neural spectral correction.".into()
-        } else if neural && self.hover.is_some_and(|p| inside(p, HIGH_QUALITY)) {
+        } else if neural && self.hover.is_some_and(|p| point_in_rect(p.0, p.1, HIGH_QUALITY)) {
             "High Quality uses the full neural model with deep filtering.".into()
-        } else if self.hover.is_some_and(|p| inside(p, RELATIVE)) {
+        } else if self.hover.is_some_and(|p| point_in_rect(p.0, p.1, RELATIVE)) {
             "Relative: level against a 1-second RMS reference; weighting follows whole-recording gain changes.".into()
-        } else if self.hover.is_some_and(|p| inside(p, ABSOLUTE)) {
+        } else if self.hover.is_some_and(|p| point_in_rect(p.0, p.1, ABSOLUTE)) {
             "Absolute: original input RMS in dBFS; gain before Dereverb intentionally changes the weighting.".into()
-        } else if self.hover.is_some_and(|p| inside(p, TRANSIENT_GUARD)) {
+        } else if self
+            .hover
+            .is_some_and(|p| point_in_rect(p.0, p.1, TRANSIENT_GUARD))
+        {
             "Drag or scroll to set protection for attacks and s, sh, and h. Shift for fine adjustment.".into()
-        } else if self.hover.is_some_and(|p| inside(p, FLAT)) {
+        } else if self.hover.is_some_and(|p| point_in_rect(p.0, p.1, FLAT)) {
             "Flat: apply the same Strength at every input level.".into()
-        } else if self.hover.is_some_and(|p| inside(p, LOUDER_BUTTON)) {
+        } else if self
+            .hover
+            .is_some_and(|p| point_in_rect(p.0, p.1, LOUDER_BUTTON))
+        {
             "Louder: reduce processing on quieter sounds. Drag the curve points to fine-tune."
                 .into()
         } else if self.curve_drag.is_some()
             || self
                 .hover
-                .is_some_and(|p| self.node_at(p).is_some() || inside(p, CURVE))
+                .is_some_and(|p| self.node_at(p).is_some() || point_in_rect(p.0, p.1, CURVE))
         {
             "Drag points vertically; Shift for fine control. Double-click resets. The teal dot follows the loudest channel.".into()
         } else if self.edit.is_some() {
             "Type a percentage. Enter applies; Escape cancels.".into()
-        } else if self.hover.is_some_and(|p| inside(p, KNOB)) {
+        } else if self.hover.is_some_and(|p| point_in_rect(p.0, p.1, KNOB)) {
             "Drag or scroll Strength; Shift for fine control. Click its value to type; double-click to reset.".into()
-        } else if self.hover.is_some_and(|p| inside(p, GRAPH)) {
+        } else if self.hover.is_some_and(|p| point_in_rect(p.0, p.1, GRAPH)) {
             "Input and output RMS are time-aligned. Readouts average the latest 200 ms across all channels.".into()
         } else {
             "Input level is normalized internally, then restored. The curve weights the selected Strength.".into()
@@ -728,12 +736,7 @@ pub fn create(params: Arc<DereverbParams>, shared: Arc<Telemetry>) -> Option<Box
                 edit: None,
             }
             .build(cx, |cx| {
-                let timer = cx.add_timer(Duration::from_millis(33), None, |cx, action| {
-                    if let TimerAction::Tick(_) = action {
-                        cx.needs_redraw();
-                    }
-                });
-                cx.start_timer(timer);
+                start_frame_timer(cx, Duration::from_millis(33), |cx| cx.needs_redraw());
             })
             .width(Stretch(1.0))
             .height(Stretch(1.0));

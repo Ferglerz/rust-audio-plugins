@@ -39,13 +39,14 @@ use nih_plug_vizia::{
     ViziaTheming,
 };
 use pleasant_ui::{
-    point_in_rect, start_frame_timer, theme::{with_alpha as alpha, BG, COLORS, GOLD, LINE, MUTED, PANEL, TEAL, TEXT},
-    AppearanceStore, Draw, ValueEdit, FONT_JETBRAINS_MONO, FRAME_INTERVAL,
+    point_in_rect, start_frame_timer,
+    theme::{with_alpha as alpha, BG, COLORS, GOLD, LINE, MUTED, PANEL, TEAL, TEXT},
+    Draw, ValueEdit, FONT_JETBRAINS_MONO, FRAME_INTERVAL,
 };
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
-    sync::{atomic::Ordering, Arc, OnceLock},
+    sync::{atomic::Ordering, Arc},
     time::Instant,
 };
 const CODES: [Code; KEY_COUNT] = [
@@ -102,10 +103,7 @@ const MEMORY_CODES: [Code; MEMORY_COUNT] = [
 ];
 const MEMORY_HINTS: [&str; MEMORY_COUNT] = ["Z", "X", "C", "V", "B", "N", "M", ",", ".", "/"];
 
-static PREFS: OnceLock<AppearanceStore> = OnceLock::new();
-fn prefs() -> &'static AppearanceStore {
-    PREFS.get_or_init(|| AppearanceStore::new("Chordboard"))
-}
+pleasant_ui::appearance_store!("Chordboard");
 fn hit(r: Rect, x: f32, y: f32) -> bool {
     point_in_rect(x, y, r)
 }
