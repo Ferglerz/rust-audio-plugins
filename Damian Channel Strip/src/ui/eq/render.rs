@@ -261,17 +261,21 @@ impl StripView {
             draw_grid_and_spectrum(&mut d, eq1_bypassed, 0);
 
             let extras = bands.iter().filter(|b| b.enabled).map(|b| b.freq);
-            let xs = eq_curve_xs(gx, gw, extras);
+            let mut scratch = self.eq_scratch.borrow_mut();
+            let scratch = &mut *scratch;
+            fill_eq_curve_xs(&mut scratch.xs, gx, gw, extras);
             let mut response_cache = self.eq_response_caches[0].borrow_mut();
-            update_eq_response_cache(
+            update_eq_response_cache_into(
                 &mut response_cache,
                 &bands,
                 &dyn_uncapped,
-                &xs,
+                &scratch.xs,
                 (gx, gw),
                 (sr, eq_sr),
+                &mut scratch.coefficients,
+                &mut scratch.frequencies,
             );
-            let mut selected_curve: Option<(Vec<(f32, f32)>, C, bool)> = None;
+            let mut selected_curve: Option<(C, bool)> = None;
             for (index, b) in bands.iter().filter(|b| b.enabled).enumerate() {
                 let color = if eq1_bypassed {
                     MUTED
@@ -280,38 +284,63 @@ impl StripView {
                 };
                 let dbs = response_cache.band(index);
                 if Some(b.id) == self.selected {
-                    let points = eq_points(&xs, dbs, self.graph_db);
+                    fill_eq_points(&mut scratch.points, &scratch.xs, dbs, self.graph_db);
                     let mut fill = color;
                     fill.a = if eq1_bypassed { 0.02 } else { 0.07 };
                     let between = b.dynamic && b.shape.has_gain();
-                    let fill_points = if between {
-                        let range =
-                            range_curve_points(b, &xs, (gx, gw, self.graph_db), (sr, eq_sr));
-                        let polygon = between_curve_polygon(&points, &range);
+                    scratch.selected_fill.clear();
+                    if between {
+                        let range = range_curve_points(
+                            b,
+                            &scratch.xs,
+                            (gx, gw, self.graph_db),
+                            (sr, eq_sr),
+                        );
+                        let polygon = between_curve_polygon(&scratch.points, &range);
                         d.fill_poly(&polygon, fill);
-                        polygon
+                        scratch.selected_fill.extend_from_slice(&polygon);
                     } else {
-                        d.area(&points, db_y(0.0, self.graph_db), fill);
-                        points.clone()
-                    };
-                    d.poly(&points, color, 1.2);
-                    selected_curve = Some((fill_points, color, between));
+                        d.area(&scratch.points, db_y(0.0, self.graph_db), fill);
+                        scratch.selected_fill.extend_from_slice(&scratch.points);
+                    }
+                    d.poly(&scratch.points, color, 1.2);
+                    selected_curve = Some((color, between));
                 }
             }
-            let points = eq_points(&xs, response_cache.sum(), self.graph_db);
+            fill_eq_points(
+                &mut scratch.sum_points,
+                &scratch.xs,
+                response_cache.sum(),
+                self.graph_db,
+            );
             let sum_color = if eq1_bypassed { MUTED } else { GOLD };
-            d.poly(&points, sum_color, 2.2);
+            d.poly(&scratch.sum_points, sum_color, 2.2);
             if let Some(b) = bands
                 .iter()
                 .find(|b| b.id == self.shared.solo_id.load(Ordering::Relaxed))
             {
-                let fill = selected_curve.as_ref().map(|(pts, color, between)| {
-                    let mut fill = *color;
+                let fill = selected_curve.map(|(color, between)| {
+                    let mut fill = color;
                     fill.a = if eq1_bypassed { 0.02 } else { 0.07 };
-                    (pts.as_slice(), db_y(0.0, self.graph_db), fill, *between)
+                    (
+                        scratch.selected_fill.as_slice(),
+                        db_y(0.0, self.graph_db),
+                        fill,
+                        between,
+                    )
                 });
                 draw_solo_shade(
-                    &mut d, b.shape, b.freq, b.q, gx, gw, eq_b, &points, sum_color, 2.2, fill,
+                    &mut d,
+                    b.shape,
+                    b.freq,
+                    b.q,
+                    gx,
+                    gw,
+                    eq_b,
+                    &scratch.sum_points,
+                    sum_color,
+                    2.2,
+                    fill,
                 );
             }
 
@@ -328,7 +357,7 @@ impl StripView {
                         draw_dyn_range_curve(
                             &mut d,
                             b,
-                            &xs,
+                            &scratch.xs,
                             (gx, gw, self.graph_db),
                             (sr, eq_sr),
                             color,
@@ -458,18 +487,22 @@ impl StripView {
             draw_grid_and_spectrum(&mut d, page_bypassed, page_idx);
 
             let extras = page_bands.iter().filter(|b| b.enabled).map(|b| b.freq);
-            let xs = eq_curve_xs(gx, gw, extras);
+            let mut scratch = self.eq_scratch.borrow_mut();
+            let scratch = &mut *scratch;
+            fill_eq_curve_xs(&mut scratch.xs, gx, gw, extras);
             let cache_index = if page_idx == EQ_PAGE_2 { 1 } else { 2 };
             let mut response_cache = self.eq_response_caches[cache_index].borrow_mut();
-            update_eq_response_cache(
+            update_eq_response_cache_into(
                 &mut response_cache,
                 page_bands,
                 &dyn_uncapped,
-                &xs,
+                &scratch.xs,
                 (gx, gw),
                 (sr, eq_sr),
+                &mut scratch.coefficients,
+                &mut scratch.frequencies,
             );
-            let mut selected_curve: Option<(Vec<(f32, f32)>, C, bool)> = None;
+            let mut selected_curve: Option<(C, bool)> = None;
             for (index, b) in page_bands.iter().filter(|b| b.enabled).enumerate() {
                 let num = band_display_num(b.id);
                 let color = if page_bypassed {
@@ -479,38 +512,63 @@ impl StripView {
                 };
                 let dbs = response_cache.band(index);
                 if Some(b.id) == self.selected {
-                    let points = eq_points(&xs, dbs, self.graph_db);
+                    fill_eq_points(&mut scratch.points, &scratch.xs, dbs, self.graph_db);
                     let mut fill = color;
                     fill.a = if page_bypassed { 0.02 } else { 0.07 };
                     let between = allow_dyn && b.dynamic && b.shape.has_gain();
-                    let fill_points = if between {
-                        let range =
-                            range_curve_points(b, &xs, (gx, gw, self.graph_db), (sr, eq_sr));
-                        let polygon = between_curve_polygon(&points, &range);
+                    scratch.selected_fill.clear();
+                    if between {
+                        let range = range_curve_points(
+                            b,
+                            &scratch.xs,
+                            (gx, gw, self.graph_db),
+                            (sr, eq_sr),
+                        );
+                        let polygon = between_curve_polygon(&scratch.points, &range);
                         d.fill_poly(&polygon, fill);
-                        polygon
+                        scratch.selected_fill.extend_from_slice(&polygon);
                     } else {
-                        d.area(&points, db_y(0.0, self.graph_db), fill);
-                        points.clone()
-                    };
-                    d.poly(&points, color, 1.2);
-                    selected_curve = Some((fill_points, color, between));
+                        d.area(&scratch.points, db_y(0.0, self.graph_db), fill);
+                        scratch.selected_fill.extend_from_slice(&scratch.points);
+                    }
+                    d.poly(&scratch.points, color, 1.2);
+                    selected_curve = Some((color, between));
                 }
             }
-            let points = eq_points(&xs, response_cache.sum(), self.graph_db);
+            fill_eq_points(
+                &mut scratch.sum_points,
+                &scratch.xs,
+                response_cache.sum(),
+                self.graph_db,
+            );
             let sum_color = if page_bypassed { MUTED } else { GOLD };
-            d.poly(&points, sum_color, 2.2);
+            d.poly(&scratch.sum_points, sum_color, 2.2);
             if let Some(b) = page_bands
                 .iter()
                 .find(|b| b.id == self.shared.solo_id.load(Ordering::Relaxed))
             {
-                let fill = selected_curve.as_ref().map(|(pts, color, between)| {
-                    let mut fill = *color;
+                let fill = selected_curve.map(|(color, between)| {
+                    let mut fill = color;
                     fill.a = if page_bypassed { 0.02 } else { 0.07 };
-                    (pts.as_slice(), db_y(0.0, self.graph_db), fill, *between)
+                    (
+                        scratch.selected_fill.as_slice(),
+                        db_y(0.0, self.graph_db),
+                        fill,
+                        between,
+                    )
                 });
                 draw_solo_shade(
-                    &mut d, b.shape, b.freq, b.q, gx, gw, eq_b, &points, sum_color, 2.2, fill,
+                    &mut d,
+                    b.shape,
+                    b.freq,
+                    b.q,
+                    gx,
+                    gw,
+                    eq_b,
+                    &scratch.sum_points,
+                    sum_color,
+                    2.2,
+                    fill,
                 );
             }
 
@@ -528,7 +586,7 @@ impl StripView {
                         draw_dyn_range_curve(
                             &mut d,
                             b,
-                            &xs,
+                            &scratch.xs,
                             (gx, gw, self.graph_db),
                             (sr, eq_sr),
                             color,

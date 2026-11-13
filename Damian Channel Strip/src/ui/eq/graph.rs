@@ -25,15 +25,27 @@ pub(in crate::ui) fn y_db(y: f32, range: f64) -> f64 {
     ((0.5 - (y - GY) as f64 / GH as f64) * 2.0 * range).clamp(-range, range)
 }
 
+#[derive(Default)]
+pub(in crate::ui) struct EqDrawScratch {
+    pub xs: Vec<f32>,
+    pub coefficients: Vec<pleasant_eq::BandCoefficients>,
+    pub frequencies: Vec<f64>,
+    pub points: Vec<(f32, f32)>,
+    pub sum_points: Vec<(f32, f32)>,
+    pub selected_fill: Vec<(f32, f32)>,
+}
+
 /// Pixel-spaced x plus each band's exact frequency so peaks and notch zeros
 /// land on a vertex instead of being skipped by a coarse chord.
-pub(in crate::ui) fn eq_curve_xs(
+pub(in crate::ui) fn fill_eq_curve_xs(
+    xs: &mut Vec<f32>,
     gx: f32,
     gw: f32,
     extra_freqs: impl IntoIterator<Item = f64>,
-) -> Vec<f32> {
+) {
+    xs.clear();
     let n = gw.max(2.0).ceil() as usize;
-    let mut xs: Vec<f32> = (0..=n).map(|i| gx + gw * (i as f32 / n as f32)).collect();
+    xs.extend((0..=n).map(|i| gx + gw * (i as f32 / n as f32)));
     for f in extra_freqs {
         if f.is_finite() && f > 0.0 {
             let x = freq_x_at(f, gx, gw);
@@ -44,11 +56,47 @@ pub(in crate::ui) fn eq_curve_xs(
     }
     xs.sort_by(|a, b| a.total_cmp(b));
     xs.dedup_by(|a, b| (*a - *b).abs() < 0.15);
+}
+
+pub(in crate::ui) fn eq_curve_xs(
+    gx: f32,
+    gw: f32,
+    extra_freqs: impl IntoIterator<Item = f64>,
+) -> Vec<f32> {
+    let mut xs = Vec::new();
+    fill_eq_curve_xs(&mut xs, gx, gw, extra_freqs);
     xs
 }
 
 /// Preserve the exact graph grid and host Nyquist clamp while evaluating at
 /// the processing rate. Each EQ page owns its independent cache.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Explicitly passes scratch buffers alongside graph and rate parameters"
+)]
+pub(in crate::ui) fn update_eq_response_cache_into(
+    cache: &mut pleasant_eq::ResponseCache,
+    bands: &[Band],
+    meters: &[(u64, f32)],
+    xs: &[f32],
+    (gx, gw): (f32, f32),
+    (sr, eq_sr): (f64, f64),
+    coefficients: &mut Vec<pleasant_eq::BandCoefficients>,
+    frequencies: &mut Vec<f64>,
+) {
+    coefficients.clear();
+    coefficients.extend(
+        bands
+            .iter()
+            .filter(|b| b.enabled)
+            .map(|b| BandCoeffs::make(&plot_band(b, meters), eq_sr).coefficients()),
+    );
+    frequencies.clear();
+    let nyq = sr * 0.49;
+    frequencies.extend(xs.iter().map(|&x| x_freq_at(x, gx, gw).min(nyq)));
+    cache.update(coefficients, frequencies, eq_sr);
+}
+
 pub(in crate::ui) fn update_eq_response_cache(
     cache: &mut pleasant_eq::ResponseCache,
     bands: &[Band],
@@ -57,16 +105,18 @@ pub(in crate::ui) fn update_eq_response_cache(
     (gx, gw): (f32, f32),
     (sr, eq_sr): (f64, f64),
 ) {
-    let coefficients: Vec<_> = bands
-        .iter()
-        .filter(|b| b.enabled)
-        .map(|b| BandCoeffs::make(&plot_band(b, meters), eq_sr).coefficients())
-        .collect();
-    let frequencies: Vec<_> = xs
-        .iter()
-        .map(|&x| x_freq_at(x, gx, gw).min(sr * 0.49))
-        .collect();
-    cache.update(&coefficients, &frequencies, eq_sr);
+    let mut coefficients = Vec::new();
+    let mut frequencies = Vec::new();
+    update_eq_response_cache_into(
+        cache,
+        bands,
+        meters,
+        xs,
+        (gx, gw),
+        (sr, eq_sr),
+        &mut coefficients,
+        &mut frequencies,
+    );
 }
 
 pub(in crate::ui) fn eq_db_on_xs(
@@ -83,11 +133,20 @@ pub(in crate::ui) fn eq_db_on_xs(
         .collect()
 }
 
+pub(in crate::ui) fn fill_eq_points(
+    points: &mut Vec<(f32, f32)>,
+    xs: &[f32],
+    dbs: &[f64],
+    graph_db: f64,
+) {
+    points.clear();
+    points.extend(xs.iter().zip(dbs).map(|(&x, &db)| (x, db_y(db, graph_db))));
+}
+
 pub(in crate::ui) fn eq_points(xs: &[f32], dbs: &[f64], graph_db: f64) -> Vec<(f32, f32)> {
-    xs.iter()
-        .zip(dbs)
-        .map(|(&x, &db)| (x, db_y(db, graph_db)))
-        .collect()
+    let mut points = Vec::new();
+    fill_eq_points(&mut points, xs, dbs, graph_db);
+    points
 }
 
 pub(in crate::ui) fn hover_preview_label(has_selected: bool, shape: Shape) -> &'static str {

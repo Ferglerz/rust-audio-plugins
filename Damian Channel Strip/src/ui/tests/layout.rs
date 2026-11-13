@@ -307,6 +307,7 @@ fn test_view() -> StripView {
     );
     StripView {
         eq_response_caches: std::array::from_fn(|_| RefCell::default()),
+        eq_scratch: RefCell::default(),
         params: params.clone(),
         shared,
         selected: None,
