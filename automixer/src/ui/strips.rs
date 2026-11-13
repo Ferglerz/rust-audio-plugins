@@ -27,7 +27,6 @@ impl AutomixerView {
             .enumerate()
         {
             drawn[column] = Some(DrawnStrip {
-                slot,
                 mic: network.slots[slot].mic.load(Ordering::Acquire),
                 rect: Self::strip_rect(column),
             });
@@ -382,7 +381,6 @@ impl AutomixerView {
                 });
             }
             drawn_strips[column] = Some(DrawnStrip {
-                slot: slot_index,
                 mic,
                 rect: r,
             });

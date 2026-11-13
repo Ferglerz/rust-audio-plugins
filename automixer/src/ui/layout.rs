@@ -72,7 +72,6 @@ pub(super) struct BypassButton {
 
 #[derive(Clone, Copy)]
 pub(super) struct DrawnStrip {
-    pub slot: usize,
     pub mic: usize,
     pub rect: Rect,
 }
