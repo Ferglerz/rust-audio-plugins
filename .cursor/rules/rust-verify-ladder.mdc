@@ -11,7 +11,7 @@ Do not run `cargo test` after every edit. Tests stay in the repo. Default verify
 
 `cargo check -p <crate>`
 
-Crate names: `damian-channel-strip`, `flattery`, `tape_stop`, `pleasant-ui`, `fundament`.
+Crate names: `composure`, `damian-channel-strip`, `flattery`, `tape_stop`, `openwurli-ui`, `chordboard`, `automixer`, `dereverb`, `pleasant-dsp`, `pleasant-curves`, `pleasant-eq`, `pleasant-dynamics`, `pleasant-ui`, `pleasant-voice` (and `scd-plugin` / `scd-core` under `scd-rust/`).
 
 - No `--workspace`
 - No `--all-targets` unless tests or examples themselves changed

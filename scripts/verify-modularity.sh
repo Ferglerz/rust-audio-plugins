@@ -9,25 +9,32 @@ cargo check -p pleasant-curves
 cargo check -p pleasant-eq
 cargo check -p pleasant-dynamics
 cargo check -p pleasant-ui
+cargo check -p pleasant-voice
 cargo check -p damian-channel-strip
 cargo check -p flattery
 cargo check -p tape_stop
 cargo check -p composure
 cargo check -p chordboard
 cargo check -p openwurli-ui
-cargo check -p fundament
+cargo check -p automixer
+cargo check -p dereverb
 
 cargo test -p pleasant-dsp --quiet
 cargo test -p pleasant-curves --quiet
 cargo test -p pleasant-eq --quiet
 cargo test -p pleasant-dynamics --quiet
+cargo test -p pleasant-ui --quiet
+cargo test -p pleasant-voice --quiet
 cargo test -p damian-channel-strip --quiet
 cargo test -p flattery --quiet
 cargo test -p tape_stop --quiet
 cargo test -p composure --quiet
 cargo test -p chordboard --quiet
 cargo test -p openwurli-ui --quiet
-cargo test -p fundament --quiet
+cargo test -p automixer --quiet
+if [ "$(uname -s)" = "Darwin" ] || [ -n "${ORT_DYLIB_PATH:-}" ]; then
+    cargo test -p dereverb --quiet
+fi
 
 cargo check -p pleasant-dsp-headless
 cargo check -p pleasant-curves-headless

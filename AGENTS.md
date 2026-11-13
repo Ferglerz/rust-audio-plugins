@@ -14,7 +14,7 @@ Put usage instructions and explanations in the existing bottom tooltip area. Kee
 
 ## Plugin installation
 
-After changing a plugin, run that plugin's `scripts/install.sh`. All seven wrappers call `scripts/install-plugin.sh`, which clears the plugin's release artifact, builds from the current checkout, verifies the bundled executable, installs it, and verifies the installed bundle. `cargo xtask bundle` alone does not update the DAW installation.
+After changing a plugin, run that plugin's `scripts/install.sh`. All nine wrappers call `scripts/install-plugin.sh`, which clears the plugin's release artifact, builds from the current checkout, verifies the bundled executable, installs it, and verifies the installed bundle. `cargo xtask bundle` alone does not update the DAW installation.
 
 Do not run `cargo test` after every edit. Tests stay in the repo. Default verify is a compile-check of the crate you touched.
 
@@ -22,7 +22,7 @@ Do not run `cargo test` after every edit. Tests stay in the repo. Default verify
 
 `cargo check -p <crate>`
 
-Plugin crate names: `composure`, `damian-channel-strip`, `flattery`, `tape_stop`, `openwurli-ui`, `chordboard`, `fundament`. Check `scd-plugin` from `scd-rust/`, its separate Cargo workspace.
+Plugin crate names: `composure`, `damian-channel-strip`, `flattery`, `tape_stop`, `openwurli-ui`, `chordboard`, `automixer`, `dereverb`. Shared crates: `pleasant-dsp`, `pleasant-curves`, `pleasant-eq`, `pleasant-dynamics`, `pleasant-ui`, `pleasant-voice`. Check `scd-plugin` and `scd-core` from `scd-rust/`, their separate Cargo workspace.
 
 - No `--workspace`
 - No `--all-targets` unless tests or examples themselves changed
