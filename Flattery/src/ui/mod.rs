@@ -33,20 +33,16 @@ use pleasant_ui::{
     draw::Draw,
     load_font_once, start_frame_timer,
     math::{flattery_freq_to_pos, flattery_pos_to_freq},
-    preferences::AppearanceStore,
     theme::{BG, COLORS, GOLD, LINE, MUTED, PANEL, TEAL, TEXT},
     value_edit::{parse_number_with_units, slider_value_rect, ValueEdit},
     FONT_JETBRAINS_MONO, FRAME_INTERVAL,
 };
 use std::{
     cell::Cell,
-    sync::{atomic::Ordering, Arc, OnceLock},
+    sync::{atomic::Ordering, Arc},
 };
 
-static PREFS: OnceLock<AppearanceStore> = OnceLock::new();
-fn prefs() -> &'static AppearanceStore {
-    PREFS.get_or_init(|| AppearanceStore::new("Flattery"))
-}
+pleasant_ui::appearance_store!("Flattery");
 
 const HEADER_HEIGHT: f32 = 70.0;
 const THEME_BUTTON: (f32, f32, f32, f32) = (WINDOW_W - EDGE_PAD - 72.0, 22.0, 72.0, 26.0);

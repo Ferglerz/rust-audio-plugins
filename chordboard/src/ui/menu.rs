@@ -14,47 +14,57 @@ pub(super) enum Menu {
 }
 
 impl Menu {
-    pub(super) fn items(self) -> Vec<String> {
-        let labels: &[&str] = match self {
+    pub(super) fn item_count(self) -> usize {
+        match self {
             Self::Meter(den) => {
-                return if den {
-                    (0..=5).map(|n| (1 << n).to_string()).collect()
+                if den {
+                    6
                 } else {
-                    (1..=32).map(|n| n.to_string()).collect()
+                    32
                 }
             }
-            Self::RouteSource => &crate::engine::routing::SOURCES,
-            Self::RouteTarget => {
-                return crate::engine::routing::available_targets()
-                    .map(|(_, t)| t.name.to_string())
-                    .collect()
-            }
-            Self::Key => {
-                return harmony::KEY_CHOICES
-                    .iter()
-                    .map(|(name, _, _)| (*name).into())
-                    .collect()
-            }
-            Self::Scale => &harmony::SCALE_NAMES,
+            Self::RouteSource => crate::engine::routing::SOURCES.len(),
+            Self::RouteTarget => crate::engine::routing::available_targets().count(),
+            Self::Key => harmony::KEY_CHOICES.len(),
+            Self::Scale => harmony::SCALE_NAMES.len(),
             Self::KeyboardParam(id) => {
                 let (min, max) = keyboard_menu_range(id).expect("keyboard dropdown");
-                return (min..=max).map(|value| value.to_string()).collect();
+                (max - min + 1) as usize
             }
-            Self::GlissDirection => return ARP_PATTERN_NAMES[..7].iter().map(|s| s.to_string()).collect(),
-            Self::ArpPattern => {
-                return ARP_PATTERN_NAMES
-                    .iter()
-                    .map(|label| (*label).to_string())
-                    .collect()
+            Self::GlissDirection => 7,
+            Self::ArpPattern => ARP_PATTERN_NAMES.len(),
+            Self::ArpRate => ARP_RATES.len(),
+        }
+    }
+
+    pub(super) fn label(self, index: usize) -> std::borrow::Cow<'static, str> {
+        use std::borrow::Cow;
+        match self {
+            Self::Meter(den) => Cow::Owned(if den { 1 << index } else { index + 1 }.to_string()),
+            Self::RouteSource => Cow::Borrowed(crate::engine::routing::SOURCES[index]),
+            Self::RouteTarget => Cow::Borrowed(
+                crate::engine::routing::available_targets()
+                    .nth(index)
+                    .expect("route target index")
+                    .1
+                    .name,
+            ),
+            Self::Key => Cow::Borrowed(harmony::KEY_CHOICES[index].0),
+            Self::Scale => Cow::Borrowed(harmony::SCALE_NAMES[index]),
+            Self::KeyboardParam(id) => {
+                let (min, _) = keyboard_menu_range(id).expect("keyboard dropdown");
+                Cow::Owned((min + index as i32).to_string())
             }
-            Self::ArpRate => {
-                return ARP_RATES
-                    .iter()
-                    .map(|(label, _)| label.to_string())
-                    .collect()
-            }
-        };
-        labels.iter().map(|s| s.to_string()).collect()
+            Self::GlissDirection | Self::ArpPattern => Cow::Borrowed(ARP_PATTERN_NAMES[index]),
+            Self::ArpRate => Cow::Borrowed(ARP_RATES[index].0),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn items(self) -> Vec<String> {
+        (0..self.item_count())
+            .map(|i| self.label(i).into_owned())
+            .collect()
     }
 
     pub(super) fn title(self) -> &'static str {
@@ -191,7 +201,7 @@ impl Menu {
             return (root.0, root.1 + root.3 + 6.0, 730.0, 492.0);
         }
         let columns = self.columns();
-        let rows = self.items().len().div_ceil(columns);
+        let rows = self.item_count().div_ceil(columns);
         let width = (self.cell_width() + 4.0) * columns as f32 + 12.0;
         let groups = self.groups();
         let height = if groups.is_empty() {
@@ -403,9 +413,10 @@ impl ChordboardView {
         for (label, heading) in Menu::Scale.group_heading_rects(bounds) {
             d.text(heading.0, heading.1 + 14.0, label, TEXT_SMALL, GOLD);
         }
-        for (i, label) in Menu::Scale.items().iter().enumerate() {
+        for i in 0..Menu::Scale.item_count() {
+            let label = Menu::Scale.label(i);
             let r = self.menu_option_rect(Menu::Scale, i);
-            self.button(d, r, label, i == self.menu_selection(Menu::Scale), GOLD);
+            self.button(d, r, &label, i == self.menu_selection(Menu::Scale), GOLD);
             if menu == Menu::Scale && self.menu_cursor == i {
                 d.outline_rounded(r.0, r.1, r.2, r.3, 6.0, GOLD, 1.0);
             }
@@ -416,7 +427,7 @@ impl ChordboardView {
         let current = self.menu_option_rect(menu, index);
         let horizontal = matches!(code, Code::ArrowLeft | Code::ArrowRight);
         let forward = matches!(code, Code::ArrowRight | Code::ArrowDown);
-        let mut candidates: Vec<_> = (0..menu.items().len())
+        let mut candidates: Vec<_> = (0..menu.item_count())
             .filter(|&next| next != index && self.route_menu_allowed(menu, next))
             .filter_map(|next| {
                 let r = self.menu_option_rect(menu, next);

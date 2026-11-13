@@ -202,7 +202,7 @@ impl ChordboardView {
         let order = self.arp_state().midi_fx.order.clone();
         order.iter().enumerate().filter_map(|(index, &effect)| {
             let module = self.fx_ui.rect(index, &order);
-            let (x, y, w, h) = arpeggiator::delay_power_rect();
+            let (x, y, w, h) = delay_editor::delay_power_rect();
             let y = y + module.1 - DELAY_SURFACE.1;
             // A clipped switch is unavailable until it can be seen in full.
             (y >= VIEWPORT.1 && y + h <= VIEWPORT.1 + VIEWPORT.3)
@@ -282,7 +282,7 @@ impl ChordboardView {
                     MidiFxId::RhythmGate => "RHYTHM GATE", MidiFxId::VoiceSplitter => "VOICE SPLITTER",
                 };
                 d.text(DELAY_SURFACE.0 + 48.0, DELAY_SURFACE.1 + 29.0, name, 16.0, TEXT);
-                let power = arpeggiator::delay_power_rect();
+                let power = delay_editor::delay_power_rect();
                 let hot = d.hover.is_some_and(|(x, y)| hit(power, x, y));
                 d.bypass_button(power, !enabled, TEAL, hot, 0.0);
             } else {
@@ -377,7 +377,7 @@ impl ChordboardView {
         };
         let enabled = state.enabled(effect);
         d.text(s.0 + 48.0, s.1 + 29.0, name, 16.0, TEXT);
-        let power = arpeggiator::delay_power_rect();
+        let power = delay_editor::delay_power_rect();
         d.bypass_button(power, !enabled, TEAL,
             d.hover.is_some_and(|(x, y)| hit(power, x, y)), 0.0);
         d.line(s.0 + 12.0, s.1 + 43.0, source_rect(0).0 - 24.0, s.1 + 43.0, LINE, 1.0);
@@ -433,7 +433,7 @@ impl ChordboardView {
     fn fx_module_press(&mut self, cx: &mut EventContext, effect: MidiFxId, x: f32, y: f32, screen_y: f32) -> bool {
         self.cancel_arp_editor();
         let state = self.arp_state();
-        if hit(arpeggiator::delay_power_rect(), x, y) {
+        if hit(delay_editor::delay_power_rect(), x, y) {
             self.toggle_fx_power(effect);
         } else if effect == MidiFxId::Harmonizer && hit(control_rect(0, 0), x, y) {
             self.params.arpeggiator.edit(|s| {
@@ -494,12 +494,12 @@ impl ChordboardView {
             let screen = |r: Rect| (r.0, r.1 + offset, r.2, r.3);
             buttons.push((screen(collapse_rect()), false));
             if self.fx_ui.collapsed.contains(&effect) {
-                buttons.push((screen(arpeggiator::delay_power_rect()), state.midi_fx.enabled(effect)));
+                buttons.push((screen(delay_editor::delay_power_rect()), state.midi_fx.enabled(effect)));
                 continue;
             }
             for i in 0..5 { buttons.push((screen(source_rect(i)), state.midi_fx.sources(effect) & (1 << i) != 0)); }
             if effect != MidiFxId::Delay {
-                buttons.push((screen(arpeggiator::delay_power_rect()), state.midi_fx.enabled(effect)));
+                buttons.push((screen(delay_editor::delay_power_rect()), state.midi_fx.enabled(effect)));
                 buttons.extend(self.fx_controls(effect, &state.midi_fx).into_iter().map(|(r, _, _, _)| (screen(r), false)));
                 if effect == MidiFxId::Harmonizer {
                     buttons.push((screen(control_rect(0, 0)), true));
@@ -523,9 +523,9 @@ impl ChordboardView {
             if !hit(r, x, y) { continue; }
             let local_y = y - r.1 + DELAY_SURFACE.1;
             if hit(collapse_rect(), x, local_y) { return Some("Collapse / expand this MIDI FX module · Processing stays active".into()); }
-            if hit(arpeggiator::delay_power_rect(), x, local_y) {
-                let screen_y = arpeggiator::delay_power_rect().1 + r.1 - DELAY_SURFACE.1;
-                let power_h = arpeggiator::delay_power_rect().3;
+            if hit(delay_editor::delay_power_rect(), x, local_y) {
+                let screen_y = delay_editor::delay_power_rect().1 + r.1 - DELAY_SURFACE.1;
+                let power_h = delay_editor::delay_power_rect().3;
                 if screen_y < VIEWPORT.1 || screen_y + power_h > VIEWPORT.1 + VIEWPORT.3 {
                     return Some("Scroll to bring this effect's power switch fully into view".into());
                 }
@@ -720,7 +720,7 @@ impl ChordboardView {
                     return true;
                 }
                 if self.fx_ui.collapsed.contains(effect) {
-                    if hit(arpeggiator::delay_power_rect(), x, local_y) {
+                    if hit(delay_editor::delay_power_rect(), x, local_y) {
                         self.toggle_fx_power(*effect);
                         cx.needs_redraw();
                     }
@@ -797,7 +797,7 @@ mod tests {
         assert_eq!(view.fx_ui.rect(0, &before.order).3, MODULE_HEADER_H);
         assert_eq!(view.fx_ui.rect(1, &before.order).1, VIEWPORT.1 + MODULE_HEADER_H + GAP);
         assert_eq!(view.params.arpeggiator.snapshot().midi_fx, before);
-        let power = view.fx_delay_screen_rect(arpeggiator::delay_power_rect());
+        let power = view.fx_delay_screen_rect(delay_editor::delay_power_rect());
         assert!(view.fx_hint(power.0 + 1.0, power.1 + 1.0).unwrap().contains("MIDI Delay"));
         // Collapse follows the module identity when the processing order changes.
         view.params.arpeggiator.edit(|s| s.midi_fx.move_effect(0, 1));
@@ -841,7 +841,7 @@ mod tests {
             );
             assert!(view.fx_ui.drag.is_none());
         }
-        click(&mut view, &mut cx, target, arpeggiator::delay_power_rect());
+        click(&mut view, &mut cx, target, delay_editor::delay_power_rect());
         assert!(view.fx_ui.drag.is_none());
         assert!(view.params.arpeggiator.snapshot().midi_fx.delay.enabled);
     }

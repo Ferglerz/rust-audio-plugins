@@ -16,6 +16,20 @@ pub fn app_appearance_path(app_name: &str) -> Option<PathBuf> {
     Some(base.join(app_name).join("appearance.txt"))
 }
 
+#[macro_export]
+macro_rules! appearance_store {
+    ($name:literal) => {
+        $crate::appearance_store!(fn prefs() = $name);
+    };
+    ($vis:vis fn $fn_name:ident() = $name:literal) => {
+        $vis fn $fn_name() -> &'static $crate::AppearanceStore {
+            static PREFS: ::std::sync::OnceLock<$crate::AppearanceStore> =
+                ::std::sync::OnceLock::new();
+            PREFS.get_or_init(|| $crate::AppearanceStore::new($name))
+        }
+    };
+}
+
 /// UI-only appearance preference, separate from host/preset state.
 pub struct AppearanceStore {
     app_name: &'static str,

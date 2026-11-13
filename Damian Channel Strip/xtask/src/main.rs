@@ -1,4 +1,4 @@
-include!("../../../pleasant-voice/bundle_licenses.rs");
+include!("../../../scripts/xtask_post_bundle.rs");
 
 fn main() -> nih_plug_xtask::Result<()> {
     nih_plug_xtask::main()?;

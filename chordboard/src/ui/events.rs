@@ -558,14 +558,14 @@ impl ChordboardView {
                             self.select_menu(cx, Menu::Key, index);
                             return true;
                         }
-                        for index in 0..Menu::Scale.items().len() {
+                        for index in 0..Menu::Scale.item_count() {
                             if hit(self.menu_option_rect(Menu::Scale, index), x, y) {
                                 self.select_menu(cx, Menu::Scale, index);
                                 return true;
                             }
                         }
                     }
-                    for index in 0..menu.items().len() {
+                    for index in 0..menu.item_count() {
                         if hit(self.menu_option_rect(menu, index), x, y) {
                             self.select_menu(cx, menu, index);
                             return true;

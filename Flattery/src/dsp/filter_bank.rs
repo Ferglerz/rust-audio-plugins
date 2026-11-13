@@ -132,7 +132,7 @@ impl FilterBank {
         let mut sum = 0.0;
         for filter in &mut self.filters[self.active_start..self.active_end] {
             if (filter.gain_linear - 1.0).abs() >= 0.001 {
-                sum += filter.state_l.process(input, &filter.coeffs) - input;
+                sum += filter.state_l.process(input, filter.coeffs) - input;
             }
         }
         input + sum

@@ -234,7 +234,7 @@ impl ChordboardView {
             return;
         }
         if let Some(menu) = self.menu {
-            targets.extend((0..menu.items().len()).map(|i| {
+            targets.extend((0..menu.item_count()).map(|i| {
                 (
                     self.menu_option_rect(menu, i),
                     i == self.menu_selection(menu),

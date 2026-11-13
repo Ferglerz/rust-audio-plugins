@@ -16,14 +16,13 @@ use nih_plug_vizia::{
 use pleasant_ui::{
     draw::{ButtonAnim, Draw, EditorViewport},
     load_font_once, start_frame_timer,
-    preferences::AppearanceStore,
     theme::{rgb, COLORS, GOLD, LINE, MUTED, PANEL, TEAL, TEXT},
     value_edit::{parse_number_with_units, ValueEdit},
     FONT_JETBRAINS_MONO, FRAME_INTERVAL,
 };
 use std::{
     cell::Cell,
-    sync::{atomic::Ordering, Arc, OnceLock},
+    sync::{atomic::Ordering, Arc},
 };
 
 mod controls;
@@ -33,10 +32,7 @@ mod performance;
 mod render;
 use performance::PerformanceTick;
 
-static PREFS: OnceLock<AppearanceStore> = OnceLock::new();
-fn prefs() -> &'static AppearanceStore {
-    PREFS.get_or_init(|| AppearanceStore::new("Tape Stop"))
-}
+pleasant_ui::appearance_store!("Tape Stop");
 
 // Outer margin matches y-axis % label left edge (GRAPH_X - 40 = 20).
 // Fit the graph, equally spaced time controls, and square performance pad.
