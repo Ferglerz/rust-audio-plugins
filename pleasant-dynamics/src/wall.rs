@@ -164,9 +164,93 @@ fn safety_sample_adaa(input: f64, previous: f64, ceiling: f64) -> f64 {
     }
 }
 
-fn one_pole(current: f64, target: f64, seconds: f64, sample_rate: f64) -> f64 {
-    let coefficient = (-1.0 / (sample_rate * seconds.max(1.0e-6))).exp();
+fn one_pole_coeff(seconds: f64, sample_rate: f64) -> f64 {
+    (-1.0 / (sample_rate * seconds.max(1.0e-6))).exp()
+}
+
+fn one_pole(current: f64, target: f64, coefficient: f64) -> f64 {
     coefficient * current + (1.0 - coefficient) * target
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Coefficients {
+    sample_rate: f64,
+    mode: f64,
+    release: f64,
+    live_attack: f64,
+    lookahead_attack: f64,
+}
+
+impl Coefficients {
+    fn new(sample_rate: f64) -> Self {
+        Self {
+            sample_rate,
+            mode: one_pole_coeff(MODE_CROSSFADE_SECONDS, sample_rate),
+            release: one_pole_coeff(RELEASE_SECONDS, sample_rate),
+            live_attack: one_pole_coeff(LIVE_ATTACK_SECONDS, sample_rate),
+            lookahead_attack: one_pole_coeff(WALL_LOOKAHEAD_SECONDS / 3.0, sample_rate),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct PeakWindow {
+    ring: Vec<(u64, f64)>,
+    head: usize,
+    len: usize,
+    sample_index: u64,
+    window: usize,
+}
+
+impl PeakWindow {
+    fn new(window: usize) -> Self {
+        let window = window.max(1);
+        Self {
+            ring: vec![(0, 0.0); window],
+            head: 0,
+            len: 0,
+            sample_index: 0,
+            window,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.head = 0;
+        self.len = 0;
+        self.sample_index = 0;
+    }
+
+    fn push(&mut self, value: f64) -> f64 {
+        let value = if value.is_finite() {
+            value.max(0.0)
+        } else {
+            0.0
+        };
+        let index = self.sample_index;
+        self.sample_index += 1;
+        let window = self.window as u64;
+        while self.len > 0 {
+            let (front_idx, _) = self.ring[self.head];
+            if index.saturating_sub(front_idx) >= window {
+                self.head = (self.head + 1) % self.window;
+                self.len -= 1;
+            } else {
+                break;
+            }
+        }
+        while self.len > 0 {
+            let back_pos = (self.head + self.len - 1) % self.window;
+            if self.ring[back_pos].1 <= value {
+                self.len -= 1;
+            } else {
+                break;
+            }
+        }
+        let back_pos = (self.head + self.len) % self.window;
+        self.ring[back_pos] = (index, value);
+        self.len += 1;
+        self.ring[self.head].1
+    }
 }
 
 /// Stateless colour plus safety clip, without anti-aliasing. Stateful
@@ -182,6 +266,7 @@ pub fn tick_wall(input: [f64; 2], settings: WallSettings) -> [f64; 2] {
 #[derive(Clone, Debug)]
 pub struct Wall {
     delay: Vec<[f64; 2]>,
+    peak_window: PeakWindow,
     position: usize,
     gain: f64,
     mode_mix: f64,
@@ -189,6 +274,9 @@ pub struct Wall {
     previous_colour_input: [f64; 2],
     previous_live_input: [f64; 2],
     previous_delayed_input: [f64; 2],
+    coeffs: Coefficients,
+    last_threshold: f64,
+    last_ceiling: f64,
 }
 
 impl Default for Wall {
@@ -199,8 +287,15 @@ impl Default for Wall {
 
 impl Wall {
     pub fn new(sample_rate: f64) -> Self {
+        let sample_rate = if sample_rate.is_finite() && sample_rate > 0.0 {
+            sample_rate
+        } else {
+            48_000.0
+        };
+        let wanted = wall_lookahead_samples(sample_rate).max(1);
         Self {
-            delay: vec![[0.0; 2]; wall_lookahead_samples(sample_rate).max(1)],
+            delay: vec![[0.0; 2]; wanted],
+            peak_window: PeakWindow::new(wanted),
             position: 0,
             gain: 1.0,
             mode_mix: 0.0,
@@ -208,11 +303,24 @@ impl Wall {
             previous_colour_input: [0.0; 2],
             previous_live_input: [0.0; 2],
             previous_delayed_input: [0.0; 2],
+            coeffs: Coefficients::new(sample_rate),
+            last_threshold: 0.0,
+            last_ceiling: 1.0,
         }
+    }
+
+    pub fn prepare(&mut self, sample_rate: f64) {
+        let sample_rate = if sample_rate.is_finite() && sample_rate > 0.0 {
+            sample_rate
+        } else {
+            48_000.0
+        };
+        self.ensure_delay(sample_rate);
     }
 
     pub fn reset(&mut self) {
         self.delay.fill([0.0; 2]);
+        self.peak_window.reset();
         self.position = 0;
         self.gain = 1.0;
         self.initialized = false;
@@ -241,16 +349,28 @@ impl Wall {
         }
     }
 
+    fn ceiling_for(&mut self, threshold: f64) -> f64 {
+        if threshold.to_bits() != self.last_threshold.to_bits() {
+            self.last_threshold = threshold;
+            self.last_ceiling = 10.0_f64.powf(threshold / 20.0).max(1.0e-6);
+        }
+        self.last_ceiling
+    }
+
     fn ensure_delay(&mut self, sample_rate: f64) {
         let wanted = wall_lookahead_samples(sample_rate).max(1);
         if self.delay.len() != wanted {
             self.delay = vec![[0.0; 2]; wanted];
+            self.peak_window = PeakWindow::new(wanted);
             self.position = 0;
             self.gain = 1.0;
             self.initialized = false;
             self.previous_colour_input = [0.0; 2];
             self.previous_live_input = [0.0; 2];
             self.previous_delayed_input = [0.0; 2];
+        }
+        if sample_rate.to_bits() != self.coeffs.sample_rate.to_bits() {
+            self.coeffs = Coefficients::new(sample_rate);
         }
     }
 
@@ -273,12 +393,7 @@ impl Wall {
             self.mode_mix = mode_target;
             self.initialized = true;
         } else {
-            self.mode_mix = one_pole(
-                self.mode_mix,
-                mode_target,
-                MODE_CROSSFADE_SECONDS,
-                sample_rate,
-            );
+            self.mode_mix = one_pole(self.mode_mix, mode_target, self.coeffs.mode);
             if (self.mode_mix - mode_target).abs() < 1.0e-4 {
                 self.mode_mix = mode_target;
             }
@@ -287,7 +402,7 @@ impl Wall {
         // The ring always runs. The detector reads the live (future) sample;
         // the delayed candidate reads the sample leaving the ring. Toggling
         // lookahead crossfades between the two candidates.
-        let ceiling = settings.ceiling();
+        let ceiling = self.ceiling_for(settings.threshold);
         let future = if settings.on {
             let even = settings.even_amount();
             let odd = settings.odd_amount();
@@ -302,9 +417,11 @@ impl Wall {
         let delayed = self.delay[self.position];
         self.delay[self.position] = future;
         self.position = (self.position + 1) % self.delay.len();
+        let future_peak = future[0].abs().max(future[1].abs());
+        let window_peak = self.peak_window.push(future_peak);
 
         if !settings.on {
-            self.gain = one_pole(self.gain, 1.0, RELEASE_SECONDS, sample_rate);
+            self.gain = one_pole(self.gain, 1.0, self.coeffs.release);
             self.previous_live_input = input;
             self.previous_delayed_input = delayed;
             let live = input;
@@ -317,28 +434,25 @@ impl Wall {
         // not the newest sample alone. Otherwise gain modulation follows a
         // future phase and lands on the wrong delayed sample.
         let peak = if settings.lookahead {
-            self.delay.iter().fold(0.0_f64, |peak, sample| {
-                peak.max(sample[0].abs()).max(sample[1].abs())
-            })
+            window_peak
         } else {
-            future[0].abs().max(future[1].abs())
+            future_peak
         };
         let target = if peak > ceiling {
             (ceiling / peak).clamp(0.0, 1.0)
         } else {
             1.0
         };
-        let attack = if settings.lookahead {
-            WALL_LOOKAHEAD_SECONDS / 3.0
+        let coeff = if target < self.gain {
+            if settings.lookahead {
+                self.coeffs.lookahead_attack
+            } else {
+                self.coeffs.live_attack
+            }
         } else {
-            LIVE_ATTACK_SECONDS
+            self.coeffs.release
         };
-        let seconds = if target < self.gain {
-            attack
-        } else {
-            RELEASE_SECONDS
-        };
-        self.gain = one_pole(self.gain, target, seconds, sample_rate).clamp(0.0, 1.0);
+        self.gain = one_pole(self.gain, target, coeff).clamp(0.0, 1.0);
 
         let gained_live = [future[0] * self.gain, future[1] * self.gain];
         let gained_delayed = [delayed[0] * self.gain, delayed[1] * self.gain];
@@ -639,5 +753,49 @@ mod tests {
         }
         // The wanted second harmonic must survive anti-aliasing.
         assert!(component(antialiased, 14_000.0) > 0.005);
+    }
+
+    #[test]
+    fn sliding_peak_matches_delay_buffer_across_toggles() {
+        let window_len = wall_lookahead_samples(SR);
+        let mut wall = Wall::new(SR);
+        let mut reference_ring = vec![[0.0_f64; 2]; window_len];
+        let mut ref_pos = 0usize;
+        let mut seed = 0x1234_5678_u32;
+        for step in 0..2_000 {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let a = (seed as i32) as f64 / i32::MAX as f64 * 2.5;
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let b = (seed as i32) as f64 / i32::MAX as f64 * 2.5;
+            let active = WallSettings {
+                even: 35.0,
+                odd: 20.0,
+                threshold: if step % 300 < 150 { -6.0 } else { -12.0 },
+                on: step % 170 >= 30,
+                lookahead: step % 120 >= 40,
+            };
+            let prev = wall.previous_colour_input;
+            let ceiling = active.ceiling();
+            let future = if active.on {
+                [
+                    colour_sample_adaa(a, prev[0], active.even_amount(), active.odd_amount(), ceiling),
+                    colour_sample_adaa(b, prev[1], active.even_amount(), active.odd_amount(), ceiling),
+                ]
+            } else {
+                [a, b]
+            };
+            reference_ring[ref_pos] = future;
+            ref_pos = (ref_pos + 1) % window_len;
+            let expected_peak = reference_ring
+                .iter()
+                .fold(0.0_f64, |p, s| p.max(s[0].abs()).max(s[1].abs()));
+            wall.process([a, b], active, SR);
+            let got_peak = wall.peak_window.ring[wall.peak_window.head].1;
+            assert!(
+                (got_peak - expected_peak).abs() < 1.0e-12,
+                "step {step}: deque peak {got_peak} != brute-force {expected_peak}"
+            );
+            assert!(wall.peak_window.len <= wall.peak_window.window);
+        }
     }
 }
