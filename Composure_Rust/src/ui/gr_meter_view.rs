@@ -89,7 +89,7 @@ where
         let bounds = self.meter_bounds(cx);
 
         let scale = cx.scale_factor();
-        for (index, line, db, knee) in meter_thresholds(params) {
+        for (index, line, db, knee) in meter_thresholds(params).iter().copied() {
             let track = pleasant_track(bounds, scale, index);
             let ty = threshold_y(line, track, db, range);
             if x < track.x - 7.0 * scale || x > track.x + track.w + 7.0 * scale {
@@ -133,8 +133,8 @@ where
             let scale = cx.scale_factor();
             let params = self.params.get(cx);
             let range = self.range_db.get(cx).max(1.0);
-            if let Some((index, _, db, _)) = meter_thresholds(&params)
-                .into_iter()
+            if let Some(&(index, _, db, _)) = meter_thresholds(&params)
+                .iter()
                 .find(|(_, candidate, _, _)| *candidate == line)
             {
                 let track = { pleasant_track(bounds, scale, index) };
@@ -291,33 +291,47 @@ fn input_y(bounds: BoundingBox, db: f32) -> f32 {
 fn input_db_from_y(bounds: BoundingBox, y: f32) -> f32 {
     (-INPUT_RANGE_DB * (y - bounds.y) / bounds.h.max(1.0)).clamp(-INPUT_RANGE_DB, 0.0)
 }
-fn meter_thresholds(params: &ComposureParams) -> Vec<(usize, ThresholdLine, f32, f32)> {
-    let mut thresholds = Vec::new();
+struct ThresholdList {
+    items: [(usize, ThresholdLine, f32, f32); 3],
+    len: usize,
+}
+
+impl std::ops::Deref for ThresholdList {
+    type Target = [(usize, ThresholdLine, f32, f32)];
+    fn deref(&self) -> &Self::Target {
+        &self.items[..self.len]
+    }
+}
+
+fn meter_thresholds(params: &ComposureParams) -> ThresholdList {
+    let mut items = [(0, ThresholdLine::InputLevel, 0.0, 0.0); 3];
+    let mut len = 0;
     if params.program_gr_enabled() {
-        thresholds.extend([
-            (
-                1,
-                ThresholdLine::GrBlendReduction,
-                params.gr_blend_threshold_reduction_db.value(),
-                params.gr_blend_threshold_reduction_knee_db.value(),
-            ),
-            (
-                2,
-                ThresholdLine::GrBlendAddition,
-                params.gr_blend_threshold_addition_db.value(),
-                params.gr_blend_threshold_addition_knee_db.value(),
-            ),
-        ]);
+        items[len] = (
+            1,
+            ThresholdLine::GrBlendReduction,
+            params.gr_blend_threshold_reduction_db.value(),
+            params.gr_blend_threshold_reduction_knee_db.value(),
+        );
+        len += 1;
+        items[len] = (
+            2,
+            ThresholdLine::GrBlendAddition,
+            params.gr_blend_threshold_addition_db.value(),
+            params.gr_blend_threshold_addition_knee_db.value(),
+        );
+        len += 1;
     }
     if params.program_input_enabled() {
-        thresholds.push((
+        items[len] = (
             0,
             ThresholdLine::InputLevel,
             params.input_level_threshold_db.value(),
             0.0,
-        ));
+        );
+        len += 1;
     }
-    thresholds
+    ThresholdList { items, len }
 }
 
 fn threshold_y(line: ThresholdLine, bounds: BoundingBox, db: f32, range: f32) -> f32 {
@@ -382,6 +396,7 @@ fn draw_pleasant_meters(
     };
     let mut d = super::appearance::painter(cx, canvas, PLEASANT_METERS_W);
     let input = display.input_meter_db.load(Ordering::Relaxed);
+    let thresholds = meter_thresholds(params);
     for index in 0..3 {
         let track = pleasant_track(bounds, 1.0, index);
         let accent = pleasant_meter_accent(index);
@@ -456,8 +471,9 @@ fn draw_pleasant_meters(
             13.0,
             if knee_active { accent } else { MUTED },
         );
-        let threshold = meter_thresholds(params)
-            .into_iter()
+        let threshold = thresholds
+            .iter()
+            .copied()
             .find(|(i, line, _, _)| *i == index && (index == 0 || active == Some(*line)));
         let readout = if let Some((_, _, db, knee)) = threshold {
             if active_knee {
@@ -478,7 +494,7 @@ fn draw_pleasant_meters(
             accent,
         );
     }
-    for (index, line, db, knee) in meter_thresholds(params) {
+    for (index, line, db, knee) in thresholds.iter().copied() {
         let track = pleasant_track(bounds, 1.0, index);
         let y = threshold_y(line, track, db, range);
         let accent = pleasant_meter_accent(index);
@@ -653,8 +669,8 @@ mod tests {
             };
             assert_eq!(
                 meter_thresholds(&params)
-                    .into_iter()
-                    .map(|(_, line, _, _)| line)
+                    .iter()
+                    .map(|(_, line, _, _)| *line)
                     .collect::<Vec<_>>(),
                 expected
             );
