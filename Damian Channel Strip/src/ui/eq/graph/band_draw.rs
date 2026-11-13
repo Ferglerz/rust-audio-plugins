@@ -1,154 +1,4 @@
-use super::super::*;
-
-/// Keep each half of the gain axis evenly divided, with at most three intervals.
-pub(in crate::ui) fn gain_axis_values(range: f64) -> Vec<i32> {
-    let intervals = ((range / 6.0).round() as i32).clamp(1, 3);
-    (-intervals..=intervals)
-        .map(|i| (range * i as f64 / intervals as f64).round() as i32)
-        .collect()
-}
-
-pub(in crate::ui) fn freq_x_at(freq: f64, gx: f32, gw: f32) -> f32 {
-    gx + gw * (freq / 20.0).log(1000.0).clamp(0.0, 1.0) as f32
-}
-
-pub(in crate::ui) fn x_freq_at(x: f32, gx: f32, gw: f32) -> f64 {
-    20.0 * 1000.0_f64.powf(((x - gx) / gw).clamp(0.0, 1.0) as f64)
-}
-
-pub(in crate::ui) fn db_y(db: f64, range: f64) -> f32 {
-    GY + GH * (0.5 - (db.clamp(-range, range) / (2.0 * range)) as f32)
-}
-
-pub(in crate::ui) fn y_db(y: f32, range: f64) -> f64 {
-    let range = range.abs().max(1.0e-6);
-    ((0.5 - (y - GY) as f64 / GH as f64) * 2.0 * range).clamp(-range, range)
-}
-
-#[derive(Default)]
-pub(in crate::ui) struct EqDrawScratch {
-    pub xs: Vec<f32>,
-    pub coefficients: Vec<pleasant_eq::BandCoefficients>,
-    pub frequencies: Vec<f64>,
-    pub points: Vec<(f32, f32)>,
-    pub sum_points: Vec<(f32, f32)>,
-    pub selected_fill: Vec<(f32, f32)>,
-}
-
-/// Pixel-spaced x plus each band's exact frequency so peaks and notch zeros
-/// land on a vertex instead of being skipped by a coarse chord.
-pub(in crate::ui) fn fill_eq_curve_xs(
-    xs: &mut Vec<f32>,
-    gx: f32,
-    gw: f32,
-    extra_freqs: impl IntoIterator<Item = f64>,
-) {
-    xs.clear();
-    let n = gw.max(2.0).ceil() as usize;
-    xs.extend((0..=n).map(|i| gx + gw * (i as f32 / n as f32)));
-    for f in extra_freqs {
-        if f.is_finite() && f > 0.0 {
-            let x = freq_x_at(f, gx, gw);
-            if x >= gx && x <= gx + gw {
-                xs.push(x);
-            }
-        }
-    }
-    xs.sort_by(|a, b| a.total_cmp(b));
-    xs.dedup_by(|a, b| (*a - *b).abs() < 0.15);
-}
-
-pub(in crate::ui) fn eq_curve_xs(
-    gx: f32,
-    gw: f32,
-    extra_freqs: impl IntoIterator<Item = f64>,
-) -> Vec<f32> {
-    let mut xs = Vec::new();
-    fill_eq_curve_xs(&mut xs, gx, gw, extra_freqs);
-    xs
-}
-
-/// Preserve the exact graph grid and host Nyquist clamp while evaluating at
-/// the processing rate. Each EQ page owns its independent cache.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Explicitly passes scratch buffers alongside graph and rate parameters"
-)]
-pub(in crate::ui) fn update_eq_response_cache_into(
-    cache: &mut pleasant_eq::ResponseCache,
-    bands: &[Band],
-    meters: &[(u64, f32)],
-    xs: &[f32],
-    (gx, gw): (f32, f32),
-    (sr, eq_sr): (f64, f64),
-    coefficients: &mut Vec<pleasant_eq::BandCoefficients>,
-    frequencies: &mut Vec<f64>,
-) {
-    coefficients.clear();
-    coefficients.extend(
-        bands
-            .iter()
-            .filter(|b| b.enabled)
-            .map(|b| BandCoeffs::make(&plot_band(b, meters), eq_sr).coefficients()),
-    );
-    frequencies.clear();
-    let nyq = sr * 0.49;
-    frequencies.extend(xs.iter().map(|&x| x_freq_at(x, gx, gw).min(nyq)));
-    cache.update(coefficients, frequencies, eq_sr);
-}
-
-#[cfg(test)]
-pub(in crate::ui) fn update_eq_response_cache(
-    cache: &mut pleasant_eq::ResponseCache,
-    bands: &[Band],
-    meters: &[(u64, f32)],
-    xs: &[f32],
-    (gx, gw): (f32, f32),
-    (sr, eq_sr): (f64, f64),
-) {
-    let mut coefficients = Vec::new();
-    let mut frequencies = Vec::new();
-    update_eq_response_cache_into(
-        cache,
-        bands,
-        meters,
-        xs,
-        (gx, gw),
-        (sr, eq_sr),
-        &mut coefficients,
-        &mut frequencies,
-    );
-}
-
-pub(in crate::ui) fn eq_db_on_xs(
-    coeff: &BandCoeffs,
-    xs: &[f32],
-    gx: f32,
-    gw: f32,
-    sr: f64,
-    eq_sr: f64,
-) -> Vec<f64> {
-    let nyq = sr * 0.49;
-    xs.iter()
-        .map(|&x| coeff.response(x_freq_at(x, gx, gw).min(nyq), eq_sr))
-        .collect()
-}
-
-pub(in crate::ui) fn fill_eq_points(
-    points: &mut Vec<(f32, f32)>,
-    xs: &[f32],
-    dbs: &[f64],
-    graph_db: f64,
-) {
-    points.clear();
-    points.extend(xs.iter().zip(dbs).map(|(&x, &db)| (x, db_y(db, graph_db))));
-}
-
-pub(in crate::ui) fn eq_points(xs: &[f32], dbs: &[f64], graph_db: f64) -> Vec<(f32, f32)> {
-    let mut points = Vec::new();
-    fill_eq_points(&mut points, xs, dbs, graph_db);
-    points
-}
+use super::*;
 
 pub(in crate::ui) fn hover_preview_label(has_selected: bool, shape: Shape) -> &'static str {
     if has_selected {
@@ -358,6 +208,10 @@ pub(in crate::ui) fn intersect_rect(
     (x1 - x0 > 0.5 && y1 - y0 > 0.5).then_some((x0, y0, x1 - x0, y1 - y0))
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Renders clipped solo shade over current EQ sum curve"
+)]
 pub(in crate::ui) fn draw_solo_shade(
     d: &mut Draw,
     shape: Shape,
@@ -392,6 +246,10 @@ pub(in crate::ui) fn draw_solo_shade(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Previews new band shape at cursor coordinates"
+)]
 pub(in crate::ui) fn draw_eq_hover_preview(
     d: &mut Draw,
     x: f32,
@@ -450,6 +308,10 @@ pub(in crate::ui) fn draw_eq_hover_preview(
 }
 
 /// Threshold / range-end grab labels, else empty-space create/deselect preview.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Resolves graph hover preview across bands, meters, and modifier state"
+)]
 pub(in crate::ui) fn draw_band_graph_hover(
     d: &mut Draw,
     x: f32,
@@ -524,7 +386,6 @@ pub(in crate::ui) const DYN_THRESH_RULE_GAP: f32 = 2.5;
 pub(in crate::ui) const DYN_RANGE_W: f32 = DYN_PILL_R * 2.0;
 /// Overhang past each pill edge, as a fraction of the full range-UI width.
 pub(in crate::ui) const DYN_THRESH_OVERHANG: f32 = 0.20;
-const RANGE_GRIP_SPACING: f32 = 4.0;
 
 #[derive(Clone, Copy, Debug)]
 pub(in crate::ui) struct DynMeterGeom {
@@ -844,191 +705,10 @@ fn draw_band_input_meter(
     draw_threshold_rule(d, rule, if ratio.is_some() { GOLD } else { color });
 }
 
-/// The static response at full dynamic range, independent of the live reduction meter.
-pub(in crate::ui) fn range_band(b: &Band) -> Band {
-    let mut endpoint = b.clone();
-    endpoint.gain -= b.range;
-    endpoint
-}
-
-pub(in crate::ui) fn between_curve_polygon(
-    main: &[(f32, f32)],
-    range: &[(f32, f32)],
-) -> Vec<(f32, f32)> {
-    let mut points = Vec::with_capacity(main.len() + range.len());
-    points.extend_from_slice(main);
-    points.extend(range.iter().rev().copied());
-    points
-}
-
-pub(in crate::ui) fn range_curve_points(
-    b: &Band,
-    xs: &[f32],
-    graph: (f32, f32, f64),
-    rates: (f64, f64),
-) -> Vec<(f32, f32)> {
-    let (gx, gw, graph_db) = graph;
-    let (sr, eq_sr) = rates;
-    let coeff = BandCoeffs::make(&range_band(b), eq_sr);
-    let dbs = eq_db_on_xs(&coeff, xs, gx, gw, sr, eq_sr);
-    eq_points(xs, &dbs, graph_db)
-}
-
-pub(in crate::ui) fn draw_dyn_range_curve(
-    d: &mut Draw,
-    b: &Band,
-    xs: &[f32],
-    graph: (f32, f32, f64),
-    rates: (f64, f64),
-    color: C,
-) {
-    let points = range_curve_points(b, xs, graph, rates);
-    let range_color = C {
-        a: color.a * 0.5,
-        ..color
-    };
-    d.poly(&points, range_color, 1.2);
-    for line in range_grip_lines(b, graph, rates) {
-        d.poly(&line, range_color, 1.2);
-    }
-}
-
-pub(in crate::ui) fn range_grip_lines(
-    b: &Band,
-    graph: (f32, f32, f64),
-    rates: (f64, f64),
-) -> [Vec<(f32, f32)>; 2] {
-    let (gx, gw, graph_db) = graph;
-    let (sr, eq_sr) = rates;
-    let coeff = BandCoeffs::make(&range_band(b), eq_sr);
-    let node_x = freq_x_at(b.freq, gx, gw);
-    let endpoint_y = db_y(b.gain - b.range, graph_db);
-    let center_response = coeff.response(b.freq.min(sr * 0.49), eq_sr);
-    let width = dyn_meter_geom(b, graph_db, gx, gw).rule_half_w * 2.0 * 0.75;
-    let curve_y_at = |sample_x: f32| {
-        let response = coeff.response(x_freq_at(sample_x, gx, gw).min(sr * 0.49), eq_sr);
-        endpoint_y + db_y(response, graph_db) - db_y(center_response, graph_db)
-    };
-    let mut span = width;
-    // At very high Q an inward parallel curve develops a loop. Remove that
-    // loop, and extend the common source span if its end normals fall inside
-    // the cusp. Both strokes must still terminate on the same source normals.
-    let mut lines = [Vec::new(), Vec::new()];
-    for _ in 0..8 {
-        let anchors: Vec<_> = (0..=128)
-            .map(|i| {
-                let distance = (i as f32 / 128.0 - 0.5) * span;
-                let x = curve_x_at_arc_distance(&curve_y_at, node_x, distance);
-                let slope = (curve_y_at(x + 0.05) - curve_y_at(x - 0.05)) / 0.1;
-                let length = (1.0 + slope * slope).sqrt();
-                (x, curve_y_at(x), -slope / length, 1.0 / length)
-            })
-            .collect();
-        lines = std::array::from_fn(|side| {
-            let offset = if side == 0 {
-                -RANGE_GRIP_SPACING
-            } else {
-                RANGE_GRIP_SPACING
-            };
-            trim_offset_loops(
-                &anchors
-                    .iter()
-                    .map(|&(x, y, nx, ny)| (x + offset * nx, y + offset * ny))
-                    .collect::<Vec<_>>(),
-            )
-        });
-        if lines
-            .iter()
-            .all(|line| line.windows(2).all(|p| p[1].0 > p[0].0))
-        {
-            break;
-        }
-        span *= 1.5;
-    }
-    lines
-}
-
-/// Keep the exterior branch of a parallel curve when a tight bend produces a
-/// self-intersection. The original first and last points remain the end caps.
-fn trim_offset_loops(points: &[(f32, f32)]) -> Vec<(f32, f32)> {
-    let cross = |a: (f32, f32), b: (f32, f32)| a.0 * b.1 - a.1 * b.0;
-    let mut result: Vec<(f32, f32)> = Vec::with_capacity(points.len());
-    for &point in points {
-        while result.len() >= 3 {
-            let start = result[result.len() - 1];
-            let direction = (point.0 - start.0, point.1 - start.1);
-            let intersection = (0..result.len() - 2).find_map(|j| {
-                let a = result[j];
-                let edge = (result[j + 1].0 - a.0, result[j + 1].1 - a.1);
-                let denominator = cross(edge, direction);
-                if denominator.abs() < 1e-6 {
-                    return None;
-                }
-                let delta = (start.0 - a.0, start.1 - a.1);
-                let t = cross(delta, direction) / denominator;
-                let u = cross(delta, edge) / denominator;
-                if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u) {
-                    Some((j, (a.0 + t * edge.0, a.1 + t * edge.1)))
-                } else {
-                    None
-                }
-            });
-            let Some((j, intersection)) = intersection else {
-                break;
-            };
-            result.truncate(j + 1);
-            result.push(intersection);
-        }
-        result.push(point);
-    }
-    result
-}
-
-/// Find an X position by distance travelled along the mirrored curve, so a
-/// narrow Q does not stretch the grip's spacing vertically.
-pub(in crate::ui) fn curve_x_at_arc_distance(
-    curve_y_at: &impl Fn(f32) -> f32,
-    center_x: f32,
-    signed_distance: f32,
-) -> f32 {
-    let direction = signed_distance.signum();
-    let target = signed_distance.abs();
-    let mut x = center_x;
-    let mut y = curve_y_at(x);
-    let mut travelled = 0.0;
-    for _ in 0..256 {
-        if travelled >= target {
-            break;
-        }
-        let next_x = x + direction * 0.25;
-        let next_y = curve_y_at(next_x);
-        let segment = (next_x - x).hypot(next_y - y);
-        if travelled + segment >= target {
-            return x + (next_x - x) * (target - travelled) / segment;
-        }
-        travelled += segment;
-        x = next_x;
-        y = next_y;
-    }
-    x
-}
-
-pub(in crate::ui) fn range_grip_hit(
-    b: &Band,
-    x: f32,
-    y: f32,
-    graph: (f32, f32, f64),
-    rates: (f64, f64),
-) -> bool {
-    b.dynamic
-        && b.shape.has_gain()
-        && !node_handle_hit(b, x, y, graph.2, graph.0, graph.1)
-        && range_grip_lines(b, graph, rates)
-            .iter()
-            .flat_map(|line| line.iter())
-            .any(|&(px, py)| (x - px).hypot(y - py) <= 4.0)
-}
-
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Draws dynamic range stem and overflow cap for a band"
+)]
 pub(in crate::ui) fn draw_dyn_range_stem(
     d: &mut Draw,
     b: &Band,
@@ -1076,33 +756,4 @@ pub(in crate::ui) fn draw_dyn_range_stem(
 
 pub(in crate::ui) fn inside(x: f32, y: f32, r: (f32, f32, f32, f32)) -> bool {
     pleasant_ui::point_in_rect(x, y, r)
-}
-
-pub(in crate::ui) fn plot_band(b: &Band, meters: &[(u64, f32)]) -> Band {
-    let mut plot = b.clone();
-    if plot.dynamic && plot.shape.has_gain() {
-        if let Some(uncapped) = uncapped_for(plot.id, meters) {
-            plot.gain -= capped_reduction(plot.range, uncapped);
-        }
-    }
-    plot
-}
-
-#[cfg(test)]
-mod axis_tests {
-    use super::*;
-    #[test]
-    fn every_gain_range_has_uniform_subdivisions_and_both_endpoints() {
-        assert_eq!(gain_axis_values(18.0), vec![-18, -12, -6, 0, 6, 12, 18]);
-        assert_eq!(gain_axis_values(72.0), vec![-72, -48, -24, 0, 24, 48, 72]);
-        for range in SCALES {
-            let values = gain_axis_values(range);
-            assert_eq!(values.first(), Some(&-(range as i32)));
-            assert_eq!(values.last(), Some(&(range as i32)));
-            assert!(values.contains(&0));
-            assert!(values.len() <= 7);
-            let step = values[1] - values[0];
-            assert!(values.windows(2).all(|pair| pair[1] - pair[0] == step));
-        }
-    }
 }
