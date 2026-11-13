@@ -90,6 +90,13 @@ struct BypassButton {
     rect: Rect,
 }
 
+#[derive(Clone, Copy)]
+struct DrawnStrip {
+    slot: usize,
+    mic: usize,
+    rect: Rect,
+}
+
 enum Parameter<'a> {
     Float(&'a FloatParam),
     Int(&'a IntParam),
@@ -134,6 +141,7 @@ struct AutomixerView {
     selected: usize,
     // A click targets the strip that was drawn, even if the registry has since changed.
     bypass_buttons: Cell<[Option<BypassButton>; PER_PAGE]>,
+    drawn_strips: Cell<[Option<DrawnStrip>; PER_PAGE]>,
     drag: Option<(Control, (f32, f32), f32)>,
     press: Option<ValuePress<Control>>,
     edit: Option<ValueEdit<Target>>,
@@ -143,11 +151,14 @@ struct AutomixerView {
 
 impl AutomixerView {
     fn new(params: Arc<AutomixerParams>, network: Arc<Network>, local_slot: Option<usize>) -> Self {
-        let page = Self::slots(&network)
+        let mut slots_buf = [0usize; CAPACITY];
+        let count = Self::collect_slots(&network, &mut slots_buf);
+        let page = slots_buf[..count]
             .iter()
             .position(|&index| Some(index) == local_slot)
             .unwrap_or(0)
             / PER_PAGE;
+        let drawn_strips = Self::compute_drawn_strips(&network, page);
         Self {
             selected: params.mic_index(),
             params,
@@ -157,6 +168,7 @@ impl AutomixerView {
             hover: None,
             page,
             bypass_buttons: Cell::new([None; PER_PAGE]),
+            drawn_strips: Cell::new(drawn_strips),
             drag: None,
             press: None,
             edit: None,
@@ -197,32 +209,41 @@ impl AutomixerView {
             }
         }
     }
-    fn slots(network: &Network) -> Vec<usize> {
-        let mut slots: Vec<_> = network
-            .slots
-            .iter()
-            .enumerate()
-            .filter(|(_, slot)| slot.owner.load(Ordering::Acquire) != 0)
-            .map(|(i, _)| i)
-            .collect();
-        slots.sort_by_key(|&i| network.slots[i].mic.load(Ordering::Acquire));
-        slots
+    fn collect_slots(network: &Network, out: &mut [usize; CAPACITY]) -> usize {
+        let mut count = 0;
+        for (i, slot) in network.slots.iter().enumerate() {
+            if slot.owner.load(Ordering::Acquire) != 0 {
+                out[count] = i;
+                count += 1;
+            }
+        }
+        out[..count].sort_by_key(|&i| network.slots[i].mic.load(Ordering::Acquire));
+        count
     }
-    fn visible(&self) -> Vec<(usize, Rect)> {
-        let slots = Self::slots(&self.network);
-        let page = self.page.min(Self::page_count(slots.len()) - 1);
-        Self::strips(slots, page).collect()
+    fn compute_drawn_strips(network: &Network, page: usize) -> [Option<DrawnStrip>; PER_PAGE] {
+        let mut slots_buf = [0usize; CAPACITY];
+        let count = Self::collect_slots(network, &mut slots_buf);
+        let page = page.min(Self::page_count(count) - 1);
+        let mut drawn = [None; PER_PAGE];
+        for (column, &slot) in slots_buf[..count]
+            .iter()
+            .skip(page * PER_PAGE)
+            .take(PER_PAGE)
+            .enumerate()
+        {
+            drawn[column] = Some(DrawnStrip {
+                slot,
+                mic: network.slots[slot].mic.load(Ordering::Acquire),
+                rect: Self::strip_rect(column),
+            });
+        }
+        drawn
     }
     fn page_count(registered: usize) -> usize {
         registered.div_ceil(PER_PAGE).max(1)
     }
-    fn strips(slots: Vec<usize>, page: usize) -> impl Iterator<Item = (usize, Rect)> {
-        slots
-            .into_iter()
-            .skip(page * PER_PAGE)
-            .take(PER_PAGE)
-            .enumerate()
-            .map(|(column, slot)| (slot, (32.0 + column as f32 * 133.0, 220.0, 125.0, 328.0)))
+    fn strip_rect(column: usize) -> Rect {
+        (32.0 + column as f32 * 133.0, 220.0, 125.0, 328.0)
     }
     fn name_rect(r: Rect) -> Rect {
         (r.0 + 5.0, r.1 + 20.0, r.2 - 10.0, 24.0)
@@ -259,7 +280,9 @@ impl AutomixerView {
         true
     }
     fn change_page(&mut self, forward: bool) {
-        let last = Self::page_count(Self::slots(&self.network).len()) - 1;
+        let mut slots_buf = [0usize; CAPACITY];
+        let count = Self::collect_slots(&self.network, &mut slots_buf);
+        let last = Self::page_count(count) - 1;
         let current = self.page.min(last);
         let next = if forward {
             (current + 1).min(last)
@@ -268,23 +291,35 @@ impl AutomixerView {
         };
         if next != current {
             self.bypass_buttons.set([None; PER_PAGE]);
+            self.drawn_strips
+                .set(Self::compute_drawn_strips(&self.network, next));
         }
         self.page = next;
     }
-    fn controls(&self) -> Vec<(Control, Rect)> {
-        let mut result: Vec<_> = GLOBAL
+    fn strip_at(&self, point: (f32, f32)) -> Option<DrawnStrip> {
+        self.drawn_strips
+            .get()
             .into_iter()
-            .enumerate()
-            .map(|(i, id)| (id, Self::global_rect(i)))
-            .collect();
-        result.push((Control::Mic, LOCAL));
-        for (slot, rect) in self.visible() {
-            result.push((
-                Control::Weight(self.network.slots[slot].mic.load(Ordering::Acquire)),
-                Self::weight_rect(rect),
-            ));
+            .flatten()
+            .find(|strip| point_in_rect(point.0, point.1, strip.rect))
+    }
+    fn control_at(&self, point: (f32, f32)) -> Option<(Control, Rect)> {
+        for (i, id) in GLOBAL.into_iter().enumerate() {
+            let rect = Self::global_rect(i);
+            if point_in_rect(point.0, point.1, rect) {
+                return Some((id, rect));
+            }
         }
-        result
+        if point_in_rect(point.0, point.1, LOCAL) {
+            return Some((Control::Mic, LOCAL));
+        }
+        for strip in self.drawn_strips.get().into_iter().flatten() {
+            let rect = Self::weight_rect(strip.rect);
+            if point_in_rect(point.0, point.1, rect) {
+                return Some((Control::Weight(strip.mic), rect));
+            }
+        }
+        None
     }
     fn value_rect(r: Rect) -> Rect {
         (r.0 + r.2 * 0.43, r.1 + 3.0, r.2 * 0.57 - 6.0, 24.0)
@@ -404,10 +439,13 @@ impl AutomixerView {
         }
     }
     fn group_at(&self, point: (f32, f32)) -> Option<usize> {
-        self.visible().into_iter().find_map(|(slot, rect)| {
-            point_in_rect(point.0, point.1, Self::group_rect(rect))
-                .then(|| self.network.slots[slot].mic.load(Ordering::Acquire))
-        })
+        self.drawn_strips
+            .get()
+            .into_iter()
+            .flatten()
+            .find_map(|strip| {
+                point_in_rect(point.0, point.1, Self::group_rect(strip.rect)).then_some(strip.mic)
+            })
     }
     fn finish_group(&mut self, cx: &mut EventContext, point: (f32, f32)) {
         let Some(mic) = self.group_press.take() else {
@@ -497,18 +535,10 @@ impl AutomixerView {
                         self.selected = mic;
                         self.group_press = Some(mic);
                     } else {
-                        if let Some((slot, _)) = self
-                            .visible()
-                            .into_iter()
-                            .find(|(_, r)| point_in_rect(point.0, point.1, *r))
-                        {
-                            self.selected = self.network.slots[slot].mic.load(Ordering::Acquire);
+                        if let Some(strip) = self.strip_at(point) {
+                            self.selected = strip.mic;
                         }
-                        if let Some((id, r)) = self
-                            .controls()
-                            .into_iter()
-                            .find(|(_, r)| point_in_rect(point.0, point.1, *r))
-                        {
+                        if let Some((id, r)) = self.control_at(point) {
                             let value_rect = Self::value_rect(r);
                             if point_in_rect(point.0, point.1, value_rect) {
                                 self.press = Some(ValuePress::new(id, value_rect, point));
@@ -525,24 +555,25 @@ impl AutomixerView {
                     self.group_press = None;
                     self.menu = None;
                     self.end_drag(cx);
-                    if let Some((slot, r)) = self
-                        .visible()
+                    if let Some(strip) = self
+                        .drawn_strips
+                        .get()
                         .into_iter()
-                        .find(|(_, r)| point_in_rect(point.0, point.1, Self::name_rect(*r)))
+                        .flatten()
+                        .find(|strip| point_in_rect(point.0, point.1, Self::name_rect(strip.rect)))
                     {
-                        let mic = self.network.slots[slot].mic.load(Ordering::Acquire);
+                        let mic = strip.mic;
                         let name = self.params.shared.mics[mic]
                             .name
                             .lock()
                             .unwrap_or_else(|e| e.into_inner())
                             .clone();
-                        self.edit =
-                            Some(ValueEdit::new(Target::Name(mic), Self::name_rect(r), name));
-                    } else if let Some((id, _)) = self
-                        .controls()
-                        .into_iter()
-                        .find(|(_, r)| point_in_rect(point.0, point.1, *r))
-                    {
+                        self.edit = Some(ValueEdit::new(
+                            Target::Name(mic),
+                            Self::name_rect(strip.rect),
+                            name,
+                        ));
+                    } else if let Some((id, _)) = self.control_at(point) {
                         self.prepare_edit(id, self.parameter(id).default());
                         param::set_normalized_once(
                             cx,
@@ -584,11 +615,7 @@ impl AutomixerView {
                         };
                         let ptr = param.as_ptr();
                         param::set_normalized_once(cx, ptr, next);
-                    } else if let Some((id, _)) = self
-                        .controls()
-                        .into_iter()
-                        .find(|(_, r)| point_in_rect(point.0, point.1, *r))
-                    {
+                    } else if let Some((id, _)) = self.control_at(point) {
                         let value = self.parameter(id).step(
                             self.normalized(id),
                             *dy > 0.0,
@@ -695,8 +722,9 @@ impl AutomixerView {
         let monitor = self.network.monitor(self.network.now_ms());
         let active = monitor.active;
         let chorus = monitor.chorus;
-        let slots = Self::slots(&self.network);
-        let registered = slots.len();
+        let mut slots_buf = [0usize; CAPACITY];
+        let registered = Self::collect_slots(&self.network, &mut slots_buf);
+        let slots = &slots_buf[..registered];
         d.text(
             32.0,
             199.0,
@@ -707,12 +735,12 @@ impl AutomixerView {
             14.0,
             TEXT,
         );
-        let state = if p.amount.value() == 0.0 {
+        let state: std::borrow::Cow<'static, str> = if p.amount.value() == 0.0 {
             "AUTOMIX OFF".into()
         } else if monitor.members == 0 {
             "NO MICS IN MIX".into()
         } else if chorus > 0.001 {
-            format!("CHORUS FADE  {:3.0}%", chorus * 100.0)
+            format!("CHORUS FADE  {:3.0}%", chorus * 100.0).into()
         } else {
             "GAIN SHARING".into()
         };
@@ -737,7 +765,14 @@ impl AutomixerView {
         let now = self.network.now_ms();
         let conflicts = self.network.conflict_mask();
         let mut bypass_buttons = [None; PER_PAGE];
-        for (column, (slot_index, r)) in Self::strips(slots, page).enumerate() {
+        let mut drawn_strips = [None; PER_PAGE];
+        for (column, &slot_index) in slots
+            .iter()
+            .skip(page * PER_PAGE)
+            .take(PER_PAGE)
+            .enumerate()
+        {
+            let r = Self::strip_rect(column);
             let slot = &self.network.slots[slot_index];
             let owner = slot.owner.load(Ordering::Acquire);
             let params = slot.editor_params(owner);
@@ -857,13 +892,13 @@ impl AutomixerView {
                 }
             }
             let voice = p.mics[mic].is_voice();
-            let group_label = if !voice {
-                "OTHER".to_string()
+            let group_label: std::borrow::Cow<'static, str> = if !voice {
+                "OTHER".into()
             } else if p.assist.value() > 0.0 && !strip_bypassed && !host_bypassed {
                 if !has_meter || !slot.vad_ready.load(Ordering::Relaxed) {
                     "VOICE WAIT".into()
                 } else {
-                    format!("VOICE {:3.0}%", slot.speech.load(Ordering::Relaxed) * 100.0)
+                    format!("VOICE {:3.0}%", slot.speech.load(Ordering::Relaxed) * 100.0).into()
                 }
             } else {
                 "VOICE".into()
@@ -882,10 +917,16 @@ impl AutomixerView {
                     rect,
                 });
             }
+            drawn_strips[column] = Some(DrawnStrip {
+                slot: slot_index,
+                mic,
+                rect: r,
+            });
             Self::paint_bypass(d, rect, strip_bypassed);
             self.paint_control(d, Control::Weight(mic), Self::weight_rect(r), "WEIGHT");
         }
         self.bypass_buttons.set(bypass_buttons);
+        self.drawn_strips.set(drawn_strips);
         if registered == 0 {
             d.text(50.0, 260.0, "NO INSTANCES", 14.0, MUTED);
         }
@@ -1070,11 +1111,7 @@ impl AutomixerView {
         if point_in_rect(point.0, point.1, Self::cc_rect()) {
             return "Weight CC for the selected microphone, 0-119. Click to open the list. The latest cue replaces the weight. Scroll to step while closed.";
         }
-        if let Some((id, _)) = self
-            .controls()
-            .into_iter()
-            .find(|(_, r)| point_in_rect(point.0, point.1, *r))
-        {
+        if let Some((id, _)) = self.control_at(point) {
             return match id {
                 Control::Amount => "Automix depth for every microphone. 0% is unity gain. 100% applies the full computed reduction, including quiet voice mics during chorus.",
                 Control::VoiceCap => "Maximum reduction for Voice microphones, in sharing and in chorus. 0 dB keeps every voice mic at unity.",
