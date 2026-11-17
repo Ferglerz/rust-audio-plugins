@@ -19,6 +19,15 @@ fn band_position(hz: f32) -> f32 {
         .clamp(0.0, (BANDS - 1) as f32)
 }
 
+/// Center frequency of each log band, from 40 Hz to 20 kHz.
+/// Computed once so each hop does not repeat the same `powf`.
+fn band_centers() -> &'static [f32; BANDS] {
+    static CENTERS: std::sync::OnceLock<[f32; BANDS]> = std::sync::OnceLock::new();
+    CENTERS.get_or_init(|| {
+        std::array::from_fn(|band| 40.0 * 500.0_f32.powf(band as f32 / (BANDS - 1) as f32))
+    })
+}
+
 pub struct SpectrumBus {
     sequence: AtomicU64,
     valid: AtomicBool,
@@ -143,6 +152,7 @@ pub struct Spectral {
 }
 impl Spectral {
     pub fn new(rate: f32, max_buffer: u32) -> Self {
+        let _ = band_centers();
         let mut planner = FftPlanner::new();
         let forward = planner.plan_fft_forward(FFT_SIZE);
         let inverse = planner.plan_fft_inverse(FFT_SIZE);
@@ -279,6 +289,7 @@ impl Spectral {
             }
         }
         let own_weight = network.params.mics[mic].spectral_weight.value();
+        let centers = band_centers();
         let own_peak = self.power.iter().copied().fold(0.0, f32::max);
         let mut target = [0.0_f32; BANDS];
         let mut drum_target = [0.0_f32; BANDS];
@@ -320,15 +331,15 @@ impl Spectral {
                 shape_count += 1;
             }
             let gap = network.params.mics[peer_mic].spectral_weight.value() - own_weight;
+            let peer_drums = network.params.mics[peer_mic].is_drums();
             let peak = power.iter().copied().fold(0.0, f32::max);
             for band in 0..BANDS {
-                let hz = 40.0 * 500.0_f32.powf(band as f32 / (BANDS - 1) as f32);
-                let destination =
-                    if hz >= 3000.0 && (own_drums || network.params.mics[peer_mic].is_drums()) {
-                        &mut drum_target[band]
-                    } else {
-                        &mut target[band]
-                    };
+                let hz = centers[band];
+                let destination = if hz >= 3000.0 && (own_drums || peer_drums) {
+                    &mut drum_target[band]
+                } else {
+                    &mut target[band]
+                };
                 *destination = destination.max(
                     influence(self.power[band], power[band], own_peak, peak, gap)
                         * settings.cap
@@ -347,6 +358,7 @@ impl Spectral {
             }
         });
         let dt = HOP as f32 / self.rate * 1000.0;
+        let drum_eq_band = band_position(3000.0);
         for band in 0..BANDS {
             let neighbor =
                 (target[band.saturating_sub(1)] + target[(band + 1).min(BANDS - 1)]) * 0.5;
@@ -380,7 +392,7 @@ impl Spectral {
             let desired_eq = eq_target[band] + (neighbor_eq - eq_target[band]) * settings.smooth;
             let eq_ms = if !enabled {
                 20.0
-            } else if own_drums && band as f32 >= band_position(3000.0) {
+            } else if own_drums && band as f32 >= drum_eq_band {
                 if desired_eq.abs() > self.eq[band].abs() {
                     5.0
                 } else {
@@ -423,7 +435,7 @@ impl Spectral {
         }
         if enabled {
             let displayed = std::array::from_fn(|i| {
-                let hz = 40.0 * 500.0_f32.powf(i as f32 / (BANDS - 1) as f32);
+                let hz = centers[i];
                 if hz >= settings.low && hz <= settings.high && hz < self.rate * 0.5 {
                     self.cut[i]
                 } else {
