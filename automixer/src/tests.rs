@@ -425,6 +425,7 @@ fn midi_addresses_remote_weights_and_state_persists() {
 }
 
 struct Context {
+    latency: std::cell::Cell<u32>,
     input: VecDeque<NoteEvent<()>>,
     output: Vec<NoteEvent<()>>,
 }
@@ -444,7 +445,7 @@ impl ProcessContext<Automixer> for Context {
         self.output.push(event);
     }
     fn set_latency_samples(&self, samples: u32) {
-        assert_eq!(samples, 0);
+        self.latency.set(samples);
     }
     fn set_current_voice_capacity(&self, _: u32) {}
 }
@@ -524,6 +525,7 @@ fn strip_bypass_ramps_and_withdraws_only_its_mic_while_meters_and_midi_continue(
     let mut b = plugin(&network);
     let b_slot = b.registration.slot().unwrap().clone();
     let mut context = Context {
+        latency: std::cell::Cell::new(0),
         input: VecDeque::new(),
         output: Vec::new(),
     };
@@ -603,6 +605,7 @@ fn process_keeps_stereo_linked_passes_midi_and_sanitizes_nonfinite_audio() {
         value: 1.0,
     };
     let mut context = Context {
+        latency: std::cell::Cell::new(0),
         input: VecDeque::from([event]),
         output: Vec::new(),
     };
@@ -758,4 +761,233 @@ fn automatic_assignment_restores_a_saved_fallback_when_hardware_is_unchanged() {
     })));
     handler(HostTrackUpdate::Prepare);
     assert_eq!(first.params.mic_index(), 9);
+}
+
+#[test]
+fn spectral_plugin_routes_midi_reports_latency_and_resets_cleanly() {
+    let mut raw_network = Network::default();
+    Arc::get_mut(&mut raw_network.params).unwrap().mode =
+        EnumParam::new("Mix mode", params::MixMode::SpectralSpace);
+    let network = Arc::new(raw_network);
+    let mut instance = plugin(&network);
+    let mut context = Context {
+        latency: std::cell::Cell::new(0),
+        input: VecDeque::from([NoteEvent::MidiCC {
+            timing: 0,
+            channel: 0,
+            cc: 20,
+            value: 1.0,
+        }]),
+        output: Vec::new(),
+    };
+    let mut rendered = Vec::new();
+    for block in 0..24 {
+        let mut left = [0.0; 128];
+        let mut right = [0.0; 128];
+        if block == 0 {
+            left[0] = 1.0;
+            right[0] = -0.5;
+        }
+        let mut buffer = Buffer::default();
+        // SAFETY: both slices outlive processing and have the declared length.
+        unsafe {
+            buffer.set_slices(128, |slices| {
+                slices.push(&mut left);
+                slices.push(&mut right);
+            });
+        }
+        instance.process(
+            &mut buffer,
+            &mut AuxiliaryBuffers {
+                inputs: &mut [],
+                outputs: &mut [],
+            },
+            &mut context,
+        );
+        for (left, right) in left.into_iter().zip(right) {
+            assert!((right + left * 0.5).abs() < 1e-6);
+            rendered.push(left);
+        }
+    }
+    assert_eq!(context.latency.get(), spectral::FFT_SIZE as u32);
+    assert_eq!(context.output.len(), 1);
+    assert_eq!(network.params.mics[0].effective_weight(), 12.0);
+    assert!((rendered[spectral::FFT_SIZE] - 1.0).abs() < 1e-5);
+    assert!(rendered
+        .iter()
+        .enumerate()
+        .all(|(i, x)| i == spectral::FFT_SIZE || x.abs() < 1e-5));
+    instance.reset();
+    assert!(instance
+        .registration
+        .slot()
+        .unwrap()
+        .spectrum
+        .read()
+        .is_none());
+    instance.deactivate();
+    assert_eq!(
+        instance
+            .registration
+            .slot()
+            .unwrap()
+            .signal
+            .load(Ordering::Acquire),
+        0
+    );
+}
+
+#[test]
+fn drums_influence_other_tracks_faster_without_entering_voice_pool() {
+    fn render(drums: bool) -> (f32, f32) {
+        let mut network = Network::default();
+        let params = Arc::get_mut(&mut network.params).unwrap();
+        params.mics[0].group = EnumParam::new(
+            "Group",
+            if drums {
+                params::MicGroup::Drums
+            } else {
+                params::MicGroup::Other
+            },
+        );
+        params.mics[1].group = EnumParam::new("Group", params::MicGroup::Other);
+        let network = Arc::new(network);
+        let source = network.register();
+        let receiver = network.register();
+        let sa = source.slot().unwrap();
+        let sb = receiver.slot().unwrap();
+        let mut a = Engine::default();
+        let mut b = Engine::default();
+        a.set_drums(drums);
+        let config = default_settings();
+        let mut attack = 0.0;
+        let mut release = 0.0;
+        for n in 0..40000 {
+            let hit = (24000..24960).contains(&n);
+            if a.analyze(if hit { 0.25 } else { 0.0 }) {
+                a.control(&network, sa, 0, 0.0, false, false, config);
+            }
+            a.gain(config, false, false);
+            if b.analyze(0.01) {
+                b.control(&network, sb, 1, 0.0, false, false, config);
+            }
+            b.gain(config, false, false);
+            if n == 24480 {
+                attack = b.reduction;
+            }
+            if n == 27840 {
+                release = b.reduction;
+            }
+        }
+        let snapshot = Observer::default().read(&network, 240, 48000);
+        assert_eq!(snapshot.voice_total, 0.0);
+        assert_eq!(snapshot.voice_active, 0);
+        assert!(!a.chorus.active && !b.chorus.active);
+        (attack, release)
+    }
+    let normal = render(false);
+    let drums = render(true);
+    assert!(
+        drums.0 > normal.0 + 3.0,
+        "drum influence must engage faster: drums={drums:?}, other={normal:?}"
+    );
+    assert!(
+        drums.1 < normal.1 * 0.5,
+        "drum influence must recover faster: drums={drums:?}, other={normal:?}"
+    );
+}
+
+#[test]
+fn combined_processing_applies_both_stages_without_changing_spectral_detection() {
+    fn render(gain_amount: f32) -> (f32, f32, [f32; spectral::BANDS]) {
+        let mut raw = Network::default();
+        let p = Arc::get_mut(&mut raw.params).unwrap();
+        p.mode = EnumParam::new("Mix mode", params::MixMode::SpectralSpace);
+        p.amount = params::float("Gain amount", gain_amount, 0.0, 100.0, " %");
+        p.mics[0].spectral_weight = params::float("Spectral weight", 12.0, -12.0, 12.0, " dB");
+        let network = Arc::new(raw);
+        let mut a = plugin(&network);
+        let mut b = plugin(&network);
+        let mut context = Context {
+            latency: std::cell::Cell::new(0),
+            input: VecDeque::new(),
+            output: Vec::new(),
+        };
+        let mut energy = [0.0_f64; 2];
+        for block in 0..600 {
+            for (track, plugin) in [&mut a, &mut b].into_iter().enumerate() {
+                let mut audio: [f32; 128] = std::array::from_fn(|i| {
+                    (std::f32::consts::TAU * 43.0 * (block * 128 + i) as f32
+                        / spectral::FFT_SIZE as f32)
+                        .sin()
+                        * 0.1
+                });
+                let mut buffer = Buffer::default();
+                // SAFETY: the complete mono slice outlives this processing call.
+                unsafe {
+                    buffer.set_slices(128, |slices| slices.push(&mut audio));
+                }
+                plugin.process(
+                    &mut buffer,
+                    &mut AuxiliaryBuffers {
+                        inputs: &mut [],
+                        outputs: &mut [],
+                    },
+                    &mut context,
+                );
+                if block >= 500 {
+                    energy[track] += audio.iter().map(|x| (*x as f64).powi(2)).sum::<f64>();
+                }
+            }
+        }
+        assert_eq!(context.latency.get(), spectral::FFT_SIZE as u32);
+        assert!(
+            b.spectral.cut.iter().any(|cut| *cut > 1.0),
+            "lower spectral weight must yield"
+        );
+        assert!(
+            a.spectral.cut.iter().all(|cut| *cut < 0.001),
+            "higher spectral weight must stay clear"
+        );
+        let slot = b.registration.slot().unwrap();
+        let (_, power, _) = slot.spectrum.read().unwrap();
+        let expected_out = 10.0 * (energy[1] / (100.0 * 128.0)).log10();
+        assert!(
+            (slot.output_db.load(Ordering::Relaxed) as f64 - expected_out).abs() < 0.2,
+            "OUT must include both stages"
+        );
+        (energy[0] as f32, energy[1] as f32, power)
+    }
+    let spectral_only = render(0.0);
+    let combined = render(100.0);
+    assert!(
+        (combined.0 / spectral_only.0 - 0.25).abs() < 0.02,
+        "equal gain weights must share even with unequal spectral weights"
+    );
+    assert!(
+        (combined.1 / spectral_only.1 - 0.25).abs() < 0.02,
+        "gain sharing must compound with spectral ducking"
+    );
+    for (combined, original) in combined.2.into_iter().zip(spectral_only.2) {
+        assert!(
+            (combined - original).abs() < 1e-8,
+            "sharing must not feed back into spectral analysis"
+        );
+    }
+}
+
+#[test]
+fn per_track_spectral_controls_are_independent_of_gain_weight_and_midi() {
+    let mut p = SharedParams::default();
+    p.mics[0].eq_blend = params::float("EQ blend", -75.0, -100.0, 100.0, " %");
+    p.mics[1].eq_blend = params::float("EQ blend", 50.0, -100.0, 100.0, " %");
+    p.mics[0].spectral_weight = params::float("Spectral weight", 6.0, -12.0, 12.0, " dB");
+    p.midi(0, 20, 0.0);
+    assert_eq!(p.mics[0].effective_weight(), -12.0);
+    assert_eq!(p.mics[0].spectral_weight.value(), 6.0);
+    assert_eq!(p.mics[1].spectral_weight.value(), 0.0);
+    assert_eq!(spectral::Settings::from_params(&p, 0).blend, -0.75);
+    assert_eq!(spectral::Settings::from_params(&p, 1).blend, 0.5);
+    let ids: std::collections::HashSet<_> = p.param_map().into_iter().map(|x| x.0).collect();
+    assert!(ids.contains("sweight_1") && ids.contains("eqblend_64") && ids.contains("samount"));
 }

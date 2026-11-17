@@ -16,6 +16,7 @@ pleasant-ui = { path = "../pleasant-ui" }
 pleasant-dynamics = { path = "../pleasant-dynamics" }
 pleasant-voice = { path = "../pleasant-voice" }
 atomic_float = "1"
+rustfft = "6"
 
 [dev-dependencies]
 image = { version = "0.24", default-features = false, features = ["png"] }

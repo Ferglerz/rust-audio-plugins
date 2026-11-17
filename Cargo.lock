@@ -553,6 +553,7 @@ dependencies = [
  "pleasant-dynamics",
  "pleasant-ui",
  "pleasant-voice",
+ "rustfft",
 ]
 
 [[package]]
