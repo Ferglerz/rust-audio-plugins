@@ -138,6 +138,13 @@ pub struct Engine {
     sample_rate: f32,
     envelope: f64,
     envelope_coeff: f64,
+    drums: bool,
+    drum_attack: f64,
+    drum_release: f64,
+    fast_attack: f32,
+    fast_release: f32,
+    drum_target: f32,
+    drum_current: f32,
     opening_coeff: f32,
     closing_coeff: f32,
     control_interval: u32,
@@ -170,6 +177,13 @@ impl Engine {
             reduction: 0.0,
             sample_rate,
             envelope: 0.0,
+            drums: false,
+            drum_attack: (-1.0 / (sample_rate as f64 * 0.001)).exp(),
+            drum_release: (-1.0 / (sample_rate as f64 * 0.003)).exp(),
+            fast_attack: 1.0 - (-1.0 / (sample_rate * 0.002)).exp(),
+            fast_release: 1.0 - (-1.0 / (sample_rate * 0.015)).exp(),
+            drum_target: 0.0,
+            drum_current: 0.0,
             envelope_coeff: (-1.0 / (sample_rate as f64 * 0.015)).exp(),
             opening_coeff: 1.0 - (-1.0 / (sample_rate * 0.010)).exp(),
             closing_coeff: 1.0 - (-1.0 / (sample_rate * 0.080)).exp(),
@@ -192,8 +206,25 @@ impl Engine {
         (10.0 * self.envelope.max(1e-12).log10()) as f32
     }
 
+    pub fn set_drums(&mut self, drums: bool) {
+        self.drums = drums;
+        self.control_interval = (self.sample_rate * if drums { 0.001 } else { 0.005 })
+            .round()
+            .max(1.0) as u32;
+        self.countdown = self.countdown.min(self.control_interval - 1);
+    }
+
     pub fn analyze(&mut self, power: f64) -> bool {
-        self.envelope += (power.min(1e12) - self.envelope) * (1.0 - self.envelope_coeff);
+        let coeff = if self.drums {
+            if power > self.envelope {
+                self.drum_attack
+            } else {
+                self.drum_release
+            }
+        } else {
+            self.envelope_coeff
+        };
+        self.envelope += (power.min(1e12) - self.envelope) * (1.0 - coeff);
         if self.envelope < 1e-24 {
             self.envelope = 0.0;
         }
@@ -222,8 +253,19 @@ impl Engine {
         } else {
             settings.threshold
         };
-        self.activity
-            .update(self.input_db(), threshold, dt_ms, settings.hold_ms);
+        if self.drums {
+            // Percussive activity has no speech-onset debounce or long voice hold.
+            if self.input_db() >= threshold {
+                self.activity.active = true;
+                self.activity.off_ms = 0.0;
+            } else {
+                self.activity
+                    .update(self.input_db(), threshold, dt_ms, 20.0);
+            }
+        } else {
+            self.activity
+                .update(self.input_db(), threshold, dt_ms, settings.hold_ms);
+        }
         let desired_weight = network.params.mics[mic].effective_weight();
         self.weight += (desired_weight - self.weight) * (1.0 - (-dt_ms / 20.0).exp());
         let own = (self.envelope.sqrt() as f32).max(1e-9) * 10.0_f32.powf(self.weight / 20.0);
@@ -243,7 +285,19 @@ impl Engine {
         } else {
             snapshot.other_total
         };
-        self.share_target = share_reduction(own, total, settings.cap(voice));
+        let full_target = share_reduction(own, total, settings.cap(voice));
+        // Keep sustained non-drum sharing on its original envelope. Only the
+        // extra reduction caused by drums takes the fast attack/release path.
+        self.share_target = if !voice && !self.drums {
+            share_reduction(
+                own,
+                (total - snapshot.drum_total).max(own),
+                settings.cap(voice),
+            )
+        } else {
+            full_target
+        };
+        self.drum_target = (full_target - self.share_target).max(0.0);
         if voice {
             self.chorus.update(
                 snapshot.voice_active,
@@ -254,10 +308,12 @@ impl Engine {
         } else {
             self.chorus.clear();
         }
-        slot.input_db.store(self.input_db(), Ordering::Relaxed);
-        slot.output_db
-            .store(self.input_db() - self.reduction, Ordering::Relaxed);
-        slot.reduction_db.store(self.reduction, Ordering::Relaxed);
+        if network.params.mode.value() == crate::params::MixMode::GainSharing {
+            slot.input_db.store(self.input_db(), Ordering::Relaxed);
+            slot.output_db
+                .store(self.input_db() - self.reduction, Ordering::Relaxed);
+            slot.reduction_db.store(self.reduction, Ordering::Relaxed);
+        }
         slot.speech.store(speech, Ordering::Relaxed);
         slot.active
             .store(self.activity.active && !bypass, Ordering::Relaxed);
@@ -294,18 +350,32 @@ impl Engine {
             (!bypass && !self.conflict) as u8 as f32,
             self.sample_rate * 0.020,
         );
-        let coefficient = if self.share_target < self.share_current {
+        let coefficient = if self.drums {
+            if self.share_target < self.share_current {
+                self.fast_attack
+            } else {
+                self.fast_release
+            }
+        } else if self.share_target < self.share_current {
             self.opening_coeff
         } else {
             self.closing_coeff
         };
         self.share_current += (self.share_target - self.share_current) * coefficient;
+        let drum_coefficient = if self.drum_target > self.drum_current {
+            self.fast_attack
+        } else {
+            self.fast_release
+        };
+        self.drum_current += (self.drum_target - self.drum_current) * drum_coefficient;
         // Chorus applies only to the Voice group. Active voice mics fade open.
         // Quiet voice mics approach Voice GR. Other mics keep their own share.
         let chorus_reduction = cap * (1.0 - open);
-        self.reduction =
-            (amount * engaged * ((1.0 - chorus) * self.share_current + chorus * chorus_reduction))
-                .clamp(0.0, cap);
+        self.reduction = (amount
+            * engaged
+            * ((1.0 - chorus) * (self.share_current + self.drum_current)
+                + chorus * chorus_reduction))
+            .clamp(0.0, cap);
         10.0_f32.powf(-self.reduction / 20.0)
     }
 }

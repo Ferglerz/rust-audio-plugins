@@ -25,6 +25,7 @@ pub struct TrackLabels {
 }
 
 pub struct Slot {
+    pub spectrum: crate::spectral::SpectrumBus,
     pub owner: AtomicU64,
     pub mic: AtomicUsize,
     pub labels: Mutex<TrackLabels>,
@@ -50,6 +51,7 @@ pub struct Slot {
 impl Default for Slot {
     fn default() -> Self {
         Self {
+            spectrum: Default::default(),
             owner: AtomicU64::new(0),
             mic: AtomicUsize::new(0),
             labels: Mutex::default(),
@@ -94,6 +96,7 @@ impl Slot {
             .store(((seq as u64) << 32) | value as u64, Ordering::Release);
     }
     pub fn withdraw(&self) {
+        self.spectrum.clear();
         self.signal.store(0, Ordering::Release);
         self.active.store(false, Ordering::Relaxed);
     }
@@ -252,6 +255,9 @@ impl Network {
             }
             result.members += 1;
             result.active += slot.active.load(Ordering::Relaxed) as usize;
+            if slot.voice.load(Ordering::Relaxed) {
+                result.voice_active += slot.active.load(Ordering::Relaxed) as usize;
+            }
             result.chorus = result.chorus.max(slot.chorus_mix.load(Ordering::Relaxed));
         }
         result
@@ -260,6 +266,7 @@ impl Network {
 
 #[derive(Default)]
 pub struct Monitor {
+    pub voice_active: usize,
     pub members: usize,
     pub active: usize,
     pub chorus: f32,
@@ -323,6 +330,7 @@ pub struct MixSnapshot {
     pub total: f32,
     pub voice_total: f32,
     pub other_total: f32,
+    pub drum_total: f32,
     pub active: usize,
     pub voice_active: usize,
     pub members: usize,
@@ -366,6 +374,9 @@ impl Observer {
                 result.voice_active += active;
             } else {
                 result.other_total += level;
+                if network.params.mics[mic].is_drums() {
+                    result.drum_total += level;
+                }
             }
             result.members += 1;
         }

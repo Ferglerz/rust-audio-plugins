@@ -5,6 +5,7 @@ use std::sync::{atomic::Ordering, Arc};
 mod dsp;
 mod network;
 mod params;
+mod spectral;
 mod ui;
 
 pub struct Automixer {
@@ -12,6 +13,8 @@ pub struct Automixer {
     registration: network::Registration,
     engine: dsp::Engine,
     vad: pleasant_voice::SpeechVad,
+    spectral: spectral::Spectral,
+    spectral_mode: bool,
     sample_rate: f32,
     current_mic: usize,
 }
@@ -40,6 +43,8 @@ impl Automixer {
             engine: dsp::Engine::default(),
             vad: pleasant_voice::SpeechVad::new(48_000.0),
             sample_rate: 48_000.0,
+            spectral: spectral::Spectral::new(48_000.0, 512),
+            spectral_mode: false,
         }
     }
 }
@@ -113,6 +118,8 @@ impl Plugin for Automixer {
     ) -> bool {
         self.sample_rate = config.sample_rate;
         self.engine = dsp::Engine::new(config.sample_rate, config.max_buffer_size);
+        self.spectral = spectral::Spectral::new(config.sample_rate, config.max_buffer_size);
+        self.spectral_mode = self.params.shared.mode.value() == params::MixMode::SpectralSpace;
         self.vad.set_sample_rate(config.sample_rate as f64);
         let mic = self.params.mic_index();
         self.vad.start_worker_enabled(
@@ -120,12 +127,17 @@ impl Plugin for Automixer {
                 && !self.params.bypassed()
                 && self.params.shared.mics[mic].is_voice(),
         );
-        context.set_latency_samples(0);
+        context.set_latency_samples(if self.spectral_mode {
+            spectral::FFT_SIZE as u32
+        } else {
+            0
+        });
         self.reset();
         true
     }
     fn reset(&mut self) {
         self.engine.reset();
+        self.spectral.reset();
         self.vad.reset();
         if let Some(slot) = self.registration.slot() {
             slot.withdraw();
@@ -145,20 +157,34 @@ impl Plugin for Automixer {
         _: &mut AuxiliaryBuffers,
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
+        let spectral_mode = self.params.shared.mode.value() == params::MixMode::SpectralSpace;
+        if spectral_mode != self.spectral_mode {
+            self.spectral_mode = spectral_mode;
+            self.reset();
+            context.set_latency_samples(if spectral_mode {
+                spectral::FFT_SIZE as u32
+            } else {
+                0
+            });
+        }
         let settings = dsp::Settings::from_params(&self.params.shared);
         let mic = self.params.mic_index();
+        let mut spectral_settings = spectral::Settings::from_params(&self.params.shared, mic);
         if mic != self.current_mic {
             self.reset();
             self.current_mic = mic;
         }
         let bypass = self.params.bypassed();
         let voice = self.params.shared.mics[mic].is_voice();
+        self.engine
+            .set_drums(self.params.shared.mics[mic].is_drums());
         if bypass {
             if let Some(slot) = self.registration.slot() {
                 slot.withdraw();
             }
         }
-        self.vad.set_enabled(settings.assist > 0.0 && !bypass && voice);
+        self.vad
+            .set_enabled(settings.assist > 0.0 && !bypass && voice);
         let samples = buffer.samples();
         let channels = buffer.channels().max(1) as f64;
         let mut next_event = context.next_event();
@@ -201,13 +227,33 @@ impl Plugin for Automixer {
                     );
                 }
             }
-            let gain = self.engine.gain(
-                settings,
-                voice,
-                bypass || self.registration.index.is_none(),
-            );
-            for sample in frame.iter_mut() {
-                *sample *= gain;
+            let gain =
+                self.engine
+                    .gain(settings, voice, bypass || self.registration.index.is_none());
+            if spectral_mode {
+                let mut input = [0.0; 2];
+                for (ch, sample) in frame.iter_mut().enumerate() {
+                    input[ch] = *sample;
+                }
+                if channels == 1.0 {
+                    input[1] = input[0];
+                }
+                spectral_settings.gain = gain;
+                let output = self.spectral.process(
+                    input,
+                    &self.registration.network,
+                    self.registration.slot().map(Arc::as_ref),
+                    mic,
+                    bypass,
+                    spectral_settings,
+                );
+                for (ch, sample) in frame.iter_mut().enumerate() {
+                    *sample = output[ch];
+                }
+            } else {
+                for sample in frame.iter_mut() {
+                    *sample *= gain;
+                }
             }
         }
         // Preserve events in empty buffers and any boundary events supplied by the host.

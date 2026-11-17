@@ -20,12 +20,19 @@ pub enum MicGroup {
     #[name = "Other"]
     #[id = "other"]
     Other,
+    #[name = "Drums"]
+    #[id = "drums"]
+    Drums,
 }
 
 #[derive(Params)]
 pub struct MicParams {
     #[id = "weight"]
     pub weight: FloatParam,
+    #[id = "sweight"]
+    pub spectral_weight: FloatParam,
+    #[id = "eqblend"]
+    pub eq_blend: FloatParam,
     #[id = "midich"]
     pub midi_channel: IntParam,
     #[id = "midicc"]
@@ -53,32 +60,30 @@ impl MicParams {
             .with_callback(Arc::new(move |_| {
                 reset.store(-1, Ordering::Relaxed);
             })),
-            midi_channel: IntParam::new(
-                "MIDI channel",
-                1,
-                IntRange::Linear { min: 0, max: 16 },
-            )
-            .with_value_to_string(Arc::new(|value| {
-                if value == 0 {
-                    "Off".into()
-                } else {
-                    value.to_string()
-                }
-            }))
-            .with_string_to_value(Arc::new(|value| {
-                let value = value.trim();
-                if value.eq_ignore_ascii_case("off") {
-                    Some(0)
-                } else {
-                    value.parse().ok()
-                }
-            })),
+            spectral_weight: float("Spectral weight", 0.0, -12.0, 12.0, " dB"),
+            eq_blend: float("EQ blend", 0.0, -100.0, 100.0, " %"),
+            midi_channel: IntParam::new("MIDI channel", 1, IntRange::Linear { min: 0, max: 16 })
+                .with_value_to_string(Arc::new(|value| {
+                    if value == 0 {
+                        "Off".into()
+                    } else {
+                        value.to_string()
+                    }
+                }))
+                .with_string_to_value(Arc::new(|value| {
+                    let value = value.trim();
+                    if value.eq_ignore_ascii_case("off") {
+                        Some(0)
+                    } else {
+                        value.parse().ok()
+                    }
+                })),
             midi_cc: IntParam::new(
                 "Weight CC",
                 20 + index as i32,
                 IntRange::Linear { min: 0, max: 119 },
             ),
-            group: EnumParam::new(&format!("Mic {} group", index + 1), MicGroup::Voice),
+            group: EnumParam::new(format!("Mic {} group", index + 1), MicGroup::Voice),
             midi_value,
             name: Mutex::new(format!("MIC {:02}", index + 1)),
         }
@@ -86,6 +91,10 @@ impl MicParams {
 
     pub fn is_voice(&self) -> bool {
         self.group.value() == MicGroup::Voice
+    }
+
+    pub fn is_drums(&self) -> bool {
+        self.group.value() == MicGroup::Drums
     }
 
     pub fn effective_weight(&self) -> f32 {
@@ -109,8 +118,34 @@ pub fn cc_weight(value: u8) -> f32 {
     }
 }
 
+#[derive(Enum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MixMode {
+    #[id = "gain"]
+    #[name = "Gain Sharing"]
+    GainSharing,
+    #[id = "spectral"]
+    #[name = "Gain + Spectral"]
+    SpectralSpace,
+}
+
 #[derive(Params)]
 pub struct SharedParams {
+    #[id = "mode"]
+    pub mode: EnumParam<MixMode>,
+    #[id = "samount"]
+    pub spectral_amount: FloatParam,
+    #[id = "scut"]
+    pub spectral_cut: FloatParam,
+    #[id = "slo"]
+    pub spectral_low: FloatParam,
+    #[id = "shi"]
+    pub spectral_high: FloatParam,
+    #[id = "satt"]
+    pub spectral_attack: FloatParam,
+    #[id = "srel"]
+    pub spectral_release: FloatParam,
+    #[id = "ssmooth"]
+    pub spectral_smooth: FloatParam,
     #[id = "amount"]
     pub amount: FloatParam,
     #[id = "cap"]
@@ -134,6 +169,14 @@ pub struct SharedParams {
 impl Default for SharedParams {
     fn default() -> Self {
         Self {
+            mode: EnumParam::new("Mix mode", MixMode::GainSharing).non_automatable(),
+            spectral_amount: float("Spectral duck amount", 100.0, 0.0, 100.0, " %"),
+            spectral_cut: float("Spectral max cut", 9.0, 0.0, 24.0, " dB"),
+            spectral_low: float("Spectral low frequency", 80.0, 20.0, 20000.0, " Hz"),
+            spectral_high: float("Spectral high frequency", 12000.0, 20.0, 20000.0, " Hz"),
+            spectral_attack: float("Spectral attack", 30.0, 5.0, 500.0, " ms"),
+            spectral_release: float("Spectral release", 250.0, 20.0, 2000.0, " ms"),
+            spectral_smooth: float("Spectral smoothing", 50.0, 0.0, 100.0, " %"),
             amount: float("Automix amount", 100.0, 0.0, 100.0, " %"),
             cap: float("Voice max gain reduction", 18.0, 0.0, 60.0, " dB"),
             other_cap: float("Other max gain reduction", 18.0, 0.0, 60.0, " dB"),
@@ -193,7 +236,7 @@ impl AutomixerParams {
         Self {
             auto_mic: AtomicU32::new(0),
             slot,
-            editor_state: ViziaState::new_screen_sized("Automixer", || (1120, 760)),
+            editor_state: ViziaState::new_screen_sized("Automixer", || (1120, 960)),
             mic: IntParam::new(
                 "This microphone (0 = Auto)",
                 0,
