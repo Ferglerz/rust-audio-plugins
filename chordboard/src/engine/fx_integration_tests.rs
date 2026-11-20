@@ -7,7 +7,7 @@ fn engine(mpe: bool) -> Engine {
         sample_rate: 1000.0,
         ..Engine::default()
     };
-    e.arp.data.midi_fx.harmonizer.enabled = true;
+    e.prepared.midi_fx.harmonizer.enabled = true;
     e.configure(
         Config {
             key_split: true,
@@ -40,6 +40,36 @@ fn notes(events: &[Out]) -> Vec<(u8, u8)> {
         .collect()
 }
 #[test]
+fn fx_engine_midi_eq_scales_melody_attacks_and_retains_releases() {
+    let mut e = engine(false);
+    let store = crate::arpeggiator::Store::new();
+    store.edit(|state| {
+        state.midi_fx.midi_eq.enabled = true;
+        state.midi_fx.midi_eq.bands[0] = Some(crate::midi_fx::MidiEqBand {
+            note: 72.0,
+            gain_db: -6.0206,
+            q: 4.0,
+        });
+    });
+    assert!(store.apply_pending(&mut e.prepared));
+    e.configure(e.host_config, &mut |_| {});
+
+    let events = on(&mut e, 72);
+    assert!(events.iter().any(|e| matches!(*e, Out::On(1, 72, v) if (v - 0.4).abs() < 1e-5)));
+    let events = on(&mut e, 127);
+    assert!(events.iter().any(|e| matches!(*e, Out::On(1, 127, v) if (v - 0.8).abs() < 0.001)));
+
+    let mut events = Vec::new();
+    store.edit(|s| s.midi_fx.midi_eq.bands[0].as_mut().unwrap().gain_db = 6.0);
+    assert!(store.apply_pending(&mut e.prepared));
+    e.configure(e.host_config, &mut |event| events.push(event));
+    assert!(events.iter().all(|event| !matches!(event, Out::On(..) | Out::Off(..))));
+    e.midi_note(false, 1, 72, 0.0, &mut |event| events.push(event));
+    assert!(events.contains(&Out::Off(1, 72, 0.0)));
+    assert!(on(&mut e, 72).contains(&Out::On(1, 72, 1.0)));
+}
+
+#[test]
 fn fx_engine_melody_harmonizes_and_releases_every_owned_note() {
     let mut e = engine(false);
     let events = on(&mut e, 72);
@@ -54,8 +84,8 @@ fn fx_engine_melody_harmonizes_and_releases_every_owned_note() {
 #[test]
 fn fx_engine_mpe_pool_expression_follows_input_across_opposite_zones() {
     let mut e = engine(true);
-    e.arp.data.midi_fx.voice_splitter.enabled = true;
-    e.arp.data.midi_fx.voice_splitter.sources = source::MELODY;
+    e.prepared.midi_fx.voice_splitter.enabled = true;
+    e.prepared.midi_fx.voice_splitter.sources = source::MELODY;
     e.configure(
         Config {
             upper: true,
@@ -67,8 +97,7 @@ fn fx_engine_mpe_pool_expression_follows_input_across_opposite_zones() {
     let assigned = notes(&events);
     assert_eq!(assigned.len(), 3);
     let masks = e
-        .arp
-        .data
+        .prepared
         .midi_fx
         .voice_splitter
         .pool_ranges(15, true)
@@ -110,7 +139,7 @@ fn fx_engine_last_bypass_rebuilds_held_notes_without_mpe_channel_collisions() {
     let mut e = engine(true);
     on(&mut e, 72);
     on(&mut e, 76);
-    e.arp.data.midi_fx.harmonizer.enabled = false;
+    e.prepared.midi_fx.harmonizer.enabled = false;
     let mut events = Vec::new();
     e.configure(e.host_config, &mut |v| events.push(v));
     e.advance(1, &mut |_, v| events.push(v));
@@ -127,10 +156,10 @@ fn fx_engine_last_bypass_rebuilds_held_notes_without_mpe_channel_collisions() {
 fn fx_engine_gate_is_block_size_independent_and_clears_on_stop() {
     fn setup() -> Engine {
         let mut e = engine(false);
-        e.arp.data.midi_fx.harmonizer.enabled = false;
-        e.arp.data.midi_fx.rhythm_gate.enabled = true;
-        e.arp.data.midi_fx.rhythm_gate.sources = source::MELODY;
-        e.arp.data.midi_fx.rhythm_gate.pattern.fill(1.0);
+        e.prepared.midi_fx.harmonizer.enabled = false;
+        e.prepared.midi_fx.rhythm_gate.enabled = true;
+        e.prepared.midi_fx.rhythm_gate.sources = source::MELODY;
+        e.prepared.midi_fx.rhythm_gate.pattern.fill(1.0);
         e.configure(e.host_config, &mut |_| {});
         e.midi_note(true, 1, 72, 0.8, &mut |_| {});
         e
@@ -155,11 +184,11 @@ fn fx_engine_gate_is_block_size_independent_and_clears_on_stop() {
 #[test]
 fn fx_engine_reorder_preserves_source_filters_and_releases_old_outputs() {
     let mut e = engine(false);
-    e.arp.data.midi_fx.rhythm_gate.enabled = true;
-    e.arp.data.midi_fx.rhythm_gate.sources = source::BASS;
+    e.prepared.midi_fx.rhythm_gate.enabled = true;
+    e.prepared.midi_fx.rhythm_gate.sources = source::BASS;
     on(&mut e, 72);
     let mut events = Vec::new();
-    e.arp.data.midi_fx.order = vec![
+    e.prepared.midi_fx.order = vec![
         MidiFxId::RhythmGate,
         MidiFxId::Harmonizer,
         MidiFxId::VoiceSplitter,

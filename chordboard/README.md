@@ -212,11 +212,15 @@ For the default lower zone with 15 members, Low uses channels **2–3**, Inner *
 
 These are filtered parts of one MPE zone, so master-channel expression is shared. Per-note bend, pressure and timbre remain independent. Pool exhaustion drops new attacks without borrowing another instrument's channels. Echoes and added harmony inherit their destination; an explicit Delay tap channel outside that destination's pool drops the echo. Pool changes release old outputs before reallocating. Hosts or receivers that cannot preserve channel filtering cannot use this three-instrument MPE routing arrangement.
 
+### MIDI EQ
+
+Click the graph to add a bell band. Drag it horizontally to change its center pitch or vertically to cut or boost velocity. Scroll over a band to adjust its width, or right-click to remove it. The summed curve applies velocity gain at each note's pitch, with 0 dB at unity. Gold bars show incoming MIDI note-on velocities before Chordboard's processing. MIDI EQ starts bypassed with all sources selected. Its rack position determines whether it shapes pitches from earlier effects, such as transposed Delay repeats.
+
 ## MIDI Delay
 
 Choose **MIDI FX** in the plugin header to open the global effects page; **Performance** returns to the performance controls. The tracker stays visible on both pages. MIDI Delay has its own module power button and one shared configuration for every row, with tails continuing through row and page changes. Source switches select Arp, Manual Strum, Chords, Bass, and Melody; Arp is selected initially, and delay power defaults off.
 
-The dotted grip spans the entire left edge of each FX module. Drag it vertically to reorder the stack; release commits the order and Escape cancels. Module order is saved with the project and defines processing order. Harmonizer, Rhythm Gate, Voice Splitter and MIDI Delay share the rack. Fresh racks use that order; existing projects retain their saved Delay position and gain the new modules bypassed. Older development saves load the new global delay with defaults; per-row delay settings are not migrated.
+The dotted grip spans the entire left edge of each FX module. Drag it vertically to reorder the stack. Release to commit, or press Escape to cancel. Module order is saved with the project and defines processing order. Fresh racks use Harmonizer, Rhythm Gate, Voice Splitter, MIDI Delay, and MIDI EQ in that order. Existing projects retain their saved module order and gain missing modules bypassed. Global delay starts with default settings in older development saves that used per-row delay.
 
 Delay time, echo velocity, feedback, ping pong, and input sources are always visible. Click the large **+** on the timeline to add up to eight taps after the latest tap. Click **×** underneath a tap to show **Are you sure?**, then click its check mark to delete it; Escape or another control cancels confirmation. At least one tap remains. Deleting a middle tap preserves every remaining tap’s timing and settings. Move a tap’s top handle sideways to change its time. Select Velocity, Feedback, Pitch, Fine Pitch, Pan, or Output Channel to edit vertically; painting, Shift ramps, and Cmd/Ctrl reset work like the arp lanes. Pitch offsets apply to every echo without accumulating.
 

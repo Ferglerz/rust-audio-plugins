@@ -42,53 +42,57 @@ impl StripView {
                 return;
             }
             if self.edit.is_some() {
-                match e {
-                    WindowEvent::CharInput(c) => {
-                        if !cx.modifiers().command() && c.is_ascii() && !c.is_control() {
-                            self.edit.as_mut().unwrap().insert(&c.to_string());
+                use pleasant_ui::readout::EditAction;
+
+                // Tab order depends on the currently visible plugin controls.
+                if matches!(e, WindowEvent::KeyDown(Code::Tab, _)) {
+                    self.advance_edit(cx);
+                    nih_plug_vizia::consume_window_event(cx, e, meta);
+                    cx.needs_redraw();
+                    return;
+                }
+                let action =
+                    pleasant_ui::readout::handle_edit(self.edit.as_mut().unwrap(), cx, e, (x, y));
+                match action {
+                    EditAction::Handled => {
+                        if matches!(e, WindowEvent::CharInput(_) | WindowEvent::KeyDown(_, _)) {
+                            nih_plug_vizia::consume_window_event(cx, e, meta);
                         }
+                        cx.needs_redraw();
+                        return;
+                    }
+                    EditAction::Cancel => {
+                        self.edit = None;
                         nih_plug_vizia::consume_window_event(cx, e, meta);
                         cx.needs_redraw();
                         return;
                     }
-                    WindowEvent::KeyDown(code, key) => {
-                        self.edit_key(cx, *code);
-                        // Some hosts deliver only KeyDown (empty characters / keyCode).
-                        let has_char = matches!(key, Some(Key::Character(_)));
-                        if !has_char && !cx.modifiers().command() {
-                            if let Some(c) = typed_char(*code, cx.modifiers().shift()) {
-                                self.edit.as_mut().unwrap().insert(&c.to_string());
-                            }
-                        }
-                        nih_plug_vizia::consume_window_event(cx, e, meta);
-                        cx.needs_redraw();
-                        return;
-                    }
-                    WindowEvent::MouseDown(MouseButton::Left) => {
-                        if inside(x, y, self.edit.as_ref().unwrap().rect) {
-                            self.edit.as_mut().unwrap().handle_mouse_down(x);
+                    EditAction::Commit => {
+                        let committed = self.commit_edit(cx);
+                        if matches!(e, WindowEvent::KeyDown(_, _)) {
+                            // Invalid Enter keeps the editor open for correction.
+                            nih_plug_vizia::consume_window_event(cx, e, meta);
                             cx.needs_redraw();
                             return;
                         }
-                        if !self.commit_edit(cx) {
+                        // Outside clicks discard invalid input and continue to
+                        // the underlying control after finishing this edit.
+                        if !committed {
                             self.edit = None;
                             cx.needs_redraw();
                         }
                     }
-                    WindowEvent::FocusOut => {
+                    EditAction::CommitAndContinue => {
                         if !self.commit_edit(cx) {
                             self.edit = None;
                         }
                     }
-                    WindowEvent::MouseDoubleClick(MouseButton::Left) => {
-                        self.edit.as_mut().unwrap().select_all();
-                        cx.needs_redraw();
-                        return;
-                    }
-                    WindowEvent::MouseDoubleClick(_)
-                    | WindowEvent::MouseScroll(_, _)
-                    | WindowEvent::MouseDown(_) => return,
-                    _ => {}
+                    EditAction::Blocked => match e {
+                        WindowEvent::MouseDoubleClick(_)
+                        | WindowEvent::MouseScroll(_, _)
+                        | WindowEvent::MouseDown(_) => return,
+                        _ => {}
+                    },
                 }
             }
             match e {
@@ -146,7 +150,7 @@ impl StripView {
                             cx.needs_redraw();
                             return;
                         }
-                        self.drag = Some(Target::Global(15));
+                        self.drag = Some(Target::Global(GlobalControl::Output));
                         self.down = (x, y);
                         self.last_drag = (x, y);
                         cx.capture();
@@ -154,7 +158,7 @@ impl StripView {
                         let bar_x = r.0 + 8.0;
                         let bar_w = r.2 - 16.0;
                         let norm = ((x - bar_x) / bar_w).clamp(0.0, 1.0);
-                        let p = self.param(15);
+                        let p = self.param(GlobalControl::Output);
                         cx.emit(RawParamEvent::BeginSetParameter(p.as_ptr()));
                         cx.emit(RawParamEvent::SetParameterNormalized(p.as_ptr(), norm));
                         cx.needs_redraw();
@@ -349,7 +353,7 @@ impl StripView {
                             (r.0 - 10.0, r.1 - 10.0, r.2 + gr.2 + 20.0, r.3 + 20.0),
                         ) && *dy != 0.0
                         {
-                            let p = self.param(0);
+                            let p = self.param(GlobalControl::Compression);
                             let cur = p.unmodulated_normalized_value();
                             let norm = (cur - *dy * 0.02).clamp(0.0, 1.0);
                             cx.emit(RawParamEvent::SetParameterNormalized(p.as_ptr(), norm));
@@ -367,7 +371,8 @@ impl StripView {
                             let p = self.param(i);
                             let cur = p.unmodulated_normalized_value();
                             let norm =
-                                (cur + *dy * if i == 0 { -0.03 } else { 0.03 }).clamp(0.0, 1.0);
+                                (cur + *dy * if i == GlobalControl::Compression { -0.03 } else { 0.03 })
+                                    .clamp(0.0, 1.0);
                             cx.emit(RawParamEvent::SetParameterNormalized(p.as_ptr(), norm));
                             cx.needs_redraw();
                             return;
@@ -430,5 +435,199 @@ impl StripView {
                 _ => {}
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod readout_tests {
+    use super::*;
+    use nih_plug_vizia::vizia::backend::BackendContext;
+
+    fn context() -> (Context, Entity) {
+        let mut cx = Context::default();
+        let target = Element::new(&mut cx).entity();
+        BackendContext::new(&mut cx)
+            .cache()
+            .set_bounds(target, BoundingBox::from_min_max(0.0, 0.0, UI_W, UI_H));
+        (cx, target)
+    }
+
+    fn send(
+        view: &mut StripView,
+        cx: &mut Context,
+        target: Entity,
+        point: (f32, f32),
+        event: WindowEvent,
+    ) {
+        let mut backend = BackendContext::new_with_event_manager(cx);
+        backend.emit_origin(WindowEvent::MouseMove(point.0, point.1));
+        backend.process_events();
+        view.handle_event(
+            &mut EventContext::new_with_current(cx, target),
+            &mut Event::new(event),
+        );
+        BackendContext::new_with_event_manager(cx).process_events();
+    }
+
+    fn invalid_edit(view: &mut StripView) {
+        let mut edit = ValueEdit::new(ValueTarget::Global(GlobalControl::Compression), (10.0, 10.0, 80.0, 20.0), "0".into());
+        edit.insert("invalid");
+        view.edit = Some(edit);
+    }
+
+    #[test]
+    fn readout_invalid_enter_and_tab_stay_open_but_focus_loss_discards() {
+        let mut view = super::super::tests::layout::test_view();
+        let (mut cx, target) = context();
+        invalid_edit(&mut view);
+        for key in [Code::Enter, Code::Tab] {
+            send(
+                &mut view,
+                &mut cx,
+                target,
+                (15.0, 15.0),
+                WindowEvent::KeyDown(key, None),
+            );
+            let edit = view.edit.as_ref().unwrap();
+            assert!(edit.invalid);
+            assert_eq!(edit.target, ValueTarget::Global(GlobalControl::Compression));
+        }
+        view.drag = Some(Target::Value(ValueTarget::Global(GlobalControl::Compression)));
+        send(
+            &mut view,
+            &mut cx,
+            target,
+            (15.0, 15.0),
+            WindowEvent::FocusOut,
+        );
+        assert!(view.edit.is_none());
+        assert!(
+            view.drag.is_none(),
+            "focus loss must continue through drag cleanup"
+        );
+    }
+
+    #[test]
+    fn readout_outside_click_discards_invalid_text_and_activates_underlying_control() {
+        let mut view = super::super::tests::layout::test_view();
+        let (mut cx, target) = context();
+        invalid_edit(&mut view);
+        let rect = view.dyn_cog_button_rect();
+        send(
+            &mut view,
+            &mut cx,
+            target,
+            (rect.0 + rect.2 * 0.5, rect.1 + rect.3 * 0.5),
+            WindowEvent::MouseDown(MouseButton::Left),
+        );
+        assert!(view.edit.is_none());
+        assert_eq!(view.dyn_page.get(), DynPage::Controls);
+    }
+
+    #[test]
+    fn readout_tab_order_and_character_delivery_preserve_local_editing_policy() {
+        let mut view = super::super::tests::layout::test_view();
+        let (mut cx, target) = context();
+        view.start_edit(
+            &mut EventContext::new_with_current(&mut cx, target),
+            ValueTarget::Global(GlobalControl::Compression),
+            (10.0, 10.0, 80.0, 20.0),
+        );
+        send(
+            &mut view,
+            &mut cx,
+            target,
+            (15.0, 15.0),
+            WindowEvent::KeyDown(Code::Tab, None),
+        );
+        assert_eq!(view.edit.as_ref().unwrap().target, ValueTarget::Global(GlobalControl::Gate));
+        BackendContext::new(&mut cx)
+            .modifiers()
+            .set(Modifiers::SHIFT, true);
+        send(
+            &mut view,
+            &mut cx,
+            target,
+            (15.0, 15.0),
+            WindowEvent::KeyDown(Code::Tab, None),
+        );
+        assert_eq!(view.edit.as_ref().unwrap().target, ValueTarget::Global(GlobalControl::Compression));
+        BackendContext::new(&mut cx)
+            .modifiers()
+            .set(Modifiers::SHIFT, false);
+        let original = view.edit.as_ref().unwrap().text.clone();
+        send(
+            &mut view,
+            &mut cx,
+            target,
+            (15.0, 15.0),
+            WindowEvent::KeyDown(Code::Digit3, Some(Key::Character("3".into()))),
+        );
+        assert_eq!(view.edit.as_ref().unwrap().text, original);
+        send(
+            &mut view,
+            &mut cx,
+            target,
+            (15.0, 15.0),
+            WindowEvent::CharInput('3'),
+        );
+        send(
+            &mut view,
+            &mut cx,
+            target,
+            (15.0, 15.0),
+            WindowEvent::KeyDown(Code::Digit4, None),
+        );
+        assert_eq!(view.edit.as_ref().unwrap().text, "34");
+        send(
+            &mut view,
+            &mut cx,
+            target,
+            (15.0, 15.0),
+            WindowEvent::KeyDown(Code::Escape, None),
+        );
+        assert!(view.edit.is_none());
+    }
+
+    #[test]
+    fn readout_press_distinguishes_click_drag_and_cancellation() {
+        let point = (15.0, 15.0);
+        for ending in [
+            WindowEvent::MouseUp(MouseButton::Left),
+            WindowEvent::MouseMove(25.0, 15.0),
+            WindowEvent::FocusOut,
+        ] {
+            let mut view = super::super::tests::layout::test_view();
+            let (mut cx, target) = context();
+            view.press_value(
+                &mut EventContext::new_with_current(&mut cx, target),
+                ValueTarget::Global(GlobalControl::Compression),
+                (10.0, 10.0, 80.0, 20.0),
+                point,
+            );
+            let dragging = matches!(ending, WindowEvent::MouseMove(_, _));
+            let clicking = matches!(ending, WindowEvent::MouseUp(_));
+            send(
+                &mut view,
+                &mut cx,
+                target,
+                if dragging { (25.0, 15.0) } else { point },
+                ending,
+            );
+            assert!(view.value_press.is_none());
+            assert_eq!(view.edit.is_some(), clicking);
+            assert_eq!(view.drag.is_some(), dragging);
+            if dragging {
+                assert_eq!(view.down, point);
+                send(
+                    &mut view,
+                    &mut cx,
+                    target,
+                    (25.0, 15.0),
+                    WindowEvent::MouseUp(MouseButton::Left),
+                );
+                assert!(view.drag.is_none());
+            }
+        }
     }
 }

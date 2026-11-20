@@ -226,7 +226,7 @@ impl ChordboardView {
                 (TEMPO_SYNC, false),
             ]);
             targets.extend(
-                self.base_controls()
+                self.base_control_summaries()
                     .into_iter()
                     .filter(|(_, r)| r.1 < HEADER_H)
                     .map(|(c, r)| (r, c.toggle && c.norm >= 0.5)),
@@ -273,7 +273,7 @@ impl ChordboardView {
         if let Some(panel) = self.panel {
             targets.push((self.panel_close_rect(panel), false));
             targets.extend(
-                self.panel_controls()
+                self.panel_control_summaries()
                     .iter()
                     .map(|(c, r)| (*r, c.toggle && c.norm >= 0.5)),
             );
@@ -356,7 +356,7 @@ impl ChordboardView {
             strum_bypass_rect(self.expand_t()),
             self.params.strum_enabled.value(),
         ));
-        targets.extend(self.base_controls().iter().map(|(c, r)| {
+        targets.extend(self.base_control_summaries().iter().map(|(c, r)| {
             (
                 *r,
                 if c.id == "bass_split" {
@@ -463,7 +463,19 @@ impl ChordboardView {
     }
 
     pub(super) fn button(&self, d: &mut Draw, r: Rect, label: &str, on: bool, color: Color) {
-        self.paint_button(d, r, label, on, color, None);
+        self.button_at(d, r, r, label, on, color);
+    }
+
+    pub(super) fn button_at(
+        &self,
+        d: &mut Draw,
+        r: Rect,
+        motion_rect: Rect,
+        label: &str,
+        on: bool,
+        color: Color,
+    ) {
+        self.paint_button(d, (r, motion_rect), label, on, color, None);
     }
 
     pub(super) fn draw_power_switch(
@@ -497,7 +509,7 @@ impl ChordboardView {
     }
 
     pub(super) fn touch_latch_button(&self, d: &mut Draw, r: Rect, on: bool, color: Color) {
-        self.paint_button(d, r, "", on, color, Some(Icon::Touch));
+        self.paint_button(d, (r, r), "", on, color, Some(Icon::Touch));
     }
 
     pub(super) fn icon_button(
@@ -509,19 +521,21 @@ impl ChordboardView {
         color: Color,
         icon: Icon,
     ) {
-        self.paint_button(d, r, label, on, color, Some(icon));
+        self.paint_button(d, (r, r), label, on, color, Some(icon));
     }
 
     pub(super) fn button_surface(&self, d: &mut Draw, r: Rect, on: bool, color: Color) {
-        let motion_rect = if self.fx_ui.open
-            && !self.quick_midi.show
-            && self.menu.is_none()
-            && hit(midi_fx::DELAY_SURFACE, r.0, r.1)
-        {
-            self.fx_delay_screen_rect(r)
-        } else {
-            r
-        };
+        self.button_surface_at(d, r, r, on, color);
+    }
+
+    pub(super) fn button_surface_at(
+        &self,
+        d: &mut Draw,
+        r: Rect,
+        motion_rect: Rect,
+        on: bool,
+        color: Color,
+    ) {
         let hover = self.hover_amount(motion_rect);
         let selected = self
             .motion
@@ -586,19 +600,19 @@ impl ChordboardView {
     fn paint_button(
         &self,
         d: &mut Draw,
-        r: Rect,
+        (r, motion_rect): (Rect, Rect),
         label: &str,
         on: bool,
         color: Color,
         icon: Option<Icon>,
     ) {
-        self.button_surface(d, r, on, color);
+        self.button_surface_at(d, r, motion_rect, on, color);
         let (r, label) = self.button_content(d, r, label);
         let old = d.font;
         d.font = self.font.get();
         let label_color = if on {
             color
-        } else if self.hover_amount(r) > 0.0 {
+        } else if self.hover_amount(motion_rect) > 0.0 {
             TEXT
         } else {
             MUTED

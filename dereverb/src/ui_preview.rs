@@ -94,6 +94,7 @@ fn render_editor_preview() {
         params: Arc::new(params),
         shared,
         font: Cell::new(Some(font)),
+        label_font: Cell::new(None),
         hover: None,
         drag: None,
         curve_drag: None,
@@ -101,15 +102,20 @@ fn render_editor_preview() {
         press: None,
         edit: None,
     };
-    for (light, name, scale, engine) in [
-        (false, "dark", 1.0, EngineKind::DpdfNet),
-        (true, "light", 1.5, EngineKind::DpdfNet),
-        (false, "wpe-dark", 1.0, EngineKind::NaraWpe),
-        (true, "wpe-light", 1.5, EngineKind::NaraWpe),
-        (false, "dtln-dark", 1.0, EngineKind::Dtln),
+    for (light, name, scale, engine, inspecting) in [
+        (false, "dark", 1.0, EngineKind::DpdfNet, false),
+        (true, "light", 1.5, EngineKind::DpdfNet, false),
+        (false, "wpe-dark", 1.0, EngineKind::NaraWpe, false),
+        (true, "wpe-light", 1.5, EngineKind::NaraWpe, false),
+        (false, "dtln-dark", 1.0, EngineKind::Dtln, false),
+        (false, "lens-dark-100", 1.0, EngineKind::NaraWpe, true),
+        (true, "lens-light-100", 1.0, EngineKind::NaraWpe, true),
+        (false, "lens-dark-75", 0.75, EngineKind::NaraWpe, true),
+        (true, "lens-light-75", 0.75, EngineKind::NaraWpe, true),
     ] {
         Arc::get_mut(&mut view.params).unwrap().engine = EnumParam::new("Engine", engine);
         view.shared.engine.store(engine as u32, Ordering::Relaxed);
+        view.hover = inspecting.then_some((GRAPH.0 + GRAPH.2 * 0.64, GRAPH.1 + GRAPH.3 * 0.5));
         let width = (SIZE.0 * scale) as u32;
         let height = (SIZE.1 * scale) as u32;
         canvas.set_size(width, height, 1.0);

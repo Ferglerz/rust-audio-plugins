@@ -2,25 +2,45 @@ use super::*;
 
 impl FlatteryView {
     pub(super) fn render(&self, cx: &mut DrawContext, canvas: &mut Canvas) {
-        let bounds = cx.bounds();
+        self.paint_editor(canvas, cx.bounds(), prefs().light(), prefs().label());
+    }
+
+    pub(super) fn paint_editor(
+        &self,
+        canvas: &mut Canvas,
+        bounds: BoundingBox,
+        light: bool,
+        appearance: &str,
+    ) {
+        if bounds.w <= 0.0 || bounds.h <= 0.0 {
+            return;
+        }
         load_font_once(canvas, &self.font, FONT_JETBRAINS_MONO);
+        let label_font = load_font_once(
+            canvas,
+            &self.label_font,
+            nih_plug_vizia::assets::fonts::NOTO_SANS_REGULAR,
+        );
 
         let mut d = Draw::new(
             canvas,
-            prefs().light(),
+            light,
             bounds.w / WINDOW_W,
             bounds.x,
             bounds.y,
             self.font.get(),
         )
         .with_hover(self.idle_hover());
+        d.with_readable_style(label_font, |d| self.paint(d, appearance));
+    }
 
+    fn paint(&self, d: &mut Draw, appearance: &str) {
         d.rounded_rect(0.0, 0.0, WINDOW_W, WINDOW_H, 0.0, BG);
         d.rounded_rect(0.0, 0.0, WINDOW_W, HEADER_HEIGHT, 0.0, PANEL);
         d.text(36.0, 44.0, "FLATTERY", 24.0, GOLD);
-        d.text(192.0, 44.0, "SPECTRAL LEVELER & SHAPER", 13.0, TEXT);
+        d.with_label_font(|d| d.text(192.0, 44.0, "Spectral leveler & shaper", 13.0, TEXT));
 
-        d.appearance_button(THEME_BUTTON, prefs().label());
+        d.appearance_button(THEME_BUTTON, appearance);
 
         let module = (
             16.0,
@@ -28,11 +48,13 @@ impl FlatteryView {
             WINDOW_W - 32.0,
             WINDOW_H - HEADER_HEIGHT - 32.0,
         );
-        d.rounded_rect(module.0, module.1, module.2, module.3, 6.0, PANEL);
-        d.outline(module, LINE);
+        d.panel(module, PANEL, LINE);
 
         let srate = self.shared.sample_rate.load(Ordering::Relaxed) as f64;
         let fft_size = self.params.fft_size.value().size();
+        let bin_hz = srate / fft_size as f64;
+        let bypassed =
+            self.params.bypass.value() || self.shared.is_bypassed.load(Ordering::Relaxed);
         let mut layout = self.layout;
         layout.set_view(
             self.params.max_boost_db.value(),
@@ -42,13 +64,13 @@ impl FlatteryView {
             self.graph_zoomed,
         );
 
-        layout.draw_background(&mut d, fft_size, srate);
+        layout.draw_background(d, fft_size, srate);
         layout.draw_limit_shade(
-            &mut d,
+            d,
             self.params.max_boost_db.value(),
             self.params.max_cut_db.value(),
         );
-        layout.draw_grid_and_labels(&mut d, self.selected.is_none());
+        layout.draw_grid_and_labels(d, self.selected.is_none());
 
         let low_cut = self.params.low_cut_hz.value() as f64;
         let high_cut = self.params.high_cut_hz.value() as f64;
@@ -58,21 +80,33 @@ impl FlatteryView {
         let cut_pct = self.params.strength_cut.value();
 
         layout.draw_operate_window(
-            &mut d,
+            d,
             self.params.min_operate_db.value() as f64,
             self.params.max_operate_db.value() as f64,
         );
 
-        if let Ok(mags) = self.shared.spectrum_mags_db.read() {
-            layout.draw_spectrum(&mut d, &mags, fft_size, srate, low_cut, high_cut);
-        }
+        let (zoom_in, zoom_out) = self.zoom_button_rects(&layout);
+        let over =
+            |rect: (f32, f32, f32, f32)| d.hover.is_some_and(|(x, y)| Self::inside(x, y, rect));
+        let hover_in = zoom_in.is_some_and(over);
+        let hover_out = zoom_out.is_some_and(over);
+        let probe_x = self.probe_x(&layout, hover_in || hover_out);
+        let reading = {
+            let mut display = self.display.borrow_mut();
+            display.refresh(&self.shared, fft_size, srate);
+            layout.draw_spectrum(d, &display.spectrum, bin_hz, low_cut, high_cut);
+            if !bypassed {
+                layout.draw_filter_gains(d, &display.filters, fft_size, srate, low_cut, high_cut);
+            }
+            probe_x.and_then(|x| display.reading(&layout, x, fft_size, bin_hz, bypassed))
+        };
 
-        if let Ok(filters) = self.shared.filter_display.read() {
-            layout.draw_filter_gains(&mut d, &filters, fft_size, srate, low_cut, high_cut);
+        if let Some(reading) = &reading {
+            reading.paint(d, &layout);
         }
 
         layout.draw_max_handles(
-            &mut d,
+            d,
             max_boost,
             max_cut,
             low_cut,
@@ -83,11 +117,6 @@ impl FlatteryView {
 
         let boost_nodes = snapshot_nodes(&self.params, Polarity::Boost);
         let cut_nodes = snapshot_nodes(&self.params, Polarity::Cut);
-        let bin_hz = if fft_size == 0 || srate <= 0.0 {
-            0.0
-        } else {
-            srate / fft_size as f64
-        };
         if let Some((polarity, id)) = self.selected {
             let (nodes, mut tint) = match polarity {
                 Polarity::Boost => (&boost_nodes, COLOR_BOOST),
@@ -95,7 +124,7 @@ impl FlatteryView {
             };
             if let Some(node) = nodes.iter().find(|node| node.id == id) {
                 tint.a = 0.09;
-                layout.draw_radius_bins(&mut d, std::slice::from_ref(node), bin_hz, tint);
+                layout.draw_radius_bins(d, std::slice::from_ref(node), bin_hz, tint);
             }
         }
         let selected_boost =
@@ -107,7 +136,7 @@ impl FlatteryView {
 
         d.scissor(layout.gx, layout.gy, layout.gw, layout.gh);
         layout.draw_strength_curve(
-            &mut d,
+            d,
             &boost_nodes,
             Polarity::Boost,
             boost_pct,
@@ -120,7 +149,7 @@ impl FlatteryView {
             selected_boost,
         );
         layout.draw_strength_curve(
-            &mut d,
+            d,
             &cut_nodes,
             Polarity::Cut,
             cut_pct,
@@ -150,14 +179,14 @@ impl FlatteryView {
                     Polarity::Cut => COLOR_CUT_HOVER,
                 };
                 layout.draw_strength_node(
-                    &mut d, polarity, pct, &preview, stroke, false, low_cut, high_cut, 0.55,
+                    d, polarity, pct, &preview, stroke, false, low_cut, high_cut, 0.55,
                 );
             }
         }
         d.reset_scissor();
 
         layout.draw_strength_handle(
-            &mut d,
+            d,
             Polarity::Boost,
             boost_pct,
             self.hover_strength == Some(Polarity::Boost)
@@ -170,7 +199,7 @@ impl FlatteryView {
                 ),
         );
         layout.draw_strength_handle(
-            &mut d,
+            d,
             Polarity::Cut,
             cut_pct,
             self.hover_strength == Some(Polarity::Cut)
@@ -190,7 +219,7 @@ impl FlatteryView {
             || (self.drag.is_none() && !hide_max_grab && self.hover_max_cut);
         if show_boost_grab {
             layout.draw_line_grab(
-                &mut d,
+                d,
                 self.mouse.0,
                 layout.db_to_y(max_boost as f64),
                 COLOR_BOOST_HOVER,
@@ -198,7 +227,7 @@ impl FlatteryView {
         }
         if show_cut_grab {
             layout.draw_line_grab(
-                &mut d,
+                d,
                 self.mouse.0,
                 layout.db_to_y(-(max_cut as f64)),
                 COLOR_CUT_HOVER,
@@ -206,37 +235,19 @@ impl FlatteryView {
         }
 
         layout.draw_cut_handles(
-            &mut d,
+            d,
             low_cut,
             high_cut,
             self.hover_low_cut,
             self.hover_high_cut,
         );
 
-        let (zoom_in, zoom_out) = self.zoom_button_rects(&layout);
         let can_zoom_in = self.zoom_would_tighten(&layout);
-        let cluster_left = zoom_out
-            .or(zoom_in)
-            .map(|r| r.0)
-            .unwrap_or(layout.gx + layout.gw);
         if let Some(r) = zoom_in {
-            let hot = can_zoom_in
-                && self
-                    .idle_hover()
-                    .is_some_and(|(hx, hy)| Self::inside(hx, hy, r));
-            d.graph_zoom_button(r, true, hot, can_zoom_in);
-            if hot {
-                d.text_right(cluster_left - 6.0, r.1 + 15.0, "Zoom to area", 10.0, MUTED);
-            }
+            d.graph_zoom_button(r, true, hover_in && can_zoom_in, can_zoom_in);
         }
         if let Some(r) = zoom_out {
-            let hot = self
-                .idle_hover()
-                .is_some_and(|(hx, hy)| Self::inside(hx, hy, r));
-            d.graph_zoom_button(r, false, hot, true);
-            if hot {
-                d.text_right(cluster_left - 6.0, r.1 + 15.0, "Reset zoom", 10.0, MUTED);
-            }
+            d.graph_zoom_button(r, false, hover_out, true);
         }
 
         let fft_rect = self.fft_button_rect();
@@ -249,17 +260,18 @@ impl FlatteryView {
 
         for &id in STACKED_SLIDERS {
             let r = Self::slider_rect(id);
+            let knob = KnobLayout::new(r).with_text_sizes(READABLE_LABEL_SIZE, 13.0);
             let (label, val_str, color) = self.slider_info(id);
             let n = self.get_slider_norm(id);
             let val_r = Self::knob_value_rect(id);
             if let Some(edit) = &self.edit {
                 if edit.target == id {
-                    d.knob(r, label, "", n, color, self.params.bypass.value());
+                    d.knob_with_layout(&knob, label, "", n, color, bypassed);
                     d.value_edit(edit, color);
                     continue;
                 }
             }
-            d.knob(r, label, &val_str, n, color, self.params.bypass.value());
+            d.knob_with_layout(&knob, label, &val_str, n, color, bypassed);
             if self.edit.is_none() {
                 if let Some((hx, hy)) = self.idle_hover() {
                     if Self::inside(hx, hy, val_r) {
@@ -278,17 +290,17 @@ impl FlatteryView {
         let (label, val_str, color) = self.slider_info(SliderId::OutputGain);
         let n = self.get_slider_norm(SliderId::OutputGain);
         let val_r = Self::output_knob_value_rect();
-        let bypassed = self.params.bypass.value();
+        let knob = KnobLayout::new(knob_r).with_text_sizes(READABLE_LABEL_SIZE, 13.0);
 
         if let Some(edit) = &self.edit {
             if edit.target == SliderId::OutputGain {
-                d.knob_bipolar(knob_r, label, "", n, color, bypassed);
+                d.knob_with_layout_bipolar(&knob, label, "", n, color, bypassed);
                 d.value_edit(edit, color);
             } else {
-                d.knob_bipolar(knob_r, label, &val_str, n, color, bypassed);
+                d.knob_with_layout_bipolar(&knob, label, &val_str, n, color, bypassed);
             }
         } else {
-            d.knob_bipolar(knob_r, label, &val_str, n, color, bypassed);
+            d.knob_with_layout_bipolar(&knob, label, &val_str, n, color, bypassed);
             if self.edit.is_none() {
                 if let Some((hx, hy)) = self.idle_hover() {
                     if Self::inside(hx, hy, val_r) {
@@ -309,14 +321,16 @@ impl FlatteryView {
                 let n = self.get_slider_norm(id);
                 let val_r = slider_value_rect(r);
                 let baseline = r.1 + 16.0;
-                d.text(r.0 + 8.0, baseline, label, 15.0, MUTED);
+                d.with_label_font(|d| {
+                    d.text(r.0 + 8.0, baseline, label, READABLE_LABEL_SIZE, MUTED)
+                });
                 let editing = self.edit.as_ref().is_some_and(|edit| edit.target == id);
                 if editing {
                     if let Some(edit) = &self.edit {
                         d.value_edit(edit, color);
                     }
                 } else {
-                    d.text_centered(val_r.0 + val_r.2 * 0.5, baseline, &val_str, 15.0, color);
+                    d.text_centered(val_r.0 + val_r.2 * 0.5, baseline, &val_str, 13.0, TEXT);
                     if let Some((hx, hy)) = self.idle_hover() {
                         if Self::inside(hx, hy, val_r) {
                             d.value_underline(val_r, baseline, color);
@@ -330,5 +344,46 @@ impl FlatteryView {
                 d.rect(bar_x, bar_y, bar_w * n.clamp(0.0, 1.0), 5.0, color);
             }
         }
+
+        let footer_y = WINDOW_H - 23.0;
+        if let Some(reading) = reading {
+            reading.paint_footer(d, GRAPH_X, footer_y);
+        } else {
+            let hint = if hover_in && can_zoom_in {
+                "Zoom to the processing range."
+            } else if hover_out {
+                "Reset graph zoom."
+            } else if self.edit.is_some() {
+                "Enter applies the value. Escape cancels."
+            } else if probe_x.is_some() {
+                "No analysis at this frequency."
+            } else if bypassed {
+                "Bypassed · Input analysis is still visible."
+            } else {
+                "Hover the graph to inspect input level and applied filter gain."
+            };
+            d.with_label_font(|d| d.text(GRAPH_X, footer_y, hint, READABLE_LABEL_SIZE, MUTED));
+        }
+    }
+
+    fn probe_x(&self, layout: &GraphLayout, over_zoom: bool) -> Option<f32> {
+        let (x, y) = self.idle_hover()?;
+        if over_zoom
+            || self.edit.is_some()
+            || self.value_press.is_some()
+            || self.hover_node.is_some()
+            || self.hover_curve.is_some()
+            || self.hover_strength.is_some()
+            || self.hover_low_cut
+            || self.hover_high_cut
+            || self.hover_max_boost
+            || self.hover_max_cut
+            || !layout.in_graph(x, y)
+            || layout.hit_op_min(x, y, self.params.min_operate_db.value())
+            || layout.hit_op_max(x, y, self.params.max_operate_db.value())
+        {
+            return None;
+        }
+        Some(x)
     }
 }

@@ -1,6 +1,6 @@
 use crate::{
     network::{self, Network, CAPACITY},
-    params::{AutomixerParams, MicGroup, MixMode},
+    params::{AutomixerParams, MicGroup},
 };
 use nih_plug::prelude::*;
 use nih_plug_vizia::{
@@ -10,14 +10,13 @@ use nih_plug_vizia::{
     ViziaTheming,
 };
 use pleasant_ui::{
-    draw::{Draw, EditorViewport},
-    load_font_once, param,
+    draw::{Draw, EditorViewport, KnobLayout},
+    load_font_once, param, point_in_rect,
     pointer::ValuePress,
-    point_in_rect,
     readout::{self, EditAction, PressAction},
     start_frame_timer,
     value_edit::ValueEdit,
-    FONT_JETBRAINS_MONO, GOLD, LINE, MUTED, PANEL, TEAL, TEXT,
+    with_alpha, BG, FONT_JETBRAINS_MONO, GOLD, LINE, MUTED, PANEL, TEAL, TEXT,
 };
 use std::{
     cell::Cell,
@@ -25,20 +24,24 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod pulls;
+use pulls::PullMotion;
+
 type Rect = (f32, f32, f32, f32);
 const SIZE: (f32, f32) = (1120.0, 960.0);
 const THEME: Rect = (1016.0, 17.0, 72.0, 30.0);
 const PAGE_PREV: Rect = (848.0, 17.0, 28.0, 28.0);
 const PAGE_NEXT: Rect = (968.0, 17.0, 28.0, 28.0);
-const PRIMARY_Y: f32 = 76.0;
 const CONTROL_H: f32 = 58.0;
 const SETUP_Y: f32 = 810.0;
-const STRIPS_TOP: f32 = 216.0;
-const SPECTRAL_SETUP_BUTTON: Rect = (1050.0, 156.0, 38.0, 38.0);
+const MODULE_Y: f32 = 72.0;
+const MODULE_H: f32 = 124.0;
+const GAIN_MODULE: Rect = (24.0, MODULE_Y, 528.0, MODULE_H);
+const SPECTRAL_MODULE: Rect = (568.0, MODULE_Y, 528.0, MODULE_H);
+const STRIPS_TOP: f32 = 208.0;
+const STATUS: Rect = (248.0, 14.0, 580.0, 40.0);
 
 const STRIP_BOTTOM: f32 = 748.0;
-const SETUP_BUTTON: Rect = (1050.0, 86.0, 38.0, 38.0);
-const MODE_BUTTON: Rect = (240.0, 17.0, 220.0, 30.0);
 const PER_PAGE: usize = 8;
 const NAME_LINE: usize = 14;
 const NAME_LIMIT: usize = NAME_LINE * 2;
@@ -67,26 +70,29 @@ struct StripLayout {
 impl StripLayout {
     fn new(strip: Rect, _local: bool) -> Self {
         let bottom = strip.1 + strip.3;
-        let eq_blend = (strip.0 + 8.0, bottom - 60.0, strip.2 - 16.0, 52.0);
-        let spectral_weight = (strip.0 + 8.0, bottom - 116.0, strip.2 - 16.0, 52.0);
-        let weight = (strip.0 + 8.0, bottom - 172.0, strip.2 - 16.0, 52.0);
-        let group = (strip.0 + 8.0, weight.1 - 32.0, strip.2 - 16.0, 26.0);
-        let midi = (strip.0 + 8.0, group.1 - 28.0, strip.2 - 16.0, 24.0);
-        let bypass = (strip.0 + strip.2 - 30.0, midi.1 - 28.0, 22.0, 22.0);
+        let knob_h = 96.0;
+        let knob_w = (strip.2 - 22.0) * 0.5;
+        let weight = (strip.0 + 8.0, bottom - 8.0 - knob_h, knob_w, knob_h);
+        let spectral_weight = (weight.0 + knob_w + 6.0, weight.1, knob_w, knob_h);
+        let midi = (strip.0 + 8.0, weight.1 - 28.0, strip.2 - 16.0, 24.0);
+        let group = (strip.0 + 8.0, midi.1 - 30.0, strip.2 - 16.0, 26.0);
+        let bypass = (strip.0 + strip.2 - 30.0, group.1 - 26.0, 22.0, 22.0);
         let speech = (strip.0 + 8.0, bypass.1, bypass.0 - strip.0 - 12.0, 22.0);
         let mut y = strip.1 + 8.0;
-        let this_mic = (strip.0 + 6.0, y, strip.2 - 12.0, 16.0);
-        let mic_label = this_mic;
+        let mic_label = (strip.0 + 6.0, y, strip.2 - 12.0, 16.0);
         y += 16.0;
         let name = (strip.0 + 6.0, y, strip.2 - 12.0, 34.0);
         y += 36.0;
         let meta = (strip.0 + 6.0, y, strip.2 - 12.0, 16.0);
-        y += 18.0;
+        y += 20.0;
+        let eq_blend = (strip.0 + 8.0, y, strip.2 - 16.0, 52.0);
+        y += 58.0;
+        let meters_y = y + 70.0 + 6.0;
         let meters = (
             strip.0 + 8.0,
-            y,
+            meters_y,
             strip.2 - 16.0,
-            (speech.1 - 8.0 - y).max(48.0),
+            (speech.1 - 8.0 - meters_y).max(48.0),
         );
         Self {
             mic_label,
@@ -103,16 +109,25 @@ impl StripLayout {
         }
     }
 
-    fn spectrum(&self) -> Rect {
-        (self.meters.0, self.meters.1, self.meters.2, 70.0)
-    }
-
-    fn spectral_meters(&self) -> Rect {
+    fn meter_rect(&self, spectral: bool) -> Rect {
+        if spectral {
+            return self.meters;
+        }
+        let top = self.spectrum().1;
         (
             self.meters.0,
-            self.meters.1 + 78.0,
+            top,
             self.meters.2,
-            self.meters.3 - 78.0,
+            self.meters.1 + self.meters.3 - top,
+        )
+    }
+
+    fn spectrum(&self) -> Rect {
+        (
+            self.eq_blend.0,
+            self.eq_blend.1 + self.eq_blend.3 + 6.0,
+            self.eq_blend.2,
+            70.0,
         )
     }
 }
@@ -163,7 +178,7 @@ pleasant_ui::appearance_store!("Automixer");
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Control {
-    Amount,
+    Strength,
     SpectralBlend(usize),
     SpectralWeight(usize),
     SpectralAmount,
@@ -173,8 +188,6 @@ enum Control {
     Attack,
     Release,
     Smooth,
-    VoiceCap,
-    OtherCap,
     Voices,
     Threshold,
     Hold,
@@ -182,7 +195,6 @@ enum Control {
     Assist,
     Weight(usize),
 }
-const PRIMARY: [Control; 3] = [Control::Amount, Control::VoiceCap, Control::OtherCap];
 const SETUP: [Control; 5] = [
     Control::Voices,
     Control::Threshold,
@@ -190,7 +202,6 @@ const SETUP: [Control; 5] = [
     Control::Fade,
     Control::Assist,
 ];
-const PRIMARY_WIDTHS: [f32; 3] = [220.0, 160.0, 160.0];
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MenuKind {
     Channel(usize),
@@ -280,6 +291,7 @@ struct AutomixerView {
     setup_open: bool,
     spectral_setup: bool,
     tray_started: Instant,
+    pull_motion: Cell<PullMotion>,
 }
 
 impl AutomixerView {
@@ -308,13 +320,14 @@ impl AutomixerView {
             setup_open: false,
             spectral_setup: false,
             tray_started: Instant::now(),
+            pull_motion: Cell::default(),
         }
     }
 
     fn parameter(&self, id: Control) -> Parameter<'_> {
         let p = &self.params.shared;
         match id {
-            Control::Amount => Parameter::Float(&p.amount),
+            Control::Strength => Parameter::Float(&p.strength),
             Control::SpectralBlend(i) => Parameter::Float(&p.mics[i].eq_blend),
             Control::SpectralWeight(i) => Parameter::Float(&p.mics[i].spectral_weight),
             Control::SpectralAmount => Parameter::Float(&p.spectral_amount),
@@ -324,8 +337,6 @@ impl AutomixerView {
             Control::Attack => Parameter::Float(&p.spectral_attack),
             Control::Release => Parameter::Float(&p.spectral_release),
             Control::Smooth => Parameter::Float(&p.spectral_smooth),
-            Control::VoiceCap => Parameter::Float(&p.cap),
-            Control::OtherCap => Parameter::Float(&p.other_cap),
             Control::Voices => Parameter::Int(&p.voices),
             Control::Threshold => Parameter::Float(&p.threshold),
             Control::Hold => Parameter::Float(&p.hold),
@@ -389,14 +400,56 @@ impl AutomixerView {
         registered.div_ceil(PER_PAGE).max(1)
     }
     fn spectral(&self) -> bool {
-        self.params.shared.mode.value() == MixMode::SpectralSpace
+        !self.params.shared.spectral_bypass.value()
     }
-    fn primary(&self) -> &[Control] {
-        &PRIMARY
+    fn gain_bypassed(&self) -> bool {
+        self.params.shared.gain_bypass.value()
+    }
+    fn module_power(module: Rect) -> Rect {
+        (module.0 + 12.0, module.1 + 12.0, 28.0, 28.0)
+    }
+    fn module_cog(module: Rect) -> Rect {
+        (module.0 + module.2 - 50.0, module.1 + 8.0, 36.0, 36.0)
+    }
+    fn strength_rect() -> Rect {
+        (
+            GAIN_MODULE.0 + 16.0,
+            GAIN_MODULE.1 + 52.0,
+            GAIN_MODULE.2 - 32.0,
+            CONTROL_H,
+        )
     }
     fn spectral_control_rect(index: usize) -> Rect {
-        let (x, y, w, h) = Self::primary_rect(index);
-        (x, y + 70.0, w, h)
+        let gap = 10.0;
+        let width = (SPECTRAL_MODULE.2 - 32.0 - gap) / 2.0;
+        (
+            SPECTRAL_MODULE.0 + 16.0 + index as f32 * (width + gap),
+            SPECTRAL_MODULE.1 + 52.0,
+            width,
+            CONTROL_H,
+        )
+    }
+    fn gain_control(id: Control) -> bool {
+        matches!(
+            id,
+            Control::Strength
+                | Control::Weight(_)
+                | Control::Voices
+                | Control::Threshold
+                | Control::Hold
+                | Control::Fade
+                | Control::Assist
+        )
+    }
+    fn control_enabled(&self, id: Control) -> bool {
+        if Self::gain_control(id) {
+            !self.gain_bypassed()
+        } else {
+            self.spectral()
+        }
+    }
+    fn toggle_bool(cx: &mut EventContext, param: &BoolParam) {
+        param::set_normalized_once(cx, param.as_ptr(), if param.value() { 0.0 } else { 1.0 });
     }
     fn setup(&self) -> &[Control] {
         if self.spectral_setup {
@@ -417,13 +470,6 @@ impl AutomixerView {
     fn strips_top(&self) -> f32 {
         STRIPS_TOP
     }
-    fn primary_rect(index: usize) -> Rect {
-        let mut x = 32.0;
-        for width in PRIMARY_WIDTHS.iter().take(index) {
-            x += width + 10.0;
-        }
-        (x, PRIMARY_Y, PRIMARY_WIDTHS[index], CONTROL_H)
-    }
     fn setup_control_rect(index: usize) -> Rect {
         let width = (1088.0 - 32.0 - 4.0 * 10.0) / 5.0;
         (
@@ -434,7 +480,7 @@ impl AutomixerView {
         )
     }
     fn status_rect(&self) -> Rect {
-        (602.0, PRIMARY_Y, 438.0, CONTROL_H)
+        STATUS
     }
     fn bypass_at(&self, point: (f32, f32)) -> Option<BypassButton> {
         self.bypass_buttons
@@ -464,6 +510,7 @@ impl AutomixerView {
         };
         if next != current {
             self.bypass_buttons.set([None; PER_PAGE]);
+            self.pull_motion.set(PullMotion::default());
         }
         self.page = next;
         self.menu = None;
@@ -473,17 +520,11 @@ impl AutomixerView {
     }
     #[cfg(test)]
     fn controls(&self) -> Vec<(Control, Rect)> {
-        let mut result: Vec<_> = self
-            .primary()
-            .iter()
-            .copied()
-            .enumerate()
-            .map(|(i, id)| (id, Self::primary_rect(i)))
-            .collect();
-        if self.spectral() {
-            result.push((Control::SpectralAmount, Self::spectral_control_rect(0)));
-            result.push((Control::SpectralCut, Self::spectral_control_rect(1)));
-        }
+        let mut result = vec![
+            (Control::Strength, Self::strength_rect()),
+            (Control::SpectralAmount, Self::spectral_control_rect(0)),
+            (Control::SpectralCut, Self::spectral_control_rect(1)),
+        ];
         if self.setup_open {
             result.extend(
                 self.setup()
@@ -502,22 +543,18 @@ impl AutomixerView {
         }
         result
     }
-    fn control_at(&self, point: (f32, f32)) -> Option<(Control, Rect)> {
-        for (index, id) in self.primary().iter().copied().enumerate() {
-            let rect = Self::primary_rect(index);
-            if inside(point, rect) {
-                return Some((id, rect));
-            }
+    fn placed_control_at(&self, point: (f32, f32)) -> Option<(Control, Rect)> {
+        let strength = Self::strength_rect();
+        if inside(point, strength) {
+            return Some((Control::Strength, strength));
         }
-        if self.spectral() {
-            let amount = Self::spectral_control_rect(0);
-            if inside(point, amount) {
-                return Some((Control::SpectralAmount, amount));
-            }
-            let cut = Self::spectral_control_rect(1);
-            if inside(point, cut) {
-                return Some((Control::SpectralCut, cut));
-            }
+        let amount = Self::spectral_control_rect(0);
+        if inside(point, amount) {
+            return Some((Control::SpectralAmount, amount));
+        }
+        let cut = Self::spectral_control_rect(1);
+        if inside(point, cut) {
+            return Some((Control::SpectralCut, cut));
         }
         if self.setup_open {
             for (index, id) in self.setup().iter().copied().enumerate() {
@@ -542,8 +579,14 @@ impl AutomixerView {
         }
         None
     }
-    fn value_rect(r: Rect) -> Rect {
-        if r.2 < 125.0 {
+    fn control_at(&self, point: (f32, f32)) -> Option<(Control, Rect)> {
+        self.placed_control_at(point)
+            .filter(|(id, _)| self.control_enabled(*id))
+    }
+    fn value_rect(id: Control, r: Rect) -> Rect {
+        if matches!(id, Control::Weight(_) | Control::SpectralWeight(_)) {
+            KnobLayout::new(r).value_rect(r.0, r.2)
+        } else if r.2 < 125.0 {
             (r.0 + 6.0, r.1 + 14.0, r.2 - 12.0, 14.0)
         } else {
             (r.0 + r.2 * 0.43, r.1 + 3.0, r.2 * 0.57 - 6.0, 24.0)
@@ -690,9 +733,10 @@ impl AutomixerView {
     }
     fn handle_event(&mut self, cx: &mut EventContext, event: &mut Event) {
         let visible = self.page_strips();
-        if !visible.iter().any(|(slot, _)| {
-            self.network.slots[slot].mic.load(Ordering::Acquire) == self.selected
-        }) {
+        if !visible
+            .iter()
+            .any(|(slot, _)| self.network.slots[slot].mic.load(Ordering::Acquire) == self.selected)
+        {
             if let Some((slot, _)) = visible.first() {
                 self.selected = self.network.slots[slot].mic.load(Ordering::Acquire);
                 self.menu = None;
@@ -769,20 +813,18 @@ impl AutomixerView {
                         }
                     } else if inside(point, THEME) {
                         prefs().toggle();
-                    } else if inside(point, MODE_BUTTON) {
+                    } else if inside(point, Self::module_power(GAIN_MODULE)) {
+                        self.end_drag(cx);
+                        Self::toggle_bool(cx, &self.params.shared.gain_bypass);
+                    } else if inside(point, Self::module_power(SPECTRAL_MODULE)) {
                         self.end_drag(cx);
                         self.menu = None;
-                        self.setup_open = false;
-                        param::set_normalized_once(
-                            cx,
-                            self.params.shared.mode.as_ptr(),
-                            if self.spectral() { 0.0 } else { 1.0 },
-                        );
-                    } else if self.spectral() && inside(point, SPECTRAL_SETUP_BUTTON) {
+                        Self::toggle_bool(cx, &self.params.shared.spectral_bypass);
+                    } else if inside(point, Self::module_cog(SPECTRAL_MODULE)) {
                         self.setup_open = !self.setup_open || !self.spectral_setup;
                         self.spectral_setup = true;
                         self.tray_started = Instant::now();
-                    } else if inside(point, SETUP_BUTTON) {
+                    } else if inside(point, Self::module_cog(GAIN_MODULE)) {
                         self.setup_open = !self.setup_open || self.spectral_setup;
                         self.spectral_setup = false;
                         self.tray_started = Instant::now();
@@ -804,7 +846,7 @@ impl AutomixerView {
                             self.selected = self.network.slots[slot].mic.load(Ordering::Acquire);
                         }
                         if let Some((id, r)) = self.control_at(point) {
-                            let value_rect = Self::value_rect(r);
+                            let value_rect = Self::value_rect(id, r);
                             if inside(point, value_rect) {
                                 self.press = Some(ValuePress::new(id, value_rect, point));
                             } else {
@@ -877,11 +919,14 @@ impl AutomixerView {
                     self.group_press = None;
                     self.setup_open = false;
                     self.end_drag(cx);
+                    self.pull_motion.set(PullMotion::default());
+                    self.hover = None;
                 }
                 WindowEvent::MouseLeave => {
                     self.hover = None;
                     self.menu = None;
                     self.group_press = None;
+                    self.pull_motion.set(PullMotion::default());
                 }
                 _ => return,
             }
@@ -942,6 +987,10 @@ impl AutomixerView {
     }
 
     fn paint(&self, d: &mut Draw) {
+        self.paint_at(d, Instant::now());
+    }
+
+    fn paint_at(&self, d: &mut Draw, frame_time: Instant) {
         d.hover = if self.drag.is_none() && self.edit.is_none() {
             self.hover
         } else {
@@ -951,16 +1000,6 @@ impl AutomixerView {
         d.rect(0.0, 0.0, SIZE.0, 64.0, PANEL);
         d.text(32.0, 42.0, "AUTOMIXER", 25.0, GOLD);
         d.appearance_button(THEME, prefs().label());
-        d.button(
-            MODE_BUTTON,
-            if self.spectral() {
-                "SPECTRAL ON"
-            } else {
-                "SPECTRAL OFF"
-            },
-            self.spectral(),
-            TEAL,
-        );
         let monitor = self.network.monitor(self.network.now_ms());
         let mut slots = [0usize; CAPACITY];
         let registered = Self::collect_slots(&self.network, &mut slots);
@@ -977,15 +1016,6 @@ impl AutomixerView {
                 TEXT,
             );
         }
-        for (index, &id) in self.primary().iter().enumerate() {
-            let label = match id {
-                Control::Amount => "GAIN AMOUNT",
-                Control::SpectralCut => "MAX CUT",
-                Control::VoiceCap => "VOICE MAX GR",
-                _ => "OTHER MAX GR",
-            };
-            self.paint_control(d, id, Self::primary_rect(index), label);
-        }
         self.paint_status(
             d,
             monitor.chorus,
@@ -993,30 +1023,35 @@ impl AutomixerView {
             monitor.voice_active,
             monitor.members,
         );
-        self.paint_cog(d, SETUP_BUTTON, self.setup_open && !self.spectral_setup);
-        if self.spectral() {
-            self.paint_control(
-                d,
-                Control::SpectralAmount,
-                Self::spectral_control_rect(0),
-                "DUCK AMOUNT",
-            );
-            self.paint_control(
-                d,
-                Control::SpectralCut,
-                Self::spectral_control_rect(1),
-                "MAX CUT",
-            );
-            self.paint_cog(
-                d,
-                SPECTRAL_SETUP_BUTTON,
-                self.setup_open && self.spectral_setup,
-            );
-        }
+        self.paint_module(d, GAIN_MODULE, "GAIN", self.gain_bypassed(), |view, d| {
+            view.paint_control(d, Control::Strength, Self::strength_rect(), "STRENGTH");
+        });
+        self.paint_module(
+            d,
+            SPECTRAL_MODULE,
+            "SPECTRAL",
+            !self.spectral(),
+            |view, d| {
+                view.paint_control(
+                    d,
+                    Control::SpectralAmount,
+                    Self::spectral_control_rect(0),
+                    "DUCK AMOUNT",
+                );
+                view.paint_control(
+                    d,
+                    Control::SpectralCut,
+                    Self::spectral_control_rect(1),
+                    "MAX CUT",
+                );
+            },
+        );
         let now = self.network.now_ms();
         let conflicts = self.network.conflict_mask();
+        let spectral = self.spectral();
+        let strips = self.page_strips();
         let mut bypass_buttons = [None; PER_PAGE];
-        for (column, (slot_index, r)) in self.page_strips().iter().enumerate() {
+        for (column, (slot_index, r)) in strips.iter().enumerate() {
             let slot = &self.network.slots[slot_index];
             let owner = slot.owner.load(Ordering::Acquire);
             let params = slot.editor_params(owner);
@@ -1095,12 +1130,14 @@ impl AutomixerView {
                 0.0
             };
             let gr_norm = (gr / 24.0).clamp(0.0, 1.0);
-            let meters = if self.spectral() {
-                self.paint_spectrum(d, slot, layout.spectrum());
-                layout.spectral_meters()
-            } else {
-                layout.meters
-            };
+            let spectral_off = !spectral;
+            Self::paint_dimmed(d, spectral_off, layout.eq_blend, |d| {
+                self.paint_control(d, Control::SpectralBlend(mic), layout.eq_blend, "EQ BLEND");
+            });
+            if spectral {
+                self.paint_spectrum(d, slot, layout.spectrum(), now);
+            }
+            let meters = layout.meter_rect(spectral);
             let bar_top = meters.1 + 16.0;
             let bar_bottom = meters.1 + meters.3 - 16.0;
             let bar_h = (bar_bottom - bar_top).max(24.0);
@@ -1193,16 +1230,26 @@ impl AutomixerView {
             };
             d.button(layout.midi, &midi_label, true, MUTED);
             Self::paint_bypass(d, layout.bypass, strip_bypassed);
-            self.paint_control(d, Control::Weight(mic), layout.weight, "GAIN WEIGHT");
-            self.paint_control(
-                d,
-                Control::SpectralWeight(mic),
-                layout.spectral_weight,
-                "SPECTRAL WEIGHT",
-            );
-            self.paint_control(d, Control::SpectralBlend(mic), layout.eq_blend, "EQ BLEND");
+            let gain_off = self.gain_bypassed();
+            Self::paint_dimmed(d, gain_off, layout.weight, |d| {
+                self.paint_control(d, Control::Weight(mic), layout.weight, "GAIN");
+            });
+            Self::paint_dimmed(d, spectral_off, layout.spectral_weight, |d| {
+                self.paint_control(
+                    d,
+                    Control::SpectralWeight(mic),
+                    layout.spectral_weight,
+                    "SPECTRAL",
+                );
+            });
         }
         self.bypass_buttons.set(bypass_buttons);
+        let pull_hint = if spectral {
+            self.paint_pulls(d, &strips, now, conflicts, frame_time)
+        } else {
+            self.pull_motion.set(PullMotion::default());
+            None
+        };
         if registered == 0 {
             d.text(50.0, self.strips_top() + 40.0, "NO INSTANCES", 14.0, MUTED);
         }
@@ -1234,6 +1281,11 @@ impl AutomixerView {
             GOLD,
         );
         if self.setup_open {
+            let setup_bypassed = if self.spectral_setup {
+                !self.spectral()
+            } else {
+                self.gain_bypassed()
+            };
             d.scissor(32.0, 790.0, 1056.0, 118.0);
             d.offset_x = 1056.0
                 * (1.0
@@ -1243,6 +1295,8 @@ impl AutomixerView {
                         self.tray_started.elapsed().as_secs_f32(),
                     ));
             d.rect(32.0, 790.0, 1056.0, 118.0, PANEL);
+            let saved_dim = d.dimmed;
+            d.dimmed = saved_dim || setup_bypassed;
             for (index, &id) in self.setup().iter().enumerate() {
                 let label = match id {
                     Control::Voices => "CHORUS ABOVE",
@@ -1258,6 +1312,10 @@ impl AutomixerView {
                 };
                 self.paint_control(d, id, Self::setup_control_rect(index), label);
             }
+            d.dimmed = saved_dim;
+            if setup_bypassed {
+                d.rounded_rect(32.0, 790.0, 1056.0, 118.0, 6.0, with_alpha(BG, 0.45));
+            }
             d.offset_x = 0.0;
             d.reset_scissor();
         }
@@ -1272,11 +1330,47 @@ impl AutomixerView {
             d.text(32.0, 906.0, warning, 11.0, GOLD);
         }
         d.line(32.0, 922.0, 1088.0, 922.0, LINE, 1.0);
-        d.text(32.0, 942.0, self.tooltip(), 10.0, MUTED);
+        d.text(
+            32.0,
+            942.0,
+            pull_hint.as_deref().unwrap_or_else(|| self.tooltip()),
+            10.0,
+            MUTED,
+        );
         self.paint_menu(d);
         if let Some(edit) = &self.edit {
             d.value_edit(edit, GOLD);
         }
+    }
+
+    fn paint_dimmed(d: &mut Draw, bypassed: bool, rect: Rect, draw: impl FnOnce(&mut Draw)) {
+        let saved = d.dimmed;
+        d.dimmed = saved || bypassed;
+        draw(d);
+        d.dimmed = saved;
+        if bypassed {
+            d.rounded_rect(rect.0, rect.1, rect.2, rect.3, 6.0, with_alpha(BG, 0.45));
+        }
+    }
+
+    fn paint_module(
+        &self,
+        d: &mut Draw,
+        rect: Rect,
+        title: &str,
+        bypassed: bool,
+        draw_body: impl FnOnce(&Self, &mut Draw),
+    ) {
+        d.panel(rect, PANEL, LINE);
+        let spectral_module = rect == SPECTRAL_MODULE;
+        let cog_open = self.setup_open && self.spectral_setup == spectral_module;
+        Self::paint_dimmed(d, bypassed, rect, |d| {
+            draw_body(self, d);
+            self.paint_cog(d, Self::module_cog(rect), cog_open);
+        });
+        let power = Self::module_power(rect);
+        d.bypass_button(power, bypassed, TEAL, d.is_hovered(power), 0.0);
+        d.text(rect.0 + 48.0, rect.1 + 32.0, title, 16.0, TEXT);
     }
 
     fn paint_cog(&self, d: &mut Draw, rect: Rect, open: bool) {
@@ -1299,14 +1393,14 @@ impl AutomixerView {
             d.cog_icon(rect.0 + rect.2 * 0.5, rect.1 + rect.3 * 0.5, MUTED);
         }
     }
-    fn paint_spectrum(&self, d: &mut Draw, slot: &network::Slot, bounds: Rect) {
+    fn paint_spectrum(&self, d: &mut Draw, slot: &network::Slot, bounds: Rect, now: u64) {
         let updated = slot.updated_ms.load(Ordering::Relaxed);
-        let snapshot = (updated != 0 && self.network.now_ms().saturating_sub(updated) < 750)
-            .then(|| slot.spectrum.read())
+        let snapshot = (updated != 0 && now.saturating_sub(updated) < 750)
+            .then(|| slot.spectrum.read_cut())
             .flatten();
         let (left, top, width, height) = bounds;
         d.outline(bounds, LINE);
-        let Some((_, _, cut)) = snapshot else {
+        let Some(cut) = snapshot else {
             d.text_centered(
                 left + width * 0.5,
                 top + height * 0.5 + 3.0,
@@ -1317,11 +1411,9 @@ impl AutomixerView {
             return;
         };
         for i in 1..crate::spectral::BANDS {
-            let x = |i: usize| {
-                left + 1.0 + i as f32 / (crate::spectral::BANDS - 1) as f32 * (width - 2.0)
-            };
-            let cy = |i: usize| top + 1.0 + (cut[i] / 24.0).clamp(0.0, 1.0) * (height - 2.0);
-            d.line(x(i - 1), cy(i - 1), x(i), cy(i), GOLD, 1.5);
+            let a = pulls::cut_point(bounds, i - 1, cut[i - 1]);
+            let b = pulls::cut_point(bounds, i, cut[i]);
+            d.line(a.0, a.1, b.0, b.1, GOLD, 1.5);
         }
     }
 
@@ -1334,48 +1426,36 @@ impl AutomixerView {
         members: usize,
     ) {
         let rect = self.status_rect();
-        d.rect(rect.0, rect.1, rect.2, rect.3, PANEL);
-        d.outline(rect, LINE);
+        let gain_live = !self.gain_bypassed() && self.params.shared.strength.value() > 0.0;
+        let spectral = self.spectral();
         let (title, color) = if members == 0 {
             ("NO MICS IN MIX".to_string(), GOLD)
-        } else if self.spectral()
+        } else if spectral
             && self.params.shared.spectral_low.value() > self.params.shared.spectral_high.value()
         {
             ("LOW > HIGH · CHECK RANGE".to_string(), GOLD)
-        } else if chorus > 0.001 && self.params.shared.amount.value() > 0.0 {
+        } else if chorus > 0.001 && gain_live {
             (
                 format!(
                     "CHORUS {:3.0}%{}",
                     chorus * 100.0,
-                    if self.spectral() { " + SPECTRAL" } else { "" }
+                    if spectral { " + SPECTRAL" } else { "" }
                 ),
                 TEAL,
             )
-        } else if self.params.shared.amount.value() == 0.0 {
-            (
-                if self.spectral() {
-                    "SPECTRAL ONLY"
-                } else {
-                    "GAIN SHARING OFF"
-                }
-                .to_string(),
-                GOLD,
-            )
+        } else if !gain_live && !spectral {
+            ("AUTOMIX OFF".to_string(), GOLD)
+        } else if !gain_live {
+            ("SPECTRAL ONLY".to_string(), GOLD)
+        } else if spectral {
+            ("GAIN + SPECTRAL".to_string(), TEAL)
         } else {
-            (
-                if self.spectral() {
-                    "GAIN + SPECTRAL"
-                } else {
-                    "GAIN SHARING"
-                }
-                .to_string(),
-                TEAL,
-            )
+            ("GAIN SHARING".to_string(), TEAL)
         };
-        d.text(rect.0 + 12.0, rect.1 + 22.0, &title, 13.0, color);
+        d.text(rect.0, rect.1 + 16.0, &title, 13.0, color);
         d.text(
-            rect.0 + 12.0,
-            rect.1 + 42.0,
+            rect.0,
+            rect.1 + 34.0,
             &format!("{registered} LINKED · {members} IN MIX · {active} VOICE ACTIVE"),
             11.0,
             MUTED,
@@ -1434,10 +1514,18 @@ impl AutomixerView {
                 !matches!(id, Control::Weight(_) | Control::SpectralWeight(_)),
             )
         };
-        if matches!(
-            id,
-            Control::Weight(_) | Control::SpectralWeight(_) | Control::SpectralBlend(_)
-        ) {
+        if matches!(id, Control::Weight(_) | Control::SpectralWeight(_)) {
+            let layout = KnobLayout::new(rect);
+            d.knob_with_layout_bipolar(&layout, label, &value, normalized, GOLD, false);
+            if self
+                .hover
+                .is_some_and(|p| inside(p, Self::value_rect(id, rect)))
+            {
+                d.value_underline(Self::value_rect(id, rect), layout.value_y, GOLD);
+            }
+            return;
+        }
+        if matches!(id, Control::SpectralBlend(_)) {
             d.control_bipolar(rect, "", "", normalized, GOLD);
             d.text_centered(rect.0 + rect.2 * 0.5, rect.1 + 11.0, label, 8.0, MUTED);
             d.text_centered(rect.0 + rect.2 * 0.5, rect.1 + 25.0, &value, 11.0, TEXT);
@@ -1447,15 +1535,15 @@ impl AutomixerView {
                 label,
                 &value,
                 normalized,
-                if id == Control::Amount { GOLD } else { TEAL },
+                if id == Control::Strength { GOLD } else { TEAL },
             );
         }
         if self
             .hover
-            .is_some_and(|p| inside(p, Self::value_rect(rect)))
+            .is_some_and(|p| inside(p, Self::value_rect(id, rect)))
         {
             d.value_underline(
-                Self::value_rect(rect),
+                Self::value_rect(id, rect),
                 rect.1 + if rect.2 < 125.0 { 26.0 } else { 18.0 },
                 GOLD,
             );
@@ -1478,14 +1566,18 @@ impl AutomixerView {
             return "Controls are shared across linked instances. Drag to adjust; click values to type; double-click to reset.";
         };
         if self.spectral()
-            && self.page_strips().iter().any(|(_, rect)| {
-                inside(point, StripLayout::new(rect, false).spectrum())
-            })
+            && self
+                .page_strips()
+                .iter()
+                .any(|(_, rect)| inside(point, StripLayout::new(rect, false).spectrum()))
         {
             return "Reduction: 40 Hz–20 kHz left to right. Gold: spectral cut only, 0 dB at the top to 24 dB at the bottom, before EQ Blend.";
         }
-        if inside(point, MODE_BUTTON) {
-            return "Enable spectral ducking and per-track EQ alongside gain sharing for all linked tracks. Adds 2048 samples of latency; switch while stopped.";
+        if inside(point, Self::module_power(GAIN_MODULE)) {
+            return "Bypass gain sharing for every linked track. Broadband gain fades to unity. Spectral ducking and EQ stay independent. Click again to resume.";
+        }
+        if inside(point, Self::module_power(SPECTRAL_MODULE)) {
+            return "Bypass spectral ducking and EQ for every linked track. Restores zero latency; switch while stopped. Gain sharing stays active. Click again to resume.";
         }
         for (_, rect) in self.page_strips().iter() {
             let layout = StripLayout::new(rect, false);
@@ -1502,11 +1594,8 @@ impl AutomixerView {
         if self.bypass_at(point).is_some() {
             return "Power icon toggles strip bypass; gold means bypassed. Fades to unity and leaves sharing and chorus. Clear HOST BYPASS in the DAW to resume.";
         }
-        if self.group_at(point).is_some() && self.spectral() {
-            return "Voice shares gain separately with chorus and voice assist. Other and Drums share gain together. All types interact spectrally; Drums have faster high bands.";
-        }
         if self.group_at(point).is_some() {
-            return "Cycle Voice / Other / Drums. Voice shares separately with chorus and voice assist. Other and Drums share Other Max GR; drums respond faster.";
+            return "Cycle Voice / Other / Drums. Voice shares separately with chorus and voice assist. Other and Drums share one pool; drums respond faster. All types interact when Spectral is on.";
         }
         if inside(point, THEME) {
             return "Cycle Dark, Light, and Auto appearance.";
@@ -1514,17 +1603,17 @@ impl AutomixerView {
         if self.page_count_now() > 1 && (inside(point, PAGE_PREV) || inside(point, PAGE_NEXT)) {
             return "Browse the linked microphone strips.";
         }
-        if self.spectral() && inside(point, SPECTRAL_SETUP_BUTTON) {
+        if inside(point, Self::module_cog(SPECTRAL_MODULE)) {
             return "Open spectral frequency range, attack, release and smoothing settings. Gain sharing stays active.";
         }
-        if inside(point, SETUP_BUTTON) {
+        if inside(point, Self::module_cog(GAIN_MODULE)) {
             return "Open gain-sharing chorus and activity detection settings. These also apply when spectral processing is on.";
         }
         if inside(point, self.status_rect()) && self.spectral() {
             if self.params.shared.spectral_low.value() > self.params.shared.spectral_high.value() {
                 return "Low is above High: no spectral cuts or EQ are applied. Correct the range in spectral settings. Gain sharing continues; FFT delay remains.";
             }
-            return "Gain sharing and spectral processing run together. SPECTRAL ONLY means gain Amount is zero. IN MIX includes silent tracks; VOICE ACTIVE drives chorus.";
+            return "Gain sharing and spectral processing run together. SPECTRAL ONLY means gain sharing is bypassed or Strength is zero. IN MIX includes silent tracks; VOICE ACTIVE drives chorus.";
         }
         if inside(point, self.status_rect()) {
             return "LINKED includes idle instances. VOICE ACTIVE counts microphones above threshold, not distinct speakers. Bleed can trigger chorus.";
@@ -1535,31 +1624,36 @@ impl AutomixerView {
         if self.midi_at(point).is_some() {
             return "MIDI weight assignment for this track. Open to choose both channel and CC; Off disables MIDI cues.";
         }
-        if let Some((id, _)) = self.control_at(point) {
+        if let Some((id, _)) = self.placed_control_at(point) {
+            if !self.control_enabled(id) {
+                return if Self::gain_control(id) {
+                    "Gain sharing is bypassed. Click the Gain power button to resume. The saved Strength stays in place."
+                } else {
+                    "Spectral processing is bypassed. Click the Spectral power button to resume. Enabling it adds 2048 samples of latency; switch while stopped."
+                };
+            }
             return match id {
-                Control::SpectralBlend(_) => "This track’s EQ: positive matches tone, negative separates it; zero is neutral. Up to ±6 dB. Independent of weights and Amount; requires Spectral On.",
+                Control::SpectralBlend(_) => "This track’s EQ, above the spectral graph: positive matches tone, negative separates it; zero is neutral. Up to ±6 dB. Independent of weights and Strength. Requires Spectral on.",
                 Control::SpectralCut => "Maximum spectral cut in dB. Only higher Spectral Weights create cuts; equal Spectral Weights never duck each other.",
                 Control::Low | Control::High => "Frequency range for ducking and EQ Blend. Low above High leaves no affected frequencies. FFT delay remains.",
                 Control::Attack => "How quickly spectral cuts engage, in addition to FFT analysis time.",
                 Control::Release => "Recovery time for ducking. Also sets EQ response, with a 100 ms minimum; Drums use faster high-band timing.",
                 Control::Smooth => "Blend adjacent bands for smoother ducking and EQ Blend curves.",
                 Control::SpectralAmount => "Depth of spectral cuts across all tracks. Zero disables ducking after release; EQ Blend remains active and FFT latency remains.",
-                Control::SpectralWeight(_) => "Spectral weight: higher priorities duck lower ones in overlapping bands. Equal weights add no cuts. Independent of Gain Weight and MIDI; requires Spectral On.",
-                Control::Amount => "Gain-sharing depth. Zero disables broadband reduction; spectral ducking and EQ remain independent. 100% applies full sharing and chorus reduction.",
-                Control::VoiceCap => "Maximum broadband reduction for Voice mics, including chorus. Zero disables gain-sharing reduction; spectral cuts and EQ remain independent.",
-                Control::OtherCap => "Maximum broadband reduction for Other and Drums. They share together and ignore voice chorus. Spectral cuts and EQ remain independent.",
-                Control::Voices => "Chorus opens active Voice mics when their count exceeds this value: 3 means 4 or more. Quiet voices stay reduced. Zero disables chorus.",
+                Control::SpectralWeight(_) => "Spectral weight knob: higher priorities duck lower ones in overlapping bands. Equal weights add no cuts. Independent of the Gain knob and MIDI. Requires Spectral on.",
+                Control::Strength => "Blends gain-sharing reduction from none to the full uncapped share. 0% is unity. 100% applies the whole reduction, including chorus. No separate maximum.",
+                Control::Voices => "Chorus opens active Voice mics when their count exceeds this value: 3 means 4 or more. Quiet voices keep their share. Zero disables chorus.",
                 Control::Threshold => "Activity threshold before weighting, not a noise gate. Uses 3 dB hysteresis and 20 ms onset confirmation; Drums skip onset confirmation.",
                 Control::Hold => "Activity hold plus chorus return hold; the delays add together. Drums use a fixed 20 ms activity hold.",
-                Control::Fade => "Fade time for Automix and for voice chorus transitions. Quiet voice mics remain at Voice GR while chorus opens the active voice mics.",
+                Control::Fade => "Fade time for Strength and for voice chorus transitions. Active voice mics open; quiet voice mics keep their share.",
                 Control::Assist => "Voice group only. Speech confidence lowers that mic's activity threshold by up to 6 dB. 0% disables it. Other mics use the plain threshold.",
-                Control::Weight(_) => "Gain weight sets gain-sharing priority, not output volume. MIDI cues control this weight only. Editing replaces the cue; Shift drags finely; double-click resets.",
+                Control::Weight(_) => "Gain weight knob sets gain-sharing priority, not output volume. MIDI cues control this weight only. Editing replaces the cue; Shift drags finely; double-click resets.",
             };
         }
         if self.spectral() {
             "IN / OUT: RMS dBFS. GR: gain-sharing reduction plus largest spectral cut; excludes EQ. Gold graph shows spectral cuts only. LINKED includes idle tracks."
         } else {
-            "IN / OUT: RMS dBFS. GR: applied reduction, shown on a fixed 0–24 dB scale. Voice shares separately; Other and Drums share together."
+            "IN / OUT: RMS dBFS. GR: applied reduction, shown on a fixed 0–24 dB scale. Voice shares separately; Other and Drums share together. Spectral is bypassed."
         }
     }
 }
@@ -1648,9 +1742,9 @@ mod layout_tests {
     #[test]
     fn setup_starts_closed() {
         let ids: Vec<_> = view().controls().into_iter().map(|(id, _)| id).collect();
-        assert!(ids.contains(&Control::Amount));
-        assert!(ids.contains(&Control::VoiceCap));
-        assert!(ids.contains(&Control::OtherCap));
+        assert!(ids.contains(&Control::Strength));
+        assert!(ids.contains(&Control::SpectralAmount));
+        assert!(ids.contains(&Control::SpectralCut));
         assert!(!ids.contains(&Control::Threshold));
         assert!(!ids.contains(&Control::Voices));
         assert!(!ids.contains(&Control::Hold));
@@ -1699,8 +1793,8 @@ mod layout_tests {
     #[test]
     fn combined_controls_keep_gain_sharing_and_independent_track_controls() {
         let mut network = Network::default();
-        Arc::get_mut(&mut network.params).unwrap().mode =
-            EnumParam::new("Mix mode", MixMode::SpectralSpace);
+        Arc::get_mut(&mut network.params).unwrap().spectral_bypass =
+            BoolParam::new("Bypass spectral", false).non_automatable();
         let network = Arc::new(network);
         let registration = network.register();
         let params = Arc::new(AutomixerParams::new(network.params.clone(), None, 0));
@@ -1708,9 +1802,7 @@ mod layout_tests {
         editor.setup_open = true;
         let ids: Vec<_> = editor.controls().into_iter().map(|(id, _)| id).collect();
         for id in [
-            Control::Amount,
-            Control::VoiceCap,
-            Control::OtherCap,
+            Control::Strength,
             Control::Voices,
             Control::Assist,
             Control::SpectralAmount,
@@ -1721,17 +1813,48 @@ mod layout_tests {
         ] {
             assert!(ids.contains(&id));
         }
+        let strength = AutomixerView::strength_rect();
+        assert!(
+            strength.0 >= GAIN_MODULE.0 && strength.0 + strength.2 <= GAIN_MODULE.0 + GAIN_MODULE.2
+        );
+        let duck = AutomixerView::spectral_control_rect(0);
+        assert!(duck.0 >= SPECTRAL_MODULE.0);
+        assert!(editor.control_at((duck.0 + 4.0, duck.1 + 4.0)).is_some());
         editor.spectral_setup = true;
         let ids: Vec<_> = editor.controls().into_iter().map(|(id, _)| id).collect();
         assert!(ids.contains(&Control::Low) && ids.contains(&Control::High));
-        assert!(ids.contains(&Control::Amount) && ids.contains(&Control::VoiceCap));
+        assert!(ids.contains(&Control::Strength));
         let (_, rect) = editor.visible()[0];
         let layout = StripLayout::new(rect, true);
-        assert!(layout.spectral_meters().3 >= 80.0);
-        assert!(layout.weight.1 + layout.weight.3 < layout.spectral_weight.1);
-        assert!(layout.spectral_weight.1 + layout.spectral_weight.3 < layout.eq_blend.1);
-        assert!(layout.eq_blend.1 + layout.eq_blend.3 < STRIP_BOTTOM);
+        assert!(layout.meters.3 >= 80.0);
+        assert!(layout.eq_blend.1 + layout.eq_blend.3 <= layout.spectrum().1);
+        assert!(layout.spectrum().1 + layout.spectrum().3 <= layout.meters.1);
+        assert!((layout.weight.1 - layout.spectral_weight.1).abs() < 0.5);
+        assert!(layout.weight.0 + layout.weight.2 <= layout.spectral_weight.0);
+        assert!(layout.spectral_weight.0 + layout.spectral_weight.2 <= rect.0 + rect.2);
         drop(registration);
+    }
+
+    #[test]
+    fn bypassed_modules_keep_their_controls_visible_but_do_not_edit() {
+        let mut network = Network::default();
+        {
+            let params = Arc::get_mut(&mut network.params).unwrap();
+            params.gain_bypass = BoolParam::new("Bypass gain sharing", true);
+            params.spectral_bypass = BoolParam::new("Bypass spectral", true).non_automatable();
+        }
+        let network = Arc::new(network);
+        let params = Arc::new(AutomixerParams::new(network.params.clone(), None, 0));
+        let editor = AutomixerView::new(params, network, None);
+        let strength = AutomixerView::strength_rect();
+        assert!(editor
+            .placed_control_at((strength.0 + 8.0, strength.1 + 8.0))
+            .is_some());
+        assert!(editor
+            .control_at((strength.0 + 8.0, strength.1 + 8.0))
+            .is_none());
+        let duck = AutomixerView::spectral_control_rect(0);
+        assert!(editor.control_at((duck.0 + 8.0, duck.1 + 8.0)).is_none());
     }
 
     #[test]

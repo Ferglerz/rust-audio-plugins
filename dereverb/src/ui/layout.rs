@@ -1,7 +1,4 @@
-use crate::{
-    params::EngineKind,
-    telemetry::POINTS,
-};
+use crate::{params::EngineKind, telemetry::POINTS};
 use pleasant_ui::draw::KnobLayout;
 
 pub(super) type Rect = (f32, f32, f32, f32);
@@ -14,7 +11,7 @@ pub(super) const DTLN: Rect = (401.0, 23.0, 62.0, 28.0);
 pub(super) const LIVE: Rect = (478.0, 23.0, 62.0, 28.0);
 pub(super) const HIGH_QUALITY: Rect = (548.0, 23.0, 120.0, 28.0);
 pub(super) const ENGINE_BUTTONS: [(Rect, &str, EngineKind); 3] = [
-    (DPDFNET, "DPDFNET", EngineKind::DpdfNet),
+    (DPDFNET, "DPDFNet", EngineKind::DpdfNet),
     (NARA_WPE, "NARA-WPE", EngineKind::NaraWpe),
     (DTLN, "DTLN", EngineKind::Dtln),
 ];
@@ -40,12 +37,4 @@ pub(super) fn recent_power(history: &[f32; POINTS]) -> f64 {
         .map(|&rms| f64::from(rms).powi(2))
         .sum::<f64>()
         / recent.len() as f64
-}
-
-pub(super) fn history_level(power: f64) -> String {
-    if power > 0.0 {
-        format!("{:.1} dBFS", 10.0 * power.log10())
-    } else {
-        "−∞ dBFS".into()
-    }
 }

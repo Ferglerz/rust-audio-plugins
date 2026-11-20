@@ -1,5 +1,6 @@
 use super::Draw;
-use nih_plug_vizia::vizia::vg::{Color, Paint, Path};
+use crate::{bezier::CubicBezier, with_alpha};
+use nih_plug_vizia::vizia::vg::{Color, LineCap, Paint, Path};
 
 /// Screen pixels from a trace baseline that still count as rest.
 /// Covers a 1px stroke centered on the baseline plus the antialias fringe.
@@ -84,6 +85,63 @@ fn rest_boundary(a: (f32, f32), b: (f32, f32), baseline: f32, rest_px: f32) -> (
 }
 
 impl Draw<'_> {
+    /// Square fill for editor backdrops and edge-to-edge header bands.
+    pub fn square_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: Color) {
+        let mut path = Path::new();
+        path.rect(
+            self.ox + (x + self.offset_x) * self.s,
+            self.oy + y * self.s,
+            w * self.s,
+            h * self.s,
+        );
+        self.c.fill_path(&path, &Paint::color(self.color(color)));
+    }
+
+    fn panel_path(&self, r: (f32, f32, f32, f32)) -> Path {
+        let mut path = Path::new();
+        path.rounded_rect(
+            self.ox + (r.0 + self.offset_x) * self.s,
+            self.oy + r.1 * self.s,
+            r.2 * self.s,
+            r.3 * self.s,
+            8.0_f32.min(r.2 * 0.5).min(r.3 * 0.5) * self.s,
+        );
+        path
+    }
+
+    pub fn panel_fill(&mut self, r: (f32, f32, f32, f32), color: Color) {
+        let path = self.panel_path(r);
+        self.c.fill_path(&path, &Paint::color(self.color(color)));
+    }
+
+    /// Module surface and border use the very same rounded path.
+    pub fn panel(&mut self, r: (f32, f32, f32, f32), fill: Color, border: Color) {
+        let path = self.panel_path(r);
+        self.c.fill_path(&path, &Paint::color(self.color(fill)));
+        self.stroke_panel_path(&path, border);
+    }
+
+    fn stroke_panel_path(&mut self, path: &Path, border: Color) {
+        let mut paint = Paint::color(self.color(border));
+        paint.set_line_width(self.s);
+        self.c.stroke_path(path, &paint);
+    }
+
+    /// Mask graph content at the rounded corners, then paint its only border.
+    pub fn finish_panel(&mut self, r: (f32, f32, f32, f32), outside: Color, border: Color) {
+        let mut mask = self.panel_path(r);
+        mask.solidity(nih_plug_vizia::vizia::vg::Solidity::Hole);
+        // Cover the antialias fringe of traces that meet the plot boundary too.
+        mask.rect(
+            self.ox + (r.0 + self.offset_x) * self.s - self.s,
+            self.oy + r.1 * self.s - self.s,
+            (r.2 + 2.0) * self.s,
+            (r.3 + 2.0) * self.s,
+        );
+        self.c.fill_path(&mask, &Paint::color(self.color(outside)));
+        self.stroke_panel_path(&self.panel_path(r), border);
+    }
+
     pub fn rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: Color) {
         let mut p = Path::new();
         p.rounded_rect(
@@ -110,6 +168,42 @@ impl Draw<'_> {
 
     pub fn line(&mut self, x: f32, y: f32, ex: f32, ey: f32, color: Color, width: f32) {
         self.poly(&[(x, y), (ex, ey)], color, width);
+    }
+
+    pub fn stroke_cubic(&mut self, curve: CubicBezier, color: Color, width: f32, fade: bool) {
+        let [a, b, c, d] = curve
+            .0
+            .map(|(x, y)| (self.ox + (x + self.offset_x) * self.s, self.oy + y * self.s));
+        let mut path = Path::new();
+        path.move_to(a.0, a.1);
+        path.bezier_to(b.0, b.1, c.0, c.1, d.0, d.1);
+        let color = self.color(color);
+        let mut paint = if fade {
+            let clear = with_alpha(color, 0.0);
+            Paint::linear_gradient_stops(
+                a.0,
+                a.1,
+                d.0,
+                d.1,
+                [(0.0, clear), (0.25, color), (0.78, color), (1.0, clear)],
+            )
+        } else {
+            Paint::color(color)
+        };
+        paint.set_line_width(width * self.s);
+        paint.set_line_cap(LineCap::Round);
+        self.c.stroke_path(&path, &paint);
+    }
+
+    pub fn soft_circle(&mut self, x: f32, y: f32, radius: f32, color: Color) {
+        let x = self.ox + (x + self.offset_x) * self.s;
+        let y = self.oy + y * self.s;
+        let radius = radius * self.s;
+        let color = self.color(color);
+        let mut path = Path::new();
+        path.circle(x, y, radius);
+        let paint = Paint::radial_gradient(x, y, 0.0, radius, color, with_alpha(color, 0.0));
+        self.c.fill_path(&path, &paint);
     }
 
     pub fn poly(&mut self, points: &[(f32, f32)], color: Color, width: f32) {

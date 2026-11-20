@@ -1,5 +1,10 @@
 use super::*;
 
+macro_rules! summary_is_toggle {
+    (control) => { false };
+    (toggle) => { true };
+}
+
 // Nested catalogs keep UI IDs, ordering, lookup, and polling values together.
 macro_rules! nested_control_catalog {
     ($params:ty, $count:literal, $($builder:ident($id:literal, $field:ident, $group:literal)),* $(,)?) => {
@@ -15,6 +20,17 @@ macro_rules! nested_control_catalog {
             pub fn control(&self, id: &str) -> Option<Control> {
                 match id {
                     $($id => Some($builder($id, $group, &self.$field)),)*
+                    _ => None,
+                }
+            }
+
+            pub fn control_summary(&self, id: &str) -> Option<ControlSummary> {
+                match id {
+                    $($id => Some(ControlSummary {
+                        id: $id,
+                        norm: self.$field.unmodulated_normalized_value(),
+                        toggle: summary_is_toggle!($builder),
+                    }),)*
                     _ => None,
                 }
             }
@@ -66,6 +82,17 @@ macro_rules! control_catalog {
                 match id {
                     $(stringify!($field) => Some($builder(stringify!($field), $group, &self.$field)),)*
                     _ => self.arp_pages[self.arp_page.value() as usize].control(id),
+                }
+            }
+
+            pub fn control_summary(&self, id: &str) -> Option<ControlSummary> {
+                match id {
+                    $(stringify!($field) => Some(ControlSummary {
+                        id: stringify!($field),
+                        norm: self.$field.unmodulated_normalized_value(),
+                        toggle: summary_is_toggle!($builder),
+                    }),)*
+                    _ => self.arp_pages[self.arp_page.value() as usize].control_summary(id),
                 }
             }
         }
@@ -155,6 +182,14 @@ pub struct Control {
     pub toggle: bool,
 }
 
+/// Values needed by animation and hit testing, without display-string formatting.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ControlSummary {
+    pub id: &'static str,
+    pub norm: f32,
+    pub toggle: bool,
+}
+
 pub(super) fn control(id: &'static str, group: usize, p: &impl Param) -> Control {
     let norm = p.unmodulated_normalized_value();
     Control {
@@ -179,6 +214,19 @@ pub(super) fn toggle(id: &'static str, group: usize, p: &BoolParam) -> Control {
 #[cfg(test)]
 mod signature_tests {
     use super::*;
+
+    fn assert_summary_matches(actual: Option<ControlSummary>, expected: &Control) {
+        assert_eq!(
+            actual,
+            Some(ControlSummary {
+                id: expected.id,
+                norm: expected.norm,
+                toggle: expected.toggle,
+            }),
+            "{}",
+            expected.id,
+        );
+    }
 
     fn assert_control_matches(actual: Control, expected: &Control) {
         assert_eq!(
@@ -230,12 +278,14 @@ mod signature_tests {
         );
         for expected in &route_controls {
             assert_control_matches(route.control(expected.id).unwrap(), expected);
+            assert_summary_matches(route.control_summary(expected.id), expected);
         }
         assert_eq!(
             route.values().as_slice(),
             route_controls.iter().map(|c| c.norm).collect::<Vec<_>>(),
         );
         assert!(route.control("missing").is_none());
+        assert!(route.control_summary("missing").is_none());
 
         let page_controls = page.controls();
         assert_eq!(
@@ -253,8 +303,10 @@ mod signature_tests {
         );
         for expected in &page_controls {
             assert_control_matches(page.control(expected.id).unwrap(), expected);
+            assert_summary_matches(page.control_summary(expected.id), expected);
             if !matches!(expected.id, "swing" | "humanize") {
                 assert_control_matches(params.control(expected.id).unwrap(), expected);
+                assert_summary_matches(params.control_summary(expected.id), expected);
             }
         }
         assert_eq!(
@@ -270,6 +322,49 @@ mod signature_tests {
         }
         assert!(page.control("missing").is_none());
         assert!(params.control("missing").is_none());
+        assert!(page.control_summary("missing").is_none());
+        assert!(params.control_summary("missing").is_none());
+    }
+
+    #[test]
+    fn control_summaries_match_catalog_after_changes_and_keep_global_precedence() {
+        let mut params = ChordboardParams::default();
+        params.arp_page = IntParam::new("Arp page", 5, IntRange::Linear { min: 0, max: 7 });
+        params.latch = BoolParam::new("Latch", !params.latch.value());
+        params.swing = FloatParam::new("Swing", 0.23, FloatRange::Linear { min: 0.0, max: 1.0 });
+        params.arp_pages[5].swing =
+            FloatParam::new("Swing", 0.8, FloatRange::Linear { min: 0.0, max: 1.0 });
+        params.humanize =
+            FloatParam::new("Humanize", 0.37, FloatRange::Linear { min: 0.0, max: 1.0 });
+        params.arp_pages[5].humanize =
+            FloatParam::new("Humanize", 0.7, FloatRange::Linear { min: 0.0, max: 1.0 });
+        params.arp_pages[5].arp_sync = BoolParam::new("Sync", false);
+        for expected in params.controls() {
+            if !expected.id.starts_with("route_") && expected.id != "modulator_bypass" {
+                assert_summary_matches(params.control_summary(expected.id), &expected);
+            }
+        }
+        for id in ["swing", "humanize"] {
+            assert_ne!(
+                params.control_summary(id).unwrap().norm,
+                params.arp_pages[5].control_summary(id).unwrap().norm,
+            );
+        }
+    }
+
+    #[test]
+    fn control_summaries_do_not_format_display_values() {
+        let mut params = ChordboardParams::default();
+        params.tempo = FloatParam::new("Tempo", 120.0, FloatRange::Linear { min: 30.0, max: 240.0 })
+            .with_value_to_string(Arc::new(|_| panic!("summary formatted a display value")));
+        assert_eq!(
+            params.control_summary("tempo"),
+            Some(ControlSummary {
+                id: "tempo",
+                norm: params.tempo.unmodulated_normalized_value(),
+                toggle: false,
+            }),
+        );
     }
 
     #[test]

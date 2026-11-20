@@ -75,7 +75,7 @@ impl ChordboardView {
         ) || self.arp_editor_dragging()
     }
     fn fine_adjustment_at(&self, x: f32, y: f32) -> bool {
-        self.placed_controls()
+        self.placed_control_summaries()
             .iter()
             .any(|(c, r)| !c.toggle && hit(*r, x, y))
             || self.strum_bound_at(x, y).is_some()

@@ -5,13 +5,12 @@ pub struct BundleCopy<'a> {
     pub sign_separately: bool,
 }
 
-pub fn post_bundle(bundle_name: &str, copies: &[BundleCopy<'_>]) -> nih_plug_xtask::Result<()> {
+pub fn post_bundle(workspace: &std::path::Path, bundle_name: &str, copies: &[BundleCopy<'_>]) -> nih_plug_xtask::Result<()> {
     use std::path::PathBuf;
 
     if !std::env::args().any(|a| a == "bundle" || a == "bundle-universal") {
         return Ok(());
     }
-    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let target = std::env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| workspace.join("target"));
@@ -76,11 +75,10 @@ pub fn post_bundle(bundle_name: &str, copies: &[BundleCopy<'_>]) -> nih_plug_xta
     Ok(())
 }
 
-pub fn bundle_voice_licenses(bundle_name: &str) -> nih_plug_xtask::Result<()> {
-    let licenses = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join("pleasant-voice/licenses");
+pub fn bundle_voice_licenses(workspace: &std::path::Path, bundle_name: &str) -> nih_plug_xtask::Result<()> {
+    let licenses = workspace.join("pleasant-voice/licenses");
     post_bundle(
+        workspace,
         bundle_name,
         &[BundleCopy {
             source: &licenses,

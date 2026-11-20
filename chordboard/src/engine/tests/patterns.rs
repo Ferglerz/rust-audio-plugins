@@ -226,8 +226,8 @@ fn note_feedback_records_octave_strikes_even_after_short_notes_end() {
         sample_rate: 1000.0,
         ..Engine::default()
     };
-    e.arp.data.pages[0].ensure_loops(4);
-    for (i, variation) in e.arp.data.pages[0].loops.iter_mut().enumerate() {
+    e.prepared.pages[0].ensure_loops(4);
+    for (i, variation) in e.prepared.pages[0].loops.iter_mut().enumerate() {
         variation.octave = i as i8;
         for step in &mut variation.steps {
             step.gate = 5;

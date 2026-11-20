@@ -25,7 +25,7 @@ fn make_engine(mode: ArpMode, pattern: u8) -> Engine {
         sample_rate: 1000.0,
         ..Engine::default()
     };
-    for page in &mut engine.arp.data.pages {
+    for page in &mut engine.prepared.pages {
         page.ensure_loops(4);
     }
     engine.configure(
@@ -60,7 +60,7 @@ fn tracker_plays_assigned_chords_without_live_keyboard_input_and_advances_by_loo
         ..Engine::default()
     };
     let settings = settings(ArpMode::Loop, 0);
-    engine.arp.data.rows[0].chord = Some(harmony::SavedChord {
+    engine.prepared.rows[0].chord = Some(harmony::SavedChord {
         root: 60,
         quality: 0,
         second: None,
@@ -69,8 +69,8 @@ fn tracker_plays_assigned_chords_without_live_keyboard_input_and_advances_by_loo
         spread: 0,
         transpose: 0,
     });
-    engine.arp.data.rows[0].settings = settings;
-    engine.arp.data.rows[0].duration = 1;
+    engine.prepared.rows[0].settings = settings;
+    engine.prepared.rows[0].duration = 1;
     let mut second = crate::arpeggiator::TrackerRow::default();
     second.id = 2;
     second.chord = Some(harmony::SavedChord {
@@ -83,7 +83,7 @@ fn tracker_plays_assigned_chords_without_live_keyboard_input_and_advances_by_loo
         transpose: 0,
     });
     second.settings = settings;
-    engine.arp.data.rows.push(second);
+    engine.prepared.rows.push(second);
     engine.configure(
         Config {
             mode: MANUAL,
@@ -101,7 +101,7 @@ fn tracker_plays_assigned_chords_without_live_keyboard_input_and_advances_by_loo
     assert!(played.iter().any(|(_, _, note, _)| *note == 60));
     assert!(played.iter().any(|(_, _, note, _)| *note == 67));
     assert_eq!(engine.arp.row_index, 1);
-    assert_eq!(engine.arp.data.rows[engine.arp.row_index].id, 2);
+    assert_eq!(engine.prepared.rows[engine.arp.row_index].id, 2);
     assert_eq!(engine.arp.loops_in_row, 0);
 }
 
@@ -131,7 +131,7 @@ fn tracker_inherited_arp_plays_the_source_pattern_on_the_selected_chord() {
         state.rows[2].arp_octave = -1;
         state.rows[2].arp_inversion = 1;
     });
-    assert!(store.apply_pending(&mut engine.arp.data));
+    assert!(store.apply_pending(&mut engine.prepared));
     engine.accept_arp_generation(&mut |_| {});
     engine.configure(
         Config {
@@ -162,7 +162,7 @@ fn tracker_plays_past_eight_rows_and_wraps_with_each_rows_settings() {
         sample_rate: 1000.0,
         ..Engine::default()
     };
-    engine.arp.data.rows = (0..10)
+    engine.prepared.rows = (0..10)
         .map(|index| crate::arpeggiator::TrackerRow {
             id: index + 1,
             chord: Some(harmony::SavedChord {
@@ -178,8 +178,8 @@ fn tracker_plays_past_eight_rows_and_wraps_with_each_rows_settings() {
             ..Default::default()
         })
         .collect();
-    engine.arp.data.rows[8].settings.pattern = 1;
-    engine.arp.data.rows[8].page.loops[0].octave = 1;
+    engine.prepared.rows[8].settings.pattern = 1;
+    engine.prepared.rows[8].page.loops[0].octave = 1;
     engine.configure(
         Config {
             mode: MANUAL,
@@ -211,13 +211,13 @@ fn tracker_plays_past_eight_rows_and_wraps_with_each_rows_settings() {
 #[test]
 fn tracker_reorder_past_eight_rows_preserves_the_active_rows_settings() {
     let mut engine = Engine::default();
-    engine.arp.data.rows = (1..=10)
+    engine.prepared.rows = (1..=10)
         .map(|id| crate::arpeggiator::TrackerRow {
             id,
             ..Default::default()
         })
         .collect();
-    engine.arp.data.rows[0].page.loops[0].octave = 2;
+    engine.prepared.rows[0].page.loops[0].octave = 2;
     engine.configure(
         Config {
             tracker_enabled: true,
@@ -225,7 +225,7 @@ fn tracker_reorder_past_eight_rows_preserves_the_active_rows_settings() {
         },
         &mut |_| {},
     );
-    engine.arp.data.rows.swap(0, 8);
+    engine.prepared.rows.swap(0, 8);
     engine.accept_arp_generation(&mut |_| {});
     assert_eq!((engine.arp.row_index, engine.arp.row_id), (8, 1));
     assert_eq!(engine.config.arp_loop_octaves[0], 2);
@@ -259,7 +259,7 @@ fn tracker_duration_waits_for_complete_loops_and_once_stays_silent() {
     });
     second.duration = 1;
     second.settings.mode = ArpMode::Loop;
-    engine.arp.data.rows = vec![first, second];
+    engine.prepared.rows = vec![first, second];
     engine.configure(
         Config {
             mode: MANUAL,
@@ -292,7 +292,7 @@ fn tracker_playhead_follows_row_identity_on_reorder_and_advances_after_delete() 
             ..Default::default()
         });
     }
-    engine.arp.data.rows = rows;
+    engine.prepared.rows = rows;
     engine.configure(
         Config {
             tracker_enabled: true,
@@ -302,10 +302,10 @@ fn tracker_playhead_follows_row_identity_on_reorder_and_advances_after_delete() 
     );
     engine.arp.row_index = 1;
     engine.arp.row_id = 2;
-    engine.arp.data.rows.swap(1, 2);
+    engine.prepared.rows.swap(1, 2);
     engine.accept_arp_generation(&mut |_| {});
     assert_eq!((engine.arp.row_index, engine.arp.row_id), (2, 2));
-    engine.arp.data.rows.remove(2);
+    engine.prepared.rows.remove(2);
     engine.accept_arp_generation(&mut |_| {});
     assert_eq!((engine.arp.row_index, engine.arp.row_id), (0, 1));
 }
@@ -349,10 +349,10 @@ fn recall(engine: &mut Engine, root: u8, quality: u8) -> Vec<Out> {
 #[test]
 fn arp_up_down_repeated_notes_have_independent_velocity_and_gate() {
     let mut engine = make_engine(ArpMode::Once, 2);
-    engine.arp.data.pages[0].loops[0].steps[1].velocity = 50;
-    engine.arp.data.pages[0].loops[0].steps[1].gate = 20;
-    engine.arp.data.pages[0].loops[0].steps[3].velocity = 150;
-    engine.arp.data.pages[0].loops[0].steps[3].gate = 80;
+    engine.prepared.pages[0].loops[0].steps[1].velocity = 50;
+    engine.prepared.pages[0].loops[0].steps[1].gate = 20;
+    engine.prepared.pages[0].loops[0].steps[3].velocity = 150;
+    engine.prepared.pages[0].loops[0].steps[3].gate = 80;
     let events = advance(&mut engine, 450);
     assert_eq!(
         attacks(&events),
@@ -607,9 +607,9 @@ fn arp_aligned_loop_retains_swing_and_realigns_after_seek() {
 #[test]
 fn arp_position_counts_muted_steps_and_excludes_skipped_occurrences() {
     let mut engine = make_engine(ArpMode::Once, 2);
-    engine.arp.data.pages[0].loops[0].steps[1].state = StepState::Mute;
-    engine.arp.data.pages[0].loops[0].steps[1].mods = [25, -50];
-    engine.arp.data.pages[0].loops[0].steps[2].state = StepState::Skip;
+    engine.prepared.pages[0].loops[0].steps[1].state = StepState::Mute;
+    engine.prepared.pages[0].loops[0].steps[1].mods = [25, -50];
+    engine.prepared.pages[0].loops[0].steps[2].state = StepState::Skip;
     advance(&mut engine, 1);
     assert_eq!(engine.sources[11], 0.0);
     assert!(attacks(&advance(&mut engine, 100)).is_empty());
@@ -621,8 +621,8 @@ fn arp_position_counts_muted_steps_and_excludes_skipped_occurrences() {
 #[test]
 fn arp_chance_failure_updates_bipolar_modulators() {
     let mut engine = make_engine(ArpMode::Once, 0);
-    engine.arp.data.pages[0].loops[0].steps[1].probability = 0;
-    engine.arp.data.pages[0].loops[0].steps[1].mods = [-100, 75];
+    engine.prepared.pages[0].loops[0].steps[1].probability = 0;
+    engine.prepared.pages[0].loops[0].steps[1].mods = [-100, 75];
     advance(&mut engine, 1);
     assert!(attacks(&advance(&mut engine, 100)).is_empty());
     assert_eq!(&engine.sources[9..12], &[-1.0, 0.75, 0.5]);
@@ -632,7 +632,7 @@ fn arp_chance_failure_updates_bipolar_modulators() {
 #[test]
 fn arp_all_skipped_is_idle_and_single_step_and_disabled_position_are_zero() {
     let mut skipped = make_engine(ArpMode::SyncLoop, 0);
-    for step in skipped.arp.data.pages[0]
+    for step in skipped.prepared.pages[0]
         .loops
         .iter_mut()
         .flat_map(|l| &mut l.steps)
@@ -658,9 +658,9 @@ fn arp_all_skipped_is_idle_and_single_step_and_disabled_position_are_zero() {
 #[test]
 fn arp_negative_microtiming_uses_lookahead_and_positive_timing_can_follow_boundary() {
     let mut engine = make_engine(ArpMode::Once, 0);
-    engine.arp.data.pages[0].loops[0].steps[0].micro = -49;
-    engine.arp.data.pages[0].loops[0].steps[1].micro = -49;
-    engine.arp.data.pages[0].loops[0].steps[2].micro = 49;
+    engine.prepared.pages[0].loops[0].steps[0].micro = -49;
+    engine.prepared.pages[0].loops[0].steps[1].micro = -49;
+    engine.prepared.pages[0].loops[0].steps[2].micro = 49;
     let played = attacks(&advance(&mut engine, 350));
     assert_eq!(
         played,
@@ -678,8 +678,8 @@ fn fractional_render(block_size: usize) -> Vec<(u64, Out)> {
     config.arp_settings[0].swing = 0.21;
     config.arp_settings[0].humanize = 0.33;
     engine.configure(config, &mut |_| {});
-    engine.arp.data.pages[0].loops[0].steps[1].micro = -31;
-    engine.arp.data.pages[0].loops[0].steps[2].micro = 23;
+    engine.prepared.pages[0].loops[0].steps[1].micro = -31;
+    engine.prepared.pages[0].loops[0].steps[2].micro = 23;
     let mut result = Vec::new();
     while engine.now < 5000 {
         let count = block_size.min((5000 - engine.now) as usize);
@@ -705,7 +705,7 @@ fn arp_page_requests_wait_for_boundary_and_keep_manual_octaves_independent() {
     config.arp_page = 1;
     config.arp_settings[1].free_ms = 200.0;
     config.arp_settings[1].octaves = 4;
-    engine.arp.data.pages[1].loops[0].steps[2].octave = 1;
+    engine.prepared.pages[1].loops[0].steps[2].octave = 1;
     engine.configure(config, &mut |_| {});
     assert_eq!(
         (engine.snapshot().arp_page, engine.snapshot().arp_pending),
@@ -737,7 +737,7 @@ fn arp_completed_once_starts_a_requested_page() {
     assert!(engine.arp.done);
     let mut config = engine.host_config;
     config.arp_page = 1;
-    engine.arp.data.pages[1].loops[0].steps[0].octave = 1;
+    engine.prepared.pages[1].loops[0].steps[0].octave = 1;
     engine.configure(config, &mut |_| {});
     assert_eq!(attacks(&advance(&mut engine, 1)), vec![(350, 0, 72, 0.5)]);
     assert_eq!(engine.arp.active, 1);
@@ -776,7 +776,7 @@ fn delay_engine(selected: u8) -> Engine {
     delay.taps[0].time = 10.0;
     delay.taps[0].velocity = 0.5;
     delay.taps[0].feedback = 0.0;
-    engine.arp.data.midi_fx.delay = delay;
+    engine.prepared.midi_fx.delay = delay;
     engine
 }
 
@@ -788,9 +788,9 @@ fn delay_follow_chords_resolves_each_repeat_and_releases_its_actual_pitch() {
         config.mpe = mpe;
         e.configure(config, &mut |_| {});
         recall(&mut e, 60, 0);
-        e.arp.data.midi_fx.delay.follow_chords = true;
-        e.arp.data.midi_fx.delay.taps[0].feedback = 0.5;
-        e.arp.data.midi_fx.delay.taps[0].pitch = 12;
+        e.prepared.midi_fx.delay.follow_chords = true;
+        e.prepared.midi_fx.delay.taps[0].feedback = 0.5;
+        e.prepared.midi_fx.delay.taps[0].pitch = 12;
         e.capture_delay_source(source::STRUM, 123, 61, 0.8, Expression::default(), Some(5));
         let first = advance(&mut e, 11);
         let first_on = attacks(&first)[0];
@@ -813,9 +813,9 @@ fn delay_voice_leading_applies_chord_octaves_without_accumulating_tap_pitch() {
         e.configure(config, &mut |_| {});
         recall(&mut e, 60, 0);
         recall(&mut e, 65, 0);
-        e.arp.data.midi_fx.delay.voice_leading = true;
-        e.arp.data.midi_fx.delay.taps[0].feedback = 0.5;
-        e.arp.data.midi_fx.delay.taps[0].pitch = 12;
+        e.prepared.midi_fx.delay.voice_leading = true;
+        e.prepared.midi_fx.delay.taps[0].feedback = 0.5;
+        e.prepared.midi_fx.delay.taps[0].pitch = 12;
         e.capture_delay_source(source::STRUM, 123, 72, 0.8, Expression::default(), Some(5));
         let played = attacks(&advance(&mut e, 21));
         // C major -> F major is a dominant resolution: Furthest selects the
@@ -852,7 +852,7 @@ fn delay_sounding_echoes_participate_in_the_next_chord_voicing() {
             );
         }
         assert_eq!(attacks(&advance(&mut e, 11)).len(), 3);
-        e.arp.data.midi_fx.delay.voice_leading = enabled;
+        e.prepared.midi_fx.delay.voice_leading = enabled;
         recall(&mut e, 65, 0);
         voicings.push(e.full_notes);
     }
@@ -885,8 +885,8 @@ fn delay_harmony_switches_preserve_non_chord_notes_and_no_chord_tails() {
         config.voice_leading = 0;
         e.configure(config, &mut |_| {});
         recall(&mut e, 60, 0);
-        e.arp.data.midi_fx.delay.follow_chords = follow;
-        e.arp.data.midi_fx.delay.voice_leading = leading;
+        e.prepared.midi_fx.delay.follow_chords = follow;
+        e.prepared.midi_fx.delay.voice_leading = leading;
         e.capture_delay_source(source::STRUM, 123, 61, 0.8, Expression::default(), Some(5));
         if !active {
             e.notes = Notes::default();
@@ -906,8 +906,8 @@ fn delay_follow_chords_combines_with_voice_leading_and_stays_in_midi_range() {
         e.configure(config, &mut |_| {});
         recall(&mut e, 60, 0);
         recall(&mut e, root, 0);
-        e.arp.data.midi_fx.delay.follow_chords = true;
-        e.arp.data.midi_fx.delay.voice_leading = leading;
+        e.prepared.midi_fx.delay.follow_chords = true;
+        e.prepared.midi_fx.delay.voice_leading = leading;
         e.capture_delay_source(
             source::STRUM,
             123,
@@ -925,8 +925,8 @@ fn delay_synced_repeats_advance_while_host_position_is_stopped() {
     for block in [1, 7, 64] {
         let mut e = delay_engine(source::STRUM);
         e.playing = false;
-        e.arp.data.midi_fx.delay.sync = true;
-        e.arp.data.midi_fx.delay.taps[0].time = 0.5;
+        e.prepared.midi_fx.delay.sync = true;
+        e.prepared.midi_fx.delay.taps[0].time = 0.5;
         e.set_host_position(Some(8.0), true);
         e.strike(60, 0.8, 20, &mut |_| {});
         let mut events = Vec::new();
@@ -1020,9 +1020,9 @@ fn delay_integration_held_melody_preserves_duration_and_isolates_pitch_pan() {
     };
     engine.input_bend_values[3] = 0.7;
     engine.input_bend[3] = engine.config.master_range;
-    engine.arp.data.midi_fx.delay.taps[0].pitch = 12;
-    engine.arp.data.midi_fx.delay.taps[0].fine = 25.0;
-    engine.arp.data.midi_fx.delay.taps[0].pan = -0.5;
+    engine.prepared.midi_fx.delay.taps[0].pitch = 12;
+    engine.prepared.midi_fx.delay.taps[0].fine = 25.0;
+    engine.prepared.midi_fx.delay.taps[0].pan = -0.5;
     engine.melody_note(true, 3, 84, 0.8, &mut |_| {});
     let events = advance(&mut engine, 11);
     let played = attacks(&events);
@@ -1051,7 +1051,7 @@ fn delay_integration_bass_sources_and_channel_overrides_respect_dry_ownership() 
     assert_eq!((events[0].0, events[0].2), (10, 36));
     assert_ne!(events[0].1, engine.config.bass_channel);
     let mut blocked = delay_engine(source::STRUM);
-    blocked.arp.data.midi_fx.delay.taps[0].channel = 1;
+    blocked.prepared.midi_fx.delay.taps[0].channel = 1;
     blocked.allocate_owned_voice(60, 0.8, 100, false, 0, None, &mut |_| {});
     let events = advance(&mut blocked, 20);
     assert!(attacks(&events).is_empty());
@@ -1068,7 +1068,7 @@ fn delay_integration_bass_sources_and_channel_overrides_respect_dry_ownership() 
 #[test]
 fn delay_integration_reuses_released_channels_and_panic_clears_tails() {
     let mut engine = delay_engine(source::STRUM);
-    engine.arp.data.midi_fx.delay.taps[0].feedback = 0.5;
+    engine.prepared.midi_fx.delay.taps[0].feedback = 0.5;
     engine.allocate_owned_voice(60, 0.8, 3, false, 0, None, &mut |_| {});
     let played = attacks(&advance(&mut engine, 21));
     assert_eq!(played, vec![(10, 2, 60, 0.4), (20, 2, 60, 0.2)]);
@@ -1137,7 +1137,7 @@ fn arp_continuous_page_modes_preserve_phase_and_early_occurrences_never_double()
     e.configure(c, &mut |_| {});
     assert_eq!(attacks(&advance(&mut e, 51))[0].2, 67);
     let mut e = make_engine(ArpMode::SyncLoop, 0);
-    e.arp.data.pages[0].loops[0].steps[2].micro = -49;
+    e.prepared.pages[0].loops[0].steps[2].micro = -49;
     advance(&mut e, 152); // phase 2 already sounded at151
     let mut c = e.host_config;
     c.arp_page = 1;
@@ -1173,7 +1173,7 @@ fn delay_mpe_melody_reclaims_echo_channel_before_attack_without_late_off_or_pan(
     c.mpe = true;
     c.members = 2;
     e.configure(c, &mut |_| {});
-    e.arp.data.midi_fx.delay.taps[0].pan = -1.0;
+    e.prepared.midi_fx.delay.taps[0].pan = -1.0;
     e.capture_delay_source(source::STRUM, 123, 64, 0.8, Expression::default(), Some(5));
     assert_eq!(attacks(&advance(&mut e, 11)), [(10, 1, 64, 0.4)]);
     let mut events = Vec::new();
@@ -1200,7 +1200,7 @@ fn delay_mpe_melody_reclaims_echo_channel_before_attack_without_late_off_or_pan(
 #[test]
 fn arp_adjustment_modulation_changes_the_current_strike_pitch() {
     let mut e = make_engine(ArpMode::SyncLoop, 0);
-    e.arp.data.pages[0].loops[0].steps[0].mods[0] = 50;
+    e.prepared.pages[0].loops[0].steps[0].mods[0] = 50;
     let mut c = e.host_config;
     c.routes[1] = routing::Route {
         source: 10,
@@ -1222,11 +1222,11 @@ fn arp_loop_octaves_follow_each_complete_ordering_and_step_adjustments() {
     let mut config = engine.host_config;
     config.arp_settings[0].octaves = 3;
     engine.configure(config, &mut |_| {});
-    for (l, octave) in engine.arp.data.pages[0].loops.iter_mut().zip([0, -1, 2, 0]) {
+    for (l, octave) in engine.prepared.pages[0].loops.iter_mut().zip([0, -1, 2, 0]) {
         l.octave = octave;
     }
     engine.configure(engine.host_config, &mut |_| {});
-    engine.arp.data.pages[0].loops[1].steps[1].octave = 1;
+    engine.prepared.pages[0].loops[1].steps[1].octave = 1;
     let snapshot = engine.snapshot();
     assert_eq!(
         &snapshot.arp_notes[..snapshot.arp_len as usize],
@@ -1248,7 +1248,7 @@ fn arp_four_loops_display_and_play_all_96_occurrences() {
     let mut config = engine.host_config;
     config.arp_settings[0].octaves = 4;
     engine.configure(config, &mut |_| {});
-    for (l, octave) in engine.arp.data.pages[0].loops.iter_mut().zip([0, 1, 2, 3]) {
+    for (l, octave) in engine.prepared.pages[0].loops.iter_mut().zip([0, 1, 2, 3]) {
         l.octave = octave;
     }
     engine.configure(engine.host_config, &mut |_| {});
@@ -1268,11 +1268,11 @@ fn arp_loop_and_step_octaves_combine_before_midi_range_validation() {
     for (root, loop_octave, step_octave) in [(120, 1, -1), (4, -1, 1)] {
         let mut engine = make_engine(ArpMode::Once, 0);
         engine.notes = notes(&[root]);
-        for l in &mut engine.arp.data.pages[0].loops {
+        for l in &mut engine.prepared.pages[0].loops {
             l.octave = loop_octave;
         }
         engine.configure(engine.host_config, &mut |_| {});
-        engine.arp.data.pages[0].loops[0].steps[0].octave = step_octave;
+        engine.prepared.pages[0].loops[0].steps[0].octave = step_octave;
         assert_eq!(
             attacks(&advance(&mut engine, 101))
                 .iter()
@@ -1283,7 +1283,7 @@ fn arp_loop_and_step_octaves_combine_before_midi_range_validation() {
     }
     let mut engine = make_engine(ArpMode::Once, 0);
     engine.notes = notes(&[120]);
-    for l in &mut engine.arp.data.pages[0].loops {
+    for l in &mut engine.prepared.pages[0].loops {
         l.octave = 1;
     }
     engine.configure(engine.host_config, &mut |_| {});
@@ -1335,7 +1335,7 @@ fn arp_paste_is_atomic_at_the_next_note_and_preserves_clock_and_sounding_notes()
     };
     let store = crate::arpeggiator::Store::new();
     store.replace_page(0, page, replacement);
-    assert!(store.apply_pending(&mut e.arp.data));
+    assert!(store.apply_pending(&mut e.prepared));
     let mut immediate = Vec::new();
     e.accept_arp_generation(&mut |event| immediate.push(event));
     // The host may still be applying the individual parameter notifications.
@@ -1360,7 +1360,7 @@ fn arp_paste_is_atomic_at_the_next_note_and_preserves_clock_and_sounding_notes()
 #[test]
 fn arp_gate_telemetry_uses_the_saved_step_without_modulation() {
     let mut e = make_engine(ArpMode::Once, 0);
-    e.arp.data.pages[0].loops[0].steps[0].gate = 20;
+    e.prepared.pages[0].loops[0].steps[0].gate = 20;
     let c = e.host_config;
     e.configure(c, &mut |_| {});
     let effective = e.effective_arp_gate(20);
@@ -1369,7 +1369,7 @@ fn arp_gate_telemetry_uses_the_saved_step_without_modulation() {
     let events = advance(&mut e, 100);
     let off = (100.0 * effective).round() as u64;
     assert!(events.contains(&(off, Out::Off(0, 60, 0.0))));
-    assert_eq!(e.arp.data.pages[0].loops[0].steps[0].gate, 20);
+    assert_eq!(e.prepared.pages[0].loops[0].steps[0].gate, 20);
 }
 
 #[test]
@@ -1382,7 +1382,7 @@ fn arp_pasted_once_mode_finishes_at_the_wrapped_boundary_without_restarting() {
     let mut page = crate::arpeggiator::Page::default();
     page.loops[0].octave = 1;
     store.replace_page(0, page, settings(ArpMode::Once, 1));
-    assert!(store.apply_pending(&mut e.arp.data));
+    assert!(store.apply_pending(&mut e.prepared));
     e.accept_arp_generation(&mut |_| {});
     e.configure(e.host_config, &mut |_| {});
     assert_eq!((e.arp.phase, e.arp.next), (phase, boundary));
@@ -1398,7 +1398,7 @@ fn arp_pasted_once_mode_finishes_at_the_wrapped_boundary_without_restarting() {
 fn global_delay_captures_every_row_with_or_without_arp_and_preserves_tails() {
     for arp_enabled in [false, true] {
         let mut e = delay_engine(source::STRUM);
-        e.arp.data.rows = (0..3)
+        e.prepared.rows = (0..3)
             .map(|i| crate::arpeggiator::TrackerRow {
                 id: i + 1,
                 ..Default::default()
@@ -1414,7 +1414,7 @@ fn global_delay_captures_every_row_with_or_without_arp_and_preserves_tails() {
         // Change row while the first echo sounds, then capture on each new row.
         for row in 1..3 {
             e.arp.row_index = row;
-            e.arp.row_id = e.arp.data.rows[row].id;
+            e.arp.row_id = e.prepared.rows[row].id;
             e.arp.active = row as u8;
             let mut transition = Vec::new();
             e.configure(config, &mut |out| transition.push(out));
@@ -1449,12 +1449,12 @@ fn global_delay_captures_every_row_with_or_without_arp_and_preserves_tails() {
 #[test]
 fn global_delay_bypass_on_another_row_releases_echoes_and_pending_attacks() {
     let mut e = delay_engine(source::STRUM);
-    e.arp.data.midi_fx.delay.taps[0].feedback = 0.5;
+    e.prepared.midi_fx.delay.taps[0].feedback = 0.5;
     e.update_delay_power(&mut |_| {});
     e.capture_delay_source(source::STRUM, 123, 60, 0.8, Expression::default(), Some(5));
     advance(&mut e, 11);
     e.arp.active = 1;
-    e.arp.data.midi_fx.delay.enabled = false;
+    e.prepared.midi_fx.delay.enabled = false;
     let mut events = Vec::new();
     e.update_delay_power(&mut |out| events.push(out));
     assert!(events.contains(&Out::Off(2, 60, 0.0)));
@@ -1468,7 +1468,7 @@ fn global_delay_tails_cross_automatic_tracker_row_boundaries() {
         sample_rate: 1000.0,
         ..Engine::default()
     };
-    e.arp.data.rows = [60, 65, 67]
+    e.prepared.rows = [60, 65, 67]
         .into_iter()
         .enumerate()
         .map(|(i, root)| crate::arpeggiator::TrackerRow {
@@ -1486,7 +1486,7 @@ fn global_delay_tails_cross_automatic_tracker_row_boundaries() {
             ..Default::default()
         })
         .collect();
-    let delay = &mut e.arp.data.midi_fx.delay;
+    let delay = &mut e.prepared.midi_fx.delay;
     delay.enabled = true;
     delay.sync = false;
     delay.taps[0].time = 350.0;
@@ -1519,7 +1519,7 @@ fn global_delay_tails_cross_automatic_tracker_row_boundaries() {
 fn global_delay_transport_seek_and_channel_change_release_sounding_tails() {
     for seek in [false, true] {
         let mut e = delay_engine(source::STRUM);
-        e.arp.data.midi_fx.delay.taps[0].feedback = 0.5;
+        e.prepared.midi_fx.delay.taps[0].feedback = 0.5;
         e.capture_delay_source(source::STRUM, 123, 60, 0.8, Expression::default(), Some(5));
         advance(&mut e, 11);
         let mut events = Vec::new();
@@ -1538,12 +1538,12 @@ fn global_delay_transport_seek_and_channel_change_release_sounding_tails() {
 
 fn tracker_transport_engine() -> Engine {
     let mut engine = Engine { sample_rate: 1000.0, ..Engine::default() };
-    engine.arp.data.rows[0].chord = harmony::parse_chord_symbol("C");
-    engine.arp.data.rows[0].settings = settings(ArpMode::Loop, 0);
-    let mut second = engine.arp.data.rows[0].clone();
+    engine.prepared.rows[0].chord = harmony::parse_chord_symbol("C");
+    engine.prepared.rows[0].settings = settings(ArpMode::Loop, 0);
+    let mut second = engine.prepared.rows[0].clone();
     second.id = 2;
     second.chord = harmony::parse_chord_symbol("D");
-    engine.arp.data.rows.push(second);
+    engine.prepared.rows.push(second);
     engine.configure(Config {
         arp_enabled: true, tracker_enabled: true, bass_enabled: false,
         ..Config::default()
@@ -1595,7 +1595,7 @@ fn tracker_transport_pause_releases_notes_freezes_position_and_resumes_remaining
 #[test]
 fn tracker_transport_tempo_changes_while_paused_retime_the_remaining_interval() {
     let mut engine = tracker_transport_engine();
-    for row in &mut engine.arp.data.rows { row.settings.sync = true; row.settings.rate = 0.25; }
+    for row in &mut engine.prepared.rows { row.settings.sync = true; row.settings.rate = 0.25; }
     engine.configure(engine.host_config, &mut |_| {});
     engine.command(Command::TrackerPlay(0), &mut |_| {});
     advance(&mut engine, 25);
@@ -1641,10 +1641,10 @@ fn tracker_transport_play_retains_selection_until_host_enables_the_parameter() {
 #[test]
 fn global_swing_and_humanize_override_rows_and_performance() {
     let mut e = Engine::default();
-    e.arp.data.rows[0].settings.swing = -0.7;
-    e.arp.data.rows[0].settings.humanize = 0.9;
-    e.arp.data.performance.settings.swing = -0.2;
-    e.arp.data.performance.settings.humanize = 0.8;
+    e.prepared.rows[0].settings.swing = -0.7;
+    e.prepared.rows[0].settings.humanize = 0.9;
+    e.prepared.performance.settings.swing = -0.2;
+    e.prepared.performance.settings.humanize = 0.8;
     let config = Config { tracker_enabled: true, arp_enabled: true, swing: 0.3, humanize: 0.4, ..Config::default() };
     e.configure(config, &mut |_| {});
     assert_eq!((e.config.swing, e.config.humanize), (0.3, 0.4));

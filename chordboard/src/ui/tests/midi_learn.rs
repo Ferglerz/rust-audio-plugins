@@ -167,10 +167,14 @@ fn midi_learn_keeps_page_navigation_and_uses_only_visible_controls() {
 
     click(&mut view, &mut cx, entity, midi_fx::FX_TAB);
     assert!(view.quick_midi.show && view.fx_ui.open);
-    let targets = view.surface_midi_targets();
-    assert_eq!(targets.len(), crate::midi_fx::EFFECTS.len());
     for effect in crate::midi_fx::EFFECTS {
         let binding = midi::fx_power_target(effect);
+        if !view.surface_midi_targets().iter().any(|(id, _)| *id == binding) {
+            let (x, y, _, _) = midi_fx::VIEWPORT;
+            event(&mut view, &mut cx, entity, x + 10.0, y + 10.0,
+                WindowEvent::MouseScroll(0.0, -100.0));
+        }
+        let targets = view.surface_midi_targets();
         let (_, rect) = targets.iter().find(|(id, _)| *id == binding).unwrap();
         click(&mut view, &mut cx, entity, *rect);
         assert_eq!(view.bridge.quick_learn.load(Ordering::Acquire), binding as u32 + 1);

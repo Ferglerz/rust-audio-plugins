@@ -8,8 +8,7 @@ impl StripView {
         let (dx, dy, dw, dh) = self.dyn_bounds();
         let is_pre = self.is_pre();
 
-        d.rect(px, py, pw, ph, PANEL);
-        d.outline((px, py, pw, ph), LINE);
+        d.panel((px, py, pw, ph), PANEL, LINE);
         let pse_power_r = self.pse_power_button_rect();
         let pse_hovered = self
             .idle_hover()
@@ -58,7 +57,7 @@ impl StripView {
                 let sig_h = sh * sig_frac;
                 let sig_top_y = sy + sh - sig_h;
 
-                let p1 = self.param(1);
+                let p1 = self.param(GlobalControl::Gate);
                 let thresh_norm = p1.unmodulated_normalized_value();
                 let thresh_y = sy + sh * (1.0 - thresh_norm);
 
@@ -84,7 +83,7 @@ impl StripView {
                 } else {
                     self.shared.pse_gr.load(Ordering::Relaxed)
                 };
-                let depth_norm = self.param(7).unmodulated_normalized_value();
+                let depth_norm = self.param(GlobalControl::PseDepth).unmodulated_normalized_value();
                 let pse_gr = catch_gr_to_depth(pse_gr, depth_norm * 20.0);
                 let gr_bar_h = gh_m * (pse_gr / 20.0).clamp(0.0, 1.0);
                 if !pse_bypassed && gr_bar_h > 0.5 {
@@ -97,7 +96,7 @@ impl StripView {
                     && (self
                         .idle_hover()
                         .is_some_and(|(hx, hy)| inside(hx, hy, depth_handle))
-                        || self.drag == Some(Target::Global(7)));
+                        || self.drag == Some(Target::Global(GlobalControl::PseDepth)));
                 let handle_color = if pse_bypassed {
                     MUTED
                 } else if depth_hover {
@@ -133,7 +132,7 @@ impl StripView {
                 let handle_hover = self
                     .idle_hover()
                     .is_some_and(|(hx, hy)| inside(hx, hy, handle_hit))
-                    || self.drag == Some(Target::Global(1));
+                    || self.drag == Some(Target::Global(GlobalControl::Gate));
                 d.grab_bar(
                     handle,
                     if pse_bypassed {
@@ -151,7 +150,7 @@ impl StripView {
                     p1.normalized_value_to_string(p1.unmodulated_normalized_value(), true)
                 };
                 let pse_dragging_knee = matches!(self.drag, Some(Target::PseKnee { .. }));
-                let pse_dragging_depth = self.drag == Some(Target::Global(7));
+                let pse_dragging_depth = self.drag == Some(Target::Global(GlobalControl::PseDepth));
                 if pse_dragging_knee || pse_dragging_depth {
                     let readout = if pse_dragging_depth {
                         format!(
@@ -194,24 +193,28 @@ impl StripView {
         if pse_ctrl_off > -pw && pse_ctrl_off < pw {
             d.offset_x = pse_ctrl_off;
             {
-                for (i, label) in [(8, "HYSTERESIS"), (10, "TIME"), (2, "VOICE DET")] {
-                    let p = self.param(i);
-                    let value = if i == 10 {
+                for (control, label) in [
+                    (GlobalControl::PseHysteresis, "HYSTERESIS"),
+                    (GlobalControl::PseTime, "TIME"),
+                    (GlobalControl::PseVoice, "VOICE DET"),
+                ] {
+                    let p = self.param(control);
+                    let value = if control == GlobalControl::PseTime {
                         format_pse_time(p.value() as f64, self.params.pse_peak.value())
                     } else {
                         p.normalized_value_to_string(p.unmodulated_normalized_value(), true)
                     };
                     d.knob(
-                        self.pse_knob_rect(i),
+                        self.pse_knob_rect(control),
                         label,
                         &value,
                         p.unmodulated_normalized_value(),
-                        if i == 2 { TEAL } else { PSE_BLUE },
+                        if control == GlobalControl::PseVoice { TEAL } else { PSE_BLUE },
                         pse_bypassed,
                     );
                 }
 
-                let time_r = self.pse_knob_rect(10);
+                let time_r = self.pse_knob_rect(GlobalControl::PseTime);
                 let det_r = self.pse_detect_mode_rect();
                 let joined_card = (
                     time_r.0 - 2.0,
@@ -274,8 +277,7 @@ impl StripView {
         d.reset_scissor();
         d.offset_x = 0.0;
 
-        d.rect(dx, dy, dw, dh, PANEL);
-        d.outline((dx, dy, dw, dh), LINE);
+        d.panel((dx, dy, dw, dh), PANEL, LINE);
         let dyn_power_r = self.dyn_power_button_rect();
         let dyn_hovered = self
             .idle_hover()
@@ -324,7 +326,7 @@ impl StripView {
                 let sig_h = sh * sig_frac;
                 let sig_top_y = sy + sh - sig_h;
 
-                let p0 = self.param(0);
+                let p0 = self.param(GlobalControl::Compression);
                 let thresh_norm = p0.unmodulated_normalized_value();
                 let thresh_y = sy + sh * thresh_norm;
 
@@ -355,7 +357,7 @@ impl StripView {
                 } else {
                     self.shared.gr_uncapped.load(Ordering::Relaxed)
                 };
-                let depth_norm = self.param(14).unmodulated_normalized_value();
+                let depth_norm = self.param(GlobalControl::CompDepth).unmodulated_normalized_value();
                 let gr = catch_gr_to_depth(gr, depth_norm * GR_METER_DB);
                 let (gr_bar_h, gr_uncapped_h) = gr_meter_bar_heights(gr, gr_uncapped, gh_m);
                 if !comp_bypassed && gr_uncapped_h > gr_bar_h + 0.5 {
@@ -371,7 +373,7 @@ impl StripView {
                     && (self
                         .idle_hover()
                         .is_some_and(|(hx, hy)| inside(hx, hy, depth_handle))
-                        || self.drag == Some(Target::Global(14)));
+                        || self.drag == Some(Target::Global(GlobalControl::CompDepth)));
                 let handle_color = if comp_bypassed {
                     MUTED
                 } else if depth_hover {
@@ -407,7 +409,7 @@ impl StripView {
                 let handle_hover = self
                     .idle_hover()
                     .is_some_and(|(hx, hy)| inside(hx, hy, handle_hit))
-                    || self.drag == Some(Target::Global(0));
+                    || self.drag == Some(Target::Global(GlobalControl::Compression));
                 d.grab_bar(
                     handle,
                     if comp_bypassed {
@@ -422,7 +424,7 @@ impl StripView {
                 let thresh_val_str =
                     p0.normalized_value_to_string(p0.unmodulated_normalized_value(), true);
                 let comp_dragging_knee = matches!(self.drag, Some(Target::CompKnee { .. }));
-                let comp_dragging_depth = self.drag == Some(Target::Global(14));
+                let comp_dragging_depth = self.drag == Some(Target::Global(GlobalControl::CompDepth));
                 if comp_dragging_knee || comp_dragging_depth {
                     let readout = if comp_dragging_depth {
                         format!(
@@ -465,18 +467,18 @@ impl StripView {
         if dyn_ctrl_off > -dw && dyn_ctrl_off < dw {
             d.offset_x = dyn_ctrl_off;
             {
-                for (i, label, color) in [
-                    (5, "ATTACK", GOLD),
-                    (11, "RELEASE", GOLD),
-                    (6, "RATIO", GOLD),
-                    (3, "DRY", TEAL),
-                    (4, "WET", GOLD),
+                for (control, label, color) in [
+                    (GlobalControl::CompAttack, "ATTACK", GOLD),
+                    (GlobalControl::CompRelease, "RELEASE", GOLD),
+                    (GlobalControl::CompRatio, "RATIO", GOLD),
+                    (GlobalControl::Dry, "DRY", TEAL),
+                    (GlobalControl::Wet, "WET", GOLD),
                 ] {
-                    let p = self.param(i);
+                    let p = self.param(control);
                     let value =
                         p.normalized_value_to_string(p.unmodulated_normalized_value(), true);
                     d.knob(
-                        self.global_rect(i),
+                        self.global_rect(control),
                         label,
                         &value,
                         p.unmodulated_normalized_value(),
@@ -491,8 +493,7 @@ impl StripView {
 
         let wall_bypassed = !self.params.wall_on.value();
         let (wx, wy, ww, wh) = self.wall_bounds();
-        d.rect(wx, wy, ww, wh, PANEL);
-        d.outline((wx, wy, ww, wh), LINE);
+        d.panel((wx, wy, ww, wh), PANEL, LINE);
         let wall_power_r = self.wall_power_button_rect();
         let wall_hovered = self
             .idle_hover()
@@ -545,7 +546,7 @@ impl StripView {
                 let sig_h = sh * sig_frac;
                 let sig_top_y = sy + sh - sig_h;
 
-                let p18 = self.param(18);
+                let p18 = self.param(GlobalControl::WallThreshold);
                 let thresh_norm = p18.unmodulated_normalized_value();
                 let thresh_y = sy + sh * thresh_norm;
 
@@ -576,7 +577,7 @@ impl StripView {
                 let handle_hover = self
                     .idle_hover()
                     .is_some_and(|(hx, hy)| inside(hx, hy, handle_hit))
-                    || self.drag == Some(Target::Global(18));
+                    || self.drag == Some(Target::Global(GlobalControl::WallThreshold));
                 d.grab_bar(
                     handle,
                     if wall_bypassed {
@@ -602,12 +603,15 @@ impl StripView {
         if wall_ctrl_off > -ww && wall_ctrl_off < ww {
             d.offset_x = wall_ctrl_off;
             {
-                for (i, label) in [(16, "EVEN"), (17, "ODD")] {
-                    let p = self.param(i);
+                for (control, label) in [
+                    (GlobalControl::WallEven, "EVEN"),
+                    (GlobalControl::WallOdd, "ODD"),
+                ] {
+                    let p = self.param(control);
                     let value =
                         p.normalized_value_to_string(p.unmodulated_normalized_value(), true);
                     d.knob(
-                        self.wall_knob_rect(i),
+                        self.wall_knob_rect(control),
                         label,
                         &value,
                         p.unmodulated_normalized_value(),

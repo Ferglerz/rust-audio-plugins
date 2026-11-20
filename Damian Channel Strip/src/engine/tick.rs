@@ -234,17 +234,6 @@ impl Engine {
 
         self.band_input.tick(bank_in);
         let (mut x, mut dry) = self.bank.tick(bank_in, self.eq1_mix, self.eq2_mix);
-        let selected = self.shared.selected_id.load(Ordering::Relaxed);
-        let band_gr = if self.bank.config.mode == ProcessingMode::LinearPhase {
-            0.0
-        } else {
-            self.bank
-                .bands
-                .iter()
-                .chain(self.bank.eq2_bands.iter())
-                .find(|b| b.band.id == selected)
-                .map_or(0.0, |b| b.reduction)
-        };
         if self.transition > 0 {
             if let Some(previous) = &mut self.previous {
                 let (old, old_dry) = previous.tick(bank_in, self.eq1_mix, self.eq2_mix);
@@ -419,6 +408,17 @@ impl Engine {
             self.shared
                 .output
                 .store(gain_db(self.out_peak) as f32, Ordering::Relaxed);
+            let selected = self.shared.selected_id.load(Ordering::Relaxed);
+            let band_gr = if self.bank.config.mode == ProcessingMode::LinearPhase {
+                0.0
+            } else {
+                self.bank
+                    .bands
+                    .iter()
+                    .chain(self.bank.eq2_bands.iter())
+                    .find(|b| b.band.id == selected)
+                    .map_or(0.0, |b| b.reduction)
+            };
             self.shared.band_gr.store(band_gr as f32, Ordering::Relaxed);
             self.dyn_gr_scratch.clear();
             if self.bank.config.mode != ProcessingMode::LinearPhase {

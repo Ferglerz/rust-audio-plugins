@@ -110,7 +110,13 @@ impl TapeStopView {
             d.value_edit(edit, GOLD);
         }
         d.text(XY_PAD.0, XY_PAD.1 - 8.0, "XY · Y: Drop Time", 11.0, MUTED);
-        pleasant_ui::xy_pad::draw(d, XY_PAD, self.pad_values());
+        pleasant_ui::xy_pad::draw_colored(
+            d,
+            XY_PAD,
+            self.pad_values(),
+            self.knob_info(KnobId::DropTime).2,
+            if self.x_id() == KnobId::Curve { GOLD } else { self.knob_info(KnobId::Return).2 },
+        );
         for (rect, label) in [
             (
                 XY_AXIS,

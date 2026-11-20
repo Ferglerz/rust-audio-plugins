@@ -318,9 +318,17 @@ impl Default for ArpPlayback {
         Self { notes: [0; crate::arpeggiator::STEPS], len: 0, phase: 0, step: 0, running: false, aligned: false }
     }
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct MidiInputNote {
+    pub velocity: f32,
+    pub strike: u32,
+    pub held: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Snapshot {
     pub held_notes: [bool; 128],
+    pub(crate) midi_input: [MidiInputNote; 128],
     pub sounding_notes: [bool; 128],
     /// Lowest note owned by the independent bass layer, including sustained notes.
     pub bass_note: Option<u8>,
@@ -373,6 +381,7 @@ impl Default for Snapshot {
     fn default() -> Self {
         Self {
             held_notes: [false; 128],
+            midi_input: [MidiInputNote::default(); 128],
             sounding_notes: [false; 128],
             bass_note: None,
             sources: SOURCE_DEFAULTS,

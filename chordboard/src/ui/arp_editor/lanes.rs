@@ -152,9 +152,9 @@ impl AdjustLane for TapLane {
             Self::Velocity => "Velocity",
             Self::Feedback => "Feedback",
             Self::Pitch => "Pitch",
-            Self::Fine => "Fine Pitch",
+            Self::Fine => "Fine pitch",
             Self::Pan => "Pan",
-            Self::Channel => "Output Channel",
+            Self::Channel => "Output channel",
         }
     }
     fn range(self) -> (f32, f32) {

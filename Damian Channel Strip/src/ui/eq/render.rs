@@ -32,8 +32,7 @@ impl StripView {
         let eq_x = eq_b.0;
         let gx = self.gx();
         let gw = self.gw();
-        d.rect(eq_b.0, eq_b.1, eq_b.2, eq_b.3, PANEL);
-        d.outline(eq_b, LINE);
+        d.panel(eq_b, PANEL, LINE);
 
         let eq_power_r = self.eq_power_rect();
         let eq_power_hovered = self

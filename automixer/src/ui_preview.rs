@@ -30,6 +30,16 @@ impl Drop for Context {
 #[test]
 #[ignore = "Manual offscreen UI check; writes /tmp/automixer-{dark,light}.png"]
 fn render_editor_preview() {
+    render_previews(false);
+}
+
+#[test]
+#[ignore = "Manual offscreen UI check; writes steady and transient spectral pull previews to /tmp"]
+fn render_spectral_pull_preview() {
+    render_previews(true);
+}
+
+fn render_previews(pulls_only: bool) {
     let mut format = std::ptr::null_mut();
     let mut context = std::ptr::null_mut();
     let mut count = 0;
@@ -53,18 +63,24 @@ fn render_editor_preview() {
     }
     .unwrap();
     let mut canvas = Canvas::new(renderer).unwrap();
-    for (mode_name, mode, setup, _track) in [
-        ("gain", MixMode::GainSharing, false, false),
-        ("gain-midi", MixMode::GainSharing, false, false),
-        ("gain-setup", MixMode::GainSharing, true, false),
-        ("spectral", MixMode::SpectralSpace, false, false),
-        ("spectral-page2", MixMode::SpectralSpace, false, false),
-        ("spectral-stale", MixMode::SpectralSpace, false, false),
-        ("spectral-setup", MixMode::SpectralSpace, true, false),
-        ("spectral-track", MixMode::SpectralSpace, false, true),
+    for (mode_name, spectral, setup, _track) in [
+        ("gain", false, false, false),
+        ("gain-midi", false, false, false),
+        ("gain-setup", false, true, false),
+        ("spectral", true, false, false),
+        ("spectral-pull-steady", true, false, false),
+        ("spectral-pull-transient", true, false, false),
+        ("spectral-page2", true, false, false),
+        ("spectral-stale", true, false, false),
+        ("spectral-setup", true, true, false),
+        ("spectral-track", true, false, true),
     ] {
+        if mode_name.starts_with("spectral-pull") != pulls_only {
+            continue;
+        }
         let mut network = Network::default();
-        Arc::get_mut(&mut network.params).unwrap().mode = EnumParam::new("Mix mode", mode);
+        Arc::get_mut(&mut network.params).unwrap().spectral_bypass =
+            BoolParam::new("Bypass spectral", !spectral).non_automatable();
         Arc::get_mut(&mut network.params).unwrap().mics[7].group =
             EnumParam::new("Group", MicGroup::Drums);
         {
@@ -132,15 +148,25 @@ fn render_editor_preview() {
             slot.updated_ms.store(network.now_ms(), Ordering::Relaxed);
         }
         network.params.midi(0, 21, 92.0 / 127.0);
-        if mode == MixMode::SpectralSpace {
-            let mut engines: Vec<_> = (0..8)
+        let show_pull = mode_name.starts_with("spectral-pull");
+        if spectral {
+            let engine_count = if show_pull { 2 } else { 8 };
+            let mut engines: Vec<_> = (0..engine_count)
                 .map(|_| crate::spectral::Spectral::new(48000.0, 512))
                 .collect();
-            for n in 0..8192 {
+            let frames = 8192;
+            for n in 0..frames {
                 for (i, engine) in engines.iter_mut().enumerate() {
-                    let sample = (std::f32::consts::TAU * (5 + i * 37) as f32 * n as f32 / 2048.0)
-                        .sin()
-                        * 0.1;
+                    let bin = if show_pull && i < 2 { 84 } else { 5 + i * 37 };
+                    let attack =
+                        if i == 1 && n >= frames - 512 && mode_name == "spectral-pull-transient" {
+                            5.5
+                        } else {
+                            1.0
+                        };
+                    let sample = (std::f32::consts::TAU * bin as f32 * n as f32 / 2048.0).sin()
+                        * 0.1
+                        * attack;
                     engine.process(
                         [sample; 2],
                         &network,
@@ -163,16 +189,23 @@ fn render_editor_preview() {
         if mode_name == "spectral-page2" {
             view.page = 1;
         }
+        if show_pull {
+            let graph = StripLayout::new(view.page_strips().first().unwrap().1, true).spectrum();
+            view.hover = Some((graph.0 + graph.2 * 0.5, graph.1 + graph.3 * 0.5));
+        }
         view.setup_open = setup;
-        view.spectral_setup = mode == MixMode::SpectralSpace;
+        view.spectral_setup = spectral;
         if mode_name == "gain-midi" {
             view.open_menu(7);
         }
         view.tray_started = Instant::now() - Duration::from_secs(1);
-        for (light, name, scale) in [(false, "dark", 1.0), (true, "light", 1.5)] {
+        for (light, name, scale) in [
+            (false, "dark", 1.0),
+            (true, "light", if show_pull { 0.75 } else { 1.5 }),
+        ] {
+            // This fixture stays frozen while the offscreen renderer draws and reads back.
             for slot in &view.network.slots {
-                slot.updated_ms
-                    .store(view.network.now_ms(), Ordering::Relaxed);
+                slot.updated_ms.store(u64::MAX, Ordering::Relaxed);
             }
             if mode_name == "spectral-stale" {
                 view.network.slots[0].updated_ms.store(0, Ordering::Relaxed);
@@ -204,7 +237,22 @@ fn render_editor_preview() {
                 Some(font),
             )
             .unwrap();
-            view.paint(&mut draw);
+            if show_pull {
+                view.pull_motion.set(PullMotion::default());
+                let now = Instant::now();
+                view.paint_at(&mut draw, now);
+                let mut draw = Draw::new_fitted(
+                    draw.c,
+                    light,
+                    (0.0, 0.0, width as f32, height as f32),
+                    SIZE,
+                    Some(font),
+                )
+                .unwrap();
+                view.paint_at(&mut draw, now + Duration::from_millis(95));
+            } else {
+                view.paint(&mut draw);
+            }
             canvas.flush();
             let pixels = canvas.screenshot().unwrap();
             let bytes: Vec<u8> = pixels

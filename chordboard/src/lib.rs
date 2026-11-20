@@ -53,6 +53,7 @@ pub struct Chordboard {
     params: Arc<ChordboardParams>,
     bridge: Arc<Bridge>,
     engine: Engine,
+    snapshot_clock: bridge::SnapshotClock,
     expected_position: Option<i64>,
     last_axes: [f32; 2],
     pending_reset: bool,
@@ -64,6 +65,7 @@ impl Default for Chordboard {
             params: Arc::new(ChordboardParams::default()),
             bridge: Arc::new(Bridge::default()),
             engine: Engine::default(),
+            snapshot_clock: bridge::SnapshotClock::default(),
             expected_position: None,
             last_axes: [0.0, 0.8],
             pending_reset: false,
@@ -148,7 +150,7 @@ impl Chordboard {
         // that page’s host settings until its complete prepared transaction arrives.
         for page in 0..arpeggiator::PAGES {
             let pending = self.params.arpeggiator.replacement_serials[page].load(Ordering::Acquire);
-            let applied = self.engine.arp.data.pages[page]
+            let applied = self.engine.prepared.pages[page]
                 .replacement
                 .map_or(0, |r| r.serial);
             if pending != 0 && pending != applied {
@@ -234,7 +236,7 @@ impl Chordboard {
                     self.engine.midi_note(false, channel, note, 0.0, out);
                 }
             }
-            self.engine.arp.data.apply_midi_powers(&self.params);
+            self.engine.prepared.apply_midi_powers(&self.params);
             self.engine.configure(self.current_config(), out);
             if let Some(selection) = self.quick_midi.selection.take() {
                 self.engine.select_root(selection, out);
@@ -475,6 +477,7 @@ impl Plugin for Chordboard {
         let panic_requested = self.bridge.panic.swap(false, Ordering::AcqRel);
         let reset_requested = self.bridge.reset.swap(false, Ordering::AcqRel);
         if self.pending_reset || panic_requested || reset_requested {
+            self.snapshot_clock.reset();
             self.quick_midi = midi_learn::Input::default();
             self.engine.panic(&mut |e| emitted.push(0, e));
             if reset_requested {
@@ -493,15 +496,15 @@ impl Plugin for Chordboard {
             if !self
                 .params
                 .arpeggiator
-                .apply_pending(&mut self.engine.arp.data)
+                .apply_pending(&mut self.engine.prepared)
             {
                 break;
             }
             arp_updated = true;
         }
-        let powers = self.engine.arp.data.power_stamp();
-        self.engine.arp.data.apply_midi_powers(&self.params);
-        let powers_changed = powers != self.engine.arp.data.power_stamp();
+        let powers = self.engine.prepared.power_stamp();
+        self.engine.prepared.apply_midi_powers(&self.params);
+        let powers_changed = powers != self.engine.prepared.power_stamp();
         if arp_updated {
             self.engine
                 .accept_arp_generation(&mut |e| emitted.push(0, e));
@@ -598,7 +601,13 @@ impl Plugin for Chordboard {
         self.params
             .selected_quality
             .store(self.engine.quality as u32, Ordering::Relaxed);
-        self.bridge.publish_with(|| self.engine.snapshot());
+        if self.snapshot_clock.should_publish(
+            self.bridge.visible.load(Ordering::Relaxed),
+            count,
+            self.engine.sample_rate,
+        ) {
+            self.bridge.publish_with(|| self.engine.snapshot());
+        }
         ProcessStatus::Normal
     }
 }
@@ -1040,7 +1049,7 @@ mod protocol_tests {
         assert!(plugin
             .params
             .arpeggiator
-            .apply_pending(&mut plugin.engine.arp.data));
+            .apply_pending(&mut plugin.engine.prepared));
         plugin.engine.accept_arp_generation(&mut |_| {});
         assert_eq!(plugin.current_config().arp_settings[0].free_ms, 200.0);
         plugin

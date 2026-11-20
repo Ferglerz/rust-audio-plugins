@@ -1,3 +1,4 @@
+pub mod bezier;
 pub mod draw;
 pub mod editor;
 pub mod envelope;

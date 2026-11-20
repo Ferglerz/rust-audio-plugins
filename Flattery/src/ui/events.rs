@@ -3,6 +3,15 @@ use super::*;
 impl FlatteryView {
     pub(super) fn handle_event(&mut self, cx: &mut EventContext, event: &mut Event) {
         event.map(|window_event, meta| {
+            if matches!(
+                window_event,
+                WindowEvent::FocusOut | WindowEvent::MouseLeave
+            ) {
+                self.hover = None;
+                self.hover_curve = None;
+                self.hover_node = None;
+                cx.needs_redraw();
+            }
             let bounds = cx.bounds();
             let scale = bounds.w / WINDOW_W;
             let mouse_x = (cx.mouse().cursorx - bounds.x) / scale;
@@ -844,13 +853,6 @@ impl FlatteryView {
 
                         cx.needs_redraw();
                     }
-                }
-
-                WindowEvent::MouseLeave => {
-                    self.hover = None;
-                    self.hover_curve = None;
-                    self.hover_node = None;
-                    cx.needs_redraw();
                 }
 
                 _ => {}

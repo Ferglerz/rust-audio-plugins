@@ -118,20 +118,13 @@ pub fn cc_weight(value: u8) -> f32 {
     }
 }
 
-#[derive(Enum, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MixMode {
-    #[id = "gain"]
-    #[name = "Gain Sharing"]
-    GainSharing,
-    #[id = "spectral"]
-    #[name = "Gain + Spectral"]
-    SpectralSpace,
-}
-
 #[derive(Params)]
 pub struct SharedParams {
-    #[id = "mode"]
-    pub mode: EnumParam<MixMode>,
+    #[id = "gbypass"]
+    pub gain_bypass: BoolParam,
+    /// Off by default. Enabling spectral processing reports FFT latency.
+    #[id = "sbypass"]
+    pub spectral_bypass: BoolParam,
     #[id = "samount"]
     pub spectral_amount: FloatParam,
     #[id = "scut"]
@@ -146,12 +139,8 @@ pub struct SharedParams {
     pub spectral_release: FloatParam,
     #[id = "ssmooth"]
     pub spectral_smooth: FloatParam,
-    #[id = "amount"]
-    pub amount: FloatParam,
-    #[id = "cap"]
-    pub cap: FloatParam,
-    #[id = "ocap"]
-    pub other_cap: FloatParam,
+    #[id = "strength"]
+    pub strength: FloatParam,
     #[id = "voices"]
     pub voices: IntParam,
     #[id = "thresh"]
@@ -169,7 +158,8 @@ pub struct SharedParams {
 impl Default for SharedParams {
     fn default() -> Self {
         Self {
-            mode: EnumParam::new("Mix mode", MixMode::GainSharing).non_automatable(),
+            gain_bypass: BoolParam::new("Bypass gain sharing", false),
+            spectral_bypass: BoolParam::new("Bypass spectral", true).non_automatable(),
             spectral_amount: float("Spectral duck amount", 100.0, 0.0, 100.0, " %"),
             spectral_cut: float("Spectral max cut", 9.0, 0.0, 24.0, " dB"),
             spectral_low: float("Spectral low frequency", 80.0, 20.0, 20000.0, " Hz"),
@@ -177,9 +167,7 @@ impl Default for SharedParams {
             spectral_attack: float("Spectral attack", 30.0, 5.0, 500.0, " ms"),
             spectral_release: float("Spectral release", 250.0, 20.0, 2000.0, " ms"),
             spectral_smooth: float("Spectral smoothing", 50.0, 0.0, 100.0, " %"),
-            amount: float("Automix amount", 100.0, 0.0, 100.0, " %"),
-            cap: float("Voice max gain reduction", 18.0, 0.0, 60.0, " dB"),
-            other_cap: float("Other max gain reduction", 18.0, 0.0, 60.0, " dB"),
+            strength: float("Strength", 100.0, 0.0, 100.0, " %"),
             voices: IntParam::new(
                 "Chorus above N (0 = off)",
                 3,

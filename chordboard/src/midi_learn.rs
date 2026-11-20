@@ -33,7 +33,7 @@ pub const SWING: usize = 32;
 pub const HUMANIZE: usize = 33;
 pub const PERFORMANCE_ARP: usize = 34;
 pub const FX_POWER_START: usize = 35;
-pub const COUNT: usize = 39;
+pub const COUNT: usize = FX_POWER_START + crate::midi_fx::EFFECTS.len();
 
 pub fn fx_power_target(effect: crate::midi_fx::MidiFxId) -> usize {
     use crate::midi_fx::MidiFxId::*;
@@ -42,6 +42,7 @@ pub fn fx_power_target(effect: crate::midi_fx::MidiFxId) -> usize {
         RhythmGate => 1,
         VoiceSplitter => 2,
         Delay => 3,
+        MidiEq => 4,
     }
 }
 pub const IDS: [&str; COUNT] = [
@@ -84,6 +85,7 @@ pub const IDS: [&str; COUNT] = [
     "rhythm_gate_enabled",
     "voice_splitter_enabled",
     "delay_enabled",
+    "midi_eq_enabled",
 ];
 pub const LABELS: [&str; COUNT] = [
     "Voicing",
@@ -125,6 +127,7 @@ pub const LABELS: [&str; COUNT] = [
     "Rhythm Gate bypass",
     "Voice Splitter bypass",
     "MIDI Delay bypass",
+    "MIDI EQ bypass",
 ];
 const RANGES: [(i32, i32); COUNT] = [
     (0, crate::harmony::VOICING_NAMES.len() as i32 - 1),
@@ -161,6 +164,7 @@ const RANGES: [(i32, i32); COUNT] = [
     (0, 6),
     (0, 127),
     (0, 127),
+    (0, 1),
     (0, 1),
     (0, 1),
     (0, 1),
@@ -677,7 +681,7 @@ mod tests {
     fn learned_power_switches_apply_to_audio_and_survive_new_tracker_data() {
         let mut plugin = Chordboard::default();
         plugin.params.arpeggiator.edit(|state| state.performance.enabled = true);
-        assert!(plugin.params.arpeggiator.apply_pending(&mut plugin.engine.arp.data));
+        assert!(plugin.params.arpeggiator.apply_pending(&mut plugin.engine.prepared));
         for (number, target) in [PERFORMANCE_ARP, fx_power_target(crate::midi_fx::MidiFxId::Delay)]
             .into_iter().enumerate()
         {
@@ -688,16 +692,16 @@ mod tests {
             send(&mut plugin, note(9, 30 + number as u8, false));
         }
         let delay_enabled = plugin.params.arpeggiator.snapshot().midi_fx.delay.enabled;
-        assert!(!plugin.engine.arp.data.performance.enabled);
-        assert_eq!(plugin.engine.arp.data.midi_fx.delay.enabled, !delay_enabled);
+        assert!(!plugin.engine.prepared.performance.enabled);
+        assert_eq!(plugin.engine.prepared.midi_fx.delay.enabled, !delay_enabled);
 
         plugin.params.arpeggiator.edit(|state| state.rows[0].duration = 2);
-        assert!(plugin.params.arpeggiator.apply_pending(&mut plugin.engine.arp.data));
-        plugin.engine.arp.data.apply_midi_powers(&plugin.params);
-        assert!(!plugin.engine.arp.data.performance.enabled);
-        assert_eq!(plugin.engine.arp.data.midi_fx.delay.enabled, !delay_enabled);
+        assert!(plugin.params.arpeggiator.apply_pending(&mut plugin.engine.prepared));
+        plugin.engine.prepared.apply_midi_powers(&plugin.params);
+        assert!(!plugin.engine.prepared.performance.enabled);
+        assert_eq!(plugin.engine.prepared.midi_fx.delay.enabled, !delay_enabled);
         send(&mut plugin, note(9, 30, true));
-        assert!(plugin.engine.arp.data.performance.enabled);
+        assert!(plugin.engine.prepared.performance.enabled);
     }
 
     #[test]

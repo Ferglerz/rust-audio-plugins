@@ -5,90 +5,76 @@ impl StripView {
         self.graph_db = display_range(range);
         *self.params.graph_range.lock().unwrap() = self.graph_db;
     }
-    pub(super) fn value_at(&self, x: f32, y: f32) -> Option<(ValueTarget, (f32, f32, f32, f32))> {
+    pub(super) fn visible_value_fields(&self) -> Vec<(ValueTarget, (f32, f32, f32, f32))> {
+        let mut fields = Vec::new();
         if let Some(b) = self.selected_lift() {
-            if self.hud_visible() {
-                for i in 0..3 {
-                    let active = match i {
-                        1 => true,
-                        2 => !(b.shape.is_cut() && b.order == 1),
-                        _ => true,
-                    };
-                    let r = self.hud_value_rect_lift(&b, i);
-                    if active && inside(x, y, r) {
-                        return Some((ValueTarget::Lift(i), r));
-                    }
+            for i in 0..3 {
+                if i != 2 || !(b.shape.is_cut() && b.order == 1) {
+                    fields.push((
+                        ValueTarget::Lift(BandField::hud(i)),
+                        hud_value_rect_lift_at(&b, self.graph_db, i, self.gx(), self.gw()),
+                    ));
                 }
             }
-            for i in 0..5 {
-                let r = self.band_value_rect(i);
-                if inside(x, y, r) {
-                    return Some((ValueTarget::Lift(i + 3), r));
-                }
-            }
+            fields.extend((0..5).map(|i| {
+                (
+                    ValueTarget::Lift(BandField::from_lift_slider(i)),
+                    self.band_value_rect(i),
+                )
+            }));
         }
         if let Some(b) = self.selected.and_then(|id| self.find_band(id)) {
-            if self.hud_visible()
-                && (self.band_dyn_anim_progress.get() - self.band_dyn_anim_target.get()).abs()
-                    <= 0.01
-            {
-                if self.band_dyn_page.get() {
-                    if band_allows_dyn(&b) {
-                        for i in 1..5 {
-                            let r = self.hud_dyn_value_rect(&b, i);
-                            if inside(x, y, r) {
-                                let target = match i {
-                                    0 => 3,
-                                    1 => 7,
-                                    2 => 4,
-                                    3 => 5,
-                                    _ => 6,
-                                };
-                                return Some((ValueTarget::Band(target), r));
-                            }
-                        }
+            if self.band_dyn_page.get() {
+                if band_allows_dyn(&b) {
+                    for i in 1..5 {
+                        fields.push((
+                            ValueTarget::Band(BandField::from_dyn_bar(i)),
+                            self.hud_dyn_value_rect(&b, i),
+                        ));
                     }
-                } else {
-                    for i in 0..3 {
-                        let active = match i {
-                            1 => b.shape.has_gain(),
-                            2 => !(b.shape.is_cut() && b.order == 1),
-                            _ => true,
-                        };
-                        let r = self.hud_value_rect(&b, i);
-                        if active && inside(x, y, r) {
-                            return Some((ValueTarget::Band(i), r));
-                        }
+                }
+            } else {
+                for i in 0..3 {
+                    if (i != 1 || b.shape.has_gain())
+                        && (i != 2 || !(b.shape.is_cut() && b.order == 1))
+                    {
+                        fields.push((
+                            ValueTarget::Band(BandField::hud(i)),
+                            self.hud_value_rect(&b, i),
+                        ));
                     }
                 }
             }
         }
-        self.global_value_hits()
-            .into_iter()
-            .find(|(_, r)| inside(x, y, *r))
+        fields.extend(self.global_value_hits());
+        fields
+    }
+    pub(super) fn value_at(&self, x: f32, y: f32) -> Option<(ValueTarget, (f32, f32, f32, f32))> {
+        let band_settled =
+            (self.band_dyn_anim_progress.get() - self.band_dyn_anim_target.get()).abs() <= 0.01;
+        self.visible_value_fields().into_iter().find(|(target, rect)| {
+            let hidden_band = matches!(target, ValueTarget::Band(_))
+                && (!self.hud_visible() || !band_settled);
+            let hidden_lift = matches!(
+                target,
+                ValueTarget::Lift(BandField::Frequency | BandField::Gain | BandField::Q)
+            ) && !self.hud_visible();
+            !hidden_band && !hidden_lift && inside(x, y, *rect)
+        })
     }
     pub(super) fn adjust_value(&self, cx: &mut EventContext, target: ValueTarget, delta: f32) {
         let d = delta as f64;
         match target {
-            ValueTarget::Global(i) => {
-                let p = self.param(i);
-                let sign = if i == 0 || i == 18 { -1.0 } else { 1.0 };
+            ValueTarget::Global(control) => {
+                let p = self.param(control);
+                let sign = if control.inverted() { -1.0 } else { 1.0 };
                 let norm = (p.unmodulated_normalized_value() + delta * sign).clamp(0.0, 1.0);
                 cx.emit(RawParamEvent::BeginSetParameter(p.as_ptr()));
                 cx.emit(RawParamEvent::SetParameterNormalized(p.as_ptr(), norm));
                 cx.emit(RawParamEvent::EndSetParameter(p.as_ptr()));
             }
-            ValueTarget::Band(i) => self.change(|b| adjust_band_value(b, i, d)),
-            ValueTarget::Lift(i) => self.change_lift(|b| match i {
-                0 => b.freq *= 1000.0_f64.powf(d),
-                1 => b.gain += 100.0 * d,
-                2 => b.q *= 120.0_f64.powf(d),
-                3 => b.threshold += 60.0 * d,
-                4 => b.ratio += 19.0 * d,
-                5 => b.attack *= 2000.0_f64.powf(d),
-                6 => b.release *= 200.0_f64.powf(d),
-                _ => b.range += 24.0 * d,
-            }),
+            ValueTarget::Band(field) => self.change(|b| adjust_band_value(b, field, d)),
+            ValueTarget::Lift(field) => self.change_lift(|b| adjust_lift_value(b, field, d)),
         }
     }
 
@@ -109,37 +95,27 @@ impl StripView {
         x: f32,
         y: f32,
     ) -> bool {
-        let Some(mut press) = self.value_press else {
-            return false;
-        };
-        match event {
-            WindowEvent::MouseMove(_, _) => {
-                if press.update(x, y) {
-                    self.value_press = None;
-                    self.drag = Some(Target::Value(press.target));
-                    self.down = press.origin;
-                    self.last_drag = press.origin;
-                    // Continue through relative readout dragging.
-                    return false;
-                }
-                self.value_press = Some(press);
+        use pleasant_ui::readout::PressAction;
+
+        match pleasant_ui::readout::handle_press(&mut self.value_press, event, (x, y)) {
+            PressAction::Inactive => return false,
+            PressAction::BeginDrag(press) => {
+                self.drag = Some(Target::Value(press.target));
+                self.down = press.origin;
+                self.last_drag = press.origin;
+                // Continue through relative readout dragging.
+                return false;
             }
-            WindowEvent::MouseUp(MouseButton::Left) => {
-                self.value_press = None;
+            PressAction::BeginEdit(press) => {
                 cx.release();
-                if press.released_as_click(x, y) {
-                    self.start_edit(cx, press.target, press.rect);
-                }
+                self.start_edit(cx, press.target, press.rect);
                 cx.needs_redraw();
             }
-            WindowEvent::FocusOut
-            | WindowEvent::KeyDown(Code::Escape, _)
-            | WindowEvent::MouseDown(MouseButton::Right) => {
-                self.value_press = None;
+            PressAction::Released | PressAction::Cancelled => {
                 cx.release();
                 cx.needs_redraw();
             }
-            _ => {}
+            PressAction::Blocked => {}
         }
         true
     }
@@ -152,48 +128,29 @@ impl StripView {
     ) {
         cx.focus();
         let value = match target {
-            ValueTarget::Global(i) => {
-                let value = self.param(i).value() as f64;
-                if i == 0 || i == 18 {
-                    -value
-                } else {
-                    value
-                }
+            ValueTarget::Global(control) => {
+                let value = self.param(control).value() as f64;
+                if control.inverted() { -value } else { value }
             }
-            ValueTarget::Band(i) => {
+            ValueTarget::Band(field) => {
                 let Some(b) = self.selected.and_then(|id| self.find_band(id)) else {
                     return;
                 };
-                [
-                    b.freq,
-                    b.gain,
-                    b.q,
-                    b.threshold,
-                    b.ratio,
-                    b.attack,
-                    b.release,
-                    b.range,
-                ][i]
+                band_component(&b, field)
             }
-            ValueTarget::Lift(i) => {
+            ValueTarget::Lift(field) => {
                 let lift_bands = self.params.lift_bands.lock().unwrap();
                 let Some(b) = lift_bands.iter().find(|b| Some(b.id) == self.selected) else {
                     return;
                 };
-                [
-                    b.freq,
-                    b.gain,
-                    b.q,
-                    b.threshold,
-                    b.ratio,
-                    b.attack,
-                    b.release,
-                    b.range,
-                ][i]
+                lift_component(b, field)
             }
         };
-        let text = if let ValueTarget::Global(10) = target {
-            format_pse_time(self.param(10).value() as f64, self.params.pse_peak.value())
+        let text = if let ValueTarget::Global(GlobalControl::PseTime) = target {
+            format_pse_time(
+                self.param(GlobalControl::PseTime).value() as f64,
+                self.params.pse_peak.value(),
+            )
         } else {
             format!("{value:.3}")
                 .trim_end_matches('0')
@@ -217,9 +174,9 @@ impl StripView {
             return false;
         };
         match edit.target {
-            ValueTarget::Global(i) => {
-                let p = self.param(i);
-                let norm = p.preview_normalized(if i == 0 || i == 18 {
+            ValueTarget::Global(control) => {
+                let p = self.param(control);
+                let norm = p.preview_normalized(if control.inverted() {
                     -value as f32
                 } else {
                     value as f32
@@ -228,134 +185,135 @@ impl StripView {
                 cx.emit(RawParamEvent::SetParameterNormalized(p.as_ptr(), norm));
                 cx.emit(RawParamEvent::EndSetParameter(p.as_ptr()));
             }
-            ValueTarget::Band(i) => self.change(|b| match i {
-                0 => b.freq = value,
-                1 => b.gain = value,
-                2 => b.q = value,
-                3 => b.threshold = value,
-                4 => b.ratio = value,
-                5 => b.attack = value,
-                6 => b.release = value,
-                _ => b.range = value,
-            }),
-            ValueTarget::Lift(i) => self.change_lift(|b| match i {
-                0 => b.freq = value.clamp(20.0, 20000.0),
-                1 => b.gain = value.clamp(-100.0, 0.0),
-                2 => b.q = value,
-                3 => b.threshold = value,
-                4 => b.ratio = value,
-                5 => b.attack = value,
-                6 => b.release = value,
-                _ => b.range = value,
-            }),
+            ValueTarget::Band(field) => self.change(|b| set_band_component(b, field, value)),
+            ValueTarget::Lift(field) => self.change_lift(|b| set_lift_component(b, field, value)),
         }
         self.edit = None;
         true
     }
-    pub(super) fn edit_key(&mut self, cx: &mut EventContext, code: Code) {
-        if code == Code::Escape {
-            self.edit = None;
-            return;
+    pub(super) fn advance_edit(&mut self, cx: &mut EventContext) {
+        let target = self.edit.as_ref().unwrap().target;
+        if self.commit_edit(cx) {
+            let fields = self.visible_value_fields();
+            let index = fields.iter().position(|(t, _)| *t == target).unwrap_or(0);
+            let next = if cx.modifiers().shift() {
+                (index + fields.len() - 1) % fields.len()
+            } else {
+                (index + 1) % fields.len()
+            };
+            self.start_edit(cx, fields[next].0, fields[next].1);
         }
-        if matches!(code, Code::Enter | Code::NumpadEnter | Code::Tab) {
-            let target = self.edit.as_ref().unwrap().target;
-            if self.commit_edit(cx) && code == Code::Tab {
-                let mut fields = Vec::new();
-                if let Some(b) = self.selected_lift() {
-                    for i in 0..3 {
-                        if i != 2 || !(b.shape.is_cut() && b.order == 1) {
-                            fields.push((
-                                ValueTarget::Lift(i),
-                                hud_value_rect_lift_at(&b, self.graph_db, i, self.gx(), self.gw()),
-                            ));
-                        }
-                    }
-                    fields.extend(
-                        (0..5).map(|i| (ValueTarget::Lift(i + 3), self.band_value_rect(i))),
-                    );
-                }
-                if let Some(b) = self.selected.and_then(|id| self.find_band(id)) {
-                    if self.band_dyn_page.get() {
-                        if band_allows_dyn(&b) {
-                            for i in 1..5 {
-                                let target = match i {
-                                    0 => 3,
-                                    1 => 7,
-                                    2 => 4,
-                                    3 => 5,
-                                    _ => 6,
-                                };
-                                fields.push((
-                                    ValueTarget::Band(target),
-                                    self.hud_dyn_value_rect(&b, i),
-                                ));
-                            }
-                        }
-                    } else {
-                        for i in 0..3 {
-                            if (i != 1 || b.shape.has_gain())
-                                && (i != 2 || !(b.shape.is_cut() && b.order == 1))
-                            {
-                                fields.push((ValueTarget::Band(i), self.hud_value_rect(&b, i)));
-                            }
-                        }
-                    }
-                }
-                fields.extend(self.global_value_hits());
-                let index = fields.iter().position(|(t, _)| *t == target).unwrap_or(0);
-                let next = if cx.modifiers().shift() {
-                    (index + fields.len() - 1) % fields.len()
-                } else {
-                    (index + 1) % fields.len()
-                };
-                self.start_edit(cx, fields[next].0, fields[next].1);
-            }
-            return;
-        }
-        self.edit.as_mut().unwrap().handle_key(cx, code);
     }
 
-    pub(super) fn global_controls(&self) -> &'static [usize] {
+    pub(super) fn global_controls(&self) -> &'static [GlobalControl] {
         match self.dyn_page.get() {
-            DynPage::Main => &[0],
-            DynPage::Controls => &[5, 11, 6, 3, 4],
+            DynPage::Main => &[GlobalControl::Compression],
+            DynPage::Controls => &[
+                GlobalControl::CompAttack,
+                GlobalControl::CompRelease,
+                GlobalControl::CompRatio,
+                GlobalControl::Dry,
+                GlobalControl::Wet,
+            ],
         }
     }
-    pub(super) fn param(&self, i: usize) -> &FloatParam {
-        match i {
-            0 => &self.params.compression,
-            1 => &self.params.gate,
-            2 => &self.params.pse_voice_det,
-            3 => &self.params.dry,
-            4 => &self.params.wet,
-            5 => &self.params.comp_attack,
-            6 => &self.params.comp_ratio,
-            7 => &self.params.pse_depth,
-            8 => &self.params.pse_hysteresis,
-            9 => &self.params.pse_knee,
-            10 => &self.params.pse_time,
-            11 => &self.params.comp_release,
-            12 => &self.params.comp_knee,
-            14 => &self.params.comp_depth,
-            15 => &self.params.output_gain,
-            16 => &self.params.wall_even,
-            17 => &self.params.wall_odd,
-            18 => &self.params.wall_threshold,
-            _ => &self.params.compression,
+    pub(super) fn param(&self, control: GlobalControl) -> &FloatParam {
+        match control {
+            GlobalControl::Compression => &self.params.compression,
+            GlobalControl::Gate => &self.params.gate,
+            GlobalControl::PseVoice => &self.params.pse_voice_det,
+            GlobalControl::Dry => &self.params.dry,
+            GlobalControl::Wet => &self.params.wet,
+            GlobalControl::CompAttack => &self.params.comp_attack,
+            GlobalControl::CompRatio => &self.params.comp_ratio,
+            GlobalControl::PseDepth => &self.params.pse_depth,
+            GlobalControl::PseHysteresis => &self.params.pse_hysteresis,
+            GlobalControl::PseTime => &self.params.pse_time,
+            GlobalControl::CompRelease => &self.params.comp_release,
+            GlobalControl::CompDepth => &self.params.comp_depth,
+            GlobalControl::Output => &self.params.output_gain,
+            GlobalControl::WallEven => &self.params.wall_even,
+            GlobalControl::WallOdd => &self.params.wall_odd,
+            GlobalControl::WallThreshold => &self.params.wall_threshold,
         }
     }
 }
 
-fn adjust_band_value(b: &mut Band, i: usize, delta: f64) {
-    match i {
-        0 => b.freq *= 1000.0_f64.powf(delta),
-        1 => b.gain += 2.0 * crate::band::MAX_GAIN_DB * delta,
-        2 => b.q *= 120.0_f64.powf(delta),
-        3 => b.threshold += 60.0 * delta,
-        4 => b.ratio += 19.0 * delta,
-        5 => b.attack *= 2000.0_f64.powf(delta),
-        6 => b.release *= 200.0_f64.powf(delta),
-        _ => b.range += 2.0 * MAX_RANGE_DB * delta,
+fn band_component(b: &Band, field: BandField) -> f64 {
+    match field {
+        BandField::Frequency => b.freq,
+        BandField::Gain => b.gain,
+        BandField::Q => b.q,
+        BandField::Threshold => b.threshold,
+        BandField::Ratio => b.ratio,
+        BandField::Attack => b.attack,
+        BandField::Release => b.release,
+        BandField::Range => b.range,
+    }
+}
+
+fn lift_component(b: &crate::lift::LiftBand, field: BandField) -> f64 {
+    match field {
+        BandField::Frequency => b.freq,
+        BandField::Gain => b.gain,
+        BandField::Q => b.q,
+        BandField::Threshold => b.threshold,
+        BandField::Ratio => b.ratio,
+        BandField::Attack => b.attack,
+        BandField::Release => b.release,
+        BandField::Range => b.range,
+    }
+}
+
+fn set_band_component(b: &mut Band, field: BandField, value: f64) {
+    match field {
+        BandField::Frequency => b.freq = value,
+        BandField::Gain => b.gain = value,
+        BandField::Q => b.q = value,
+        BandField::Threshold => b.threshold = value,
+        BandField::Ratio => b.ratio = value,
+        BandField::Attack => b.attack = value,
+        BandField::Release => b.release = value,
+        BandField::Range => b.range = value,
+    }
+}
+
+fn set_lift_component(b: &mut crate::lift::LiftBand, field: BandField, value: f64) {
+    match field {
+        BandField::Frequency => b.freq = value.clamp(20.0, 20000.0),
+        BandField::Gain => b.gain = value.clamp(-100.0, 0.0),
+        BandField::Q => b.q = value,
+        BandField::Threshold => b.threshold = value,
+        BandField::Ratio => b.ratio = value,
+        BandField::Attack => b.attack = value,
+        BandField::Release => b.release = value,
+        BandField::Range => b.range = value,
+    }
+}
+
+fn adjust_lift_value(b: &mut crate::lift::LiftBand, field: BandField, delta: f64) {
+    match field {
+        BandField::Frequency => b.freq *= 1000.0_f64.powf(delta),
+        BandField::Gain => b.gain += 100.0 * delta,
+        BandField::Q => b.q *= 120.0_f64.powf(delta),
+        BandField::Threshold => b.threshold += 60.0 * delta,
+        BandField::Ratio => b.ratio += 19.0 * delta,
+        BandField::Attack => b.attack *= 2000.0_f64.powf(delta),
+        BandField::Release => b.release *= 200.0_f64.powf(delta),
+        BandField::Range => b.range += 24.0 * delta,
+    }
+}
+
+fn adjust_band_value(b: &mut Band, field: BandField, delta: f64) {
+    match field {
+        BandField::Frequency => b.freq *= 1000.0_f64.powf(delta),
+        BandField::Gain => b.gain += 2.0 * crate::band::MAX_GAIN_DB * delta,
+        BandField::Q => b.q *= 120.0_f64.powf(delta),
+        BandField::Threshold => b.threshold += 60.0 * delta,
+        BandField::Ratio => b.ratio += 19.0 * delta,
+        BandField::Attack => b.attack *= 2000.0_f64.powf(delta),
+        BandField::Release => b.release *= 200.0_f64.powf(delta),
+        BandField::Range => b.range += 2.0 * MAX_RANGE_DB * delta,
     }
 }
 
@@ -365,21 +323,30 @@ mod value_drag_tests {
 
     #[test]
     fn readout_adjustments_change_only_the_addressed_parameter() {
-        for index in 0..8 {
+        for field in [
+            BandField::Frequency,
+            BandField::Gain,
+            BandField::Q,
+            BandField::Threshold,
+            BandField::Ratio,
+            BandField::Attack,
+            BandField::Release,
+            BandField::Range,
+        ] {
             let original = Band::default();
             let mut band = original.clone();
-            adjust_band_value(&mut band, index, 0.01);
+            adjust_band_value(&mut band, field, 0.01);
             assert_ne!(band, original);
-            if index != 4 {
+            if field != BandField::Ratio {
                 assert_eq!(band.ratio, original.ratio);
             }
-            if index != 7 {
+            if field != BandField::Range {
                 assert_eq!(band.range, original.range);
             }
-            if index != 1 {
+            if field != BandField::Gain {
                 assert_eq!(band.gain, original.gain);
             }
-            adjust_band_value(&mut band, index, -0.01);
+            adjust_band_value(&mut band, field, -0.01);
             assert!((band.gain - original.gain).abs() < 1e-8);
             assert!((band.freq - original.freq).abs() < 1e-8);
             assert!((band.attack - original.attack).abs() < 1e-8);

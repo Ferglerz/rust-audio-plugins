@@ -1,7 +1,16 @@
 use super::*;
 impl ChordboardView {
     pub(super) fn render(&self, cx: &mut DrawContext, canvas: &mut Canvas) {
-        let bounds = cx.bounds();
+        self.paint_editor(canvas, cx.bounds(), prefs().light(), prefs().label());
+    }
+
+    pub(super) fn paint_editor(
+        &self,
+        canvas: &mut Canvas,
+        bounds: BoundingBox,
+        light: bool,
+        appearance: &str,
+    ) {
         if bounds.w <= 0.0 || bounds.h <= 0.0 {
             return;
         }
@@ -20,9 +29,16 @@ impl ChordboardView {
                 nih_plug_vizia::assets::fonts::NOTO_SANS_BOLD,
             );
         }
+        if self.fx_ui.open {
+            pleasant_ui::load_font_once(
+                canvas,
+                &self.delay_label_font,
+                nih_plug_vizia::assets::fonts::NOTO_SANS_REGULAR,
+            );
+        }
         let mut d = Draw::new(
             canvas,
-            prefs().light(),
+            light,
             editor_scale(bounds.w, bounds.h),
             bounds.x + CONTENT_X * editor_scale(bounds.w, bounds.h),
             bounds.y,
@@ -49,7 +65,7 @@ impl ChordboardView {
             let summary = self.fit_text(&d, &theory.summary, readout.2, TEXT_SMALL);
             d.text(readout.0, 66.0, &summary, TEXT_SMALL, MUTED);
         }
-        d.appearance_button(APPEARANCE, prefs().label());
+        d.appearance_button(APPEARANCE, appearance);
         d.font = self.ui_font.get();
         if !self.quick_midi.show {
             self.draw_page_navigation(&mut d);
@@ -101,14 +117,24 @@ impl ChordboardView {
         } else {
             ""
         };
-        let footer = self.fit_text(&d, footer, W - 64.0, TEXT_LABEL);
-        d.text(
-            32.0,
-            H - 10.0,
-            &footer,
-            TEXT_LABEL,
-            if feedback { GOLD } else { MUTED },
-        );
+        if !feedback && hint.is_some() && self.delay_footer_hovered() {
+            d.with_readable_style(self.delay_label_font.get(), |d| {
+                d.with_label_font(|d| {
+                    let size = pleasant_ui::draw::READABLE_LABEL_SIZE;
+                    let footer = d.fit_text(footer, W - 64.0, size);
+                    d.text(32.0, H - 10.0, &footer, size, TEXT);
+                });
+            });
+        } else {
+            let footer = self.fit_text(&d, footer, W - 64.0, TEXT_LABEL);
+            d.text(
+                32.0,
+                H - 10.0,
+                &footer,
+                TEXT_LABEL,
+                if feedback { GOLD } else { MUTED },
+            );
+        }
         if let Some(menu) = self.menu {
             if matches!(menu, Menu::Key | Menu::Scale) {
                 self.draw_root_menu(&mut d, menu);
@@ -677,9 +703,9 @@ impl ChordboardView {
     pub(super) fn draw_control(&self, d: &mut Draw, c: &Control, rect: Rect, color: Color) {
         if c.id == "gliss_ms" {
             let mut layout = pleasant_ui::draw::KnobLayout::new(rect);
-            layout.cy = rect.1 + 50.0;
+            layout.cy = rect.1 + 58.0;
             layout.radius = 29.0;
-            layout.label_y = rect.1 + 12.0;
+            layout.label_y = rect.1 + 20.0;
             layout.value_y = rect.1 + 99.0;
             let layout = layout.with_text_sizes(TEXT_LABEL, TEXT_LABEL);
             d.knob_with_layout(&layout, "Glissando", &self.display_value(c), c.norm, color, false);

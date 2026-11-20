@@ -1,11 +1,11 @@
-//! Run the shared scheduler with a separate live clock and voice owner.
-//! Swapping fixed-size runtimes keeps the single prepared publication on the audio thread.
+//! Run the performance clock against the shared publication.
+//! The tracker clock stays on `arp`. Timing and output stay with the call.
 use super::*;
 use routing::{ARP_POSITION_SOURCE, PERF_MOD_SOURCES, SOURCE_COUNT};
 
 impl Engine {
     pub(super) fn performance_arp_snapshot(&self) -> ArpPlayback {
-        let program = &self.arp.data.performance;
+        let program = &self.prepared.performance;
         let settings = self
             .performance_arp
             .timing
@@ -43,32 +43,27 @@ impl Engine {
         }
     }
     pub(super) fn performance_arp_enabled(&self) -> bool {
-        self.arp.data.performance.enabled
+        self.prepared.performance.enabled
     }
     pub(super) fn with_performance_arp<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
         debug_assert!(!self.in_performance_arp);
         let config = self.config;
         let overrides = self.source_overrides;
-        std::mem::swap(&mut self.arp, &mut self.performance_arp);
-        // The prepared data stays shared; only the scheduler state changes owners.
-        std::mem::swap(&mut self.arp.data, &mut self.performance_arp.data);
         self.in_performance_arp = true;
-        // Keep the existing cycle-position route local to the current arp.
+        // Cycle position belongs to the clock that is running, not to the publication.
         std::mem::swap(&mut self.sources[ARP_POSITION_SOURCE], &mut self.performance_arp_position);
         self.configure_performance_arp();
         let result = f(self);
         std::mem::swap(&mut self.sources[ARP_POSITION_SOURCE], &mut self.performance_arp_position);
         self.in_performance_arp = false;
-        std::mem::swap(&mut self.arp.data, &mut self.performance_arp.data);
-        std::mem::swap(&mut self.arp, &mut self.performance_arp);
         self.config = config;
         self.source_overrides = overrides;
         result
     }
     pub(super) fn configure_performance_arp(&mut self) {
-        let program = &self.arp.data.performance;
+        let program = self.prepared.performance.clone();
         let settings = self
-            .arp
+            .performance_arp
             .timing
             .map_or(program.settings, |t| t.apply(program.settings));
         let mut config = self.host_config;
@@ -136,8 +131,8 @@ mod tests {
             sample_rate: 1000.0,
             ..Engine::default()
         };
-        e.arp.data.performance.enabled = true;
-        e.arp.data.performance.settings = Settings {
+        e.prepared.performance.enabled = true;
+        e.prepared.performance.settings = Settings {
             mode: ArpMode::Loop,
             sync: false,
             free_ms: 50.0,
@@ -196,7 +191,7 @@ mod tests {
     #[test]
     fn performance_arp_and_tracker_have_independent_clocks_and_pause_ownership() {
         let mut e = engine();
-        e.arp.data.rows[0].chord = Some(harmony::SavedChord {
+        e.prepared.rows[0].chord = Some(harmony::SavedChord {
             root: 48,
             second: None,
             additions: 0,
@@ -205,7 +200,7 @@ mod tests {
             spread: 0,
             transpose: 0,
         });
-        e.arp.data.rows[0].settings = Settings {
+        e.prepared.rows[0].settings = Settings {
             mode: ArpMode::Loop,
             sync: false,
             free_ms: 100.0,
@@ -255,7 +250,7 @@ mod tests {
     #[test]
     fn performance_lanes_meter_and_route_independently_of_the_tracker() {
         let mut e = engine();
-        let row = &mut e.arp.data.rows[0];
+        let row = &mut e.prepared.rows[0];
         row.chord = Some(harmony::SavedChord {
             root: 48,
             second: None,
@@ -266,7 +261,7 @@ mod tests {
             transpose: 0,
         });
         row.page.loops[0].steps[0].mods = [-30, 20];
-        e.arp.data.performance.page.loops[0].steps[0].mods = [50, -25];
+        e.prepared.performance.page.loops[0].steps[0].mods = [50, -25];
         let mut config = Config {
             arp_enabled: true,
             velocity: 0.5,
@@ -305,7 +300,7 @@ mod tests {
     #[test]
     fn performance_lane_routes_smooth_from_step_changes_and_clear_on_bypass() {
         let mut e = engine();
-        e.arp.data.performance.page.loops[0].steps[0].mods = [100, 0];
+        e.prepared.performance.page.loops[0].steps[0].mods = [100, 0];
         let mut config = Config {
             velocity: 0.5,
             ..e.host_config
@@ -324,7 +319,7 @@ mod tests {
         e.advance(5, &mut |_, _| {});
         assert!((e.config.velocity - 0.698).abs() < 1e-6);
 
-        e.arp.data.performance.enabled = false;
+        e.prepared.performance.enabled = false;
         e.accept_arp_generation(&mut |_| {});
         assert_eq!(e.snapshot().sources[PERF_MOD_SOURCES], [0.0; 2]);
         e.advance(10, &mut |_, _| {});
@@ -333,7 +328,7 @@ mod tests {
     #[test]
     fn tracker_bypass_uses_performance_program_without_overwriting_row() {
         let mut e = engine();
-        e.arp.data.rows[0].chord = Some(harmony::SavedChord {
+        e.prepared.rows[0].chord = Some(harmony::SavedChord {
             root: 48,
             second: None,
             additions: 0,
@@ -342,9 +337,9 @@ mod tests {
             spread: 0,
             transpose: 0,
         });
-        e.arp.data.rows[0].settings.pattern = 1;
-        e.arp.data.rows[0].enabled = false;
-        e.arp.data.performance.page.loops[0].octave = 1;
+        e.prepared.rows[0].settings.pattern = 1;
+        e.prepared.rows[0].enabled = false;
+        e.prepared.performance.page.loops[0].octave = 1;
         e.configure(
             Config {
                 arp_enabled: true,
@@ -353,8 +348,8 @@ mod tests {
             &mut |_| {},
         );
         assert_eq!(attacks(&mut e, 101), [(0, 60), (50, 64), (100, 67)]);
-        assert_eq!(e.arp.data.rows[0].settings.pattern, 1);
-        e.arp.data.rows[0].enabled = true;
+        assert_eq!(e.prepared.rows[0].settings.pattern, 1);
+        e.prepared.rows[0].enabled = true;
         e.configure(e.host_config, &mut |_| {});
         assert_eq!(e.active_arp_page().loops[0].octave, 0);
     }
@@ -372,7 +367,7 @@ mod tests {
         e.note_on(60, 60, 0, 0.8, Some(0), &mut |_| {});
         assert!(e.layer_pending.iter().all(Option::is_none));
         assert_eq!(attacks(&mut e, 101).len(), 3);
-        e.arp.data.performance.enabled = false;
+        e.prepared.performance.enabled = false;
         e.accept_arp_generation(&mut |_| {});
         assert!(e.layer_pending.iter().any(Option::is_some));
         assert!(!e
@@ -384,7 +379,7 @@ mod tests {
     #[test]
     fn strum_chord_latch_retains_harmony_and_ringing_notes_without_latching_chord_layer() {
         let mut e = engine();
-        e.arp.data.performance.enabled = false;
+        e.prepared.performance.enabled = false;
         e.configure(
             Config {
                 strum_chord_latch: true,
@@ -428,7 +423,7 @@ mod tests {
         delay.taps[0].time = 10.0;
         delay.taps[0].velocity = 1.0;
         delay.taps[0].feedback = 0.0;
-        e.arp.data.midi_fx.delay = delay;
+        e.prepared.midi_fx.delay = delay;
         e.note_on(60, 60, 0, 0.8, Some(0), &mut |_| {});
         e.advance(15, &mut |_, _| {});
         assert!(

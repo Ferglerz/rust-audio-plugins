@@ -27,24 +27,30 @@ impl DereverbView {
     pub(super) fn paint_curve(&self, d: &mut Draw) {
         let curve = self.params.weighting();
         let viewport = Viewport::from_tuple(CURVE);
-        d.text(64.0, 104.0, "LEVEL WEIGHTING", 11.0, MUTED);
+        d.with_label_font(|d| d.text(64.0, 104.0, "Level weighting", READABLE_LABEL_SIZE, TEXT));
         d.button(
             RELATIVE,
-            "RELATIVE",
+            "Relative",
             curve.mode == LevelMode::Relative,
             GOLD,
         );
         d.button(
             ABSOLUTE,
-            "ABSOLUTE",
+            "Absolute",
             curve.mode == LevelMode::Absolute,
             GOLD,
         );
-        d.text(64.0, 130.0, "WEIGHT %", 10.0, MUTED);
+        d.with_label_font(|d| d.text(64.0, 130.0, "Weight %", READABLE_LABEL_SIZE, MUTED));
         for value in [0, 25, 50, 75, 100] {
             let (_, y) = viewport.from_normalized(0.0, value as f32 / 100.0);
             d.line(CURVE.0, y, CURVE.0 + CURVE.2, y, LINE, 1.0);
-            d.text_right(CURVE.0 - 12.0, y + 4.0, &value.to_string(), 10.0, MUTED);
+            d.text_right(
+                CURVE.0 - 12.0,
+                y + 4.0,
+                &value.to_string(),
+                READABLE_AXIS_SIZE,
+                MUTED,
+            );
         }
         for i in 0..NODES {
             let position = i as f32 / (NODES - 1) as f32;
@@ -54,21 +60,23 @@ impl DereverbView {
                 x,
                 372.0,
                 &format!("{:.0}", curve.mode.db(position)),
-                10.0,
+                READABLE_AXIS_SIZE,
                 MUTED,
             );
         }
-        d.text_centered(
-            CURVE.0 + CURVE.2 * 0.5,
-            391.0,
-            if curve.mode == LevelMode::Relative {
-                "LEVEL RELATIVE TO AVERAGE · dB"
-            } else {
-                "INPUT LEVEL · dBFS"
-            },
-            10.0,
-            MUTED,
-        );
+        d.with_label_font(|d| {
+            d.text_centered(
+                CURVE.0 + CURVE.2 * 0.5,
+                391.0,
+                if curve.mode == LevelMode::Relative {
+                    "Level relative to average · dB"
+                } else {
+                    "Input level · dBFS"
+                },
+                READABLE_LABEL_SIZE,
+                MUTED,
+            );
+        });
         let points: [(f32, f32); 129] = std::array::from_fn(|i| {
             let x = i as f32 / 128.0;
             viewport.from_normalized(x, curve.at(x))
@@ -76,12 +84,18 @@ impl DereverbView {
         let mut fill = GOLD;
         fill.a = 0.06;
         d.area(&points, CURVE.1 + CURVE.3, fill);
+        if d.light {
+            d.poly(&points, MUTED, 3.0);
+        }
         d.poly(&points, GOLD, 2.0);
         for (i, &value) in curve.nodes.iter().enumerate() {
             let (x, y) = viewport.from_normalized(i as f32 / (NODES - 1) as f32, value);
             let selected = self.curve_drag.is_some_and(|(n, _, _)| n == i)
                 || self.hover.is_some_and(|p| self.node_at(p) == Some(i));
             d.circle(x, y, if selected { 6.5 } else { 5.0 }, GOLD, true);
+            if d.light {
+                d.circle(x, y, if selected { 6.5 } else { 5.0 }, MUTED, false);
+            }
             if selected {
                 d.circle(x, y, 10.0, GOLD, false);
                 d.text_right(
@@ -92,8 +106,8 @@ impl DereverbView {
                         curve.mode.db(i as f32 / 4.0),
                         value * 100.0
                     ),
-                    10.0,
-                    GOLD,
+                    READABLE_AXIS_SIZE,
+                    if d.light { TEXT } else { GOLD },
                 );
             }
         }
@@ -113,10 +127,10 @@ impl DereverbView {
             d.circle(x, y, 5.5, TEAL, true);
             d.circle(x, y, 8.0, TEAL, false);
         }
-        d.button(FLAT, "FLAT", curve.nodes == [1.0; NODES], GOLD);
+        d.button(FLAT, "Flat", curve.nodes == [1.0; NODES], GOLD);
         d.button(
             LOUDER_BUTTON,
-            "LOUDER",
+            "Louder",
             curve
                 .nodes
                 .iter()
@@ -124,7 +138,15 @@ impl DereverbView {
                 .all(|(a, b)| (a - b).abs() < 1e-5),
             GOLD,
         );
-        d.text(600.0, 430.0, "EFFECTIVE STRENGTH", 10.0, MUTED);
+        d.with_label_font(|d| {
+            d.text(
+                600.0,
+                430.0,
+                "Effective strength",
+                READABLE_LABEL_SIZE,
+                MUTED,
+            )
+        });
         d.text(
             600.0,
             454.0,
@@ -137,7 +159,7 @@ impl DereverbView {
                 }
             ),
             18.0,
-            TEAL,
+            if d.light { TEXT } else { TEAL },
         );
     }
 }

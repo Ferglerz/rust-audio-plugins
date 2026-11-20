@@ -2,7 +2,7 @@ use super::{controls::*, *};
 use nih_plug_vizia::{vizia::backend::BackendContext, widgets::RawParamEvent};
 use std::{cell::RefCell, rc::Rc};
 
-fn view() -> TapeStopView {
+pub(super) fn view() -> TapeStopView {
     TapeStopView {
         params: Arc::new(TapeStopParams::default()),
         telemetry: TapeStopTelemetry::new(),
@@ -11,9 +11,10 @@ fn view() -> TapeStopView {
         edit: None,
         value_press: None,
         hover_stop: Cell::new(false),
-        stop_click: Cell::new(0.0),
+        reels: Cell::default(),
         hover: None,
         curve_hover_anim: Cell::new(0.0),
+        curve_geometry: RefCell::default(),
         auto_restart_anim: ButtonAnim::new(),
         show_axis_controls: false,
         axis_controls_progress: 0.0,

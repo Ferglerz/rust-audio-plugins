@@ -372,6 +372,43 @@ fn pleasant_meter_accent(index: usize) -> VgColor {
     }
 }
 
+/// The hint belongs to the empty track below the handle, under trails and live fill.
+fn draw_release_hint(
+    d: &mut pleasant_ui::Draw,
+    track: BoundingBox,
+    threshold: f32,
+    faster: bool,
+) {
+    use nih_plug_vizia::vizia::vg::{Align, Baseline, Paint};
+
+    let label = if faster { "Faster" } else { "Slower" };
+    let size = 12.0;
+    let top = (threshold + 8.0).max(track.y);
+    let bottom = track.y + track.h;
+    let padding = 8.0;
+    if bottom - top < d.text_width(label, size) + padding * 2.0
+        || track.w < size + padding * 2.0
+    {
+        return;
+    }
+
+    let mut paint = Paint::color(d.color(pleasant_ui::with_alpha(pleasant_ui::MUTED, 0.38)));
+    if let Some(font) = d.font {
+        paint.set_font(&[font]);
+    }
+    paint.set_font_size(size * d.s);
+    paint.set_text_align(Align::Center);
+    paint.set_text_baseline(Baseline::Middle);
+    d.c.save();
+    d.c.translate(
+        d.ox + (track.x + track.w * 0.5 + d.offset_x) * d.s,
+        d.oy + (top + bottom) * 0.5 * d.s,
+    );
+    d.c.rotate(-std::f32::consts::FRAC_PI_2);
+    let _ = d.c.fill_text(0.0, 0.0, label, &paint);
+    d.c.restore();
+}
+
 fn draw_pleasant_meters(
     cx: &mut DrawContext,
     canvas: &mut Canvas,
@@ -401,6 +438,19 @@ fn draw_pleasant_meters(
         let track = pleasant_track(bounds, 1.0, index);
         let accent = pleasant_meter_accent(index);
         d.rect(track.x, track.y, track.w, track.h, LINE);
+        if let Some((_, line, db, _)) = thresholds.iter().find(|(i, _, _, _)| *i == index) {
+            let inverse = if index == 0 {
+                params.input_dependence.value() < 0.0
+            } else {
+                params.gr_dependence.value() < 0.0
+            };
+            draw_release_hint(
+                &mut d,
+                track,
+                threshold_y(*line, track, *db, range),
+                (index != 1) != inverse,
+            );
+        }
         if index != 0 {
             display.read_trails(|lines| {
                 for line in lines {

@@ -1,6 +1,10 @@
 //! Global MIDI effects, independent of tracker rows.
 use serde::{Deserialize, Serialize};
 
+mod eq;
+pub use eq::{MidiEqBand, MidiEqSettings};
+pub(crate) use eq::{note_frequency, MIDI_EQ_GAIN_DB, MIDI_EQ_RATE};
+
 pub const TAPS: usize = 8;
 pub mod source {
     pub const ARP: u8 = 1;
@@ -283,13 +287,15 @@ pub enum MidiFxId {
     RhythmGate,
     VoiceSplitter,
     Delay,
+    MidiEq,
 }
 
-pub const EFFECTS: [MidiFxId; 4] = [
+pub const EFFECTS: [MidiFxId; 5] = [
     MidiFxId::Harmonizer,
     MidiFxId::RhythmGate,
     MidiFxId::VoiceSplitter,
     MidiFxId::Delay,
+    MidiFxId::MidiEq,
 ];
 
 fn legacy_order() -> Vec<MidiFxId> {
@@ -303,6 +309,7 @@ pub struct MidiFxState {
     pub harmonizer: HarmonizerSettings,
     pub rhythm_gate: RhythmGateSettings,
     pub voice_splitter: VoiceSplitterSettings,
+    pub midi_eq: MidiEqSettings,
     #[serde(default = "legacy_order")]
     pub order: Vec<MidiFxId>,
 }
@@ -313,6 +320,7 @@ impl Default for MidiFxState {
             harmonizer: HarmonizerSettings::default(),
             rhythm_gate: RhythmGateSettings::default(),
             voice_splitter: VoiceSplitterSettings::default(),
+            midi_eq: MidiEqSettings::default(),
             order: EFFECTS.to_vec(),
         }
     }
@@ -323,6 +331,7 @@ impl MidiFxState {
         self.harmonizer.sanitize();
         self.rhythm_gate.sanitize();
         self.voice_splitter.sanitize();
+        self.midi_eq.sanitize();
         // Exactly one instance of each supported effect. Keep valid saved order.
         let mut seen = Vec::new();
         self.order.retain(|id| {
@@ -343,12 +352,20 @@ impl MidiFxState {
         move_item(&mut self.order, from, to);
     }
 
+    pub(crate) fn uses_fx_runtime(&self) -> bool {
+        self.harmonizer.enabled
+            || self.rhythm_gate.enabled
+            || self.voice_splitter.enabled
+            || self.midi_eq.enabled
+    }
+
     fn slot(&self, id: MidiFxId) -> (u8, bool) {
         match id {
             MidiFxId::Harmonizer => (self.harmonizer.sources, self.harmonizer.enabled),
             MidiFxId::RhythmGate => (self.rhythm_gate.sources, self.rhythm_gate.enabled),
             MidiFxId::VoiceSplitter => (self.voice_splitter.sources, self.voice_splitter.enabled),
             MidiFxId::Delay => (self.delay.sources, self.delay.enabled),
+            MidiFxId::MidiEq => (self.midi_eq.sources, self.midi_eq.enabled),
         }
     }
 
@@ -360,6 +377,7 @@ impl MidiFxState {
                 (&mut self.voice_splitter.sources, &mut self.voice_splitter.enabled)
             }
             MidiFxId::Delay => (&mut self.delay.sources, &mut self.delay.enabled),
+            MidiFxId::MidiEq => (&mut self.midi_eq.sources, &mut self.midi_eq.enabled),
         }
     }
 
@@ -404,7 +422,8 @@ mod tests {
                 MidiFxId::Delay,
                 MidiFxId::Harmonizer,
                 MidiFxId::RhythmGate,
-                MidiFxId::VoiceSplitter
+                MidiFxId::VoiceSplitter,
+                MidiFxId::MidiEq,
             ]
         );
         assert!(state.delay.enabled);
@@ -417,6 +436,7 @@ mod tests {
         assert_eq!(state.harmonizer.sources, source::MELODY);
         assert_eq!(state.rhythm_gate.sources, source::CHORDS);
         assert_eq!(state.voice_splitter.sources, source::CHORDS);
+        assert_eq!(state.midi_eq, MidiEqSettings::default());
         let mut missing: MidiFxState = serde_json::from_str("{}").unwrap();
         missing.sanitize();
         assert_eq!(missing.order, state.order);
@@ -439,6 +459,7 @@ mod tests {
         state.rhythm_gate.pattern[1] = f32::NEG_INFINITY;
         state.voice_splitter.channels = [0, 255, 4];
         state.voice_splitter.pools = [0, 255, 3];
+        state.midi_eq.bands[0] = Some(MidiEqBand { note: -1.0, gain_db: f32::NAN, q: 40.0 });
         state.sanitize();
         assert_eq!(state.harmonizer.voices[0].velocity, 0.8);
         assert_eq!(state.harmonizer.voices[1].interval, -24);
@@ -450,6 +471,7 @@ mod tests {
         assert_eq!(state.rhythm_gate.pattern[1], 0.0);
         assert_eq!(state.voice_splitter.channels, [1, 16, 4]);
         assert!(state.voice_splitter.pool_ranges(15, false).is_none());
+        assert_eq!(state.midi_eq.bands[0], Some(MidiEqBand { note: 0.0, gain_db: 0.0, q: 18.0 }));
         for id in EFFECTS {
             state.set_sources(id, 255);
             assert_eq!(state.sources(id), source::ALL);

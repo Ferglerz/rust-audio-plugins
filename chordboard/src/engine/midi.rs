@@ -53,6 +53,11 @@ impl Engine {
         let pressed = on && velocity > 0.0;
         let learn_id = channel as usize * 128 + note as usize;
         self.midi_held[learn_id] = pressed;
+        if pressed && velocity.is_finite() {
+            let attack = &mut self.midi_input[note as usize];
+            attack.velocity = velocity.min(1.0);
+            attack.strike = attack.strike.wrapping_add(1);
+        }
         if self.learned_note_held[learn_id] {
             if !pressed {
                 self.learned_note_held[learn_id] = false;

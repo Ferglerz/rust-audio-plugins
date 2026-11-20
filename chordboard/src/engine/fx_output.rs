@@ -38,14 +38,13 @@ impl Engine {
 
     pub(super) fn configure_fx(&mut self, out: &mut impl FnMut(Out)) {
         self.refresh_fx_lifetimes();
-        let enabled = self.arp.data.midi_fx.harmonizer.enabled
-            || self.arp.data.midi_fx.rhythm_gate.enabled
-            || self.arp.data.midi_fx.voice_splitter.enabled;
+        let enabled = self.prepared.midi_fx.uses_fx_runtime();
         if enabled && !self.fx.active() {
             self.reset_delay(out);
         }
         let ctx = self.fx_context();
-        self.fx.configure(&self.arp.data.midi_fx, ctx, out);
+        self.fx.set_midi_eq_gains(self.prepared.midi_eq_gains);
+        self.fx.configure(&self.prepared.midi_fx, ctx, out);
     }
 
     pub(super) fn refresh_fx_lifetimes(&mut self) {
@@ -107,8 +106,8 @@ impl Engine {
             return;
         }
         if self.fx.delay_due(ctx)
-            && (self.arp.data.midi_fx.delay.follow_chords
-                || self.arp.data.midi_fx.delay.voice_leading)
+            && (self.prepared.midi_fx.delay.follow_chords
+                || self.prepared.midi_fx.delay.voice_leading)
         {
             ctx.delay_map = self.cached_delay_map();
         }

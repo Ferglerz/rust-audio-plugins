@@ -42,7 +42,7 @@ fn tracker(rows: Vec<TrackerRow>, config: Config) -> Engine {
         sample_rate: 1000.0,
         ..Engine::default()
     };
-    engine.arp.data.rows = rows;
+    engine.prepared.rows = rows;
     engine.configure(
         Config {
             mode: MANUAL,
@@ -100,13 +100,13 @@ fn globals_resolve_live_and_tracker_chords_identically_without_baking_offsets() 
     let mut arp = tracker(vec![row(1, saved, settings())], config);
     assert_eq!(live.notes.as_slice(), &[66, 69, 73, 74, 76]);
     assert_eq!(live.notes, arp.arp_cycle_chord());
-    let before = arp.arp.data.rows[0].clone();
+    let before = arp.prepared.rows[0].clone();
     for _ in 0..4 {
         arp.configure(arp.host_config, &mut |_| {});
         live.configure(live.host_config, &mut |_| {});
     }
     assert_eq!(live.notes, arp.arp_cycle_chord());
-    assert_eq!(arp.arp.data.rows[0], before);
+    assert_eq!(arp.prepared.rows[0], before);
     let original = Config {
         base_inversion: 0,
         complexity: 0,
@@ -137,7 +137,7 @@ fn saved_inversion_then_global_then_loop_inversion_and_octave_are_additive() {
         },
     );
     assert_eq!(pitches(&advance(&mut engine, 301)), [62, 65, 70, 62]);
-    assert_eq!(engine.arp.data.rows[0].chord, Some(saved));
+    assert_eq!(engine.prepared.rows[0].chord, Some(saved));
 }
 
 #[test]
@@ -339,8 +339,8 @@ fn complexity_changes_do_not_restart_a_locked_loop() {
 fn fixed_length_changes_are_latched_until_the_next_loop_boundary() {
     let mut engine = tracker(vec![row(1, chord(60, 0), settings())], Config::default());
     let mut events = advance(&mut engine, 150);
-    engine.arp.data.rows[0].settings.steps = 2;
-    engine.arp.data.generation += 1;
+    engine.prepared.rows[0].settings.steps = 2;
+    engine.prepared.generation += 1;
     engine.accept_arp_generation(&mut |_| {});
     events.extend(advance(&mut engine, 551));
     assert_eq!(pitches(&events), [60, 64, 67, 60, 60, 64, 60, 64]);
@@ -458,8 +458,8 @@ fn changing_odd_to_even_loop_length_keeps_the_swing_clock_parity() {
     };
     let mut engine = tracker(vec![row(1, chord(60, 0), timing)], Config::default());
     let mut events = advance(&mut engine, 201);
-    engine.arp.data.rows[0].settings.steps = 4;
-    engine.arp.data.generation += 1;
+    engine.prepared.rows[0].settings.steps = 4;
+    engine.prepared.generation += 1;
     engine.accept_arp_generation(&mut |_| {});
     events.extend(advance(&mut engine, 400));
     assert_eq!(
@@ -617,7 +617,7 @@ fn daw_alignment_is_global_across_rows_without_changing_their_repeat_setting() {
     engine.arp.row_index = 1;
     engine.configure(engine.host_config, &mut |_| {});
     assert!(engine.arp_alignment_available());
-    assert_eq!(engine.arp.data.rows[1].settings.mode, ArpMode::SyncLoop);
+    assert_eq!(engine.prepared.rows[1].settings.mode, ArpMode::SyncLoop);
     let mut config = engine.host_config;
     config.daw_alignment = false;
     engine.configure(config, &mut |_| {});

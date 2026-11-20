@@ -21,7 +21,7 @@ use pleasant_ui::{
     FONT_JETBRAINS_MONO, FRAME_INTERVAL,
 };
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     sync::{atomic::Ordering, Arc},
 };
 
@@ -29,6 +29,7 @@ mod controls;
 mod events;
 mod graph;
 mod performance;
+mod reels;
 mod render;
 use performance::PerformanceTick;
 
@@ -94,9 +95,10 @@ pub struct TapeStopView {
     edit: Option<ValueEdit<KnobId>>,
     value_press: Option<pleasant_ui::pointer::ValuePress<KnobId>>,
     hover_stop: Cell<bool>,
-    stop_click: Cell<f32>,
+    reels: Cell<reels::Reels>,
     hover: Option<(f32, f32)>,
     curve_hover_anim: Cell<f32>,
+    curve_geometry: RefCell<graph::CurveGeometryCache>,
     auto_restart_anim: ButtonAnim,
     show_axis_controls: bool,
     axis_controls_progress: f32,
@@ -141,9 +143,10 @@ pub fn create(
                 edit: None,
                 value_press: None,
                 hover_stop: Cell::new(false),
-                stop_click: Cell::new(0.0),
+                reels: Cell::default(),
                 hover: None,
                 curve_hover_anim: Cell::new(0.0),
+                curve_geometry: RefCell::default(),
                 auto_restart_anim: ButtonAnim::new(),
                 show_axis_controls: false,
                 axis_controls_progress: 0.0,
@@ -164,6 +167,9 @@ pub fn create(
 
 #[cfg(test)]
 mod interaction_tests;
+
+#[cfg(all(test, target_os = "macos"))]
+mod preview;
 
 #[cfg(test)]
 mod tests {

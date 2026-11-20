@@ -6,7 +6,8 @@ use std::cell::Cell;
 
 const MAX_ROOTS: usize = 2304;
 const MAX_NODES: usize = 8192;
-const END: usize = 5;
+const READY: usize = midi_fx::EFFECTS.len();
+const END: usize = READY + 1;
 const EPS: f64 = 1e-9;
 
 #[derive(Clone, Copy, Debug)]
@@ -158,11 +159,14 @@ pub(super) struct Runtime {
     controllers: Box<[[Cell<Option<f32>>; 128]]>,
     delay: delay::Runtime,
     active: bool,
-    order: [MidiFxId; 4],
+    order: [MidiFxId; READY],
     harmonizer: midi_fx::HarmonizerSettings,
     gate: midi_fx::RhythmGateSettings,
     splitter: midi_fx::VoiceSplitterSettings,
     delay_settings: midi_fx::DelaySettings,
+    midi_eq_enabled: bool,
+    midi_eq_sources: u8,
+    midi_eq_gains: [f32; 128],
     routing: Option<Routing>,
     gate_clock: Option<GateClock>,
     serial: u64,
@@ -188,6 +192,9 @@ impl Default for Runtime {
             gate: Default::default(),
             splitter: Default::default(),
             delay_settings: Default::default(),
+            midi_eq_enabled: false,
+            midi_eq_sources: 0,
+            midi_eq_gains: [1.0; 128],
             routing: None,
             gate_clock: None,
             serial: 0,
@@ -199,6 +206,9 @@ impl Default for Runtime {
 impl Runtime {
     pub(super) fn active(&self) -> bool {
         self.active
+    }
+    pub(super) fn set_midi_eq_gains(&mut self, gains: [f32; 128]) {
+        self.midi_eq_gains = gains;
     }
     pub(super) fn output_serial(&self) -> u64 {
         self.output_serial
@@ -260,8 +270,7 @@ impl Runtime {
         for (to, from) in order.iter_mut().zip(&state.order) {
             *to = *from;
         }
-        let requested =
-            state.harmonizer.enabled || state.rhythm_gate.enabled || state.voice_splitter.enabled;
+        let requested = state.uses_fx_runtime();
         // Keep the allocator responsible for notes it remapped until they drain.
         let active = requested
             || self.active
@@ -272,6 +281,7 @@ impl Runtime {
             || state.harmonizer.enabled != self.harmonizer.enabled
             || state.rhythm_gate.enabled != self.gate.enabled
             || state.voice_splitter.enabled != self.splitter.enabled
+            || state.midi_eq.enabled != self.midi_eq_enabled
             || state.voice_splitter.pools != self.splitter.pools
             || state.voice_splitter.channels != self.splitter.channels
             || self.routing.is_some_and(|routing| routing != ctx.routing());
@@ -302,6 +312,8 @@ impl Runtime {
         self.gate = state.rhythm_gate;
         self.splitter = state.voice_splitter;
         self.delay_settings = state.delay;
+        self.midi_eq_enabled = state.midi_eq.enabled;
+        self.midi_eq_sources = state.midi_eq.sources;
         self.routing = Some(ctx.routing());
         let was_active = self.active;
         self.active = active;
@@ -641,11 +653,10 @@ impl Runtime {
         self.order
             .iter()
             .position(|id| *id == MidiFxId::Delay)
-            .unwrap_or(3)
+            .unwrap_or(READY - 1)
     }
     fn process_pending(&mut self, ctx: Context) {
-        for stage in 0..4 {
-            let id = self.order[stage];
+        for (stage, id) in self.order.into_iter().enumerate() {
             // Split rank is computed for the whole stage before any node advances.
             if id == MidiFxId::VoiceSplitter
                 && self.splitter.enabled
@@ -686,6 +697,13 @@ impl Runtime {
                     continue;
                 };
                 node.next = stage + 1;
+                if id == MidiFxId::MidiEq
+                    && self.midi_eq_enabled
+                    && self.midi_eq_sources & node.input.source != 0
+                {
+                    node.input.velocity =
+                        (node.input.velocity * self.midi_eq_gains[node.input.note as usize]).min(1.0);
+                }
                 self.nodes[index] = Some(node);
                 match id {
                     MidiFxId::Harmonizer
@@ -804,7 +822,7 @@ impl Runtime {
     fn emit_ready(&mut self, ctx: Context, out: &mut impl FnMut(Out)) {
         self.notes_changed = true;
         for index in 0..self.node_len {
-            let Some(mut node) = self.nodes[index].filter(|n| n.live && n.next == 4) else {
+            let Some(mut node) = self.nodes[index].filter(|n| n.live && n.next == READY) else {
                 continue;
             };
             let range = if ctx.mpe {

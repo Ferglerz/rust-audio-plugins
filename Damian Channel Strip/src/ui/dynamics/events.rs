@@ -87,7 +87,7 @@ impl StripView {
                 );
                 let knee_rect = self.pse_main_knee_rect(thresh_y, 0.0);
                 if inside(x, y, handle_hit) {
-                    self.drag = Some(Target::Global(1));
+                    self.drag = Some(Target::Global(GlobalControl::Gate));
                     self.last_drag = (x, y);
                     cx.emit(RawParamEvent::BeginSetParameter(gate_ptr));
                     cx.capture();
@@ -111,7 +111,7 @@ impl StripView {
                 let depth_y = gr.1 + gr.3 * depth_norm;
                 let depth_handle = self.pse_main_depth_handle_rect(depth_y);
                 if inside(x, y, depth_handle) {
-                    self.drag = Some(Target::Global(7));
+                    self.drag = Some(Target::Global(GlobalControl::PseDepth));
                     self.last_drag = (x, y);
                     cx.emit(RawParamEvent::BeginSetParameter(pse_depth_ptr));
                     cx.capture();
@@ -119,7 +119,7 @@ impl StripView {
                     return true;
                 }
                 if inside(x, y, (r.0 - 10.0, r.1 - 10.0, r.2 + 20.0, r.3 + 20.0)) {
-                    self.drag = Some(Target::Global(1));
+                    self.drag = Some(Target::Global(GlobalControl::Gate));
                     self.last_drag = (x, y);
                     let norm = 1.0 - ((y - r.1) / r.3).clamp(0.0, 1.0);
                     cx.emit(RawParamEvent::BeginSetParameter(gate_ptr));
@@ -163,7 +163,7 @@ impl StripView {
                 );
                 let knee_rect = self.dyn_main_knee_rect(thresh_y, 0.0);
                 if inside(x, y, handle_hit) {
-                    self.drag = Some(Target::Global(0));
+                    self.drag = Some(Target::Global(GlobalControl::Compression));
                     self.last_drag = (x, y);
                     cx.emit(RawParamEvent::BeginSetParameter(comp_ptr));
                     cx.capture();
@@ -186,7 +186,7 @@ impl StripView {
                 let depth_y = gr.1 + gr.3 * depth_norm;
                 let depth_handle = self.dyn_main_depth_handle_rect(depth_y);
                 if inside(x, y, depth_handle) {
-                    self.drag = Some(Target::Global(14));
+                    self.drag = Some(Target::Global(GlobalControl::CompDepth));
                     self.last_drag = (x, y);
                     cx.emit(RawParamEvent::BeginSetParameter(comp_depth_ptr));
                     cx.capture();
@@ -195,7 +195,7 @@ impl StripView {
                 }
                 let combined = (r.0 - 10.0, r.1 - 10.0, r.2 + gr.2 + 20.0, r.3 + 20.0);
                 if inside(x, y, combined) {
-                    self.drag = Some(Target::Global(0));
+                    self.drag = Some(Target::Global(GlobalControl::Compression));
                     self.last_drag = (x, y);
                     let norm = ((y - r.1) / r.3).clamp(0.0, 1.0);
                     cx.emit(RawParamEvent::BeginSetParameter(comp_ptr));
@@ -234,7 +234,7 @@ impl StripView {
                 if inside(x, y, handle_hit)
                     || inside(x, y, (r.0 - 10.0, r.1 - 10.0, r.2 + 20.0, r.3 + 20.0))
                 {
-                    self.drag = Some(Target::Global(18));
+                    self.drag = Some(Target::Global(GlobalControl::WallThreshold));
                     self.last_drag = (x, y);
                     let norm = ((y - r.1) / r.3).clamp(0.0, 1.0);
                     cx.emit(RawParamEvent::BeginSetParameter(wall_ptr));

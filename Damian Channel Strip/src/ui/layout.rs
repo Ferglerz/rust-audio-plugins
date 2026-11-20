@@ -1,3 +1,4 @@
+use super::GlobalControl;
 use nih_plug_vizia::vizia::prelude::BoundingBox;
 use nih_plug_vizia::vizia::vg::Color as C;
 use pleasant_ui::theme::rgb;
@@ -55,9 +56,14 @@ pub(super) const SC_EQ_ID_BASE: u64 = 20_000;
 pub(super) const GRAPH_CLIP_W: f32 = EQ_W;
 pub(super) const PSE_BLUE: C = rgb(108, 176, 242);
 pub(super) const WALL_COLOR: C = rgb(220, 108, 88);
-pub(super) const PSE_CONTROLS_KNOBS: [usize; 3] = [8, 10, 2];
-pub(super) const WALL_CONTROLS_KNOBS: [usize; 2] = [16, 17];
-pub(super) const WALL_MAIN_KNOBS: [usize; 1] = [18];
+pub(super) const PSE_CONTROLS_KNOBS: [GlobalControl; 3] = [
+    GlobalControl::PseHysteresis,
+    GlobalControl::PseTime,
+    GlobalControl::PseVoice,
+];
+pub(super) const WALL_CONTROLS_KNOBS: [GlobalControl; 2] =
+    [GlobalControl::WallEven, GlobalControl::WallOdd];
+pub(super) const WALL_MAIN_KNOBS: [GlobalControl; 1] = [GlobalControl::WallThreshold];
 
 pub(super) fn band_display_num(id: u64) -> u64 {
     if id >= SC_EQ_ID_BASE {

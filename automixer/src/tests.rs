@@ -12,13 +12,12 @@ fn default_settings() -> Settings {
 
 #[test]
 fn gain_sharing_matches_normalized_weighted_rms() {
-    let cap = 60.0;
-    let gain = |own, total| 10.0_f32.powf(-dsp::share_reduction(own, total, cap) / 20.0);
+    let gain = |own, total| 10.0_f32.powf(-dsp::share_reduction(own, total) / 20.0);
     assert!((gain(1.0, 2.0) - 0.5).abs() < 1e-6);
     assert!((gain(3.0, 4.0) - 0.75).abs() < 1e-6);
     assert_eq!(gain(1.0, 1.0), 1.0);
     assert_eq!(gain(0.0, 0.0), 1.0);
-    assert!((gain(1e-12, 1.0) - 0.001).abs() < 1e-6);
+    assert!((gain(1e-12, 1.0) - 1e-9).abs() < 1e-12);
 }
 
 #[test]
@@ -91,18 +90,14 @@ fn run_engines(
             }
             gains[i] = engine.gain(settings, voice, false);
             assert!(gains[i].is_finite() && gains[i] <= 1.0);
-            assert!(
-                engine.reduction <= settings.voice_cap + 1e-5,
-                "cap breached: {}",
-                engine.reduction
-            );
+            assert!(engine.reduction.is_finite() && engine.reduction >= 0.0);
         }
     }
     gains
 }
 
 #[test]
-fn chorus_opens_active_mics_but_keeps_quiet_mics_capped_then_restores_sharing() {
+fn chorus_opens_active_mics_and_leaves_quiet_mics_at_their_share() {
     let network = Arc::new(Network::default());
     let registrations: Vec<_> = (0..4).map(|_| network.register()).collect();
     let mut engines: Vec<_> = (0..4).map(|_| Engine::default()).collect();
@@ -126,8 +121,8 @@ fn chorus_opens_active_mics_but_keeps_quiet_mics_capped_then_restores_sharing() 
         );
     }
     assert!(
-        (gains[3] - 10.0_f32.powf(-18.0 / 20.0)).abs() < 1e-5,
-        "quiet chorus mic must remain capped: {}",
+        gains[3] < 0.01,
+        "quiet chorus mic keeps its uncapped share: {}",
         gains[3]
     );
     let gains = run_engines(
@@ -144,7 +139,7 @@ fn chorus_opens_active_mics_but_keeps_quiet_mics_capped_then_restores_sharing() 
     );
     assert!(!engines[0].chorus.active);
     let dry = Settings {
-        amount: 0.0,
+        strength: 0.0,
         ..settings
     };
     let gains = run_engines(
@@ -156,24 +151,33 @@ fn chorus_opens_active_mics_but_keeps_quiet_mics_capped_then_restores_sharing() 
     );
     assert!(
         gains.iter().all(|&g| (g - 1.0).abs() < 1e-6),
-        "amount zero must bypass ALL attenuation, including quiet mics"
+        "strength zero must bypass ALL attenuation, including quiet mics"
     );
 }
 
 #[test]
-fn reduction_cap_holds_during_cap_changes_and_fades_do_not_jump() {
+fn strength_scales_uncapped_sharing_and_fades_do_not_jump() {
     let network = Arc::new(Network::default());
     let registrations: Vec<_> = (0..2).map(|_| network.register()).collect();
     let mut engines = vec![Engine::default(), Engine::default()];
     let mut settings = Settings {
         voices: 0,
-        voice_cap: 30.0,
+        strength: 1.0,
         ..default_settings()
     };
-    run_engines(&mut engines, &registrations, &[1e-8, 0.1], settings, 48_000);
-    settings.voice_cap = 6.0;
-    let gains = run_engines(&mut engines, &registrations, &[1e-8, 0.1], settings, 48_000);
-    assert!((gains[0] - 10.0_f32.powf(-6.0 / 20.0)).abs() < 0.001);
+    let full = run_engines(&mut engines, &registrations, &[0.1, 0.1], settings, 48_000);
+    assert!(
+        (full[0] - 0.5).abs() < 0.02,
+        "full strength shares equally: {}",
+        full[0]
+    );
+    settings.strength = 0.5;
+    let gains = run_engines(&mut engines, &registrations, &[0.1, 0.1], settings, 48_000);
+    assert!(
+        (gains[0] - 0.5_f32.sqrt()).abs() < 0.02,
+        "half strength halves the reduction in dB: {}",
+        gains[0]
+    );
     let mut ramp = dsp::Ramp::default();
     for i in 1..=1000 {
         assert!((ramp.tick(1.0, 1000.0) - i as f32 / 1000.0).abs() < 0.00002);
@@ -212,14 +216,12 @@ fn run_grouped(
 }
 
 #[test]
-fn groups_share_separately_and_keep_their_own_caps() {
+fn groups_share_separately_without_a_reduction_cap() {
     let network = Arc::new(Network::default());
     let registrations: Vec<_> = (0..4).map(|_| network.register()).collect();
     let mut engines: Vec<_> = (0..4).map(|_| Engine::default()).collect();
     let settings = Settings {
         voices: 0,
-        voice_cap: 12.0,
-        other_cap: 6.0,
         ..default_settings()
     };
     let gains = run_grouped(
@@ -236,21 +238,13 @@ fn groups_share_separately_and_keep_their_own_caps() {
         "loud voice stays near unity: {}",
         gains[0]
     );
-    assert!(
-        (gains[1] - 10.0_f32.powf(-12.0 / 20.0)).abs() < 0.02,
-        "quiet voice uses the voice cap: {}",
-        gains[1]
-    );
+    assert!(gains[1] < 1.0e-4, "quiet voice is uncapped: {}", gains[1]);
     assert!(
         (gains[2] - 1.0).abs() < 0.02,
         "loud other stays near unity: {}",
         gains[2]
     );
-    assert!(
-        (gains[3] - 10.0_f32.powf(-6.0 / 20.0)).abs() < 0.02,
-        "quiet other uses the other cap: {}",
-        gains[3]
-    );
+    assert!(gains[3] < 1.0e-4, "quiet other is uncapped: {}", gains[3]);
 }
 
 #[test]
@@ -262,8 +256,6 @@ fn chorus_and_voice_assist_apply_only_to_the_voice_group() {
         voices: 1,
         fade_ms: 80.0,
         hold_ms: 80.0,
-        voice_cap: 60.0,
-        other_cap: 60.0,
         ..default_settings()
     };
     let gains = run_grouped(
@@ -766,8 +758,9 @@ fn automatic_assignment_restores_a_saved_fallback_when_hardware_is_unchanged() {
 #[test]
 fn spectral_plugin_routes_midi_reports_latency_and_resets_cleanly() {
     let mut raw_network = Network::default();
-    Arc::get_mut(&mut raw_network.params).unwrap().mode =
-        EnumParam::new("Mix mode", params::MixMode::SpectralSpace);
+    Arc::get_mut(&mut raw_network.params)
+        .unwrap()
+        .spectral_bypass = BoolParam::new("Bypass spectral", false).non_automatable();
     let network = Arc::new(raw_network);
     let mut instance = plugin(&network);
     let mut context = Context {
@@ -902,8 +895,8 @@ fn combined_processing_applies_both_stages_without_changing_spectral_detection()
     fn render(gain_amount: f32) -> (f32, f32, [f32; spectral::BANDS]) {
         let mut raw = Network::default();
         let p = Arc::get_mut(&mut raw.params).unwrap();
-        p.mode = EnumParam::new("Mix mode", params::MixMode::SpectralSpace);
-        p.amount = params::float("Gain amount", gain_amount, 0.0, 100.0, " %");
+        p.spectral_bypass = BoolParam::new("Bypass spectral", false).non_automatable();
+        p.strength = params::float("Strength", gain_amount, 0.0, 100.0, " %");
         p.mics[0].spectral_weight = params::float("Spectral weight", 12.0, -12.0, 12.0, " dB");
         let network = Arc::new(raw);
         let mut a = plugin(&network);
@@ -990,4 +983,6 @@ fn per_track_spectral_controls_are_independent_of_gain_weight_and_midi() {
     assert_eq!(spectral::Settings::from_params(&p, 1).blend, 0.5);
     let ids: std::collections::HashSet<_> = p.param_map().into_iter().map(|x| x.0).collect();
     assert!(ids.contains("sweight_1") && ids.contains("eqblend_64") && ids.contains("samount"));
+    assert!(ids.contains("strength") && ids.contains("gbypass") && ids.contains("sbypass"));
+    assert!(!ids.contains("mode") && !ids.contains("cap") && !ids.contains("ocap"));
 }

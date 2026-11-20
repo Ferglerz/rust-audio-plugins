@@ -32,6 +32,10 @@ impl DereverbView {
 
     pub(super) fn handle_event(&mut self, cx: &mut EventContext, event: &mut Event) {
         event.map(|window: &WindowEvent, meta| {
+            if matches!(window, WindowEvent::FocusOut | WindowEvent::MouseLeave) {
+                self.hover = None;
+                cx.needs_redraw();
+            }
             let b = cx.bounds();
             let Some(viewport) = EditorViewport::fit((b.x, b.y, b.w, b.h), SIZE) else {
                 return;
@@ -251,7 +255,7 @@ impl DereverbView {
                 | WindowEvent::FocusOut
                 | WindowEvent::KeyDown(Code::Escape, _)
                 | WindowEvent::MouseDown(MouseButton::Right) => self.end_drag(cx),
-                WindowEvent::MouseLeave => self.hover = None,
+                WindowEvent::MouseLeave => {}
                 _ => return,
             }
             nih_plug_vizia::consume_window_event(cx, window, meta);

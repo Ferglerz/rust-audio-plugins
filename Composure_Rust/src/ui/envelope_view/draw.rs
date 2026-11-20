@@ -132,7 +132,7 @@ impl EnvelopeView {
                 );
             }
         }
-        // True duration proportions remain visible beneath the enlarged stage zones.
+        // Show duration proportions alongside the curve display.
         let mut x = GRAPH.0;
         for (ms, color) in [
             (values.attack_ms, TEAL),
@@ -220,36 +220,32 @@ impl EnvelopeView {
             d.text_right(bar_x - 10.0, LOOK_BAR.1 + 20.0, &text, 11.0, GOLD);
         }
 
-        for hit in [
-            EnvelopeHit::AttackLength,
-            EnvelopeHit::HoldLength,
-            EnvelopeHit::ReleaseLength,
+        for (hit, name) in [
+            (EnvelopeHit::AttackLength, "ATTACK"),
+            (EnvelopeHit::HoldLength, "HOLD"),
+            (EnvelopeHit::ReleaseLength, "RELEASE"),
         ] {
-            let Some(rect) = Self::label_rect(hit) else {
-                continue;
-            };
             let param = self.param(hit);
-            let name = match hit {
-                EnvelopeHit::AttackLength => "ATT",
-                EnvelopeHit::HoldLength => "HOLD",
-                EnvelopeHit::ReleaseLength => "REL",
-                _ => "",
-            };
+            let track = Self::timing_track(hit);
+            let value_rect = Self::timing_value_rect(hit);
             let value =
                 param.normalized_value_to_string(param.unmodulated_normalized_value(), true);
-            let accent = if active == Some(hit) { GOLD } else { TEXT };
-            d.text(rect.0 + 4.0, rect.1 + 14.0, name, 11.0, MUTED);
+            let accent = if active == Some(hit) { GOLD } else { TEAL };
+            let mut fill = accent;
+            fill.a = 0.22;
+            let thumb_x = Self::timing_thumb(hit, timing_slider_norm(hit, values));
+            d.rect(track.0, track.1, track.2, track.3, PANEL);
+            d.rect(track.0, track.1, thumb_x - track.0, track.3, fill);
+            d.outline(track, LINE);
+            d.rect(thumb_x - 2.0, track.1 + 2.0, 4.0, track.3 - 4.0, accent);
+            let baseline = value_rect.1 + 13.0;
+            d.text(track.0, baseline, name, 11.0, MUTED);
             if self.edit.as_ref().is_some_and(|edit| edit.target == hit) {
                 continue;
             }
-            d.rect(rect.0 + 2.0, rect.1 + 17.0, rect.2 - 6.0, 18.0, PANEL);
-            d.text(rect.0 + 4.0, rect.1 + 30.0, &value, 13.0, accent);
-            if hover.is_some_and(|p| Self::label_hit(p) == Some(hit)) {
-                d.value_underline(
-                    (rect.0, rect.1 + 14.0, rect.2 - 8.0, 18.0),
-                    rect.1 + 30.0,
-                    GOLD,
-                );
+            d.text_right(value_rect.0 + value_rect.2, baseline, &value, 12.0, TEXT);
+            if hover.is_some_and(|p| Viewport::from_tuple(value_rect).contains(p.0, p.1)) {
+                d.value_underline(value_rect, baseline, GOLD);
             }
         }
         if let Some(edit) = &self.edit {

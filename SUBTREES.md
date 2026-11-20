@@ -95,3 +95,20 @@ workspace and `scd-rust/Cargo.toml` point to that copy, so a standalone SCD
 checkout also needs a sibling Damian checkout for those path patches. Moving
 the forks to a neutral root directory requires a replacement dependency source
 for standalone exports and verification of both Cargo workspaces and lockfiles.
+
+## Supported build and installation checkout
+
+Release builds and installation scripts are supported from the complete
+`audio-plugins` checkout. Subtree exports preserve component history and source,
+but are not standalone build distributions: they omit root `scripts/`, the
+workspace configuration, and sibling shared libraries. In particular, the
+Automixer, Damian, and Dereverb xtasks include the root post-bundle helper, and
+all plugin installation wrappers call the root installer.
+
+For a reproducible release, clone `audio-plugins`, enter the desired plugin
+directory, and run `scripts/install.sh`. Do not copy the installer or patched
+host dependencies into individual subtrees. Supporting independent releases
+would require distributing versioned shared libraries and build tooling together.
+
+The post-bundle helper takes its workspace path explicitly from each xtask; it
+does not infer workspace ownership from the location where its source is included.

@@ -607,8 +607,8 @@ impl View for Background {
         let width = cx.bounds().w / cx.scale_factor();
         let height = cx.bounds().h / cx.scale_factor();
         let mut d = painter(cx, canvas, width);
-        d.rect(0.0, 0.0, width, height, BG);
-        d.rect(0.0, 0.0, width, HEADER_H, PANEL);
+        d.square_rect(0.0, 0.0, width, height, BG);
+        d.square_rect(0.0, 0.0, width, HEADER_H, PANEL);
         d.line(24.0, HEADER_H, width - 24.0, HEADER_H, LINE, 1.0);
         d.text(30.0, 40.0, "COMPOSURE", 24.0, GOLD);
         d.text(220.0, 39.0, "CURVE DYNAMICS", 13.0, MUTED);
@@ -666,8 +666,7 @@ fn draw_module(
     bypassed: bool,
 ) {
     const INSET: f32 = 10.0;
-    d.rect(x, y, w, h, PANEL);
-    d.outline((x, y, w, h), LINE);
+    d.panel((x, y, w, h), PANEL, LINE);
     if title.is_empty() {
         return;
     }

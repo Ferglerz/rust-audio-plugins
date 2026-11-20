@@ -37,7 +37,7 @@ impl StripView {
     pub(super) fn expand_graph_after_drag(&mut self) {
         let id = match self.drag {
             Some(Target::Node(id) | Target::Range(id) | Target::SoloAudition { id, .. }) => id,
-            Some(Target::Value(ValueTarget::Band(1 | 7))) => match self.selected {
+            Some(Target::Value(ValueTarget::Band(BandField::Gain | BandField::Range))) => match self.selected {
                 Some(id) => id,
                 None => return,
             },
@@ -476,29 +476,29 @@ impl StripView {
                     });
                 }
             }
-            Some(Target::Global(i)) => {
-                let p = self.param(i);
-                if i == 0 && self.dyn_page.get() == DynPage::Main {
+            Some(Target::Global(control)) => {
+                let p = self.param(control);
+                if control == GlobalControl::Compression && self.dyn_page.get() == DynPage::Main {
                     let r = self.dyn_main_thresh_slider_rect();
                     let norm = ((y - r.1) / r.3).clamp(0.0, 1.0);
                     cx.emit(RawParamEvent::SetParameterNormalized(p.as_ptr(), norm));
-                } else if i == 18 && self.wall_page.get() == WallPage::Main {
+                } else if control == GlobalControl::WallThreshold && self.wall_page.get() == WallPage::Main {
                     let r = self.wall_main_thresh_slider_rect();
                     let norm = ((y - r.1) / r.3).clamp(0.0, 1.0);
                     cx.emit(RawParamEvent::SetParameterNormalized(p.as_ptr(), norm));
-                } else if i == 1 && self.pse_page.get() == PsePage::Main {
+                } else if control == GlobalControl::Gate && self.pse_page.get() == PsePage::Main {
                     let r = self.pse_main_thresh_slider_rect();
                     let norm = 1.0 - ((y - r.1) / r.3).clamp(0.0, 1.0);
                     cx.emit(RawParamEvent::SetParameterNormalized(p.as_ptr(), norm));
-                } else if i == 14 && self.dyn_page.get() == DynPage::Main {
+                } else if control == GlobalControl::CompDepth && self.dyn_page.get() == DynPage::Main {
                     let r = self.dyn_main_gr_meter_rect();
                     let norm = ((y - r.1) / r.3).clamp(0.0, 1.0);
                     cx.emit(RawParamEvent::SetParameterNormalized(p.as_ptr(), norm));
-                } else if i == 7 && self.pse_page.get() == PsePage::Main {
+                } else if control == GlobalControl::PseDepth && self.pse_page.get() == PsePage::Main {
                     let r = self.pse_main_gr_meter_rect();
                     let norm = ((y - r.1) / r.3).clamp(0.0, 1.0);
                     cx.emit(RawParamEvent::SetParameterNormalized(p.as_ptr(), norm));
-                } else if i == 15 {
+                } else if control == GlobalControl::Output {
                     let r = output_gain_rect();
                     let bar_x = r.0 + 8.0;
                     let bar_w = r.2 - 16.0;
@@ -514,7 +514,7 @@ impl StripView {
                     let cur = p.unmodulated_normalized_value();
                     let delta = (dy * if shift { 0.0015 } else { 0.007 }) as f32;
                     let norm =
-                        (cur + if i == 0 || i == 18 { -delta } else { delta }).clamp(0.0, 1.0);
+                        (cur + if control.inverted() { -delta } else { delta }).clamp(0.0, 1.0);
                     cx.emit(RawParamEvent::SetParameterNormalized(p.as_ptr(), norm));
                 }
             }
@@ -563,31 +563,33 @@ impl StripView {
                     }
                 });
             }
-            Some(Target::Band(i)) => {
+            Some(Target::Band(field)) => {
                 let Some(b) = self.selected.and_then(|id| self.find_band(id)) else {
                     return;
                 };
-                let r = self.hud_dyn_field_rect(&b, i);
+                let r = self.hud_dyn_field_rect(&b, field.dyn_bar_index());
                 let bar_x = r.0 + 8.0;
                 let bar_w = (r.2 - 16.0).max(1.0);
                 let n = ((x - bar_x) / bar_w).clamp(0.0, 1.0) as f64;
-                self.change(|b| match i {
-                    0 => b.threshold = -60.0 + 60.0 * n,
-                    1 => b.range = -MAX_RANGE_DB + 2.0 * MAX_RANGE_DB * n,
-                    2 => b.ratio = 1.0 + 19.0 * n,
-                    3 => b.attack = 0.1 * 2000.0_f64.powf(n),
-                    _ => b.release = 10.0 * 200.0_f64.powf(n),
+                self.change(|b| match field {
+                    BandField::Threshold => b.threshold = -60.0 + 60.0 * n,
+                    BandField::Range => b.range = -MAX_RANGE_DB + 2.0 * MAX_RANGE_DB * n,
+                    BandField::Ratio => b.ratio = 1.0 + 19.0 * n,
+                    BandField::Attack => b.attack = 0.1 * 2000.0_f64.powf(n),
+                    BandField::Release => b.release = 10.0 * 200.0_f64.powf(n),
+                    BandField::Frequency | BandField::Gain | BandField::Q => {}
                 });
             }
-            Some(Target::LiftBand(i)) => {
-                let r = self.band_rect(i);
+            Some(Target::LiftBand(field)) => {
+                let r = self.band_rect(field.lift_slider_index());
                 let n = ((x - r.0 - 12.0) / (r.2 - 24.0)).clamp(0.0, 1.0) as f64;
-                self.change_lift(|b| match i {
-                    0 => b.threshold = -60.0 + 60.0 * n,
-                    1 => b.ratio = 1.0 + 19.0 * n,
-                    2 => b.attack = 0.1 * 2000.0_f64.powf(n),
-                    3 => b.release = 10.0 * 200.0_f64.powf(n),
-                    _ => b.range = 24.0 * n,
+                self.change_lift(|b| match field {
+                    BandField::Threshold => b.threshold = -60.0 + 60.0 * n,
+                    BandField::Ratio => b.ratio = 1.0 + 19.0 * n,
+                    BandField::Attack => b.attack = 0.1 * 2000.0_f64.powf(n),
+                    BandField::Release => b.release = 10.0 * 200.0_f64.powf(n),
+                    BandField::Range => b.range = 24.0 * n,
+                    BandField::Frequency | BandField::Gain | BandField::Q => {}
                 });
             }
             _ => {}
@@ -620,7 +622,7 @@ impl StripView {
             return false;
         }
         if inside(x, y, output_gain_rect()) {
-            self.reset_float_param(cx, self.param(15));
+            self.reset_float_param(cx, self.param(GlobalControl::Output));
             self.finish_param_reset(cx);
             return true;
         }
@@ -642,7 +644,7 @@ impl StripView {
             let depth_y = gr.1 + gr.3 * self.params.pse_depth.unmodulated_normalized_value();
             let depth_handle = self.pse_main_depth_handle_rect(depth_y);
             if inside(x, y, handle_hit) {
-                self.reset_float_param(cx, self.param(1));
+                self.reset_float_param(cx, self.param(GlobalControl::Gate));
                 self.finish_param_reset(cx);
                 return true;
             }
@@ -652,12 +654,12 @@ impl StripView {
                 return true;
             }
             if inside(x, y, depth_handle) {
-                self.reset_float_param(cx, self.param(7));
+                self.reset_float_param(cx, self.param(GlobalControl::PseDepth));
                 self.finish_param_reset(cx);
                 return true;
             }
             if inside(x, y, (r.0 - 10.0, r.1 - 10.0, r.2 + 20.0, r.3 + 20.0)) {
-                self.reset_float_param(cx, self.param(1));
+                self.reset_float_param(cx, self.param(GlobalControl::Gate));
                 self.finish_param_reset(cx);
                 return true;
             }
@@ -680,7 +682,7 @@ impl StripView {
             let depth_y = gr.1 + gr.3 * self.params.comp_depth.unmodulated_normalized_value();
             let depth_handle = self.dyn_main_depth_handle_rect(depth_y);
             if inside(x, y, handle_hit) {
-                self.reset_float_param(cx, self.param(0));
+                self.reset_float_param(cx, self.param(GlobalControl::Compression));
                 self.finish_param_reset(cx);
                 return true;
             }
@@ -690,7 +692,7 @@ impl StripView {
                 return true;
             }
             if inside(x, y, depth_handle) {
-                self.reset_float_param(cx, self.param(14));
+                self.reset_float_param(cx, self.param(GlobalControl::CompDepth));
                 self.finish_param_reset(cx);
                 return true;
             }
@@ -699,7 +701,7 @@ impl StripView {
                 y,
                 (r.0 - 10.0, r.1 - 10.0, r.2 + gr.2 + 20.0, r.3 + 20.0),
             ) {
-                self.reset_float_param(cx, self.param(0));
+                self.reset_float_param(cx, self.param(GlobalControl::Compression));
                 self.finish_param_reset(cx);
                 return true;
             }
@@ -720,7 +722,7 @@ impl StripView {
             if inside(x, y, handle_hit)
                 || inside(x, y, (r.0 - 10.0, r.1 - 10.0, r.2 + 20.0, r.3 + 20.0))
             {
-                self.reset_float_param(cx, self.param(18));
+                self.reset_float_param(cx, self.param(GlobalControl::WallThreshold));
                 self.finish_param_reset(cx);
                 return true;
             }

@@ -167,7 +167,7 @@ impl StripView {
             } else if self.is_lift_selected() {
                 if let Some(i) = (0..5).find(|i| inside(x, y, self.band_rect(*i))) {
                     dock_control_handled = true;
-                    self.drag = Some(Target::LiftBand(i));
+                    self.drag = Some(Target::LiftBand(BandField::from_lift_slider(i)));
                     self.last_drag = (x, y);
                     cx.capture();
                     self.apply_drag(cx, x, y, false, false, false);
@@ -285,7 +285,7 @@ impl StripView {
                                         if let Some(i) = (2..5).find(|i| {
                                             *i != 1 && inside(x, y, self.hud_dyn_field_rect(&b, *i))
                                         }) {
-                                            self.drag = Some(Target::Band(i));
+                                            self.drag = Some(Target::Band(BandField::from_dyn_bar(i)));
                                             self.last_drag = (x, y);
                                             cx.capture();
                                             self.apply_drag(cx, x, y, false, false, false);

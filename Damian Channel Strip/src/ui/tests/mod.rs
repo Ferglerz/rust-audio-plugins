@@ -15,6 +15,9 @@ pub(super) fn hud_value_rect_lift(b: &LiftBand, range: f64, i: usize) -> (f32, f
 
 
 mod entries;
-mod layout;
+pub(super) mod layout;
 mod meters;
 mod graph;
+
+#[cfg(target_os = "macos")]
+mod preview;

@@ -16,7 +16,7 @@ mod route;
 mod tests;
 
 pub use arp_page::ArpPageParams;
-pub use catalog::Control;
+pub use catalog::{Control, ControlSummary};
 pub use route::{ModulatorParams, RouteParams};
 
 #[derive(Params)]

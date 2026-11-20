@@ -409,12 +409,12 @@ impl TapeStopView {
         }
     }
 
-    pub(super) fn draw_drop_time(&self, d: &mut Draw) {
-        self.draw_time_slider(d, KnobId::DropTime);
-        self.draw_time_slider(d, KnobId::Return);
+    pub(super) fn draw_drop_time(&self, d: &mut Draw, returning: bool) {
+        self.draw_time_slider(d, KnobId::DropTime, false);
+        self.draw_time_slider(d, KnobId::Return, returning);
     }
 
-    fn draw_time_slider(&self, d: &mut Draw, id: KnobId) {
+    fn draw_time_slider(&self, d: &mut Draw, id: KnobId, active: bool) {
         let (_, val_str, color) = self.knob_info(id);
         let n = self.get_knob_norm(id);
         let readout = if id == KnobId::DropTime {
@@ -433,25 +433,18 @@ impl TapeStopView {
                 "RETURN"
             },
             10.0,
-            MUTED,
+            if active { color } else { MUTED },
         );
 
-        d.rounded_rect(
-            readout.0,
-            slider.1,
-            readout.2,
-            readout.1 + readout.3 - slider.1,
-            8.0,
-            DROP_CHROME,
-        );
-        d.outline(
+        d.panel(
             (
                 readout.0,
                 slider.1,
                 readout.2,
                 readout.1 + readout.3 - slider.1,
             ),
-            LINE,
+            DROP_CHROME,
+            if active { color } else { LINE },
         );
         d.rect(bar.0, bar.1, bar.2, bar.3, LINE);
         let fill_h = bar.3 * n.clamp(0.0, 1.0);

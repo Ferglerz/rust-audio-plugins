@@ -21,11 +21,46 @@ fn band_position(hz: f32) -> f32 {
 
 /// Center frequency of each log band, from 40 Hz to 20 kHz.
 /// Computed once so each hop does not repeat the same `powf`.
-fn band_centers() -> &'static [f32; BANDS] {
+pub(crate) fn band_centers() -> &'static [f32; BANDS] {
     static CENTERS: std::sync::OnceLock<[f32; BANDS]> = std::sync::OnceLock::new();
     CENTERS.get_or_init(|| {
         std::array::from_fn(|band| 40.0 * 500.0_f32.powf(band as f32 / (BANDS - 1) as f32))
     })
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Contribution {
+    pub owner: u64,
+    pub db: f32,
+}
+
+impl Contribution {
+    fn consider(&mut self, owner: u64, db: f32) {
+        if db > self.db {
+            *self = Self { owner, db };
+        } else if db > 0.0 && db == self.db && owner != self.owner {
+            self.owner = 0;
+        }
+    }
+
+    fn follow(&mut self, target: Self, coefficient: f32) {
+        if target.owner == 0 {
+            *self = Self::default();
+            return;
+        }
+        if self.owner != target.owner {
+            *self = Self {
+                owner: target.owner,
+                db: 0.0,
+            };
+        }
+        self.db += (target.db - self.db) * coefficient;
+    }
+}
+
+pub(crate) struct PullSnapshot {
+    pub cut: [f32; BANDS],
+    pub sources: [Contribution; BANDS],
 }
 
 pub struct SpectrumBus {
@@ -33,6 +68,9 @@ pub struct SpectrumBus {
     valid: AtomicBool,
     power: [AtomicF32; BANDS],
     cut: [AtomicF32; BANDS],
+    owners: [AtomicU64; BANDS],
+    attributed: [AtomicF32; BANDS],
+    transient: AtomicF32,
 }
 impl Default for SpectrumBus {
     fn default() -> Self {
@@ -41,6 +79,9 @@ impl Default for SpectrumBus {
             valid: AtomicBool::new(false),
             power: std::array::from_fn(|_| AtomicF32::new(0.0)),
             cut: std::array::from_fn(|_| AtomicF32::new(0.0)),
+            owners: std::array::from_fn(|_| AtomicU64::new(0)),
+            attributed: std::array::from_fn(|_| AtomicF32::new(0.0)),
+            transient: AtomicF32::new(0.0),
         }
     }
 }
@@ -48,17 +89,26 @@ impl SpectrumBus {
     pub fn clear(&self) {
         self.valid.store(false, SeqCst);
     }
-    fn publish(&self, power: &[f32; BANDS], cut: &[f32; BANDS]) {
+    fn publish(
+        &self,
+        power: &[f32; BANDS],
+        cut: &[f32; BANDS],
+        sources: &[Contribution; BANDS],
+        transient: f32,
+    ) {
         self.sequence.fetch_add(1, SeqCst);
         for i in 0..BANDS {
             self.power[i].store(power[i], SeqCst);
             self.cut[i].store(cut[i], SeqCst);
+            self.owners[i].store(sources[i].owner, SeqCst);
+            self.attributed[i].store(sources[i].db, SeqCst);
         }
+        self.transient.store(transient, SeqCst);
         self.sequence.fetch_add(1, SeqCst);
         self.valid.store(true, SeqCst);
     }
     // A single bounded attempt: skip a concurrently written frame rather than spin.
-    pub fn read(&self) -> Option<(u64, [f32; BANDS], [f32; BANDS])> {
+    fn read_frame<T>(&self, read: impl FnOnce(u64) -> T) -> Option<T> {
         if !self.valid.load(SeqCst) {
             return None;
         }
@@ -66,11 +116,88 @@ impl SpectrumBus {
         if sequence & 1 != 0 {
             return None;
         }
-        let power = std::array::from_fn(|i| self.power[i].load(SeqCst));
-        let cut = std::array::from_fn(|i| self.cut[i].load(SeqCst));
-        (sequence == self.sequence.load(SeqCst) && self.valid.load(SeqCst))
-            .then_some((sequence, power, cut))
+        let value = read(sequence);
+        (sequence == self.sequence.load(SeqCst) && self.valid.load(SeqCst)).then_some(value)
     }
+
+    fn read_power(&self) -> Option<(u64, [f32; BANDS])> {
+        self.read_frame(|sequence| {
+            (
+                sequence,
+                std::array::from_fn(|i| self.power[i].load(SeqCst)),
+            )
+        })
+    }
+
+    #[cfg(test)]
+    pub fn read(&self) -> Option<(u64, [f32; BANDS], [f32; BANDS])> {
+        self.read_frame(|sequence| {
+            let power = std::array::from_fn(|i| self.power[i].load(SeqCst));
+            let cut = std::array::from_fn(|i| self.cut[i].load(SeqCst));
+            (sequence, power, cut)
+        })
+    }
+
+    pub(crate) fn read_cut(&self) -> Option<[f32; BANDS]> {
+        self.read_frame(|_| std::array::from_fn(|i| self.cut[i].load(SeqCst)))
+    }
+
+    pub(crate) fn read_pulls(&self) -> Option<PullSnapshot> {
+        self.read_frame(|_| PullSnapshot {
+            cut: std::array::from_fn(|i| self.cut[i].load(SeqCst)),
+            sources: std::array::from_fn(|i| Contribution {
+                owner: self.owners[i].load(SeqCst),
+                db: self.attributed[i].load(SeqCst),
+            }),
+        })
+    }
+
+    pub(crate) fn read_transient(&self) -> Option<f32> {
+        self.read_frame(|_| self.transient.load(SeqCst))
+    }
+}
+
+#[derive(Default)]
+struct Transient {
+    baseline_db: Option<f32>,
+    strength: f32,
+}
+
+impl Transient {
+    fn update(&mut self, input_db: f32, dt_ms: f32) -> f32 {
+        let baseline = self.baseline_db.unwrap_or(input_db);
+        let excess = if input_db >= -65.0 {
+            ((input_db - baseline - 3.0) / 15.0).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let baseline_ms = if input_db > baseline { 80.0 } else { 250.0 };
+        self.baseline_db =
+            Some(baseline + (input_db - baseline) * (1.0 - (-dt_ms / baseline_ms).exp()));
+        self.strength = (excess * excess).max(self.strength * (-dt_ms / 140.0).exp());
+        self.strength
+    }
+}
+
+fn smoothed_source(taps: [Contribution; 3], smooth: f32) -> Contribution {
+    if smooth == 0.0 {
+        return taps[0];
+    }
+    let weighted = [
+        taps[0].db * (1.0 - smooth),
+        taps[1].db * (0.5 * smooth),
+        taps[2].db * (0.5 * smooth),
+    ];
+    let mut strongest = Contribution::default();
+    for tap in taps.into_iter().filter(|tap| tap.owner != 0) {
+        let db = taps
+            .iter()
+            .zip(weighted)
+            .filter_map(|(source, db)| (source.owner == tap.owner).then_some(db))
+            .sum();
+        strongest.consider(tap.owner, db);
+    }
+    strongest
 }
 
 #[derive(Clone, Copy)]
@@ -133,7 +260,8 @@ pub struct Spectral {
     input: [Vec<f32>; 2],
     output: [Vec<f32>; 2],
     gain_delay: Vec<f32>,
-    gain_reduction: f32,
+    minimum_gain: f32,
+    channels: usize,
     window: Vec<f32>,
     positions: Vec<f32>,
     cursor: usize,
@@ -146,12 +274,21 @@ pub struct Spectral {
     eq: [f32; BANDS],
     regular_cut: [f32; BANDS],
     drum_cut: [f32; BANDS],
+    regular_source: [Contribution; BANDS],
+    drum_source: [Contribution; BANDS],
+    transient: Transient,
     peak_cut: f32,
     input_energy: f64,
     output_energy: f64,
 }
 impl Spectral {
     pub fn new(rate: f32, max_buffer: u32) -> Self {
+        Self::with_channels(rate, max_buffer, 2)
+    }
+
+    /// Channel count is fixed during host initialization; mono retains stereo-normalized power.
+    pub fn with_channels(rate: f32, max_buffer: u32, channels: usize) -> Self {
+        assert!((1..=2).contains(&channels));
         let _ = band_centers();
         let mut planner = FftPlanner::new();
         let forward = planner.plan_fft_forward(FFT_SIZE);
@@ -167,7 +304,8 @@ impl Spectral {
             input: std::array::from_fn(|_| vec![0.0; FFT_SIZE]),
             output: std::array::from_fn(|_| vec![0.0; FFT_SIZE]),
             gain_delay: vec![1.0; FFT_SIZE],
-            gain_reduction: 0.0,
+            minimum_gain: 1.0,
+            channels,
             window: (0..FFT_SIZE)
                 .map(|i| {
                     (0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / FFT_SIZE as f32).cos()).sqrt()
@@ -186,6 +324,9 @@ impl Spectral {
             eq: [0.0; BANDS],
             regular_cut: [0.0; BANDS],
             drum_cut: [0.0; BANDS],
+            regular_source: [Contribution::default(); BANDS],
+            drum_source: [Contribution::default(); BANDS],
+            transient: Transient::default(),
             peak_cut: 0.0,
             input_energy: 0.0,
             output_energy: 0.0,
@@ -199,7 +340,7 @@ impl Spectral {
             channel.fill(0.0);
         }
         self.gain_delay.fill(1.0);
-        self.gain_reduction = 0.0;
+        self.minimum_gain = 1.0;
         self.cursor = 0;
         self.hop = 0;
         self.power.fill(0.0);
@@ -207,6 +348,9 @@ impl Spectral {
         self.eq.fill(0.0);
         self.regular_cut.fill(0.0);
         self.drum_cut.fill(0.0);
+        self.regular_source.fill(Contribution::default());
+        self.drum_source.fill(Contribution::default());
+        self.transient = Transient::default();
         self.peak_cut = 0.0;
         self.peers.fill(Peer::default());
         self.input_energy = 0.0;
@@ -225,28 +369,38 @@ impl Spectral {
         // Analysis still sees the original signal, keeping linked detection independent.
         let gain = self.gain_delay[self.cursor];
         self.gain_delay[self.cursor] = settings.gain;
-        self.gain_reduction = self.gain_reduction.max(-20.0 * gain.max(1e-6).log10());
-        let output = std::array::from_fn(|ch| {
+        self.minimum_gain = self.minimum_gain.min(gain.max(1e-6));
+        let input = if self.channels == 1 {
+            [input[0]; 2]
+        } else {
+            input
+        };
+        let mut output = [0.0; 2];
+        for ch in 0..self.channels {
             let out = self.output[ch][self.cursor] * gain;
             self.output[ch][self.cursor] = 0.0;
             self.input[ch][self.cursor] = input[ch];
-            out
-        });
+            output[ch] = out;
+        }
+        if self.channels == 1 {
+            output[1] = output[0];
+        }
         self.input_energy += input.iter().map(|x| (*x as f64).powi(2)).sum::<f64>() * 0.5;
         self.output_energy += output.iter().map(|x| (*x as f64).powi(2)).sum::<f64>() * 0.5;
         self.cursor = (self.cursor + 1) % FFT_SIZE;
         self.hop += 1;
         if self.hop == HOP {
             self.hop = 0;
-            self.frame(network, slot, mic, bypass, settings);
+            let db = |energy: f64| (10.0 * (energy / HOP as f64).max(1e-12).log10()) as f32;
+            let input_db = slot.map_or(-120.0, |_| db(self.input_energy));
+            self.frame(network, slot, mic, bypass, settings, input_db);
             if let Some(slot) = slot {
-                let db = |energy: f64| (10.0 * (energy / HOP as f64).max(1e-12).log10()) as f32;
-                slot.input_db.store(db(self.input_energy), SeqCst);
+                slot.input_db.store(input_db, SeqCst);
                 slot.output_db.store(db(self.output_energy), SeqCst);
                 slot.reduction_db
-                    .store(self.peak_cut + self.gain_reduction, SeqCst);
+                    .store(self.peak_cut - 20.0 * self.minimum_gain.log10(), SeqCst);
             }
-            self.gain_reduction = 0.0;
+            self.minimum_gain = 1.0;
             self.input_energy = 0.0;
             self.output_energy = 0.0;
         }
@@ -259,8 +413,9 @@ impl Spectral {
         mic: usize,
         bypass: bool,
         settings: Settings,
+        input_db: f32,
     ) {
-        for ch in 0..2 {
+        for ch in 0..self.channels {
             for i in 0..FFT_SIZE {
                 self.bins[ch][i] = Complex32::new(
                     self.input[ch][(self.cursor + i) % FFT_SIZE] * self.window[i],
@@ -277,7 +432,9 @@ impl Spectral {
             let lo = pos as usize;
             let hi = (lo + 1).min(BANDS - 1);
             let mix = pos - lo as f32;
-            let power = (self.bins[0][bin].norm_sqr() + self.bins[1][bin].norm_sqr()) * scale;
+            let power = (self.bins[0][bin].norm_sqr()
+                + self.bins[self.channels - 1][bin].norm_sqr())
+                * scale;
             self.power[lo] += power * (1.0 - mix);
             self.power[hi] += power * mix;
         }
@@ -291,8 +448,8 @@ impl Spectral {
         let own_weight = network.params.mics[mic].spectral_weight.value();
         let centers = band_centers();
         let own_peak = self.power.iter().copied().fold(0.0, f32::max);
-        let mut target = [0.0_f32; BANDS];
-        let mut drum_target = [0.0_f32; BANDS];
+        let mut target = [Contribution::default(); BANDS];
+        let mut drum_target = [Contribution::default(); BANDS];
         let own_drums = network.params.mics[mic].is_drums();
         let own_shape = tonal_shape(&self.power);
         let mut shape_sum = own_shape.unwrap_or([0.0; BANDS]);
@@ -311,7 +468,7 @@ impl Spectral {
             {
                 continue;
             }
-            let Some((sequence, power, _)) = peer_slot.spectrum.read() else {
+            let Some((sequence, power)) = peer_slot.spectrum.read_power() else {
                 continue;
             };
             if owner != peer.owner || sequence != peer.sequence {
@@ -331,6 +488,9 @@ impl Spectral {
                 shape_count += 1;
             }
             let gap = network.params.mics[peer_mic].spectral_weight.value() - own_weight;
+            if gap <= 0.0 || settings.amount == 0.0 || settings.cap == 0.0 {
+                continue;
+            }
             let peer_drums = network.params.mics[peer_mic].is_drums();
             let peak = power.iter().copied().fold(0.0, f32::max);
             for band in 0..BANDS {
@@ -340,7 +500,8 @@ impl Spectral {
                 } else {
                     &mut target[band]
                 };
-                *destination = destination.max(
+                destination.consider(
+                    owner,
                     influence(self.power[band], power[band], own_peak, peak, gap)
                         * settings.cap
                         * settings.amount,
@@ -360,9 +521,10 @@ impl Spectral {
         let dt = HOP as f32 / self.rate * 1000.0;
         let drum_eq_band = band_position(3000.0);
         for band in 0..BANDS {
-            let neighbor =
-                (target[band.saturating_sub(1)] + target[(band + 1).min(BANDS - 1)]) * 0.5;
-            let desired = target[band] + (neighbor - target[band]) * settings.smooth;
+            let low = band.saturating_sub(1);
+            let high = (band + 1).min(BANDS - 1);
+            let neighbor = (target[low].db + target[high].db) * 0.5;
+            let desired = target[band].db + (neighbor - target[band].db) * settings.smooth;
             let ms = if !enabled {
                 20.0
             } else if desired > self.regular_cut[band] {
@@ -370,20 +532,29 @@ impl Spectral {
             } else {
                 settings.release
             };
-            self.regular_cut[band] +=
-                (desired - self.regular_cut[band]) * (1.0 - (-dt / ms.max(1.0)).exp());
-            let drum_neighbor = (drum_target[band.saturating_sub(1)]
-                + drum_target[(band + 1).min(BANDS - 1)])
-                * 0.5;
+            let coefficient = 1.0 - (-dt / ms.max(1.0)).exp();
+            self.regular_cut[band] += (desired - self.regular_cut[band]) * coefficient;
+            self.regular_source[band].follow(
+                smoothed_source([target[band], target[low], target[high]], settings.smooth),
+                coefficient,
+            );
+            let drum_neighbor = (drum_target[low].db + drum_target[high].db) * 0.5;
             let drum_desired =
-                drum_target[band] + (drum_neighbor - drum_target[band]) * settings.smooth;
+                drum_target[band].db + (drum_neighbor - drum_target[band].db) * settings.smooth;
             let drum_ms = if drum_desired > self.drum_cut[band] {
                 settings.attack.min(5.0)
             } else {
                 settings.release.min(40.0)
             };
-            self.drum_cut[band] +=
-                (drum_desired - self.drum_cut[band]) * (1.0 - (-dt / drum_ms.max(1.0)).exp());
+            let drum_coefficient = 1.0 - (-dt / drum_ms.max(1.0)).exp();
+            self.drum_cut[band] += (drum_desired - self.drum_cut[band]) * drum_coefficient;
+            self.drum_source[band].follow(
+                smoothed_source(
+                    [drum_target[band], drum_target[low], drum_target[high]],
+                    settings.smooth,
+                ),
+                drum_coefficient,
+            );
             self.cut[band] = self.regular_cut[band]
                 .max(self.drum_cut[band])
                 .clamp(0.0, settings.cap);
@@ -424,7 +595,7 @@ impl Spectral {
             let post_eq_gain = 10.0_f32.powf(interpolate(&self.eq) / 20.0);
             // Mixer reduction is measured before EQ Blend. Apply EQ downstream
             // in the same FFT frame, without feeding it into linked detectors.
-            for ch in 0..2 {
+            for ch in 0..self.channels {
                 self.bins[ch][bin] *= mixer_gain;
                 self.bins[ch][bin] *= post_eq_gain;
                 if bin > 0 && bin < FFT_SIZE / 2 {
@@ -434,7 +605,7 @@ impl Spectral {
             }
         }
         if enabled {
-            let displayed = std::array::from_fn(|i| {
+            let displayed: [f32; BANDS] = std::array::from_fn(|i| {
                 let hz = centers[i];
                 if hz >= settings.low && hz <= settings.high && hz < self.rate * 0.5 {
                     self.cut[i]
@@ -443,10 +614,33 @@ impl Spectral {
                 }
             });
             if let Some(slot) = slot {
-                slot.spectrum.publish(&self.power, &displayed);
+                let sources = std::array::from_fn(|i| {
+                    let regular = self.regular_cut[i];
+                    let drum = self.drum_cut[i];
+                    let mut source = if regular >= drum {
+                        self.regular_source[i]
+                    } else {
+                        self.drum_source[i]
+                    };
+                    let total = regular.max(drum);
+                    if total <= 0.0
+                        || displayed[i] <= 0.0
+                        || (regular == drum
+                            && self.regular_source[i].owner != self.drum_source[i].owner)
+                    {
+                        return Contribution::default();
+                    }
+                    source.db = (source.db / total).clamp(0.0, 1.0) * displayed[i];
+                    source
+                });
+                let transient = self.transient.update(input_db, dt);
+                slot.spectrum
+                    .publish(&self.power, &displayed, &sources, transient);
             }
+        } else {
+            self.transient = Transient::default();
         }
-        for ch in 0..2 {
+        for ch in 0..self.channels {
             self.inverse
                 .process_with_scratch(&mut self.bins[ch], &mut self.scratch);
             for i in 0..FFT_SIZE {
@@ -460,6 +654,86 @@ impl Spectral {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mono_matches_dual_mono_audio_detection_and_meters() {
+        let network = weighted_network(12.0, 0.0);
+        let source = network.register();
+        let receiver = network.register();
+        let source_slot = source.slot().unwrap();
+        let receiver_slot = receiver.slot().unwrap();
+        source_slot.publish(0.1, true, true);
+        receiver_slot.publish(0.1, true, true);
+        let mut peer = Spectral::new(48000.0, 128);
+        let mut stereo = Spectral::new(48000.0, 128);
+        let mut mono = Spectral::with_channels(48000.0, 128, 1);
+        for n in 0..FFT_SIZE * 8 {
+            let config = Settings {
+                gain: if n % 113 < 57 { 0.25 } else { 0.75 },
+                blend: if n < FFT_SIZE * 4 { 0.7 } else { 0.0 },
+                ..settings()
+            };
+            peer.process(
+                [tone(n, 43) * 0.25 + tone(n, 256); 2],
+                &network,
+                Some(source_slot),
+                0,
+                false,
+                config,
+            );
+            let input = tone(n, 43) + tone(n, 256) * 0.25;
+            let bypass = n >= FFT_SIZE * 6;
+            let expected =
+                stereo.process([input; 2], &network, Some(receiver_slot), 1, bypass, config);
+            let meter = receiver_slot.reduction_db.load(SeqCst);
+            let actual = mono.process([input; 2], &network, Some(receiver_slot), 1, bypass, config);
+            assert_eq!(actual, expected, "audio at sample {n}");
+            assert_eq!(mono.power, stereo.power);
+            assert_eq!(mono.cut, stereo.cut);
+            assert_eq!(mono.eq, stereo.eq);
+            assert_eq!(receiver_slot.reduction_db.load(SeqCst), meter);
+        }
+        mono.reset();
+        stereo.reset();
+        assert_eq!(mono.minimum_gain, 1.0);
+        for n in 0..FFT_SIZE * 2 {
+            let input = [tone(n, 43); 2];
+            assert_eq!(
+                mono.process(input, &network, None, 1, false, settings()),
+                stereo.process(input, &network, None, 1, false, settings())
+            );
+        }
+    }
+
+    #[test]
+    fn hop_gain_meter_matches_per_sample_db_maximum() {
+        let network = Arc::new(Network::default());
+        let registration = network.register();
+        let slot = registration.slot().unwrap();
+        let mut engine = Spectral::new(48000.0, 128);
+        let mut expected = 0.0_f32;
+        for n in 0..FFT_SIZE * 3 {
+            let gain = [0.0_f32, 0.1, 0.5, 1.0, 1.5][n % 5];
+            let delayed_gain = if n < FFT_SIZE {
+                1.0
+            } else {
+                [0.0_f32, 0.1, 0.5, 1.0, 1.5][(n - FFT_SIZE) % 5]
+            };
+            expected = expected.max(-20.0 * delayed_gain.max(1e-6).log10());
+            engine.process(
+                [0.0; 2],
+                &network,
+                Some(slot),
+                0,
+                false,
+                Settings { gain, ..settings() },
+            );
+            if (n + 1) % HOP == 0 {
+                assert_eq!(slot.reduction_db.load(SeqCst), expected);
+                expected = 0.0;
+            }
+        }
+    }
+
     fn settings() -> Settings {
         static SETTINGS: std::sync::OnceLock<Settings> = std::sync::OnceLock::new();
         *SETTINGS.get_or_init(|| Settings::from_params(&SharedParams::default(), 0))
@@ -478,6 +752,89 @@ mod tests {
     }
     fn max_cut(engine: &Spectral) -> f32 {
         engine.cut.iter().copied().fold(0.0, f32::max)
+    }
+
+    #[test]
+    fn smoothing_preserves_known_shares_and_handoffs_do_not_relabel_old_cut() {
+        let center = Contribution { owner: 1, db: 4.0 };
+        let left = Contribution { owner: 2, db: 4.0 };
+        let right = Contribution { owner: 1, db: 4.0 };
+        let source = smoothed_source([center, left, right], 0.5);
+        assert_eq!(source.owner, 1);
+        assert_eq!(source.db, 3.0);
+        let mut envelope = center;
+        envelope.follow(left, 0.25);
+        assert_eq!(envelope.owner, 2);
+        assert_eq!(envelope.db, 1.0);
+        envelope.follow(Contribution::default(), 0.25);
+        assert_eq!(envelope.owner, 0);
+        assert_eq!(envelope.db, 0.0);
+    }
+
+    #[test]
+    fn spectral_snapshot_names_the_sender_then_leaves_release_unattributed() {
+        let network = weighted_network(12.0, -12.0);
+        let a = network.register();
+        let b = network.register();
+        let source_slot = a.slot().unwrap();
+        let target_slot = b.slot().unwrap();
+        source_slot.publish(0.1, true, true);
+        target_slot.publish(0.1, true, true);
+        let mut source = Spectral::new(48000.0, HOP as u32);
+        let mut receiver = Spectral::new(48000.0, HOP as u32);
+        let config = Settings {
+            amount: 1.0,
+            cap: 12.0,
+            attack: 5.0,
+            release: 200.0,
+            ..settings()
+        };
+        for n in 0..FFT_SIZE * 4 {
+            let input = [tone(n, 43); 2];
+            source.process(input, &network, Some(source_slot), 0, false, config);
+            receiver.process(input, &network, Some(target_slot), 1, false, config);
+        }
+        let snapshot = target_slot.spectrum.read_pulls().unwrap();
+        let band = snapshot
+            .cut
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.total_cmp(b.1))
+            .unwrap()
+            .0;
+        assert!(snapshot.cut[band] > 0.25);
+        assert_eq!(snapshot.sources[band].owner, a.token);
+        assert!((snapshot.cut[band] - snapshot.sources[band].db).abs() < 1e-5);
+        source_slot.withdraw();
+        for n in 0..HOP {
+            receiver.process(
+                [tone(n, 43); 2],
+                &network,
+                Some(target_slot),
+                1,
+                false,
+                config,
+            );
+        }
+        let release = target_slot.spectrum.read_pulls().unwrap();
+        assert!(release.cut[band] > 0.25);
+        assert_eq!(release.sources[band].owner, 0);
+    }
+
+    #[test]
+    fn transient_response_accelerates_nonlinearly_then_decays() {
+        let kick = |db| {
+            let mut signal = Transient::default();
+            assert_eq!(signal.update(-30.0, 10.0), 0.0);
+            assert_eq!(signal.update(-30.0, 10.0), 0.0);
+            signal.update(db, 10.0)
+        };
+        assert!(kick(-15.0) > 3.0 * kick(-21.0));
+        let mut signal = Transient::default();
+        signal.update(-30.0, 10.0);
+        let attack = signal.update(-10.0, 10.0);
+        let release = signal.update(-30.0, 140.0);
+        assert!((release - attack / std::f32::consts::E).abs() < 1e-6);
     }
 
     #[test]
@@ -603,6 +960,8 @@ mod tests {
                 sa.spectrum.publish(
                     if n < HOP * 2 { &power } else { &[0.0; BANDS] },
                     &[0.0; BANDS],
+                    &[Contribution::default(); BANDS],
+                    0.0,
                 );
                 receiver.process([tone(n, bin); 2], &network, Some(sb), 1, false, settings());
                 if n == HOP * 2 - 1 {

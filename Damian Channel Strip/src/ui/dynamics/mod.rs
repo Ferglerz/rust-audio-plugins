@@ -81,22 +81,24 @@ pub(super) fn draw_gr_depth_handle(d: &mut Draw, gx_m: f32, gw_m: f32, depth_y: 
     let y_top = y_bot - th;
 
     // Left right-triangle (vertical outer edge, horizontal bottom, hypotenuse facing inward):
-    d.fill_poly(
+    d.fill_rounded_poly(
         &[
             (gx_m - tw * 0.5, y_top),
             (gx_m - tw * 0.5, y_bot),
             (gx_m + tw * 0.5, y_bot),
         ],
+        0.8,
         color,
     );
 
     // Right right-triangle (vertical outer edge, horizontal bottom, hypotenuse facing inward):
-    d.fill_poly(
+    d.fill_rounded_poly(
         &[
             (gx_m + gw_m + tw * 0.5, y_top),
             (gx_m + gw_m + tw * 0.5, y_bot),
             (gx_m + gw_m - tw * 0.5, y_bot),
         ],
+        0.8,
         color,
     );
 

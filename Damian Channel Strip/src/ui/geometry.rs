@@ -61,8 +61,9 @@ impl StripView {
             return None;
         }
         (2..5).find(|&i| {
-            let target = ValueTarget::Band(i + 2);
-            self.drag == Some(Target::Band(i))
+            let field = BandField::from_dyn_bar(i);
+            let target = ValueTarget::Band(field);
+            self.drag == Some(Target::Band(field))
                 || self.drag == Some(Target::Value(target))
                 || self.edit.as_ref().is_some_and(|edit| edit.target == target)
                 || self.value_press.is_some_and(|press| press.target == target)
@@ -237,7 +238,7 @@ impl StripView {
         )
     }
     pub(super) fn pse_detect_mode_rect(&self) -> (f32, f32, f32, f32) {
-        let r = self.pse_knob_rect(10);
+        let r = self.pse_knob_rect(GlobalControl::PseTime);
         (r.0, r.1 + r.3 + 2.0, r.2, 24.0)
     }
     pub(super) fn dyn_main_thresh_slider_rect(&self) -> (f32, f32, f32, f32) {
@@ -300,24 +301,23 @@ impl StripView {
             handle.3 + 2.0 * knee_offset,
         )
     }
-    pub(super) fn pse_knob_rect(&self, i: usize) -> (f32, f32, f32, f32) {
+    pub(super) fn pse_knob_rect(&self, control: GlobalControl) -> (f32, f32, f32, f32) {
         let slots = stacked_knob_slots(self.pse_bounds().0, PSE_W, 4);
-        match i {
-            10 => slots[1],
-            2 => (slots[2].0, slots[2].1 + 30.0, slots[2].2, slots[2].3),
+        match control {
+            GlobalControl::PseTime => slots[1],
+            GlobalControl::PseVoice => (slots[2].0, slots[2].1 + 30.0, slots[2].2, slots[2].3),
             _ => slots[0],
         }
     }
     pub(super) fn pse_vad_meter_rect(&self) -> (f32, f32, f32, f32) {
-        let r = self.pse_knob_rect(2);
+        let r = self.pse_knob_rect(GlobalControl::PseVoice);
         (r.0 + 8.0, r.1 + r.3 + 12.0, r.2 - 16.0, 10.0)
     }
-    pub(super) fn wall_knob_rect(&self, i: usize) -> (f32, f32, f32, f32) {
+    pub(super) fn wall_knob_rect(&self, control: GlobalControl) -> (f32, f32, f32, f32) {
         let wx = self.wall_bounds().0;
         let slots = stacked_knob_slots(wx, WALL_W, 3);
-        match i {
-            16 => slots[0],
-            17 => slots[1],
+        match control {
+            GlobalControl::WallOdd => slots[1],
             _ => slots[0],
         }
     }
@@ -325,24 +325,24 @@ impl StripView {
         let wx = self.wall_bounds().0;
         stacked_knob_slots(wx, WALL_W, 3)[2]
     }
-    pub(super) fn global_rect(&self, i: usize) -> (f32, f32, f32, f32) {
+    pub(super) fn global_rect(&self, control: GlobalControl) -> (f32, f32, f32, f32) {
         let dx = self.dyn_bounds().0;
         match self.dyn_page.get() {
             DynPage::Controls => {
                 let slots = stacked_knob_slots(dx, DYN_W, 5);
-                match i {
-                    5 => slots[0],
-                    11 => slots[1],
-                    6 => slots[2],
-                    3 => slots[3],
-                    4 => slots[4],
+                match control {
+                    GlobalControl::CompAttack => slots[0],
+                    GlobalControl::CompRelease => slots[1],
+                    GlobalControl::CompRatio => slots[2],
+                    GlobalControl::Dry => slots[3],
+                    GlobalControl::Wet => slots[4],
                     _ => (0.0, -1000.0, 0.0, 0.0),
                 }
             }
             DynPage::Main => {
-                if i == 14 {
+                if control == GlobalControl::CompDepth {
                     meter_value_rect(self.dyn_main_gr_meter_rect())
-                } else if i == 0 {
+                } else if control == GlobalControl::Compression {
                     meter_value_rect(self.dyn_main_thresh_slider_rect())
                 } else {
                     (dx + 6.0, 226.0, 56.0, 86.0)
@@ -353,40 +353,42 @@ impl StripView {
     pub(super) fn knob_value_rect(r: (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
         pleasant_ui::draw::KnobLayout::new(r).value_rect(r.0 + 8.0, r.2 - 16.0)
     }
-    pub(super) fn global_value_rect(&self, i: usize) -> (f32, f32, f32, f32) {
-        if self.dyn_page.get() == DynPage::Main && matches!(i, 0 | 14) {
-            self.global_rect(i)
+    pub(super) fn global_value_rect(&self, control: GlobalControl) -> (f32, f32, f32, f32) {
+        if self.dyn_page.get() == DynPage::Main
+            && matches!(control, GlobalControl::Compression | GlobalControl::CompDepth)
+        {
+            self.global_rect(control)
         } else {
-            Self::knob_value_rect(self.global_rect(i))
+            Self::knob_value_rect(self.global_rect(control))
         }
     }
-    pub(super) fn pse_value_rect(&self, i: usize) -> (f32, f32, f32, f32) {
-        if self.pse_page.get() == PsePage::Main && i == 1 {
+    pub(super) fn pse_value_rect(&self, control: GlobalControl) -> (f32, f32, f32, f32) {
+        if self.pse_page.get() == PsePage::Main && control == GlobalControl::Gate {
             meter_value_rect(self.pse_main_thresh_slider_rect())
         } else {
-            Self::knob_value_rect(self.pse_knob_rect(i))
+            Self::knob_value_rect(self.pse_knob_rect(control))
         }
     }
-    pub(super) fn wall_value_rect(&self, i: usize) -> (f32, f32, f32, f32) {
-        if self.wall_page.get() == WallPage::Main && i == 18 {
+    pub(super) fn wall_value_rect(&self, control: GlobalControl) -> (f32, f32, f32, f32) {
+        if self.wall_page.get() == WallPage::Main && control == GlobalControl::WallThreshold {
             meter_value_rect(self.wall_main_thresh_slider_rect())
         } else {
-            Self::knob_value_rect(self.wall_knob_rect(i))
+            Self::knob_value_rect(self.wall_knob_rect(control))
         }
     }
-    pub(super) fn pse_controls(&self) -> &'static [usize] {
+    pub(super) fn pse_controls(&self) -> &'static [GlobalControl] {
         match self.pse_page.get() {
-            PsePage::Main => &[1],
+            PsePage::Main => &[GlobalControl::Gate],
             PsePage::Controls => &PSE_CONTROLS_KNOBS,
         }
     }
-    pub(super) fn wall_controls(&self) -> &'static [usize] {
+    pub(super) fn wall_controls(&self) -> &'static [GlobalControl] {
         match self.wall_page.get() {
             WallPage::Main => &WALL_MAIN_KNOBS,
             WallPage::Controls => &WALL_CONTROLS_KNOBS,
         }
     }
-    pub(super) fn global_hit_rects(&self) -> Vec<(usize, (f32, f32, f32, f32))> {
+    pub(super) fn global_hit_rects(&self) -> Vec<(GlobalControl, (f32, f32, f32, f32))> {
         let mut rects: Vec<_> = self
             .global_controls()
             .iter()
@@ -432,27 +434,34 @@ impl StripView {
                 .copied()
                 .map(|i| (ValueTarget::Global(i), self.wall_value_rect(i))),
         );
-        fields.push((ValueTarget::Global(15), output_gain_value_rect()));
+        fields.push((ValueTarget::Global(GlobalControl::Output), output_gain_value_rect()));
         fields
     }
     pub(super) fn value_baseline(&self, target: ValueTarget) -> f32 {
         match target {
-            ValueTarget::Band(_) | ValueTarget::Lift(0..=2) => hud_control_text_y(),
-            ValueTarget::Lift(i) => band_rect_at(i - 3, self.gx(), self.gw()).1 + 18.0,
-            ValueTarget::Global(15) => output_gain_rect().1 + 13.0,
-            ValueTarget::Global(i) => {
-                if (matches!(i, 0 | 14) && self.dyn_page.get() == DynPage::Main)
-                    || (i == 1 && self.pse_page.get() == PsePage::Main)
-                    || (i == 18 && self.wall_page.get() == WallPage::Main)
+            ValueTarget::Band(_)
+            | ValueTarget::Lift(BandField::Frequency | BandField::Gain | BandField::Q) => {
+                hud_control_text_y()
+            }
+            ValueTarget::Lift(field) => {
+                band_rect_at(field.lift_slider_index(), self.gx(), self.gw()).1 + 18.0
+            }
+            ValueTarget::Global(GlobalControl::Output) => output_gain_rect().1 + 13.0,
+            ValueTarget::Global(control) => {
+                if (matches!(control, GlobalControl::Compression | GlobalControl::CompDepth)
+                    && self.dyn_page.get() == DynPage::Main)
+                    || (control == GlobalControl::Gate && self.pse_page.get() == PsePage::Main)
+                    || (control == GlobalControl::WallThreshold
+                        && self.wall_page.get() == WallPage::Main)
                 {
                     meter_value_y()
                 } else {
-                    let r = if self.pse_controls().contains(&i) {
-                        self.pse_knob_rect(i)
-                    } else if self.wall_controls().contains(&i) {
-                        self.wall_knob_rect(i)
+                    let r = if self.pse_controls().contains(&control) {
+                        self.pse_knob_rect(control)
+                    } else if self.wall_controls().contains(&control) {
+                        self.wall_knob_rect(control)
                     } else {
-                        self.global_rect(i)
+                        self.global_rect(control)
                     };
                     pleasant_ui::draw::KnobLayout::new(r).value_y
                 }
@@ -462,9 +471,16 @@ impl StripView {
 
     pub(super) fn value_color(&self, target: ValueTarget) -> C {
         match target {
-            ValueTarget::Global(1 | 7 | 8 | 9 | 10) => PSE_BLUE,
-            ValueTarget::Global(2 | 3) => TEAL,
-            ValueTarget::Global(16 | 17 | 18) => WALL_COLOR,
+            ValueTarget::Global(
+                GlobalControl::Gate
+                | GlobalControl::PseDepth
+                | GlobalControl::PseHysteresis
+                | GlobalControl::PseTime,
+            ) => PSE_BLUE,
+            ValueTarget::Global(GlobalControl::PseVoice | GlobalControl::Dry) => TEAL,
+            ValueTarget::Global(
+                GlobalControl::WallEven | GlobalControl::WallOdd | GlobalControl::WallThreshold,
+            ) => WALL_COLOR,
             ValueTarget::Global(_) => GOLD,
             ValueTarget::Band(_) => self
                 .selected

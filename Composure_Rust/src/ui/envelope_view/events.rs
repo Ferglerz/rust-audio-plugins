@@ -2,6 +2,7 @@ use super::*;
 
 impl EnvelopeView {
     pub(super) fn handle_event(&mut self, cx: &mut EventContext, event: &mut Event) {
+        let was_editing = self.edit.is_some();
         event.map(|window_event, meta| {
             let point = Self::point(cx);
             match window_event {
@@ -27,16 +28,22 @@ impl EnvelopeView {
                         if cx.modifiers().command() && hit != EnvelopeHit::Lookahead {
                             self.reset(cx, hit);
                         } else {
-                            self.begin_graph(cx, hit);
+                            self.begin_graph(cx, hit, false);
                         }
                         cx.needs_redraw();
                         meta.consume();
                     } else if let Some(hit) = Self::label_hit(point) {
                         if cx.modifiers().command() {
                             self.reset(cx, hit);
-                        } else {
+                        } else if Viewport::from_tuple(Self::timing_track(hit))
+                            .contains(point.0, point.1)
+                        {
+                            self.begin_graph(cx, hit, true);
+                        } else if Viewport::from_tuple(Self::timing_value_rect(hit))
+                            .contains(point.0, point.1)
+                        {
                             self.press = Some(LabelPress {
-                                press: ValuePress::new(hit, Self::label_rect(hit).unwrap(), point),
+                                press: ValuePress::new(hit, Self::timing_value_rect(hit), point),
                                 start_norm: self.param(hit).unmodulated_normalized_value(),
                                 active: false,
                             });
@@ -105,17 +112,26 @@ impl EnvelopeView {
                             }
                             hit => {
                                 let fine = cx.modifiers().shift();
-                                let dx = axis_delta * if fine { 0.2 } else { 1.0 };
-                                let plain = stage_time_drag(hit, values, dx);
-                                self.set_plain(
-                                    cx,
-                                    hit,
+                                let sensitivity = if fine { 0.2 } else { 1.0 };
+                                let plain = if drag.time_slider {
+                                    let dx = (point.0 - drag.origin.0) * sensitivity;
+                                    if dx.abs() < f32::EPSILON {
+                                        self.param(hit).unmodulated_plain_value()
+                                    } else {
+                                        let norm = drag.start_norm
+                                            + dx / (Self::timing_track(hit).2 - 4.0);
+                                        timing_slider_plain(hit, norm, fine)
+                                    }
+                                } else {
+                                    let plain =
+                                        stage_time_drag(hit, values, axis_delta * sensitivity);
                                     if fine || axis_delta == 0.0 {
                                         plain
                                     } else {
                                         Self::snapped_plain(hit, plain)
-                                    },
-                                );
+                                    }
+                                };
+                                self.set_plain(cx, hit, plain);
                             }
                         }
                         meta.consume();
@@ -154,17 +170,17 @@ impl EnvelopeView {
                     });
                     self.finish_gesture(cx);
                     if let Some(hit) = clicked {
-                        if let Some(rect) = Self::label_rect(hit) {
-                            let param = self.param(hit);
-                            self.edit = Some(ValueEdit::new(
-                                hit,
-                                (rect.0, rect.1 + 14.0, rect.2 - 6.0, 20.0),
-                                param.normalized_value_to_string(
+                        let param = self.param(hit);
+                        self.edit = Some(ValueEdit::new(
+                            hit,
+                            Self::timing_value_rect(hit),
+                            param
+                                .normalized_value_to_string(
                                     param.unmodulated_normalized_value(),
                                     false,
-                                ),
-                            ));
-                        }
+                                )
+                                .replace('µ', "u"),
+                        ));
                     }
                     cx.needs_redraw();
                     meta.consume();
@@ -255,6 +271,7 @@ impl EnvelopeView {
                         }
                         cx.needs_redraw();
                         meta.consume();
+                        nih_plug_vizia::report_handled_key(cx, window_event);
                     }
                 }
                 WindowEvent::CharInput(c) => {
@@ -264,6 +281,7 @@ impl EnvelopeView {
                         }
                         cx.needs_redraw();
                         meta.consume();
+                        nih_plug_vizia::report_handled_key(cx, window_event);
                     }
                 }
                 WindowEvent::MouseLeave => {
@@ -278,5 +296,6 @@ impl EnvelopeView {
                 _ => {}
             }
         });
+        pleasant_ui::value_edit::sync_text_input(cx, was_editing, self.edit.is_some());
     }
 }

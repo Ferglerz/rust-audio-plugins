@@ -14,7 +14,7 @@ pub mod ui;
 
 use dsp::TapeStopEngine;
 use params::{MidiAssign, TapeStopParams};
-use telemetry::TapeStopTelemetry;
+use telemetry::{TapeStopTelemetry, TransportFrame, TransportStage};
 
 pub struct TapeStop {
     params: Arc<TapeStopParams>,
@@ -132,6 +132,7 @@ impl Plugin for TapeStop {
     fn reset(&mut self) {
         self.engine.reset();
         self.midi.reset();
+        self.telemetry.publish_transport(TransportFrame::default());
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
@@ -249,14 +250,25 @@ impl Plugin for TapeStop {
         }
 
         // 4. Update UI telemetry
-        self.telemetry.update(
-            self.engine.speed_left(),
-            self.engine.speed_right(),
-            self.engine.is_braking(),
-            self.engine.is_crossfading(),
-            self.engine.brake_progress(),
-            self.engine.brake_progress_l(),
-            self.engine.brake_progress_r(),
+        if num_samples > 0 {
+            self.telemetry.publish_transport(TransportFrame {
+                stage: if self.engine.is_braking() {
+                    TransportStage::Braking
+                } else if self.engine.is_returning() {
+                    TransportStage::Returning
+                } else if self.engine.is_crossfading() {
+                    TransportStage::Crossfading
+                } else {
+                    TransportStage::Live
+                },
+                speed: [self.engine.speed_left(), self.engine.speed_right()],
+                brake_progress: [
+                    self.engine.brake_progress_l(),
+                    self.engine.brake_progress_r(),
+                ],
+            });
+        }
+        self.telemetry.update_levels(
             max_in_peak,
             max_out_peak,
             self.engine.live_envelope(),

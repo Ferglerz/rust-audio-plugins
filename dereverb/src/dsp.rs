@@ -247,6 +247,10 @@ impl SpectralChannel {
         };
         let weight = weighting.amount(aligned_level);
         self.activity = (aligned_level, weight);
+        let neural_output = match &self.processor {
+            Processor::Neural(tensors) if !self.failed => Some(tensors.enhanced.extract_tensor().1),
+            _ => None,
+        };
         for bin in 0..bins {
             let original = if self.delay_frames == 0 {
                 self.spectrum[bin]
@@ -256,12 +260,11 @@ impl SpectralChannel {
             let wet = if self.failed {
                 original
             } else {
-                let enhanced = match &self.processor {
-                    Processor::Neural(tensors) => {
-                        let output = tensors.enhanced.extract_tensor().1;
+                let enhanced = match neural_output {
+                    Some(output) => {
                         Complex64::new(output[bin * 2] as f64, output[bin * 2 + 1] as f64)
                     }
-                    Processor::Wpe(_) => self.analysis[bin],
+                    None => self.analysis[bin],
                 };
                 Complex32::new(
                     (enhanced.re * aligned_level.restore) as f32,

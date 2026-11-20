@@ -1,4 +1,4 @@
-use super::Draw;
+use super::{Draw, READABLE_LABEL_SIZE};
 use crate::theme::{rgb, LINE, MUTED, PANEL, TEXT};
 use nih_plug_vizia::vizia::vg::{Color, Paint};
 
@@ -94,6 +94,21 @@ impl Draw<'_> {
         hover: f32,
         press: f32,
     ) {
+        if self.readable_style.is_some() {
+            self.rounded_rect(r.0, r.1, r.2, r.3, 5.0, PANEL);
+            let mut face = LINE;
+            face.a = 0.35;
+            self.rounded_rect(r.0, r.1, r.2, r.3, 5.0, face);
+            let mut tint = TEXT;
+            tint.a = (hover + press).clamp(0.0, 1.0) * if self.light { 0.10 } else { 0.05 };
+            if tint.a > 0.0 {
+                self.rounded_rect(r.0, r.1, r.2, r.3, 5.0, tint);
+            }
+            if selected > 0.5 {
+                self.rounded_rect(r.0 + 4.0, r.1 + r.3 - 2.0, r.2 - 8.0, 2.0, 1.0, color);
+            }
+            return;
+        }
         let selected = selected.clamp(0.0, 1.0);
         let offset = 2.0_f32.min(r.3 * 0.5);
         let height = r.3 - offset;
@@ -124,24 +139,32 @@ impl Draw<'_> {
     }
 
     pub fn appearance_button(&mut self, r: (f32, f32, f32, f32), label: &str) {
-        const TEXT_SIZE: f32 = 13.0;
+        self.with_label_font(|d| d.draw_appearance_button(r, label));
+    }
+
+    fn draw_appearance_button(&mut self, r: (f32, f32, f32, f32), label: &str) {
+        let text_size = if self.readable_style.is_some() {
+            READABLE_LABEL_SIZE
+        } else {
+            13.0
+        };
         const ICON_WIDTH: f32 = 14.0;
         const GAP: f32 = 6.0;
         let mut paint = Paint::color(self.color(MUTED));
         if let Some(font) = self.font {
             paint.set_font(&[font]);
         }
-        paint.set_font_size(TEXT_SIZE * self.s);
+        paint.set_font_size(text_size * self.s);
         let text_width = self
             .c
             .measure_text(0.0, 0.0, label, &paint)
             .map(|metrics| metrics.width() / self.s)
-            .unwrap_or(label.len() as f32 * TEXT_SIZE * 0.6);
+            .unwrap_or(label.len() as f32 * text_size * 0.6);
         let left = r.0 + (r.2 - ICON_WIDTH - GAP - text_width) * 0.5;
         let center_y = r.1 + r.3 * 0.5;
         self.button_surface(r, MUTED, 0.0, self.is_hovered(r) as u8 as f32, 0.0);
         self.palette_icon(left + ICON_WIDTH * 0.5, center_y, MUTED);
-        self.text_middle(left + ICON_WIDTH + GAP, center_y, label, TEXT_SIZE, MUTED);
+        self.text_middle(left + ICON_WIDTH + GAP, center_y, label, text_size, MUTED);
     }
 
     fn button_aligned(
@@ -158,7 +181,7 @@ impl Draw<'_> {
             if !on && color == MUTED { TEXT } else { color },
             if on {
                 1.0
-            } else if hovered {
+            } else if hovered && self.readable_style.is_none() {
                 0.5
             } else {
                 0.0
@@ -166,18 +189,7 @@ impl Draw<'_> {
             hovered as u8 as f32,
             0.0,
         );
-        let label_color = if on { color } else { MUTED };
-        if centered {
-            self.text_centered(
-                r.0 + r.2 * 0.5,
-                r.1 + r.3 / 2.0 + 4.0,
-                label,
-                11.0,
-                label_color,
-            );
-        } else {
-            self.text(r.0 + 10.0, r.1 + r.3 / 2.0 + 4.0, label, 11.0, label_color);
-        }
+        self.draw_button_label(r, label, on, color, centered);
     }
 
     pub fn button_tinted(&mut self, r: (f32, f32, f32, f32), label: &str, on: bool, color: Color) {
@@ -199,18 +211,30 @@ impl Draw<'_> {
             self.is_hovered(r) as u8 as f32,
             0.0,
         );
-        let label_color = if on { color } else { MUTED };
-        if centered {
-            self.text_centered(
-                r.0 + r.2 * 0.5,
-                r.1 + r.3 / 2.0 + 4.0,
-                label,
-                11.0,
-                label_color,
-            );
+        self.draw_button_label(r, label, on, color, centered);
+    }
+
+    fn draw_button_label(
+        &mut self,
+        r: (f32, f32, f32, f32),
+        label: &str,
+        on: bool,
+        color: Color,
+        centered: bool,
+    ) {
+        let (size, label_color) = if self.readable_style.is_some() {
+            (READABLE_LABEL_SIZE, if on { TEXT } else { MUTED })
         } else {
-            self.text(r.0 + 10.0, r.1 + r.3 / 2.0 + 4.0, label, 11.0, label_color);
-        }
+            (11.0, if on { color } else { MUTED })
+        };
+        self.with_label_font(|d| {
+            let y = r.1 + r.3 * 0.5 + 4.0;
+            if centered {
+                d.text_centered(r.0 + r.2 * 0.5, y, label, size, label_color);
+            } else {
+                d.text(r.0 + 10.0, y, label, size, label_color);
+            }
+        });
     }
 
     pub fn tab_button(&mut self, r: (f32, f32, f32, f32), label: &str, on: bool, color: Color) {
@@ -383,13 +407,15 @@ impl Draw<'_> {
         } = *layout;
         let scale = rad / 17.0;
 
-        self.text_centered(
-            cx,
-            label_y,
-            label,
-            label_size,
-            if bypassed { MUTED } else { TEXT },
-        );
+        self.with_label_font(|d| {
+            d.text_centered(
+                cx,
+                label_y,
+                label,
+                label_size,
+                if bypassed { MUTED } else { TEXT },
+            );
+        });
 
         let start_angle = 135.0_f32.to_radians();
         let total_sweep = 270.0_f32.to_radians();
@@ -450,7 +476,13 @@ impl Draw<'_> {
             value_y,
             value,
             value_size,
-            if bypassed { MUTED } else { color },
+            if bypassed {
+                MUTED
+            } else if self.light && self.readable_style.is_some() {
+                TEXT
+            } else {
+                color
+            },
         );
     }
 
@@ -490,8 +522,7 @@ impl Draw<'_> {
                 (cur_angle, center_angle)
             };
             let steps = (((a_end - a_start) / total_sweep * 24.0).ceil() as usize).max(2);
-            let (val_pts, val_len) =
-                arc_points(cx, cy, rad, a_start, a_end - a_start, steps);
+            let (val_pts, val_len) = arc_points(cx, cy, rad, a_start, a_end - a_start, steps);
             self.poly(&val_pts[..val_len], color, 2.5 * scale);
         }
 

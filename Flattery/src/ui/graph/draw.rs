@@ -108,7 +108,13 @@ impl GraphLayout {
                 } else {
                     format!("{db}")
                 };
-                d.text(self.gx + self.gw + 10.0, y + 4.0, &label, 10.5, MUTED);
+                d.text(
+                    self.gx + self.gw + 10.0,
+                    y + 4.0,
+                    &label,
+                    READABLE_AXIS_SIZE,
+                    MUTED,
+                );
             }
             db += step;
         }
@@ -136,7 +142,7 @@ impl GraphLayout {
                             x - 9.0,
                             self.gy + self.gh + FREQ_LABEL_BASELINE_OFFSET,
                             label,
-                            10.5,
+                            READABLE_AXIS_SIZE,
                             MUTED,
                         );
                     }
@@ -185,7 +191,7 @@ impl GraphLayout {
                 x - 9.0,
                 self.gy + self.gh + FREQ_LABEL_BASELINE_OFFSET,
                 &label,
-                10.5,
+                READABLE_AXIS_SIZE,
                 MUTED,
             );
         }
@@ -240,19 +246,14 @@ impl GraphLayout {
     pub fn draw_spectrum(
         &self,
         d: &mut Draw,
-        mags_db: &[f32],
-        fft_size: usize,
-        srate: f64,
+        smoothed: &[f32],
+        bin_hz: f64,
         low_cut_hz: f64,
         high_cut_hz: f64,
     ) {
-        if mags_db.is_empty() {
+        if smoothed.is_empty() {
             return;
         }
-        let mut smoothed = vec![0.0_f32; mags_db.len()];
-        smooth_bins_f32(mags_db, &mut smoothed);
-
-        let bin_hz = srate / fft_size as f64;
         let mut points = Vec::with_capacity(smoothed.len());
 
         for (k, &db) in smoothed.iter().enumerate() {
@@ -284,8 +285,8 @@ impl GraphLayout {
             &points,
             x_lo,
             x_hi,
-            Color::rgba(90, 160, 255, 160),
-            1.2,
+            Color::rgba(90, 160, 255, 218),
+            1.5,
             Some(self.gy + self.gh),
         );
     }

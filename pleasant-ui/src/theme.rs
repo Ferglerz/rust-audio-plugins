@@ -23,6 +23,21 @@ pub const MUTED: Color = rgb(143, 153, 164);
 pub const GOLD: Color = rgb(225, 187, 101);
 pub const TEAL: Color = rgb(106, 213, 189);
 
+/// Higher-contrast foreground roles for editors that opt in. Compare the
+/// opaque role first so translucent accents keep the same base hue.
+pub(crate) fn readable_color(c: Color, light: bool) -> Color {
+    if !light {
+        return c;
+    }
+    let role = with_alpha(c, 1.0);
+    let color = if role == MUTED {
+        rgb(70, 81, 91)
+    } else {
+        transform_color(role, true)
+    };
+    with_alpha(color, c.a)
+}
+
 pub const COLORS: [Color; 6] = [
     rgb(111, 210, 188),
     rgb(171, 151, 238),
@@ -82,4 +97,20 @@ pub fn transform_color(c: Color, light: bool) -> Color {
     };
     result.a = c.a;
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn readable_style_keeps_original_light_accents() {
+        for (role, original) in [(GOLD, rgb(214, 148, 22)), (TEAL, rgb(12, 154, 128))] {
+            assert_eq!(readable_color(role, true), original);
+            assert_eq!(
+                readable_color(with_alpha(role, 0.4), true),
+                with_alpha(original, 0.4)
+            );
+        }
+    }
 }

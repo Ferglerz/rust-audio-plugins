@@ -5,32 +5,39 @@ pub(super) fn create(params: Arc<FlatteryParams>, shared: Arc<Shared>) -> Option
         params.editor_state.clone(),
         ViziaTheming::Custom,
         move |cx, _| {
-            nih_plug_vizia::assets::register_noto_sans_light(cx);
-            FlatteryView {
-                params: params.clone(),
-                shared: shared.clone(),
-                layout: GraphLayout::default(),
-                font: Cell::new(None),
-                drag: None,
-                hover_low_cut: false,
-                hover_high_cut: false,
-                hover_max_boost: false,
-                hover_max_cut: false,
-                hover_strength: None,
-                hover_curve: None,
-                hover_node: None,
-                selected: None,
-                mouse: (0.0, 0.0),
-                hover: None,
-                edit: None,
-                value_press: None,
-                graph_zoomed: false,
-            }
-            .build(cx, |cx| {
-                start_frame_timer(cx, FRAME_INTERVAL, |cx| cx.needs_redraw());
-            })
-            .width(Stretch(1.0))
-            .height(Stretch(1.0));
+            FlatteryView::new(params.clone(), shared.clone())
+                .build(cx, |cx| {
+                    start_frame_timer(cx, FRAME_INTERVAL, |cx| cx.needs_redraw());
+                })
+                .width(Stretch(1.0))
+                .height(Stretch(1.0));
         },
     )
+}
+
+impl FlatteryView {
+    pub(super) fn new(params: Arc<FlatteryParams>, shared: Arc<Shared>) -> Self {
+        Self {
+            params,
+            shared,
+            layout: GraphLayout::default(),
+            font: Cell::new(None),
+            label_font: Cell::new(None),
+            display: RefCell::new(probe::DisplayFrame::default()),
+            drag: None,
+            hover_low_cut: false,
+            hover_high_cut: false,
+            hover_max_boost: false,
+            hover_max_cut: false,
+            hover_strength: None,
+            hover_curve: None,
+            hover_node: None,
+            selected: None,
+            mouse: (0.0, 0.0),
+            hover: None,
+            edit: None,
+            value_press: None,
+            graph_zoomed: false,
+        }
+    }
 }

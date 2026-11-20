@@ -1,7 +1,13 @@
 use super::*;
 
 impl DereverbView {
-    pub(super) fn paint_footer(&self, d: &mut Draw, engine: EngineKind, neural: bool) {
+    pub(super) fn paint_footer(
+        &self,
+        d: &mut Draw,
+        engine: EngineKind,
+        neural: bool,
+        history_hover: Option<history::HistorySample>,
+    ) {
         let status = self.shared.status.load(Ordering::Relaxed);
         let rate = self.shared.sample_rate.load(Ordering::Relaxed);
         let latency = self.shared.latency.load(Ordering::Relaxed);
@@ -13,14 +19,14 @@ impl DereverbView {
         });
         let switching = active_slot != Some(engine.index(self.params.quality.value()));
         let mode = match active_slot.map(|index| EngineKind::MODES[index]) {
-            Some((EngineKind::Dtln, _)) => "DTLN DENOISE",
-            Some((EngineKind::NaraWpe, Quality::Live)) => "NARA-WPE · SHORT",
+            Some((EngineKind::Dtln, _)) => "DTLN denoise",
+            Some((EngineKind::NaraWpe, Quality::Live)) => "NARA-WPE · Short",
             Some((EngineKind::NaraWpe, Quality::HighQuality)) => "NARA-WPE · 20 MS",
-            Some((EngineKind::DpdfNet, Quality::HighQuality)) => "DPDFNET HIGH QUALITY",
-            _ => "DPDFNET LIVE",
+            Some((EngineKind::DpdfNet, Quality::HighQuality)) => "DPDFNet high quality",
+            _ => "DPDFNet live",
         };
         let state = if switching {
-            format!("{mode} · SWITCHING MODE")
+            format!("{mode} · Switching mode")
         } else {
             match status {
                 telemetry::ACTIVE => format!(
@@ -28,33 +34,44 @@ impl DereverbView {
                     rate / 1000.0,
                     1000.0 * latency as f32 / rate.max(1.0)
                 ),
-                telemetry::RECOVERING => "RECOVERING · ALIGNED PASSTHROUGH".into(),
-                telemetry::FAILED => "BYPASSED · ENGINE UNAVAILABLE".into(),
-                _ => "WAITING FOR AUDIO".into(),
+                telemetry::RECOVERING => "Recovering · Aligned passthrough".into(),
+                telemetry::FAILED => "Bypassed · Engine unavailable".into(),
+                _ => "Waiting for audio".into(),
             }
         };
         d.line(36.0, 559.0, 764.0, 559.0, LINE, 1.0);
-        d.text(
-            36.0,
-            581.0,
-            &state,
-            11.0,
-            if status == telemetry::ACTIVE {
-                TEAL
-            } else {
-                GOLD
-            },
-        );
+        let status_color = if status == telemetry::ACTIVE && !switching {
+            TEAL
+        } else {
+            GOLD
+        };
+        if d.light {
+            d.circle(39.0, 577.0, 3.0, status_color, true);
+        }
+        d.with_label_font(|d| {
+            d.text(
+                if d.light { 49.0 } else { 36.0 },
+                581.0,
+                &state,
+                READABLE_LABEL_SIZE,
+                if d.light { TEXT } else { status_color },
+            );
+        });
         let tooltip = if let Some(index) = active_slot.filter(|_| status == telemetry::FAILED) {
             self.shared.errors.lock().unwrap_or_else(|e| e.into_inner())[index]
                 .chars()
                 .take(105)
                 .collect::<String>()
+        } else if let Some(sample) = history_hover {
+            sample.tooltip()
         } else if self.hover.is_some_and(|p| point_in_rect(p.0, p.1, THEME)) {
             "Cycle Dark, Light, and Auto appearance.".into()
         } else if self.hover.is_some_and(|p| point_in_rect(p.0, p.1, DPDFNET)) {
             "DPDFNet: neural voice restoration with Live and High Quality modes.".into()
-        } else if self.hover.is_some_and(|p| point_in_rect(p.0, p.1, NARA_WPE)) {
+        } else if self
+            .hover
+            .is_some_and(|p| point_in_rect(p.0, p.1, NARA_WPE))
+        {
             "NARA-WPE: adaptive late reverb reduction. The filter learns from the incoming audio."
                 .into()
         } else if self.hover.is_some_and(|p| point_in_rect(p.0, p.1, DTLN)) {
@@ -65,17 +82,29 @@ impl DereverbView {
             "10 ms analysis window. A half-second average of the learned filter steadies removal."
                 .into()
         } else if engine == EngineKind::NaraWpe
-            && self.hover.is_some_and(|p| point_in_rect(p.0, p.1, HIGH_QUALITY))
+            && self
+                .hover
+                .is_some_and(|p| point_in_rect(p.0, p.1, HIGH_QUALITY))
         {
             "20 ms analysis window with finer frequency resolution and faster filter response."
                 .into()
         } else if neural && self.hover.is_some_and(|p| point_in_rect(p.0, p.1, LIVE)) {
             "Live uses lighter neural spectral correction.".into()
-        } else if neural && self.hover.is_some_and(|p| point_in_rect(p.0, p.1, HIGH_QUALITY)) {
+        } else if neural
+            && self
+                .hover
+                .is_some_and(|p| point_in_rect(p.0, p.1, HIGH_QUALITY))
+        {
             "High Quality uses the full neural model with deep filtering.".into()
-        } else if self.hover.is_some_and(|p| point_in_rect(p.0, p.1, RELATIVE)) {
+        } else if self
+            .hover
+            .is_some_and(|p| point_in_rect(p.0, p.1, RELATIVE))
+        {
             "Relative: level against a 1-second RMS reference; weighting follows whole-recording gain changes.".into()
-        } else if self.hover.is_some_and(|p| point_in_rect(p.0, p.1, ABSOLUTE)) {
+        } else if self
+            .hover
+            .is_some_and(|p| point_in_rect(p.0, p.1, ABSOLUTE))
+        {
             "Absolute: original input RMS in dBFS; gain before Dereverb intentionally changes the weighting.".into()
         } else if self
             .hover
@@ -100,11 +129,12 @@ impl DereverbView {
             "Type a percentage. Enter applies; Escape cancels.".into()
         } else if self.hover.is_some_and(|p| point_in_rect(p.0, p.1, KNOB)) {
             "Drag or scroll Strength; Shift for fine control. Click its value to type; double-click to reset.".into()
-        } else if self.hover.is_some_and(|p| point_in_rect(p.0, p.1, GRAPH)) {
-            "Input and output RMS are time-aligned. Readouts average the latest 200 ms across all channels.".into()
         } else {
-            "Input level is normalized internally, then restored. The curve weights the selected Strength.".into()
+            "Hover the history to inspect aligned levels. The In and Out readouts average the last 200 ms.".into()
         };
-        d.text(36.0, 605.0, &tooltip, 10.0, MUTED);
+        d.with_label_font(|d| {
+            let tooltip = d.fit_text(&tooltip, SIZE.0 - 72.0, READABLE_LABEL_SIZE);
+            d.text(36.0, 605.0, &tooltip, READABLE_LABEL_SIZE, TEXT);
+        });
     }
 }

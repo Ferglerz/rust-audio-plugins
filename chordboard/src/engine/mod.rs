@@ -15,6 +15,8 @@ pub use types::*;
 
 pub struct Engine {
     pub arp: arpeggiator::Runtime,
+    /// Shared tracker and performance publication. Scheduler clocks stay on `arp` and `performance_arp`.
+    pub prepared: Box<crate::arpeggiator::Prepared>,
     performance_arp: arpeggiator::Runtime,
     in_performance_arp: bool,
     performance_arp_position: f32,
@@ -78,6 +80,7 @@ pub struct Engine {
     pub last_string: i16,
     pub strikes: [u32; 12],
     pub note_strikes: [u32; 128],
+    midi_input: [MidiInputNote; 128],
     pub learn: u8,
     pub learned: Option<(usize, Mapping)>,
     pub learned_base: Option<u8>,
@@ -95,7 +98,7 @@ pub struct Engine {
     /// Set when output ownership changes. The cache is the block-start snapshot.
     owned_notes_dirty: bool,
     pub(crate) owned_notes_cache: Box<[[bool; 128]; 16]>,
-    delay_map_cache: Option<Box<(delay_output::DelayMapKey, [u8; 128])>>,
+    delay_map_cache: Box<(Option<delay_output::DelayMapKey>, [u8; 128])>,
     pub rng: u32,
     pub tempo: f64,
     pub playing: bool,
@@ -107,6 +110,7 @@ impl Default for Engine {
     fn default() -> Self {
         Self {
             arp: arpeggiator::Runtime::default(),
+            prepared: crate::arpeggiator::Store::new().initial_prepared(),
             performance_arp: arpeggiator::Runtime::default(),
             in_performance_arp: false,
             performance_arp_position: 0.0,
@@ -170,6 +174,7 @@ impl Default for Engine {
             last_string: -1,
             strikes: [0; 12],
             note_strikes: [0; 128],
+            midi_input: [MidiInputNote::default(); 128],
             learn: 0,
             learned: None,
             learned_base: None,
@@ -190,7 +195,7 @@ impl Default for Engine {
             needs_setup: true,
             owned_notes_dirty: true,
             owned_notes_cache: Box::new([[false; 128]; 16]),
-            delay_map_cache: None,
+            delay_map_cache: Box::new((None, [0; 128])),
             rng: 0x43484f52,
             tempo: 120.0,
             playing: false,
@@ -208,7 +213,7 @@ impl Engine {
             self.fx.notes_changed = false;
         }
         if self.owned_notes_dirty {
-            self.owned_notes_cache = Box::new(self.owned_output_notes());
+            *self.owned_notes_cache = self.owned_output_notes();
             self.owned_notes_dirty = false;
         }
     }
@@ -219,7 +224,7 @@ impl Engine {
     pub(super) fn overlay_arp_settings(&self, config: &mut Config) -> u8 {
         let tracker_row = config
             .tracker_enabled
-            .then(|| self.arp.data.rows.get(self.arp.row_index))
+            .then(|| self.prepared.rows.get(self.arp.row_index))
             .flatten();
         // Tracker row indices can exceed the legacy bank's eight pages. Select
         // the source before indexing: map_or eagerly evaluates its fallback.
@@ -228,13 +233,13 @@ impl Engine {
                 (row.settings, row.page)
             } else {
                 (
-                    self.arp.data.performance.settings,
-                    self.arp.data.performance.page,
+                    self.prepared.performance.settings,
+                    self.prepared.performance.page,
                 )
             }
         } else {
             let index = self.arp.active.min(7) as usize;
-            (config.arp_settings[index], self.arp.data.pages[index])
+            (config.arp_settings[index], self.prepared.pages[index])
         };
         let settings = self
             .arp
@@ -314,11 +319,11 @@ impl Engine {
         if config.tracker_enabled
             && config.arp_enabled
             && !old.arp_enabled
-            && !self.arp.data.rows.is_empty()
+            && !self.prepared.rows.is_empty()
         {
             self.arp.row_index = self.arp.requested_row.take().unwrap_or(0)
-                .min(self.arp.data.rows.len() - 1);
-            self.arp.row_id = self.arp.data.rows[self.arp.row_index].id;
+                .min(self.prepared.rows.len() - 1);
+            self.arp.row_id = self.prepared.rows[self.arp.row_index].id;
             self.arp.active = self.arp.row_index.min(u8::MAX as usize) as u8;
             self.arp.loops_in_row = 0;
         }
@@ -973,7 +978,7 @@ impl Engine {
         let base = harmony::resolve_chord(harmony::SavedChord { spread, ..recipe }, globals);
         let mut echoes = [0; 48];
         let mut echo_count = 0;
-        if self.arp.data.midi_fx.delay.voice_leading {
+        if self.prepared.midi_fx.delay.voice_leading {
             echo_count = self.fx.echo_notes(&mut echoes);
             for voice in self
                 .voices
@@ -1210,7 +1215,9 @@ impl Engine {
             }
         }
         let mut held_notes = [false; 128];
+        let mut midi_input = self.midi_input;
         for (id, &held) in self.down[..2048].iter().enumerate() {
+            midi_input[id % 128].held |= self.midi_held[id];
             if held || self.midi_held[id] {
                 held_notes[id % 128] = true;
             }
@@ -1227,6 +1234,7 @@ impl Engine {
         let (arp_notes, arp_len) = self.resolved_arp_cycle(self.arp.display_phase, self.arp.seed);
         Snapshot {
             held_notes,
+            midi_input,
             sounding_notes,
             bass_note: (0..128)
                 .find(|&note| self.bass.iter().any(|input| input[note].is_some()))
@@ -1382,3 +1390,31 @@ mod global_arp_tests;
 
 #[cfg(test)]
 mod fx_integration_tests;
+
+#[cfg(test)]
+mod cache_storage_tests {
+    use super::*;
+
+    #[test]
+    fn owned_note_cache_reuses_storage_and_preserves_block_start_snapshot() {
+        let mut engine = Engine::default();
+        let storage = engine.owned_notes_cache.as_ref() as *const _;
+        engine.refresh_owned_note_cache();
+        assert_eq!(engine.owned_notes_cache.as_ref() as *const _, storage);
+        assert!(!engine.owned_notes_cache[2][60]);
+
+        engine.melody[2][60] = true;
+        engine.touch_owned_notes();
+        assert!(!engine.owned_notes_cache[2][60]);
+        engine.refresh_owned_note_cache();
+        assert!(engine.owned_notes_cache[2][60]);
+        assert_eq!(engine.owned_notes_cache.as_ref() as *const _, storage);
+
+        engine.melody[2][60] = false;
+        engine.touch_owned_notes();
+        assert!(engine.owned_notes_cache[2][60]);
+        engine.refresh_owned_note_cache();
+        assert!(!engine.owned_notes_cache[2][60]);
+        assert_eq!(engine.owned_notes_cache.as_ref() as *const _, storage);
+    }
+}

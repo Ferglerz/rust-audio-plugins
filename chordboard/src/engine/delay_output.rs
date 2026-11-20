@@ -47,7 +47,7 @@ impl Engine {
         let ctx = self.fx_context();
         self.fx.capture(fx::Input { token, source, channel, note, velocity, expression, off, retrigger }, ctx);
         if !self.fx.active() {
-            self.delay.capture(self.arp.data.midi_fx.delay, source, token, note, velocity,
+            self.delay.capture(self.prepared.midi_fx.delay, source, token, note, velocity,
                 expression, off, self.now, self.beat, self.sample_rate as f64, self.tempo);
         }
     }
@@ -60,7 +60,7 @@ impl Engine {
     }
 
     pub(super) fn update_delay_power(&mut self, out: &mut impl FnMut(Out)) {
-        let power = self.arp.data.midi_fx.delay.enabled;
+        let power = self.prepared.midi_fx.delay.enabled;
         if self.delay_power && !power {
             self.reset_delay(out);
         }
@@ -89,7 +89,7 @@ impl Engine {
     /// Resolve only new attacks. Existing echo tokens retain their actual pitch
     /// until release, so a harmony change cannot misdirect a pending note-off.
     pub(super) fn delay_note(&self, mut note: u8) -> u8 {
-        let settings = self.arp.data.midi_fx.delay;
+        let settings = self.prepared.midi_fx.delay;
         let chord_notes = if self.config.tracker_enabled {
             self.arp_cycle_chord()
         } else {
@@ -136,18 +136,15 @@ impl Engine {
     }
     pub(super) fn cached_delay_map(&mut self) -> [u8; 128] {
         let key = self.delay_map_key();
-        if let Some(cached) = &self.delay_map_cache {
-            if cached.0 == key {
-                return cached.1;
-            }
+        if self.delay_map_cache.0 == Some(key) {
+            return self.delay_map_cache.1;
         }
         let map = std::array::from_fn(|note| self.delay_note(note as u8));
-        let result = map;
-        self.delay_map_cache = Some(Box::new((key, map)));
-        result
+        *self.delay_map_cache = (Some(key), map);
+        map
     }
     fn delay_map_key(&self) -> DelayMapKey {
-        let settings = self.arp.data.midi_fx.delay;
+        let settings = self.prepared.midi_fx.delay;
         let chord = if self.config.tracker_enabled {
             self.arp_cycle_chord()
         } else {
@@ -290,4 +287,36 @@ fn nearest_chord_pitch(note: u8, chord: &[u8]) -> u8 {
         }
     }
     note
+}
+
+#[cfg(test)]
+mod cache_storage_tests {
+    use super::*;
+
+    #[test]
+    fn delay_map_cache_reuses_storage_across_hits_and_harmony_changes() {
+        let mut engine = Engine::default();
+        let storage = engine.delay_map_cache.as_ref() as *const _;
+        assert_eq!(engine.cached_delay_map(), std::array::from_fn(|n| n as u8));
+        assert_eq!(engine.delay_map_cache.as_ref() as *const _, storage);
+
+        engine.prepared.midi_fx.delay.follow_chords = true;
+        engine.prepared.midi_fx.delay.voice_leading = false;
+        for root in [60, 62, 65] {
+            let mut chord = Notes::default();
+            for interval in [0, 4, 7] {
+                chord.push(root + interval);
+            }
+            engine.notes = chord;
+            engine.full_notes = chord;
+            let expected = std::array::from_fn(|note| engine.delay_note(note as u8));
+            assert_eq!(engine.cached_delay_map(), expected);
+            assert_eq!(engine.cached_delay_map(), expected);
+            assert_eq!(engine.delay_map_cache.as_ref() as *const _, storage);
+        }
+
+        engine.prepared.midi_fx.delay.follow_chords = false;
+        assert_eq!(engine.cached_delay_map(), std::array::from_fn(|n| n as u8));
+        assert_eq!(engine.delay_map_cache.as_ref() as *const _, storage);
+    }
 }

@@ -190,9 +190,8 @@ impl TapeStopView {
                     let dx = mouse_x - scx;
                     let dy = mouse_y - scy;
                     if dx * dx + dy * dy <= (sw * 0.5) * (sw * 0.5) {
-                        let is_braking = self.telemetry.is_braking.load(Ordering::Relaxed);
+                        let is_braking = self.telemetry.is_braking();
                         self.telemetry.set_manual_trigger(!is_braking);
-                        self.stop_click.set(1.0);
                         cx.needs_redraw();
                         return;
                     }

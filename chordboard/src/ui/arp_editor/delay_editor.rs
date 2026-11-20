@@ -1,4 +1,5 @@
 use super::*;
+use pleasant_ui::draw::{READABLE_AXIS_SIZE, READABLE_LABEL_SIZE};
 
 pub(in crate::ui) fn delay_power_rect() -> Rect {
     (DELAY_SURFACE.0 + 12.0, DELAY_SURFACE.1 + 8.0, 28.0, 28.0)
@@ -12,7 +13,7 @@ pub(super) fn delay_time_rect() -> Rect {
 pub(super) fn delay_gain_rect() -> Rect {
     (DELAY_SURFACE.0 + 286.0, DELAY_SURFACE.1 + 48.0, 132.0, 26.0)
 }
-pub(super) fn delay_feedback_rect() -> Rect {
+pub(in crate::ui) fn delay_feedback_rect() -> Rect {
     (DELAY_SURFACE.0 + 426.0, DELAY_SURFACE.1 + 48.0, 140.0, 26.0)
 }
 pub(super) fn tap_lane_rect() -> Rect {
@@ -65,7 +66,7 @@ pub(in crate::ui) fn source_rect(index: usize) -> Rect {
     super::super::midi_fx::source_rect(index)
 }
 
-pub(super) fn tap_graph() -> Rect {
+pub(in crate::ui) fn tap_graph() -> Rect {
     (
         DELAY_SURFACE.0 + 26.0,
         DELAY_SURFACE.1 + 94.0,
@@ -90,12 +91,137 @@ pub(in crate::ui) fn time_domain(delay: &DelaySettings) -> f32 {
         // taps at the maximum interval. This is a display range, not a time limit.
         .mul_add(4.25, 0.0)
 }
-pub(super) fn tap_x(tap: &DelayTap, domain: f32) -> f32 {
+pub(in crate::ui) fn tap_x(tap: &DelayTap, domain: f32) -> f32 {
     let g = tap_graph();
     g.0 + (tap.time / domain).clamp(0.0, 1.0) * g.2
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delay_spotlight_uses_only_visible_playable_repeats() {
+        let mut tap = DelayTap {
+            time: 0.5,
+            velocity: 1.0,
+            feedback: 0.5,
+            ..DelayTap::default()
+        };
+        assert_eq!(
+            echo_repeats(&tap, 1.5).collect::<Vec<_>>(),
+            [(1.0, 0.5), (1.5, 0.25)]
+        );
+        tap.feedback = 0.0;
+        assert_eq!(echo_repeats(&tap, 4.0).count(), 0);
+        tap.feedback = 0.5;
+        tap.velocity = 0.01;
+        assert_eq!(echo_repeats(&tap, 4.0).count(), 0);
+        tap.velocity = 1.0;
+        tap.enabled = false;
+        assert_eq!(echo_repeats(&tap, 4.0).count(), 0);
+    }
+}
+
+fn nearest_tap(delay: &DelaySettings, domain: f32, x: f32) -> Option<usize> {
+    delay.taps[..delay.count as usize]
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| {
+            (tap_x(a, domain) - x)
+                .abs()
+                .total_cmp(&(tap_x(b, domain) - x).abs())
+        })
+        .map(|(index, _)| index)
+}
+
+fn tap_handle_at(delay: &DelaySettings, domain: f32, x: f32, y: f32) -> Option<usize> {
+    let top = tap_graph().1;
+    if !(top - 18.0..top).contains(&y) {
+        return None;
+    }
+    nearest_tap(delay, domain, x).filter(|&i| (x - tap_x(&delay.taps[i], domain)).abs() < 22.0)
+}
+
+fn echo_repeats(tap: &DelayTap, domain: f32) -> impl Iterator<Item = (f32, f32)> + '_ {
+    let mut decay = 1.0;
+    let playable = tap.enabled && tap.time > 0.0 && tap.velocity >= 1.0 / 127.0;
+    (2..=64).map_while(move |generation| {
+        decay *= tap.feedback;
+        let time = tap.time * generation as f32;
+        (playable && time <= domain && tap.velocity * decay >= 1.0 / 127.0).then_some((time, decay))
+    })
+}
+
+fn draw_delay_icon(d: &mut Draw, r: Rect, on: bool, icon: style::Icon) {
+    d.button_surface(r, TEAL, on as u8 as f32, d.is_hovered(r) as u8 as f32, 0.0);
+    icon.draw(
+        d,
+        r.0 + r.2 * 0.5,
+        r.1 + r.3 * 0.5,
+        if on { TEAL } else { MUTED },
+    );
+}
+
+fn draw_delay_value(d: &mut Draw, r: Rect, label: &str, value: &str, norm: f32) {
+    d.button_surface(r, GOLD, 0.0, d.is_hovered(r) as u8 as f32, 0.0);
+    let label_width = d.with_label_font(|d| d.text_width(label, READABLE_LABEL_SIZE));
+    let gap = 5.0;
+    let width = label_width + gap + d.text_width(value, READABLE_LABEL_SIZE);
+    let x = r.0 + (r.2 - width) * 0.5;
+    let y = r.1 + r.3 * 0.5 + 2.0;
+    d.with_label_font(|d| d.text(x, y, label, READABLE_LABEL_SIZE, MUTED));
+    d.text(x + label_width + gap, y, value, READABLE_LABEL_SIZE, TEXT);
+    let rail = (r.0 + 8.0, r.1 + r.3 - 4.0, r.2 - 16.0);
+    d.line(rail.0, rail.1, rail.0 + rail.2, rail.1, LINE, 2.0);
+    d.line(
+        rail.0,
+        rail.1,
+        rail.0 + rail.2 * norm.clamp(0.0, 1.0),
+        rail.1,
+        GOLD,
+        2.0,
+    );
+}
+
 impl ChordboardView {
+    fn delay_spotlight(&self, delay: &DelaySettings, x: f32, y: f32) -> Option<usize> {
+        if !self.fx_ui.open
+            || !self.fx_delay_expanded()
+            || self.menu.is_some()
+            || self.quick_midi.show
+            || self.fx_ui.drag.is_some()
+            || self.arp_ui.drag.is_some()
+            || self.arp_ui.dropdown.is_some()
+            || !hit(super::super::midi_fx::VIEWPORT, x, y)
+            || crate::midi_learn::value(
+                &self.params,
+                crate::midi_learn::fx_power_target(crate::midi_fx::MidiFxId::Delay),
+            ) == 0
+        {
+            return None;
+        }
+        let y = self.fx_delay_local_y(y);
+        if hit(delay_feedback_rect(), x, y) {
+            return Some(self.arp_ui.selected_tap.min(delay.count as usize - 1));
+        }
+        tap_handle_at(delay, time_domain(delay), x, y)
+    }
+
+    pub(super) fn delay_spotlight_hint(&self, x: f32, y: f32) -> Option<String> {
+        let state = self.arp_state();
+        let delay = &state.midi_fx.delay;
+        let index = self.delay_spotlight(delay, x, y)?;
+        let tap = &delay.taps[index];
+        Some(format!(
+            "Settings preview · Tap {} · Interval {} · Feedback {:.0}%{}",
+            index + 1,
+            time_label(tap.time, delay.sync),
+            tap.feedback * 100.0,
+            if tap.enabled { "" } else { " · Tap off" }
+        ))
+    }
+
     pub(super) fn delay_editor_event(
         &mut self,
         cx: &mut EventContext,
@@ -270,17 +396,8 @@ impl ChordboardView {
             }
         } else {
             let g = tap_graph();
-            let domain = time_domain(delay);
             // Numbered caps are separate horizontal handles on every adjustment lane.
-            let nearest = (0..delay.count as usize)
-                .min_by(|a, b| {
-                    (tap_x(&delay.taps[*a], domain) - x)
-                        .abs()
-                        .total_cmp(&(tap_x(&delay.taps[*b], domain) - x).abs())
-                })
-                .unwrap_or(0);
-            let tx = tap_x(&delay.taps[nearest], domain);
-            if (x - tx).abs() < 22.0 && y >= g.1 - 18.0 && y < g.1 {
+            if let Some(nearest) = tap_handle_at(delay, domain, x, y) {
                 self.arp_ui.selected_tap = nearest;
                 self.start_arp_drag(
                     cx,
@@ -296,7 +413,7 @@ impl ChordboardView {
                 if reset {
                     self.apply_arp_drag(cx, x, y)
                 }
-            } else if hit(g, x, y) {
+            } else if let Some(nearest) = nearest_tap(delay, domain, x).filter(|_| hit(g, x, y)) {
                 self.arp_ui.selected_tap = nearest;
                 let lane = self.arp_ui.tap_lane;
                 self.start_arp_drag(
@@ -316,27 +433,39 @@ impl ChordboardView {
         true
     }
 
+    pub(in crate::ui) fn draw_delay_heading(&self, d: &mut Draw, enabled: bool) {
+        let s = DELAY_SURFACE;
+        d.with_label_font(|d| {
+            let x = s.0 + 48.0;
+            let title = "MIDI Delay";
+            d.text(x, s.1 + 29.0, title, 16.0, TEXT);
+            if !enabled {
+                let status_x = x + d.text_width(title, 16.0) + 12.0;
+                d.text(status_x, s.1 + 29.0, "Bypassed", READABLE_LABEL_SIZE, MUTED);
+            }
+        });
+        let power = delay_power_rect();
+        self.draw_power_switch(d, power, enabled, TEAL, self.fx_delay_screen_rect(power));
+    }
+
     pub(in crate::ui) fn draw_delay_strings(&self, d: &mut Draw, delay: &DelaySettings) {
         let s = DELAY_SURFACE;
         let selected = self.arp_ui.selected_tap.min(delay.count as usize - 1);
         let tap = &delay.taps[selected];
         let u = &self.arp_ui;
-        d.text(s.0 + 48.0, s.1 + 29.0, "MIDI DELAY", 16.0, TEXT);
-        d.text(
-            s.0 + 210.0,
-            s.1 + 28.0,
-            &format!("Tap {} of {}", selected + 1, delay.count),
-            13.0,
-            MUTED,
-        );
-        let power = delay_power_rect();
-        self.draw_power_switch(
-            d,
-            power,
-            delay.enabled,
-            TEAL,
-            self.fx_delay_screen_rect(power),
-        );
+        let spotlight = self
+            .hover_pointer()
+            .and_then(|(x, y)| self.delay_spotlight(delay, x, y));
+        self.draw_delay_heading(d, delay.enabled);
+        d.with_label_font(|d| {
+            d.text(
+                s.0 + 252.0,
+                s.1 + 28.0,
+                &format!("Tap {} of {}", selected + 1, delay.count),
+                READABLE_LABEL_SIZE,
+                MUTED,
+            )
+        });
         d.line(
             s.0 + 12.0,
             s.1 + 43.0,
@@ -345,74 +474,68 @@ impl ChordboardView {
             LINE,
             1.0,
         );
-        self.arp_icon_button(
+        draw_delay_icon(
             d,
             delay_sync_rect(),
-            "",
             delay.sync,
-            TEAL,
             if delay.sync {
                 style::Icon::Host
             } else {
                 style::Icon::Glyph(style::GLYPH_CLOCK)
             },
         );
-        self.arp_value(
+        draw_delay_value(
             d,
             delay_time_rect(),
-            &format!("Time: {}", time_label(tap.time, delay.sync)),
+            "Time",
+            &time_label(tap.time, delay.sync),
             tap.time / time_range(delay.sync).1,
         );
-        self.arp_value(
+        draw_delay_value(
             d,
             delay_gain_rect(),
-            &format!("Velocity: {:.0}%", tap.velocity * 100.0),
+            "Velocity",
+            &format!("{:.0}%", tap.velocity * 100.0),
             tap.velocity,
         );
-        self.arp_value(
+        draw_delay_value(
             d,
             delay_feedback_rect(),
-            &format!("Feedback: {:.0}%", tap.feedback * 100.0),
+            "Feedback",
+            &format!("{:.0}%", tap.feedback * 100.0),
             tap.feedback,
         );
-        self.arp_button(
-            d,
+        d.button_tinted(
             tap_lane_rect(),
             &format!("{} ▾", u.tap_lane.label()),
             u.dropdown == Some(Dropdown::TapLane),
             GOLD,
         );
-        self.arp_icon_button(
+        draw_delay_icon(
             d,
             ping_rect(),
-            "",
             delay.ping_pong,
-            TEAL,
             style::Icon::Glyph(style::GLYPH_SHUFFLE),
         );
-        self.arp_icon_button(
+        draw_delay_icon(
             d,
             delay_leading_rect(),
-            "",
             delay.voice_leading,
-            TEAL,
             style::Icon::Glyph(style::GLYPH_ROUTE),
         );
-        self.arp_icon_button(
+        draw_delay_icon(
             d,
             delay_follow_rect(),
-            "",
             delay.follow_chords,
-            TEAL,
             style::Icon::Glyph(style::GLYPH_REPLACE),
         );
-        self.draw_delay_pattern(d, delay);
+        self.draw_delay_pattern(d, delay, spotlight);
         if self.arp_ui.dropdown == Some(Dropdown::TapLane) {
             self.draw_arp_dropdown(d, Dropdown::TapLane);
         }
     }
 
-    fn draw_delay_pattern(&self, d: &mut Draw, delay: &DelaySettings) {
+    fn draw_delay_pattern(&self, d: &mut Draw, delay: &DelaySettings, spotlight: Option<usize>) {
         let u = &self.arp_ui;
         let selected = u.selected_tap.min(delay.count as usize - 1);
         let g = tap_graph();
@@ -430,26 +553,23 @@ impl ChordboardView {
             let label = time_label(domain * i as f32 / 4.0, delay.sync);
             let y = g.1 + g.3 + 14.0;
             match i {
-                0 => d.text(x, y, &label, TEXT_LABEL, MUTED),
-                4 => d.text_right(x, y, &label, TEXT_LABEL, MUTED),
-                _ => d.text_centered(x, y, &label, TEXT_LABEL, MUTED),
+                0 => d.text(x, y, &label, READABLE_AXIS_SIZE, MUTED),
+                4 => d.text_right(x, y, &label, READABLE_AXIS_SIZE, MUTED),
+                _ => d.text_centered(x, y, &label, READABLE_AXIS_SIZE, MUTED),
             }
         }
         d.line(g.0, baseline, g.0 + g.2, baseline, LINE, 1.0);
-        // Paint echo trains first so their faint lines never cover tap handles.
-        for (i, t) in delay.taps[..delay.count as usize].iter().enumerate() {
-            if !t.enabled || t.velocity < 1.0 / 127.0 || t.time <= 0.0 {
-                continue;
-            }
-            let color = if i == selected { GOLD } else { TEAL };
+        // Paint the focused train above the other trains and behind the tap handles.
+        for i in (0..delay.count as usize)
+            .filter(|&i| Some(i) != spotlight)
+            .chain(spotlight)
+        {
+            let t = &delay.taps[i];
+            let focused = spotlight == Some(i);
+            let color = if focused || i == selected { GOLD } else { TEAL };
             let y = value_y(u.tap_lane.get(t), range, g);
-            let mut decay = 1.0;
-            for generation in 2..=64 {
-                decay *= t.feedback;
-                let time = t.time * generation as f32;
-                if time > domain || t.velocity * decay < 1.0 / 127.0 {
-                    break;
-                }
+            let mut last_marker = f32::NEG_INFINITY;
+            for (time, decay) in echo_repeats(t, domain) {
                 let x = g.0 + time / domain * g.2;
                 // Only velocity falls with feedback; pitch, pan and channel
                 // retain their lane values while the lines fade in opacity.
@@ -458,7 +578,28 @@ impl ChordboardView {
                 } else {
                     y
                 };
-                d.line(x, baseline, x, echo_y, alpha(color, decay * 0.65), 2.0);
+                let opacity = if focused {
+                    0.70 + 0.30 * decay
+                } else if spotlight.is_some() {
+                    0.24 + 0.24 * decay
+                } else {
+                    0.65 * decay
+                };
+                d.line(
+                    x,
+                    baseline,
+                    x,
+                    echo_y,
+                    alpha(color, opacity),
+                    if focused { 2.5 } else { 2.0 },
+                );
+                if focused && x - last_marker >= 6.0 {
+                    d.circle(x, echo_y, 2.5 + decay, color, true);
+                    if d.light {
+                        d.circle(x, echo_y, 2.5 + decay, MUTED, false);
+                    }
+                    last_marker = x;
+                }
             }
         }
         for i in 0..delay.count as usize {
@@ -477,7 +618,16 @@ impl ChordboardView {
             );
             d.circle(x, y, 6.0, color, true);
             d.rounded_rect(x - 20.0, g.1 - 18.0, 40.0, 16.0, 4.0, alpha(color, 0.18));
-            d.text_centered(x, g.1 - 6.0, &format!("{} ↔", i + 1), 13.0, color);
+            d.text_centered(
+                x,
+                g.1 - 6.0,
+                &format!("{} ↔", i + 1),
+                READABLE_LABEL_SIZE,
+                TEXT,
+            );
+            if i == selected {
+                d.line(x - 14.0, g.1 - 2.0, x + 14.0, g.1 - 2.0, GOLD, 2.0);
+            }
             self.string_readout(
                 d,
                 x,
@@ -490,7 +640,7 @@ impl ChordboardView {
                 let r = tap_remove_rect(t, domain);
                 let confirming = u.pending_tap_remove == Some(i);
                 d.rect(r.0, r.1, r.2, r.3, LINE);
-                self.button_surface(d, r, confirming, color);
+                self.button_surface_at(d, r, self.fx_delay_screen_rect(r), confirming, color);
                 if confirming {
                     self.close_icon(d, r, color, true);
                 } else {
@@ -500,9 +650,21 @@ impl ChordboardView {
                 }
             }
         }
+        if let Some(i) = spotlight {
+            let x = tap_x(&delay.taps[i], domain);
+            d.outline_rounded(
+                x - 20.0,
+                g.1 - 18.0,
+                40.0,
+                16.0,
+                4.0,
+                if d.light { MUTED } else { GOLD },
+                1.5,
+            );
+        }
         if (delay.count as usize) < TAPS {
             let r = add_rect(delay, domain);
-            self.button_surface(d, r, false, TEAL);
+            self.button_surface_at(d, r, self.fx_delay_screen_rect(r), false, TEAL);
             let (x, y) = (r.0 + r.2 * 0.5, r.1 + r.3 * 0.5);
             d.line(x - 6.0, y, x + 6.0, y, TEAL, 2.0);
             d.line(x, y - 6.0, x, y + 6.0, TEAL, 2.0);

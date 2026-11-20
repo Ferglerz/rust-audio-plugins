@@ -56,8 +56,29 @@ impl Draw<'_> {
     }
 
     pub fn grab_bar(&mut self, r: (f32, f32, f32, f32), color: Color) {
-        self.rect(r.0, r.1, r.2, r.3, color);
-        self.grip_lines(r, color, false);
+        let (x, y, w, h) = r;
+        let cy = y + h * 0.5;
+        let wing = 6.0_f32.min(w * 0.2);
+        let half_band = 3.0_f32.min(h * 0.25);
+        self.fill_rounded_poly(
+            &[
+                (x, y),
+                (x + wing, cy - half_band),
+                (x + w - wing, cy - half_band),
+                (x + w, y),
+                (x + w, y + h),
+                (x + w - wing, cy + half_band),
+                (x + wing, cy + half_band),
+                (x, y + h),
+            ],
+            0.8,
+            color,
+        );
+        let grip = Self::grip_color(color);
+        let inset = wing + 1.5;
+        for dy in [-1.2, 1.2] {
+            self.line(x + inset, cy + dy, x + w - inset, cy + dy, grip, 0.9);
+        }
     }
 
     /// Rounded grab tag with an optional triangle pointing at `anchor`.

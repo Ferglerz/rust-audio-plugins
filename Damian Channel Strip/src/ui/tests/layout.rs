@@ -297,7 +297,7 @@ fn dual_eq_animation_math_and_id_ranges() {
     assert!((eased_sc - 1.5).abs() < 1e-6);
 }
 
-fn test_view() -> StripView {
+pub(in crate::ui) fn test_view() -> StripView {
     let params = Arc::new(StripParams::default());
     let shared = Shared::new(
         params.bands.clone(),
@@ -387,8 +387,15 @@ fn dynamics_routing_and_layout_geometry() {
     assert!(view.eq_bounds().0 + view.eq_bounds().2 <= view.dyn_bounds().0);
     assert!(view.dyn_bounds().0 + view.dyn_bounds().2 <= view.wall_bounds().0);
     assert_eq!(view.gx(), MARGIN + PSE_W + GAP + EQ_GRAPH_PAD_LEFT);
-    assert_eq!(view.global_controls(), &[0]);
-    assert_eq!(PSE_CONTROLS_KNOBS, [8, 10, 2]);
+    assert_eq!(view.global_controls(), &[GlobalControl::Compression]);
+    assert_eq!(
+        PSE_CONTROLS_KNOBS,
+        [
+            GlobalControl::PseHysteresis,
+            GlobalControl::PseTime,
+            GlobalControl::PseVoice,
+        ]
+    );
 
     let tab2 = view.eq_tab_2_rect();
     let tab_lift = view.eq_tab_lift_rect();
@@ -507,19 +514,19 @@ fn dynamics_routing_and_layout_geometry() {
     );
     assert_eq!(THEME_BUTTON, (32.0, FOOTER_BTN_Y, 88.0, 28.0));
     assert_eq!(PROCESS_BUTTON.0, 128.0);
-    let thresh_val = view.global_value_rect(0);
-    assert_eq!(thresh_val, view.global_rect(0));
+    let thresh_val = view.global_value_rect(GlobalControl::Compression);
+    assert_eq!(thresh_val, view.global_rect(GlobalControl::Compression));
     assert!(thresh_val.1 + thresh_val.3 <= FOOTER_LINE_Y);
     assert!(
         (rect_center_x(thresh_val) - rect_center_x(slider)).abs() < 0.5,
         "DYN threshold value must sit under the meter"
     );
-    let dyn_depth_val = view.global_value_rect(14);
+    let dyn_depth_val = view.global_value_rect(GlobalControl::CompDepth);
     assert!(
         (rect_center_x(dyn_depth_val) - rect_center_x(gr_meter)).abs() < 0.5,
         "DYN depth value must sit under the GR meter"
     );
-    let pse_thresh_val = view.pse_value_rect(1);
+    let pse_thresh_val = view.pse_value_rect(GlobalControl::Gate);
     assert!(
         (rect_center_x(pse_thresh_val) - rect_center_x(pse_slider)).abs() < 0.5,
         "PSE threshold value must sit under the meter"
@@ -533,16 +540,25 @@ fn dynamics_routing_and_layout_geometry() {
         .is_none());
 
     view.dyn_page.set(DynPage::Controls);
-    assert_eq!(view.global_controls(), &[5, 11, 6, 3, 4]);
-    let attack = view.global_rect(5);
-    let release = view.global_rect(11);
-    let ratio = view.global_rect(6);
+    assert_eq!(
+        view.global_controls(),
+        &[
+            GlobalControl::CompAttack,
+            GlobalControl::CompRelease,
+            GlobalControl::CompRatio,
+            GlobalControl::Dry,
+            GlobalControl::Wet,
+        ]
+    );
+    let attack = view.global_rect(GlobalControl::CompAttack);
+    let release = view.global_rect(GlobalControl::CompRelease);
+    let ratio = view.global_rect(GlobalControl::CompRatio);
     assert!(attack.2 > 90.0);
     assert!(attack.3 > 70.0);
     assert_eq!(attack.0, release.0);
     assert!(release.1 > attack.1 + attack.3 - 1.0);
     assert!(ratio.1 > release.1);
-    assert!(view.global_rect(4).1 > view.global_rect(3).1);
+    assert!(view.global_rect(GlobalControl::Wet).1 > view.global_rect(GlobalControl::Dry).1);
     let routing = view.footer_comp_routing_rect();
     let auto = view.footer_auto_rect();
     let link = view.footer_link_rect();
@@ -552,24 +568,24 @@ fn dynamics_routing_and_layout_geometry() {
     assert!(auto.0 + auto.2 <= link.0);
     assert!((out_r.0 - (link.0 + link.2) - GAP).abs() < f32::EPSILON);
     assert!(
-        !view.global_controls().contains(&2),
+        !view.global_controls().contains(&GlobalControl::PseVoice),
         "SC HPF must not appear on the compressor controls page"
     );
 
     view.pse_page.set(PsePage::Controls);
-    assert_eq!(view.pse_controls(), &[8, 10, 2]);
-    let time_r = view.pse_knob_rect(10);
+    assert_eq!(view.pse_controls(), &PSE_CONTROLS_KNOBS);
+    let time_r = view.pse_knob_rect(GlobalControl::PseTime);
     let det_r = view.pse_detect_mode_rect();
     assert_eq!(det_r.0 + det_r.2, time_r.0 + time_r.2);
     assert!(time_r.1 + time_r.3 <= det_r.1);
     assert!(inside(
         view.pse_bounds().0 + 20.0,
-        view.pse_knob_rect(8).1 + 10.0,
+        view.pse_knob_rect(GlobalControl::PseHysteresis).1 + 10.0,
         view.pse_bounds()
     ));
 
     view.wall_page.set(WallPage::Main);
-    assert_eq!(view.wall_controls(), &[18]);
+    assert_eq!(view.wall_controls(), &WALL_MAIN_KNOBS);
     let wall_slider = view.wall_main_thresh_slider_rect();
     assert_eq!(wall_slider.1, slider.1);
     assert_eq!(wall_slider.2, slider.2);
@@ -582,7 +598,7 @@ fn dynamics_routing_and_layout_geometry() {
         wall_slider.1 + 4.0,
         view.wall_bounds()
     ));
-    let wall_thresh_val = view.wall_value_rect(18);
+    let wall_thresh_val = view.wall_value_rect(GlobalControl::WallThreshold);
     assert_eq!(wall_thresh_val.1, meter_value_y() - 14.0);
     assert!(
         (rect_center_x(wall_slider) - rect_center_x(view.wall_bounds())).abs() < 0.5,
@@ -593,9 +609,9 @@ fn dynamics_routing_and_layout_geometry() {
         "WALL threshold value must sit under the meter"
     );
     view.wall_page.set(WallPage::Controls);
-    assert_eq!(view.wall_controls(), &[16, 17]);
-    let even_r = view.wall_knob_rect(16);
-    let odd_r = view.wall_knob_rect(17);
+    assert_eq!(view.wall_controls(), &WALL_CONTROLS_KNOBS);
+    let even_r = view.wall_knob_rect(GlobalControl::WallEven);
+    let odd_r = view.wall_knob_rect(GlobalControl::WallOdd);
     assert!(even_r.2 > 90.0);
     assert!(even_r.3 > 100.0);
     assert_eq!(even_r.0, odd_r.0);
@@ -734,10 +750,10 @@ fn lift_dock_is_above_the_graph_and_pse_controls_stack() {
         assert!(r.0 >= view.gx() && r.0 + r.2 <= view.gx() + view.gw());
         assert!(r.1 + r.3 <= GY + LIFT_DOCK_H);
     }
-    let hysteresis = view.pse_knob_rect(8);
-    let time = view.pse_knob_rect(10);
+    let hysteresis = view.pse_knob_rect(GlobalControl::PseHysteresis);
+    let time = view.pse_knob_rect(GlobalControl::PseTime);
     let mode = view.pse_detect_mode_rect();
-    let voice = view.pse_knob_rect(2);
+    let voice = view.pse_knob_rect(GlobalControl::PseVoice);
     let meter = view.pse_vad_meter_rect();
     assert_eq!(hysteresis.0, time.0);
     assert_eq!(time.0, voice.0);

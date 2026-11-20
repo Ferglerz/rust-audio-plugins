@@ -518,10 +518,24 @@ fn global_midi_fx_survives_all_row_operations_and_state_restore() {
         s.midi_fx.delay.enabled = true;
         s.midi_fx.delay.sources = 31;
         s.midi_fx.delay.taps[0].time = 1.5;
+        s.midi_fx.midi_eq.enabled = true;
+        s.midi_fx.midi_eq.bands[0] = Some(crate::midi_fx::MidiEqBand {
+            gain_db: -6.0,
+            ..Default::default()
+        });
         s.midi_fx.order = vec![MidiFxId::Delay, MidiFxId::Delay];
     });
     let expected = store.snapshot().midi_fx;
-    assert_eq!(expected.order, vec![MidiFxId::Delay, MidiFxId::Harmonizer, MidiFxId::RhythmGate, MidiFxId::VoiceSplitter]);
+    assert_eq!(
+        expected.order,
+        vec![
+            MidiFxId::Delay,
+            MidiFxId::Harmonizer,
+            MidiFxId::RhythmGate,
+            MidiFxId::VoiceSplitter,
+            MidiFxId::MidiEq,
+        ]
+    );
     store.edit(|s| {
         s.add_row_after(0);
         let copied = s.rows[0].clone();

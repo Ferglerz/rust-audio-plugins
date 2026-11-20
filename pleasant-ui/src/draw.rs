@@ -6,6 +6,8 @@ mod text;
 
 pub use controls::KnobLayout;
 pub use primitives::TRACE_REST_PX;
+pub const READABLE_LABEL_SIZE: f32 = 12.0;
+pub const READABLE_AXIS_SIZE: f32 = 11.0;
 
 use crate::theme;
 use nih_plug_vizia::vizia::{
@@ -90,6 +92,12 @@ pub struct Draw<'a> {
     /// Fade disabled content into its background in either theme.
     pub disabled: bool,
     pub hover: Option<(f32, f32)>,
+    readable_style: Option<ReadableStyle>,
+}
+
+#[derive(Clone, Copy)]
+struct ReadableStyle {
+    label_font: Option<FontId>,
 }
 
 impl<'a> Draw<'a> {
@@ -133,7 +141,32 @@ impl<'a> Draw<'a> {
             dimmed: false,
             disabled: false,
             hover: None,
+            readable_style: None,
         }
+    }
+
+    /// Scope proportional labels and higher-contrast colors to an editor or panel.
+    pub fn with_readable_style<R>(
+        &mut self,
+        label_font: Option<FontId>,
+        draw: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let previous = self.readable_style.replace(ReadableStyle { label_font });
+        let result = draw(self);
+        self.readable_style = previous;
+        result
+    }
+
+    /// Draw or measure a label with the same face, leaving numeric runs in mono.
+    pub fn with_label_font<R>(&mut self, draw: impl FnOnce(&mut Self) -> R) -> R {
+        let previous = self.font;
+        self.font = self
+            .readable_style
+            .and_then(|style| style.label_font)
+            .or(previous);
+        let result = draw(self);
+        self.font = previous;
+        result
     }
 
     pub fn with_hover(mut self, hover: Option<(f32, f32)>) -> Self {
@@ -157,7 +190,11 @@ impl<'a> Draw<'a> {
     }
 
     pub fn color(&self, c: Color) -> Color {
-        let mut col = theme::transform_color(c, self.light);
+        let mut col = if self.readable_style.is_some() {
+            theme::readable_color(c, self.light)
+        } else {
+            theme::transform_color(c, self.light)
+        };
         if self.dimmed {
             let panel = theme::transform_color(theme::PANEL, self.light);
             let gray = luma(panel) * 0.35 + luma(col) * 0.65;

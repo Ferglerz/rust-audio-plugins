@@ -1,6 +1,6 @@
 //! Automatic arp clock, independent of the live Strumfield.
 use super::*;
-use crate::arpeggiator::{ArpMode, Prepared, Settings, Step, StepState, Store, LOOPS, STEPS};
+use crate::arpeggiator::{ArpMode, Settings, Step, StepState, LOOPS, STEPS};
 use routing::{ARP_MOD_SOURCES, ARP_POSITION_SOURCE, PERF_MOD_SOURCES};
 pub use super::{ARP_OWNER, PERFORMANCE_ARP_OWNER};
 pub fn pass_length(notes: usize, pattern: u8) -> usize {
@@ -51,7 +51,6 @@ impl Timing {
 pub struct Runtime {
     pub(super) timing: Option<Timing>,
     pub(super) timing_commit: bool,
-    pub data: Box<Prepared>,
     pub active: u8,
     pub row_index: usize,
     pub row_id: u64,
@@ -88,7 +87,6 @@ impl Default for Runtime {
         Self {
             timing: None,
             timing_commit: false,
-            data: Store::new().initial_prepared(),
             active: 0,
             row_index: 0,
             row_id: 1,
@@ -242,47 +240,63 @@ pub(super) fn apply_arp_playback(
 }
 
 impl Engine {
+    pub(super) fn scheduler(&mut self) -> &mut Runtime {
+        if self.in_performance_arp {
+            &mut self.performance_arp
+        } else {
+            &mut self.arp
+        }
+    }
+    fn scheduler_ref(&self) -> &Runtime {
+        if self.in_performance_arp {
+            &self.performance_arp
+        } else {
+            &self.arp
+        }
+    }
     pub(super) fn active_arp_page(&self) -> &crate::arpeggiator::Page {
         if self.in_performance_arp {
-            return &self.arp.data.performance.page;
+            return &self.prepared.performance.page;
         }
         if self.config.tracker_enabled {
-            self.arp
-                .data
+            self.prepared
                 .rows
-                .get(self.arp.row_index)
-                .map(|row| if row.enabled { &row.page } else { &self.arp.data.performance.page })
-                .unwrap_or(&self.arp.data.pages[0])
+                .get(self.scheduler_ref().row_index)
+                .map(|row| if row.enabled { &row.page } else { &self.prepared.performance.page })
+                .unwrap_or(&self.prepared.pages[0])
         } else {
-            &self.arp.data.pages[self.arp.active as usize]
+            &self.prepared.pages[self.scheduler_ref().active as usize]
         }
     }
     fn advance_tracker_row(&mut self, out: &mut impl FnMut(Out)) {
-        if self.arp.data.rows.is_empty() {
+        if self.prepared.rows.is_empty() {
             return;
         }
-        self.arp.row_index = (self.arp.row_index + 1) % self.arp.data.rows.len();
-        self.arp.row_id = self.arp.data.rows[self.arp.row_index].id;
-        self.arp.active = self.arp.row_index.min(u8::MAX as usize) as u8;
-        self.arp.loops_in_row = 0;
-        self.arp.counted_phase = 0;
-        self.arp.timing = None;
-        self.arp.events.fill(None);
-        self.arp.early = None;
-        self.arp.phase = 0;
-        self.arp.done = false;
-        self.arp.finished = false;
+        let len = self.prepared.rows.len();
+        let next = (self.scheduler().row_index + 1) % len;
+        let id = self.prepared.rows[next].id;
+        self.scheduler().row_index = next;
+        self.scheduler().row_id = id;
+        self.scheduler().active = next.min(u8::MAX as usize) as u8;
+        self.scheduler().loops_in_row = 0;
+        self.scheduler().counted_phase = 0;
+        self.scheduler().timing = None;
+        self.scheduler().events.fill(None);
+        self.scheduler().early = None;
+        self.scheduler().phase = 0;
+        self.scheduler().done = false;
+        self.scheduler().finished = false;
         self.configure(self.host_config, out);
-        self.arp.next = self.now as f64;
+        self.scheduler().next = self.now as f64;
     }
     pub(super) fn retime_arp(&mut self, old_tempo: f64, new_tempo: f64) {
         if !self.config.arp_sync || old_tempo == new_tempo {
             return;
         }
         let factor = old_tempo / new_tempo;
-        let now = self.arp.paused_at.unwrap_or(self.now) as f64;
-        self.arp.next = now + (self.arp.next - now) * factor;
-        for event in self.arp.events.iter_mut().flatten() {
+        let now = self.scheduler().paused_at.unwrap_or(self.now) as f64;
+        self.scheduler().next = now + (self.scheduler().next - now) * factor;
+        for event in self.scheduler().events.iter_mut().flatten() {
             event.at = (now + (event.at as f64 - now) * factor).round().max(now) as u64;
             event.boundary = now + (event.boundary - now) * factor;
             event.interval *= factor;
@@ -298,48 +312,45 @@ impl Engine {
         }
     }
     pub fn accept_arp_generation(&mut self, out: &mut impl FnMut(Out)) {
-        if self.arp.restore_epoch != self.arp.data.restore_epoch {
-            self.arp.restore_epoch = self.arp.data.restore_epoch;
-            self.arp.paste_settings.fill(None);
-            self.arp.paste_seen.fill(0);
-            self.arp.preserve_paste_clock = false;
+        if self.scheduler().restore_epoch != self.prepared.restore_epoch {
+            self.scheduler().restore_epoch = self.prepared.restore_epoch;
+            self.scheduler().paste_settings.fill(None);
+            self.scheduler().paste_seen.fill(0);
+            self.scheduler().preserve_paste_clock = false;
             self.reset_automatic_arp(out);
             self.reset_delay(out);
             let ctx = self.fx_context();
             self.fx.clear(ctx, out);
-            self.arp.active = self.host_config.arp_page.min(7);
+            self.scheduler().active = self.host_config.arp_page.min(7);
             self.configure(self.host_config, out);
         }
-        if self.host_config.tracker_enabled && !self.arp.data.rows.is_empty() {
-            if let Some(index) = self
-                .arp
-                .data
-                .rows
-                .iter()
-                .position(|row| row.id == self.arp.row_id)
-            {
-                self.arp.row_index = index;
+        if self.host_config.tracker_enabled && !self.prepared.rows.is_empty() {
+            let row_id = self.scheduler().row_id;
+            if let Some(index) = self.prepared.rows.iter().position(|row| row.id == row_id) {
+                self.scheduler().row_index = index;
             } else {
-                if self.arp.row_index >= self.arp.data.rows.len() {
-                    self.arp.row_index = 0;
+                if self.scheduler().row_index >= self.prepared.rows.len() {
+                    self.scheduler().row_index = 0;
                 }
-                self.arp.row_id = self.arp.data.rows[self.arp.row_index].id;
-                self.arp.loops_in_row = 0;
-                self.arp.events.fill(None);
+                let index = self.scheduler().row_index;
+                let id = self.prepared.rows[index].id;
+                self.scheduler().row_id = id;
+                self.scheduler().loops_in_row = 0;
+                self.scheduler().events.fill(None);
             }
-            self.arp.active = self.arp.row_index.min(u8::MAX as usize) as u8;
+            self.scheduler().active = self.scheduler().row_index.min(u8::MAX as usize) as u8;
             self.configure(self.host_config, out);
         }
         for page in 0..8 {
-            if let Some(replacement) = self.arp.data.pages[page].replacement {
-                if replacement.serial != self.arp.paste_seen[page] {
-                    self.arp.paste_seen[page] = replacement.serial;
-                    self.arp.paste_settings[page] = Some(replacement.settings);
-                    if page == self.arp.active as usize {
-                        self.arp.preserve_paste_clock = true;
-                        self.arp.timing = Some(Timing::from(replacement.settings));
-                        if !self.arp.finished {
-                            self.arp.done = false;
+            if let Some(replacement) = self.prepared.pages[page].replacement {
+                if replacement.serial != self.scheduler().paste_seen[page] {
+                    self.scheduler().paste_seen[page] = replacement.serial;
+                    self.scheduler().paste_settings[page] = Some(replacement.settings);
+                    if page == self.scheduler().active as usize {
+                        self.scheduler().preserve_paste_clock = true;
+                        self.scheduler().timing = Some(Timing::from(replacement.settings));
+                        if !self.scheduler().finished {
+                            self.scheduler().done = false;
                         }
                     }
                 }
@@ -347,8 +358,8 @@ impl Engine {
         }
         let previous_sources = self.sources;
         self.with_performance_arp(|e| {
-            if e.arp.restore_epoch != e.arp.data.restore_epoch {
-                e.arp.restore_epoch = e.arp.data.restore_epoch;
+            if e.performance_arp.restore_epoch != e.prepared.restore_epoch {
+                e.performance_arp.restore_epoch = e.prepared.restore_epoch;
                 e.reset_automatic_arp(out);
             }
             if !e.arp_gated() { e.reset_automatic_arp(out); }
@@ -362,22 +373,21 @@ impl Engine {
         let mut settings = self.arp_requested_settings();
         settings.swing = self.config.swing;
         settings.humanize = self.config.humanize;
-        self.arp
+        self.scheduler_ref()
             .timing
             .map_or(settings, |timing| timing.apply(settings))
     }
     fn arp_requested_settings(&self) -> Settings {
-        if self.in_performance_arp { return self.arp.data.performance.settings; }
+        if self.in_performance_arp { return self.prepared.performance.settings; }
         if self.config.tracker_enabled {
             return self
-                .arp
-                .data
+                .prepared
                 .rows
-                .get(self.arp.row_index)
-                .map_or(Settings::default(), |row| if row.enabled { row.settings } else { self.arp.data.performance.settings });
+                .get(self.scheduler_ref().row_index)
+                .map_or(Settings::default(), |row| if row.enabled { row.settings } else { self.prepared.performance.settings });
         }
-        let requested = self.arp.paste_settings[self.arp.active.min(7) as usize]
-            .unwrap_or(self.host_config.arp_settings[self.arp.active.min(7) as usize]);
+        let requested = self.scheduler_ref().paste_settings[self.scheduler_ref().active.min(7) as usize]
+            .unwrap_or(self.host_config.arp_settings[self.scheduler_ref().active.min(7) as usize]);
         Settings {
             mode: requested.mode,
             pattern: requested.pattern,
@@ -402,10 +412,9 @@ impl Engine {
         if self.config.tracker_enabled {
             self.config.arp_enabled
                 && self
-                    .arp
-                    .data
+                    .prepared
                     .rows
-                    .get(self.arp.row_index)
+                    .get(self.scheduler_ref().row_index)
                     .is_some_and(|row| row.chord.is_some())
         } else {
             self.config.arp_enabled
@@ -419,40 +428,42 @@ impl Engine {
         }
     }
     pub(super) fn tracker_play(&mut self, selected: usize, out: &mut impl FnMut(Out)) {
-        if !self.config.tracker_enabled || self.arp.data.rows.is_empty() {
+        if !self.config.tracker_enabled || self.prepared.rows.is_empty() {
             return;
         }
         // The host can apply the Play button's power parameter after its UI command.
         if !self.config.arp_enabled {
-            self.arp.requested_row = Some(selected);
+            self.scheduler().requested_row = Some(selected);
             return;
         }
-        self.arp.requested_row = None;
-        if let Some(paused_at) = self.arp.paused_at.take() {
+        self.scheduler().requested_row = None;
+        if let Some(paused_at) = self.scheduler().paused_at.take() {
             let elapsed = self.now.saturating_sub(paused_at);
-            self.arp.next += elapsed as f64;
-            for event in self.arp.events.iter_mut().flatten() {
+            self.scheduler().next += elapsed as f64;
+            for event in self.scheduler().events.iter_mut().flatten() {
                 event.at = event.at.saturating_add(elapsed);
                 event.boundary += elapsed as f64;
             }
             return;
         }
-        if self.arp.running && !self.arp.finished {
+        if self.scheduler().running && !self.scheduler().finished {
             return;
         }
         self.reset_automatic_arp(out);
-        self.arp.row_index = selected.min(self.arp.data.rows.len() - 1);
-        self.arp.row_id = self.arp.data.rows[self.arp.row_index].id;
-        self.arp.active = self.arp.row_index.min(u8::MAX as usize) as u8;
-        self.arp.loops_in_row = 0;
+        let index = selected.min(self.prepared.rows.len() - 1);
+        let id = self.prepared.rows[index].id;
+        self.scheduler().row_index = index;
+        self.scheduler().row_id = id;
+        self.scheduler().active = index.min(u8::MAX as usize) as u8;
+        self.scheduler().loops_in_row = 0;
         self.configure(self.host_config, out);
     }
 
     pub(super) fn tracker_pause(&mut self, out: &mut impl FnMut(Out)) {
-        if !self.config.tracker_enabled || !self.config.arp_enabled || self.arp.paused_at.is_some() {
+        if !self.config.tracker_enabled || !self.config.arp_enabled || self.scheduler().paused_at.is_some() {
             return;
         }
-        self.arp.paused_at = Some(self.now);
+        self.scheduler().paused_at = Some(self.now);
         self.clear_arp_sources();
         // Release only the tracker voices; live keyboard/Strumfield notes remain playable.
         for i in 0..self.voices.len() {
@@ -463,17 +474,17 @@ impl Engine {
     }
 
     pub(super) fn restart_automatic_arp(&mut self) {
-        if self.arp.paused_at.is_some() { self.arp.paused_at = Some(self.now); }
-        self.arp.phase = 0;
-        self.arp.clock_phase = 0;
-        self.arp.counted_phase = 0;
-        self.arp.timing = None;
-        self.arp.next = self.now as f64;
-        self.arp.done = false;
-        self.arp.finished = false;
-        self.arp.early = None;
-        self.arp.events.fill(None);
-        self.arp.running = false;
+        if self.scheduler().paused_at.is_some() { self.scheduler().paused_at = Some(self.now); }
+        self.scheduler().phase = 0;
+        self.scheduler().clock_phase = 0;
+        self.scheduler().counted_phase = 0;
+        self.scheduler().timing = None;
+        self.scheduler().next = self.now as f64;
+        self.scheduler().done = false;
+        self.scheduler().finished = false;
+        self.scheduler().early = None;
+        self.scheduler().events.fill(None);
+        self.scheduler().running = false;
     }
     pub(super) fn reset_automatic_arp(&mut self, out: &mut impl FnMut(Out)) {
         self.restart_automatic_arp();
@@ -498,10 +509,9 @@ impl Engine {
     }
     pub(super) fn arp_cycle_chord(&self) -> Notes {
         let mut notes = if self.config.tracker_enabled {
-            self.arp
-                .data
+            self.prepared
                 .rows
-                .get(self.arp.row_index)
+                .get(self.scheduler_ref().row_index)
                 .and_then(|row| row.chord)
                 .map(|chord| crate::harmony::resolve_chord(chord, self.config.global_harmony()))
                 .unwrap_or_default()
@@ -533,10 +543,9 @@ impl Engine {
     }
     pub(super) fn arp_recipe(&self) -> Option<crate::harmony::SavedChord> {
         if self.config.tracker_enabled {
-            self.arp
-                .data
+            self.prepared
                 .rows
-                .get(self.arp.row_index)
+                .get(self.scheduler_ref().row_index)
                 .and_then(|r| r.chord)
         } else {
             self.memory.map(|mut recipe| {
@@ -551,7 +560,7 @@ impl Engine {
             variation.octave = self.config.arp_loop_octaves[i];
         }
         if self.config.tracker_enabled {
-            if let Some(row) = self.arp.data.rows.get(self.arp.row_index) {
+            if let Some(row) = self.prepared.rows.get(self.scheduler_ref().row_index) {
                 page.offset_voicing(row.arp_octave, row.arp_inversion);
             }
         }
@@ -569,10 +578,10 @@ impl Engine {
         )
     }
     pub(super) fn arp_slots(&self) -> ([usize; STEPS], usize, [i16; STEPS]) {
-        self.arp_slots_at(self.arp.phase)
+        self.arp_slots_at(self.scheduler_ref().phase)
     }
     fn arp_slots_at(&self, phase: i64) -> ([usize; STEPS], usize, [i16; STEPS]) {
-        let (notes, len) = self.resolved_arp_cycle(phase, self.arp.plan_seed);
+        let (notes, len) = self.resolved_arp_cycle(phase, self.scheduler_ref().plan_seed);
         let mut slots = [0; STEPS];
         let mut count = 0;
         let pass_len = self.arp_pass_len();
@@ -586,25 +595,25 @@ impl Engine {
         (slots, count, notes)
     }
     pub(super) fn arp_deadline(&self) -> Option<u64> {
-        if self.arp.paused_at.is_some() { return None; }
+        if self.scheduler_ref().paused_at.is_some() { return None; }
         if !self.arp_gated() {
-            return self.arp.running.then_some(self.now);
+            return self.scheduler_ref().running.then_some(self.now);
         }
-        if self.arp_alignment_available() != self.arp.aligned {
+        if self.arp_alignment_available() != self.scheduler_ref().aligned {
             return Some(self.now);
         }
         let count = self.arp_slots().1;
         let requested =
-            !self.config.tracker_enabled && self.config.arp_page.min(7) != self.arp.active;
-        if !self.arp.running {
+            !self.config.tracker_enabled && self.config.arp_page.min(7) != self.scheduler_ref().active;
+        if !self.scheduler_ref().running {
             return (count > 0 || requested).then_some(self.now);
         }
         let boundary =
-            (!self.arp.finished || requested || self.config.tracker_enabled && self.arp.done)
-                .then_some(self.arp.next.round().max(0.0) as u64);
+            (!self.scheduler_ref().finished || requested || self.config.tracker_enabled && self.scheduler_ref().done)
+                .then_some(self.scheduler_ref().next.round().max(0.0) as u64);
         boundary
             .into_iter()
-            .chain(self.arp.events.iter().flatten().map(|e| e.at))
+            .chain(self.scheduler_ref().events.iter().flatten().map(|e| e.at))
             .min()
     }
     fn arp_interval(&self, phase: i64) -> f64 {
@@ -644,12 +653,12 @@ impl Engine {
                     });
             phase += 1;
         }
-        self.arp.phase = phase;
-        self.arp.clock_phase = phase;
-        self.arp.next = self.now as f64
+        self.scheduler().phase = phase;
+        self.scheduler().clock_phase = phase;
+        self.scheduler().next = self.now as f64
             + (boundary - self.beat).max(0.0) * self.sample_rate as f64 * 60.0 / self.tempo;
-        self.arp.early = None;
-        self.arp.events.fill(None);
+        self.scheduler().early = None;
+        self.scheduler().events.fill(None);
     }
     fn prepare_arp_event(&mut self, phase: i64, boundary: f64, floor: u64) -> Option<Event> {
         let (slots, count, notes) = self.arp_slots_at(phase);
@@ -659,7 +668,9 @@ impl Engine {
         let ordinal = phase.rem_euclid(count as i64) as usize;
         let index = slots[ordinal];
         let step = *self.active_arp_page().step(index, self.arp_pass_len());
-        let interval = self.arp_interval(self.arp.clock_phase + phase - self.arp.phase);
+        let clock_phase = self.scheduler().clock_phase;
+        let current_phase = self.scheduler().phase;
+        let interval = self.arp_interval(clock_phase + phase - current_phase);
         let jitter = self.humanize_timing(interval);
         let at = (boundary + interval * step.micro as f64 / 100.0 + jitter)
             .round()
@@ -677,7 +688,7 @@ impl Engine {
         Some(Event {
             at,
             boundary,
-            seed: self.arp.plan_seed,
+            seed: self.scheduler().plan_seed,
             phase,
             step: index,
             note: notes[index],
@@ -694,80 +705,80 @@ impl Engine {
         })
     }
     fn timing_pending(&self) -> bool {
-        self.arp
+        self.scheduler_ref()
             .timing
             .is_some_and(|t| t != Timing::from(self.arp_requested_settings()))
     }
     fn commit_arp_timing(&mut self, out: &mut impl FnMut(Out)) {
         let requested = self.arp_requested_settings();
-        if self.arp.timing.is_none() {
-            self.arp.timing = Some(Timing::from(requested));
+        if self.scheduler().timing.is_none() {
+            self.scheduler().timing = Some(Timing::from(requested));
             return;
         }
         let old_len = self.arp_pass_len() as i64;
         if self.timing_pending()
-            && self.arp.phase.rem_euclid(old_len) == 0
-            && self.now >= self.arp.next.round().max(0.0) as u64
+            && self.scheduler().phase.rem_euclid(old_len) == 0
+            && self.now >= self.scheduler().next.round().max(0.0) as u64
         {
-            self.arp.timing = Some(Timing::from(requested));
+            self.scheduler().timing = Some(Timing::from(requested));
             let new_len = self.arp_pass_len() as i64;
-            self.arp.phase = self.arp.phase.div_euclid(old_len) * new_len;
-            self.arp.events.fill(None);
-            self.arp.early = None;
-            self.arp.done = false;
-            self.arp.finished = false;
-            self.arp.timing_commit = true;
+            self.scheduler().phase = self.scheduler().phase.div_euclid(old_len) * new_len;
+            self.scheduler().events.fill(None);
+            self.scheduler().early = None;
+            self.scheduler().done = false;
+            self.scheduler().finished = false;
+            self.scheduler().timing_commit = true;
             self.configure(self.host_config, out);
-            self.arp.timing_commit = false;
+            self.scheduler().timing_commit = false;
         }
     }
     pub(super) fn refresh_arp_events(&mut self) {
         let settings = self.arp_live_settings();
         let notes = self.arp_cycle_chord();
         let request = if self.config.tracker_enabled {
-            self.arp.row_index.min(u8::MAX as usize) as u8
+            self.scheduler().row_index.min(u8::MAX as usize) as u8
         } else {
             self.config.arp_page
         };
-        if self.arp.cached_notes == notes
-            && self.arp.cached_settings == settings
-            && self.arp.cached_generation == self.arp.data.generation
-            && self.arp.cached_request == request
+        if self.scheduler().cached_notes == notes
+            && self.scheduler().cached_settings == settings
+            && self.scheduler().cached_generation == self.prepared.generation
+            && self.scheduler().cached_request == request
         {
             return;
         }
-        if !self.arp.preserve_paste_clock
+        if !self.scheduler().preserve_paste_clock
             && self.arp_alignment_available()
-            && (settings.rate != self.arp.cached_settings.rate
-                || settings.swing != self.arp.cached_settings.swing)
+            && (settings.rate != self.scheduler().cached_settings.rate
+                || settings.swing != self.scheduler().cached_settings.swing)
         {
-            self.arp.running = false;
+            self.scheduler().running = false;
         }
-        self.arp.cached_notes = notes;
-        self.arp.cached_settings = settings;
-        self.arp.cached_generation = self.arp.data.generation;
-        self.arp.cached_request = request;
-        for i in 0..self.arp.events.len() {
-            if let Some(event) = self.arp.events[i].take() {
-                if self.config.arp_page != self.arp.active && event.phase == self.arp.phase {
-                    self.arp.early = None;
+        self.scheduler().cached_notes = notes;
+        self.scheduler().cached_settings = settings;
+        self.scheduler().cached_generation = self.prepared.generation;
+        self.scheduler().cached_request = request;
+        for i in 0..self.scheduler().events.len() {
+            if let Some(event) = self.scheduler().events[i].take() {
+                if self.config.arp_page != self.scheduler().active && event.phase == self.scheduler().phase {
+                    self.scheduler().early = None;
                 } else {
-                    self.arp.events[i] =
+                    self.scheduler().events[i] =
                         self.prepare_arp_event(event.phase, event.boundary, self.now);
                 }
             }
         }
     }
     fn enqueue_arp(&mut self, event: Event) {
-        if let Some(slot) = self.arp.events.iter_mut().find(|e| e.is_none()) {
+        if let Some(slot) = self.scheduler().events.iter_mut().find(|e| e.is_none()) {
             *slot = Some(event);
         }
     }
     pub(super) fn tick_automatic_arp(&mut self, out: &mut impl FnMut(Out)) {
-        if self.arp.paused_at.is_some() { return; }
+        if self.scheduler().paused_at.is_some() { return; }
         self.refresh_arp_events();
         if !self.arp_gated() {
-            if self.arp.running {
+            if self.scheduler().running {
                 self.restart_automatic_arp();
                 self.clear_arp_sources();
                 self.configure(self.host_config, out);
@@ -777,83 +788,82 @@ impl Engine {
         self.commit_arp_timing(out);
         let aligned = self.arp_alignment_available();
         let settings = self.arp_live_settings();
-        if self.arp.preserve_paste_clock {
-            self.arp.aligned = aligned;
-            self.arp.last_settings = settings;
-            self.arp.preserve_paste_clock = false;
+        if self.scheduler().preserve_paste_clock {
+            self.scheduler().aligned = aligned;
+            self.scheduler().last_settings = settings;
+            self.scheduler().preserve_paste_clock = false;
         }
         if aligned
-            && (!self.arp.aligned
-                || settings.rate != self.arp.last_settings.rate
-                || settings.swing != self.arp.last_settings.swing)
+            && (!self.scheduler().aligned
+                || settings.rate != self.scheduler().last_settings.rate
+                || settings.swing != self.scheduler().last_settings.swing)
         {
             self.align_arp();
         }
-        self.arp.aligned = aligned;
-        self.arp.last_settings = settings;
-        if !self.arp.running {
-            self.arp.running = true;
+        self.scheduler().aligned = aligned;
+        self.scheduler().last_settings = settings;
+        if !self.scheduler().running {
+            self.scheduler().running = true;
             if aligned {
                 self.align_arp();
             } else {
-                self.arp.next = self.now as f64;
+                self.scheduler().next = self.now as f64;
             }
         }
-        if self.now >= self.arp.next.round().max(0.0) as u64 {
+        if self.now >= self.scheduler().next.round().max(0.0) as u64 {
             let completed_count = self.arp_slots().1.max(1) as i64;
             if self.config.tracker_enabled
-                && self.arp.phase != self.arp.counted_phase
-                && self.arp.phase.rem_euclid(completed_count) == 0
+                && self.scheduler().phase != self.scheduler().counted_phase
+                && self.scheduler().phase.rem_euclid(completed_count) == 0
             {
-                self.arp.counted_phase = self.arp.phase;
-                self.arp.loops_in_row = self.arp.loops_in_row.saturating_add(1);
-                let duration = self.arp.data.rows[self.arp.row_index].duration;
-                if self.arp.loops_in_row >= duration {
-                    let legacy_once = self.arp.done && !self.arp_live_settings().lock_length;
+                self.scheduler().counted_phase = self.scheduler().phase;
+                self.scheduler().loops_in_row = self.scheduler().loops_in_row.saturating_add(1);
+                let row_index = self.scheduler().row_index;
+                let duration = self.prepared.rows[row_index].duration;
+                if self.scheduler().loops_in_row >= duration {
+                    let legacy_once = self.scheduler().done && !self.arp_live_settings().lock_length;
                     self.advance_tracker_row(out);
                     if legacy_once {
-                        self.arp.next += self.arp_interval(self.arp.clock_phase);
+                        let clock_phase = self.scheduler().clock_phase;
+                        self.scheduler().next += self.arp_interval(clock_phase);
                         return;
                     }
-                } else if self.arp.done {
-                    self.arp.finished = true;
+                } else if self.scheduler().done {
+                    self.scheduler().finished = true;
                     self.clear_arp_sources();
-                    self.arp.next += (0..completed_count)
-                        .map(|i| self.arp_interval(self.arp.clock_phase + i))
+                    let clock_phase = self.scheduler().clock_phase;
+                    self.scheduler().next += (0..completed_count)
+                        .map(|i| self.arp_interval(clock_phase + i))
                         .sum::<f64>();
-                    self.arp.phase += completed_count;
-                    self.arp.clock_phase += completed_count;
+                    self.scheduler().phase += completed_count;
+                    self.scheduler().clock_phase += completed_count;
                     self.configure(self.host_config, out);
                 }
             }
             let requested = if self.config.tracker_enabled {
-                self.arp.active
+                self.scheduler().active
             } else {
                 self.config.arp_page.min(7)
             };
-            if requested != self.arp.active {
-                let consumed = self.arp.early == Some(self.arp.phase)
-                    && !self
-                        .arp
-                        .events
-                        .iter()
-                        .flatten()
-                        .any(|e| e.phase == self.arp.phase);
-                self.arp.active = requested;
-                self.arp.events.fill(None);
-                self.arp.early = if consumed { Some(self.arp.phase) } else { None };
-                if self.arp.done
-                    || self.arp.paste_settings[requested as usize]
+            if requested != self.scheduler().active {
+                let phase = self.scheduler().phase;
+                let repeated = self.scheduler().events.iter().flatten().any(|e| e.phase == phase);
+                let consumed = self.scheduler().early == Some(phase) && !repeated;
+                self.scheduler().active = requested;
+                self.scheduler().events.fill(None);
+                self.scheduler().early = if consumed { Some(self.scheduler().phase) } else { None };
+                if self.scheduler().done
+                    || self.scheduler().paste_settings[requested as usize]
                         .unwrap_or(self.host_config.arp_settings[requested as usize])
                         .mode
                         == ArpMode::Once
                 {
-                    self.arp.phase = 0;
-                    self.arp.clock_phase = 0;
-                    self.arp.timing = None;
-                    self.arp.next = self.now as f64;
-                    self.arp.done = false;
-                    self.arp.finished = false;
+                    self.scheduler().phase = 0;
+                    self.scheduler().clock_phase = 0;
+                    self.scheduler().timing = None;
+                    self.scheduler().next = self.now as f64;
+                    self.scheduler().done = false;
+                    self.scheduler().finished = false;
                 }
                 self.configure(self.host_config, out);
                 if self.arp_alignment_available() {
@@ -862,69 +872,77 @@ impl Engine {
             }
             let (_, count, _) = self.arp_slots();
             if count == 0 {
-                self.arp.running = false;
-                self.arp.events.fill(None);
+                self.scheduler().running = false;
+                self.scheduler().events.fill(None);
                 self.clear_arp_sources();
                 return;
             }
-            if self.arp.done && !self.arp.finished {
-                self.arp.finished = true;
+            if self.scheduler().done && !self.scheduler().finished {
+                self.scheduler().finished = true;
                 self.clear_arp_sources();
                 self.configure(self.host_config, out);
             }
-            if !self.arp.done {
-                let phase = self.arp.phase;
-                if self.arp.early != Some(phase) {
-                    if let Some(event) = self.prepare_arp_event(phase, self.arp.next, self.now) {
+            if !self.scheduler().done {
+                let phase = self.scheduler().phase;
+                if self.scheduler().early != Some(phase) {
+                    let boundary = self.scheduler().next;
+                    if let Some(event) = self.prepare_arp_event(phase, boundary, self.now) {
                         self.enqueue_arp(event);
                     }
                 }
-                self.arp.early = None;
-                self.arp.next += self.arp_interval(self.arp.clock_phase);
-                self.arp.clock_phase = self.arp.clock_phase.wrapping_add(1);
-                self.arp.phase = self.arp.phase.wrapping_add(1);
-                self.arp.done = self.config.arp_mode == ArpMode::Once
-                    && self.arp.phase.rem_euclid(count as i64) == 0;
-                if self.config.arp_pattern == 6 && self.arp.phase.rem_euclid(count as i64) == 0 {
-                    self.arp.plan_seed = self.random();
+                self.scheduler().early = None;
+                let clock_phase = self.scheduler().clock_phase;
+                self.scheduler().next += self.arp_interval(clock_phase);
+                self.scheduler().clock_phase = self.scheduler().clock_phase.wrapping_add(1);
+                self.scheduler().phase = self.scheduler().phase.wrapping_add(1);
+                self.scheduler().done = self.config.arp_mode == ArpMode::Once
+                    && self.scheduler().phase.rem_euclid(count as i64) == 0;
+                if self.config.arp_pattern == 6 && self.scheduler().phase.rem_euclid(count as i64) == 0 {
+                    self.scheduler().plan_seed = self.random();
                 }
                 let row_ends = self.config.tracker_enabled
-                    && self.arp.phase.rem_euclid(count as i64) == 0
-                    && self.arp.loops_in_row + 1 >= self.arp.data.rows[self.arp.row_index].duration;
-                if !self.arp.done
+                    && self.scheduler().phase.rem_euclid(count as i64) == 0
+                    && {
+                        let row_index = self.scheduler().row_index;
+                        let loops = self.scheduler().loops_in_row;
+                        loops + 1 >= self.prepared.rows[row_index].duration
+                    };
+                if !self.scheduler().done
                     && !row_ends
                     && !(self.timing_pending()
-                        && self.arp.phase.rem_euclid(self.arp_pass_len() as i64) == 0)
+                        && self.scheduler().phase.rem_euclid(self.arp_pass_len() as i64) == 0)
                 {
                     // Prepare the next event once, retaining it even if it is late. This makes
                     // negative microtiming and humanize independent of callback boundaries.
-                    if let Some(event) =
-                        self.prepare_arp_event(self.arp.phase, self.arp.next, self.now)
+                    let phase = self.scheduler().phase;
+                    let boundary = self.scheduler().next;
+                    if let Some(event) = self.prepare_arp_event(phase, boundary, self.now)
                     {
                         self.enqueue_arp(event);
-                        self.arp.early = Some(self.arp.phase);
+                        self.scheduler().early = Some(self.scheduler().phase);
                     }
                 }
             }
         }
         loop {
+            let now = self.now;
             let index = self
-                .arp
+                .scheduler()
                 .events
                 .iter()
                 .enumerate()
-                .filter_map(|(i, e)| e.filter(|e| e.at <= self.now).map(|e| (i, e)))
+                .filter_map(|(i, e)| e.filter(|e| e.at <= now).map(|e| (i, e)))
                 .min_by_key(|(_, e)| (e.at, e.phase))
                 .map(|(i, _)| i);
             let Some(index) = index else {
                 break;
             };
-            let Some(event) = self.arp.events[index].take() else {
+            let Some(event) = self.scheduler().events[index].take() else {
                 break;
             };
-            self.arp.step = event.step as u8;
-            self.arp.display_phase = event.phase;
-            self.arp.seed = event.seed;
+            self.scheduler().step = event.step as u8;
+            self.scheduler().display_phase = event.phase;
+            self.scheduler().seed = event.seed;
             let lanes = self.arp_mod_sources();
             self.sources[lanes]
                 .copy_from_slice(&event.adjustment.mods.map(|value| value as f32 / 100.0));

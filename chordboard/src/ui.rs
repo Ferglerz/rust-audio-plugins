@@ -27,7 +27,7 @@ use crate::{
     bridge::Bridge,
     engine::{Command, Snapshot, POINTER_KEY_OFFSET},
     harmony::{self, SavedChord, KEY_COLUMNS, KEY_COUNT},
-    params::{ChordboardParams, Control},
+    params::{ChordboardParams, Control, ControlSummary},
 };
 use layout::*;
 use nih_plug::prelude::*;
@@ -144,6 +144,7 @@ struct ChordboardView {
     context: Arc<dyn GuiContext>,
     font: Cell<Option<FontId>>,
     ui_font: Cell<Option<FontId>>,
+    delay_label_font: Cell<Option<FontId>>,
     bold_font: Cell<Option<FontId>>,
     music_font: Cell<Option<FontId>>,
     icon_font: Cell<Option<FontId>>,
@@ -239,6 +240,7 @@ impl ChordboardView {
             context,
             font: Cell::new(None),
             ui_font: Cell::new(None),
+            delay_label_font: Cell::new(None),
             bold_font: Cell::new(None),
             music_font: Cell::new(None),
             icon_font: Cell::new(None),
@@ -340,6 +342,17 @@ impl ChordboardView {
         self.params.routes[self.route_slot]
             .control(id)
             .or_else(|| self.params.control(id))
+    }
+    fn control_summary(&self, id: &str) -> Option<ControlSummary> {
+        if matches!(id, "swing" | "humanize") {
+            return self.params.control_summary(id);
+        }
+        if let Some(control) = self.arp_params().control_summary(id) {
+            return Some(control);
+        }
+        self.params.routes[self.route_slot]
+            .control_summary(id)
+            .or_else(|| self.params.control_summary(id))
     }
     fn arp_params(&self) -> &crate::params::ArpPageParams {
         &self.arp_editor_params
@@ -446,7 +459,7 @@ impl ChordboardView {
             || matches!(self.drag, Some(Drag::Key(token)) if token == key as u8 + POINTER_KEY_OFFSET)
             || self.snapshot.accepted & (1 << key) != 0
     }
-    fn base_controls(&self) -> Vec<(Control, Rect)> {
+    fn base_control_placements(&self) -> Vec<(&'static str, Rect)> {
         let mut positions = Vec::new();
         positions.extend(voicing_controls());
         positions.extend(globals::global_controls());
@@ -456,14 +469,35 @@ impl ChordboardView {
         if !self.arp_params().arp_sync.value() && !self.editor_arp_inherits() {
             positions.push(("arp_free_ms", arp_rate_rect()));
         }
-        positions.extend(self.keyboard_controls().into_iter().map(|(c, r)| (c.id, r)));
+        positions.extend(self.keyboard_control_placements());
         if self.programming && !self.fx_ui.open && !self.params.tempo_sync.value() {
             positions.push(("tempo", TEMPO_CONTROL));
         }
         positions
+    }
+    fn controls_at(
+        &self,
+        positions: impl IntoIterator<Item = (&'static str, Rect)>,
+    ) -> Vec<(Control, Rect)> {
+        positions
             .into_iter()
             .filter_map(|(id, r)| self.control(id).map(|c| (c, r)))
             .collect()
+    }
+    fn control_summaries_at(
+        &self,
+        positions: impl IntoIterator<Item = (&'static str, Rect)>,
+    ) -> Vec<(ControlSummary, Rect)> {
+        positions
+            .into_iter()
+            .filter_map(|(id, r)| self.control_summary(id).map(|c| (c, r)))
+            .collect()
+    }
+    fn base_controls(&self) -> Vec<(Control, Rect)> {
+        self.controls_at(self.base_control_placements())
+    }
+    fn base_control_summaries(&self) -> Vec<(ControlSummary, Rect)> {
+        self.control_summaries_at(self.base_control_placements())
     }
     fn panel_rect(&self, panel: Panel) -> Rect {
         panel.rect()
@@ -493,46 +527,57 @@ impl ChordboardView {
     fn menu_option_rect(&self, menu: Menu, index: usize) -> Rect {
         menu.option_rect_at(self.menu_bounds(menu), index)
     }
-    fn keyboard_controls(&self) -> Vec<(Control, Rect)> {
-        let ids: &[&str] = if self.params.mpe_enabled() {
-            &["bass_channel", "bass_split", "upper", "members"]
+    fn keyboard_control_placements(&self) -> [(&'static str, Rect); 4] {
+        let mpe = self.params.mpe_enabled();
+        let ids = if mpe {
+            ["bass_channel", "bass_split", "upper", "members"]
         } else {
-            &[
+            [
                 "bass_channel",
                 "bass_split",
                 "output_channel",
                 "upper_channel",
             ]
         };
-        ids.iter()
-            .filter_map(|id| {
-                self.control(id)
-                    .map(|c| (c, keyboard_control_rect(id, self.params.mpe_enabled())))
-            })
-            .collect()
+        ids.map(|id| (id, keyboard_control_rect(id, mpe)))
     }
-    fn panel_controls(&self) -> Vec<(Control, Rect)> {
+    fn keyboard_controls(&self) -> Vec<(Control, Rect)> {
+        self.controls_at(self.keyboard_control_placements())
+    }
+    fn panel_control_placements(&self) -> Vec<(&'static str, Rect)> {
         if self.panel != Some(Panel::Routes) || !self.has_selected_route() {
             return Vec::new();
         }
         ["route_enabled", "route_smoothing_ms"]
             .into_iter()
-            .filter_map(|id| self.control(id).map(|c| (c, route_control_rect(id))))
+            .map(|id| (id, route_control_rect(id)))
             .collect()
     }
+    fn panel_controls(&self) -> Vec<(Control, Rect)> {
+        self.controls_at(self.panel_control_placements())
+    }
+    fn panel_control_summaries(&self) -> Vec<(ControlSummary, Rect)> {
+        self.control_summaries_at(self.panel_control_placements())
+    }
     // Popovers own their pointer targets; covered controls cannot react underneath.
-    fn placed_controls(&self) -> Vec<(Control, Rect)> {
-        let mut controls = self.base_controls();
+    fn placed_control_placements(&self) -> Vec<(&'static str, Rect)> {
+        let mut controls = self.base_control_placements();
         if self.programming {
-            controls.retain(|(c, r)| c.id == "tempo" || !hit(TRACKER_SURFACE, r.0 + r.2 / 2.0, r.1 + r.3 / 2.0));
+            controls.retain(|(id, r)| *id == "tempo" || !hit(TRACKER_SURFACE, r.0 + r.2 / 2.0, r.1 + r.3 / 2.0));
         }
         if let Some(panel) = self.panel {
             let p = self.panel_rect(panel);
             controls.retain(|(_, r)| !hit(p, r.0 + r.2 / 2.0, r.1 + r.3 / 2.0));
-            controls.extend(self.panel_controls());
+            controls.extend(self.panel_control_placements());
         }
-        if self.performance_arp_enabled() { controls.retain(|(c, _)| c.id != "gliss_ms"); }
+        if self.performance_arp_enabled() { controls.retain(|(id, _)| *id != "gliss_ms"); }
         controls
+    }
+    fn placed_controls(&self) -> Vec<(Control, Rect)> {
+        self.controls_at(self.placed_control_placements())
+    }
+    fn placed_control_summaries(&self) -> Vec<(ControlSummary, Rect)> {
+        self.control_summaries_at(self.placed_control_placements())
     }
 
     fn emit(cx: &mut EventContext, ptr: ParamPtr, norm: f32) {
@@ -1033,6 +1078,7 @@ impl ChordboardView {
             }
         }
         let mut changed = old != self.snapshot;
+        changed |= self.tick_midi_eq(&old, dt);
         if old.leading_serial != self.snapshot.leading_serial {
             self.leading_progress = 0.0;
         }
@@ -1280,3 +1326,6 @@ pub fn preview() {
 
 #[cfg(test)]
 mod tests;
+#[cfg(all(test, target_os = "macos"))]
+#[path = "ui/delay_preview.rs"]
+mod delay_preview;

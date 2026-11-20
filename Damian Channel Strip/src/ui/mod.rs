@@ -20,7 +20,7 @@ use hud::*;
 use hud_draw::*;
 use layout::*;
 use lift::*;
-use value_input::{parse_value, typed_char, ValueTarget};
+use value_input::{parse_value, BandField, GlobalControl, ValueTarget};
 
 use crate::{
     band::{infer_shape, Band, Shape, MAX_RANGE_DB},
@@ -78,9 +78,9 @@ enum WallPage {
 #[derive(Clone, Copy, PartialEq)]
 enum Target {
     Value(ValueTarget),
-    Global(usize),
-    Band(usize),
-    LiftBand(usize),
+    Global(GlobalControl),
+    Band(BandField),
+    LiftBand(BandField),
     Node(u64),
     Range(u64),
     Threshold(u64),

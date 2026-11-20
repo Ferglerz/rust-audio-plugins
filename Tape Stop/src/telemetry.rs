@@ -1,18 +1,45 @@
 use atomic_float::AtomicF32;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering, Ordering::SeqCst};
 use std::sync::Arc;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum TransportStage {
+    #[default]
+    Idle,
+    Live,
+    Braking,
+    Returning,
+    Crossfading,
+}
+
+impl TransportStage {
+    fn from_byte(value: u8) -> Self {
+        match value {
+            1 => Self::Live,
+            2 => Self::Braking,
+            3 => Self::Returning,
+            4 => Self::Crossfading,
+            _ => Self::Idle,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct TransportFrame {
+    pub stage: TransportStage,
+    pub speed: [f32; 2],
+    pub brake_progress: [f32; 2],
+}
 
 pub struct TapeStopTelemetry {
     pub tempo: AtomicF32,
     pub effective_drop: AtomicF32,
     pub effective_return: AtomicF32,
-    pub speed_l: AtomicF32,
-    pub speed_r: AtomicF32,
-    pub is_braking: AtomicBool,
-    pub is_crossfading: AtomicBool,
-    pub brake_progress: AtomicF32,
-    pub brake_progress_l: AtomicF32,
-    pub brake_progress_r: AtomicF32,
+    transport_sequence: AtomicU64,
+    stage: AtomicU8,
+    speed: [AtomicF32; 2],
+    brake_progress: [AtomicF32; 2],
     pub input_peak: AtomicF32,
     pub output_peak: AtomicF32,
     pub live_envelope: AtomicF32,
@@ -26,13 +53,10 @@ impl TapeStopTelemetry {
             tempo: AtomicF32::new(120.0),
             effective_drop: AtomicF32::new(0.5),
             effective_return: AtomicF32::new(0.5),
-            speed_l: AtomicF32::new(1.0),
-            speed_r: AtomicF32::new(1.0),
-            is_braking: AtomicBool::new(false),
-            is_crossfading: AtomicBool::new(false),
-            brake_progress: AtomicF32::new(0.0),
-            brake_progress_l: AtomicF32::new(0.0),
-            brake_progress_r: AtomicF32::new(0.0),
+            transport_sequence: AtomicU64::new(0),
+            stage: AtomicU8::new(TransportStage::Idle as u8),
+            speed: std::array::from_fn(|_| AtomicF32::new(0.0)),
+            brake_progress: std::array::from_fn(|_| AtomicF32::new(0.0)),
             input_peak: AtomicF32::new(0.0),
             output_peak: AtomicF32::new(0.0),
             live_envelope: AtomicF32::new(0.0),
@@ -41,31 +65,43 @@ impl TapeStopTelemetry {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    #[inline(always)]
-    pub fn update(
+    pub(crate) fn publish_transport(&self, frame: TransportFrame) {
+        self.transport_sequence.fetch_add(1, SeqCst);
+        for channel in 0..2 {
+            self.speed[channel].store(frame.speed[channel], SeqCst);
+            self.brake_progress[channel].store(frame.brake_progress[channel], SeqCst);
+        }
+        self.stage.store(frame.stage as u8, SeqCst);
+        self.transport_sequence.fetch_add(1, SeqCst);
+    }
+
+    pub(crate) fn transport(&self) -> Option<(u64, TransportFrame)> {
+        let sequence = self.transport_sequence.load(SeqCst);
+        if sequence & 1 != 0 {
+            return None;
+        }
+        let frame = TransportFrame {
+            stage: TransportStage::from_byte(self.stage.load(SeqCst)),
+            speed: self.speed.each_ref().map(|speed| speed.load(SeqCst)),
+            brake_progress: self
+                .brake_progress
+                .each_ref()
+                .map(|progress| progress.load(SeqCst)),
+        };
+        (self.transport_sequence.load(SeqCst) == sequence).then_some((sequence, frame))
+    }
+
+    pub(crate) fn is_braking(&self) -> bool {
+        self.stage.load(Ordering::Relaxed) == TransportStage::Braking as u8
+    }
+
+    pub fn update_levels(
         &self,
-        speed_l: f32,
-        speed_r: f32,
-        is_braking: bool,
-        is_crossfading: bool,
-        brake_progress: f32,
-        brake_progress_l: f32,
-        brake_progress_r: f32,
         in_peak: f32,
         out_peak: f32,
         live_envelope: f32,
         transient_flash: f32,
     ) {
-        self.speed_l.store(speed_l, Ordering::Relaxed);
-        self.speed_r.store(speed_r, Ordering::Relaxed);
-        self.is_braking.store(is_braking, Ordering::Relaxed);
-        self.is_crossfading.store(is_crossfading, Ordering::Relaxed);
-        self.brake_progress.store(brake_progress, Ordering::Relaxed);
-        self.brake_progress_l
-            .store(brake_progress_l, Ordering::Relaxed);
-        self.brake_progress_r
-            .store(brake_progress_r, Ordering::Relaxed);
         self.input_peak.store(in_peak, Ordering::Relaxed);
         self.output_peak.store(out_peak, Ordering::Relaxed);
         self.live_envelope.store(live_envelope, Ordering::Relaxed);

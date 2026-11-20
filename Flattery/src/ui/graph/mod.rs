@@ -1,11 +1,10 @@
 use crate::strength::{weight_at, Polarity, StrengthNode, STRENGTH_REST_PX};
 use nih_plug_vizia::vizia::vg::Color;
 use pleasant_ui::{
-    draw::{Draw, TRACE_REST_PX},
+    draw::{Draw, READABLE_AXIS_SIZE, TRACE_REST_PX},
     graph::{AxisMapping, FlatteryFrequencyAxis},
     handles::{tag_contains, TagPointer},
     math::{flattery_freq_to_pos, flattery_pos_to_freq},
-    spectrum::smooth_bins_f32,
     theme::{rgb, LINE, MUTED},
 };
 

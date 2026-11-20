@@ -1,4 +1,5 @@
 use super::{controls::*, graph::*, *};
+use std::time::Instant;
 
 impl TapeStopView {
     pub(super) fn render(&self, cx: &mut DrawContext, canvas: &mut Canvas) {
@@ -18,10 +19,18 @@ impl TapeStopView {
             return;
         };
 
-        let braking = self.telemetry.is_braking.load(Ordering::Relaxed);
+        self.paint(&mut d, Instant::now());
+    }
+
+    pub(super) fn paint(&self, d: &mut Draw, now: Instant) {
+        let mut reels = self.reels.get();
+        let enabled = self.params.power.value() && !self.params.bypass.value();
+        let transport = reels.advance(now, self.telemetry.transport(), enabled);
+        self.reels.set(reels);
 
         d.rounded_rect(0.0, 0.0, UI_W, HEADER_HEIGHT, 0.0, PANEL);
         d.text(36.0, 44.0, "TAPE STOP", 24.0, GOLD);
+        reels.draw(d, transport, enabled, now);
         let affect_midi = self.params.affect_midi.value();
         d.button_surface(AFFECT_MIDI, TEAL, affect_midi as u8 as f32, 0.0, 0.0);
         d.text_centered(
@@ -34,44 +43,24 @@ impl TapeStopView {
 
         d.appearance_button(THEME_BUTTON, prefs().label());
 
-        self.draw_graph(&mut d);
-        self.draw_performance(&mut d);
+        self.draw_graph(d, transport);
+        self.draw_performance(d);
 
         // Circular STOP / REW overlay in the bottom-left of the graph
         let (sx, sy, sw, sh) = STOP_BUTTON;
         let scx = sx + sw * 0.5;
         let scy = sy + sh * 0.5;
-        let stop_active = braking || self.telemetry.get_manual_trigger();
+        let stop_active = self.telemetry.is_braking() || self.telemetry.get_manual_trigger();
         let stop_color = if stop_active { GOLD } else { MUTED };
 
-        let click_amt = self.stop_click.get();
-        if click_amt > 0.01 {
-            self.stop_click.set((click_amt - 0.08).max(0.0));
-        }
-        let is_hovered = self.hover_stop.get();
-        let now_sec = (std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis()
-            % 100_000) as f32
-            * 0.001;
-        let pulse = if is_hovered {
-            (now_sec * 5.0).sin() * 0.5 + 0.5
-        } else {
-            0.0
-        };
-
-        if is_hovered || click_amt > 0.01 {
-            let halo_r = sw * 0.5 + 2.0 + pulse * 3.0 + click_amt * 6.0;
-            let mut halo_col = stop_color;
-            halo_col.a = (0.25 + 0.25 * pulse + click_amt * 0.4).clamp(0.0, 1.0);
-            d.circle(scx, scy, halo_r, halo_col, false);
-        }
-        if click_amt > 0.05 {
-            let rip_r = sw * 0.5 + (1.0 - click_amt) * 14.0;
-            let mut rip_col = stop_color;
-            rip_col.a = (click_amt * 0.8).clamp(0.0, 1.0);
-            d.circle(scx, scy, rip_r, rip_col, false);
+        if self.hover_stop.get() {
+            d.circle(
+                scx,
+                scy,
+                sw * 0.5 + 3.0,
+                pleasant_ui::with_alpha(stop_color, 0.6),
+                false,
+            );
         }
 
         let mut stop_fill = rgb(0, 0, 0);
@@ -98,14 +87,14 @@ impl TapeStopView {
             d.scissor(left, top, width, height);
             d.offset_x = width * (1.0 - eased);
             d.rounded_rect(left, top, width, height, 0.0, pleasant_ui::theme::BG);
-            self.draw_midi_slot(&mut d);
-            self.draw_audio_trigger(&mut d);
+            self.draw_midi_slot(d);
+            self.draw_audio_trigger(d);
             for &id in &[KnobId::Xfade, KnobId::StereoDiv] {
-                self.draw_axis_slider(&mut d, id);
+                self.draw_axis_slider(d, id);
             }
             d.offset_x = 0.0;
             d.reset_scissor();
         }
-        self.draw_axis_cog(&mut d);
+        self.draw_axis_cog(d);
     }
 }

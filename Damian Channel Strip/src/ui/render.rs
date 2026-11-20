@@ -2,7 +2,10 @@ use super::*;
 
 impl StripView {
     pub(super) fn render(&self, cx: &mut DrawContext, canvas: &mut Canvas) {
-        let bounds = cx.bounds();
+        self.paint_editor(canvas, cx.bounds(), preferences::light());
+    }
+
+    pub(super) fn paint_editor(&self, canvas: &mut Canvas, bounds: BoundingBox, light: bool) {
         let Some(scale) = view_scale(bounds) else {
             return;
         };
@@ -14,15 +17,15 @@ impl StripView {
         );
         let mut d = Draw::new(
             canvas,
-            preferences::light(),
+            light,
             scale,
             bounds.x,
             bounds.y,
             self.font.get(),
         )
         .with_hover(self.idle_hover());
-        d.rect(0.0, 0.0, UI_W, UI_H, BG);
-        d.rect(0.0, 0.0, UI_W, HEADER_H, PANEL);
+        d.square_rect(0.0, 0.0, UI_W, UI_H, BG);
+        d.square_rect(0.0, 0.0, UI_W, HEADER_H, PANEL);
         d.text(32.0, 46.0, "dB", 28.0, GOLD);
         d.text(88.0, 46.0, "SIGNATURE CHANNEL STRIP", 16.0, TEXT);
         draw_signature(&mut d, self.signature.get());
@@ -153,7 +156,7 @@ impl StripView {
         let r = output_gain_rect();
         d.rect(r.0, r.1, r.2, r.3, PANEL);
         let out_hover = self.idle_hover().is_some_and(|(hx, hy)| inside(hx, hy, r));
-        let out_dragging = self.drag == Some(Target::Global(15));
+        let out_dragging = self.drag == Some(Target::Global(GlobalControl::Output));
         d.outline(
             r,
             if out_hover || out_dragging {
@@ -163,7 +166,7 @@ impl StripView {
             },
         );
 
-        let p_out = self.param(15);
+        let p_out = self.param(GlobalControl::Output);
         let out_norm = p_out.unmodulated_normalized_value();
         let out_val = p_out.value();
         let val_str = if out_val.abs() < 0.05 {
@@ -175,7 +178,7 @@ impl StripView {
         d.text(r.0 + 8.0, r.1 + 13.0, "OUTPUT", 9.5, MUTED);
         let val_r = output_gain_value_rect();
         if let Some(edit) = &self.edit {
-            if edit.target == ValueTarget::Global(15) {
+            if edit.target == ValueTarget::Global(GlobalControl::Output) {
                 d.value_edit(edit, GOLD);
             } else {
                 d.text_centered(val_r.0 + val_r.2 * 0.5, r.1 + 13.0, &val_str, 10.5, TEXT);

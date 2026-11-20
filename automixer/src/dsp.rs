@@ -6,9 +6,7 @@ use std::sync::atomic::Ordering;
 
 #[derive(Clone, Copy)]
 pub struct Settings {
-    pub amount: f32,
-    pub voice_cap: f32,
-    pub other_cap: f32,
+    pub strength: f32,
     pub voices: usize,
     pub threshold: f32,
     pub hold_ms: f32,
@@ -18,22 +16,16 @@ pub struct Settings {
 impl Settings {
     pub fn from_params(p: &SharedParams) -> Self {
         Self {
-            amount: p.amount.value() * 0.01,
-            voice_cap: p.cap.value(),
-            other_cap: p.other_cap.value(),
+            strength: if p.gain_bypass.value() {
+                0.0
+            } else {
+                p.strength.value() * 0.01
+            },
             voices: p.voices.value() as usize,
             threshold: p.threshold.value(),
             hold_ms: p.hold.value(),
             fade_ms: p.fade.value(),
             assist: p.assist.value() * 0.01,
-        }
-    }
-
-    pub fn cap(&self, voice: bool) -> f32 {
-        if voice {
-            self.voice_cap
-        } else {
-            self.other_cap
         }
     }
 }
@@ -116,11 +108,13 @@ pub fn assisted_threshold(threshold: f32, assist: f32, speech: f32) -> f32 {
             * speech.clamp(0.0, 1.0)
 }
 
-pub fn share_reduction(own: f32, total: f32, cap: f32) -> f32 {
-    if !total.is_finite() || total <= 1e-15 {
+/// Uncapped share in dB. The 1e-9 ratio floor avoids an infinite value from a
+/// silent input; it is not a user gain-reduction limit.
+pub fn share_reduction(own: f32, total: f32) -> f32 {
+    if !own.is_finite() || !total.is_finite() || total <= 1e-15 {
         return 0.0;
     }
-    (-20.0 * (own / total).clamp(1e-9, 1.0).log10()).clamp(0.0, cap)
+    -20.0 * (own / total).clamp(1e-9, 1.0).log10()
 }
 
 pub struct Engine {
@@ -128,7 +122,7 @@ pub struct Engine {
     pub chorus: Chorus,
     pub chorus_mix: Ramp,
     voice_mix: Ramp,
-    amount: Ramp,
+    strength: Ramp,
     engaged: Ramp,
     observer: Observer,
     pub active_count: usize,
@@ -170,7 +164,7 @@ impl Engine {
             chorus: Chorus::default(),
             chorus_mix: Ramp::default(),
             voice_mix: Ramp::default(),
-            amount: Ramp::default(),
+            strength: Ramp::default(),
             engaged: Ramp::default(),
             observer: Observer::default(),
             active_count: 0,
@@ -289,15 +283,11 @@ impl Engine {
         } else {
             snapshot.other_total
         };
-        let full_target = share_reduction(own, total, settings.cap(voice));
+        let full_target = share_reduction(own, total);
         // Keep sustained non-drum sharing on its original envelope. Only the
         // extra reduction caused by drums takes the fast attack/release path.
         self.share_target = if !voice && !self.drums {
-            share_reduction(
-                own,
-                (total - snapshot.drum_total).max(own),
-                settings.cap(voice),
-            )
+            share_reduction(own, (total - snapshot.drum_total).max(own))
         } else {
             full_target
         };
@@ -312,7 +302,7 @@ impl Engine {
         } else {
             self.chorus.clear();
         }
-        if network.params.mode.value() == crate::params::MixMode::GainSharing {
+        if network.params.spectral_bypass.value() {
             slot.input_db.store(self.input_db(), Ordering::Relaxed);
             slot.output_db
                 .store(self.input_db() - self.reduction, Ordering::Relaxed);
@@ -338,7 +328,6 @@ impl Engine {
     }
 
     pub fn gain(&mut self, settings: Settings, voice_group: bool, bypass: bool) -> f32 {
-        let cap = settings.cap(voice_group);
         let fade_samples = settings.fade_ms * 0.001 * self.sample_rate;
         let chorus_target = if voice_group {
             self.chorus.active as u8 as f32
@@ -349,7 +338,7 @@ impl Engine {
         let open = self
             .voice_mix
             .tick(self.activity.active as u8 as f32, fade_samples);
-        let amount = self.amount.tick(settings.amount, fade_samples);
+        let strength = self.strength.tick(settings.strength, fade_samples);
         let engaged = self.engaged.tick(
             (!bypass && !self.conflict) as u8 as f32,
             self.sample_rate * 0.020,
@@ -373,13 +362,11 @@ impl Engine {
         };
         self.drum_current += (self.drum_target - self.drum_current) * drum_coefficient;
         // Chorus applies only to the Voice group. Active voice mics fade open.
-        // Quiet voice mics approach Voice GR. Other mics keep their own share.
-        let chorus_reduction = cap * (1.0 - open);
-        self.reduction = (amount
-            * engaged
-            * ((1.0 - chorus) * (self.share_current + self.drum_current)
-                + chorus * chorus_reduction))
-            .clamp(0.0, cap);
+        // Quiet voice mics keep their uncapped share. Strength scales that
+        // reduction in dB. Other mics keep their own share.
+        let shared = self.share_current + self.drum_current;
+        let opened = if voice_group { chorus * open } else { 0.0 };
+        self.reduction = (strength * engaged * shared * (1.0 - opened)).max(0.0);
         if self.reduction.to_bits() != self.last_reduction.to_bits() {
             self.last_reduction = self.reduction;
             self.last_gain = 10.0_f32.powf(-self.reduction / 20.0);

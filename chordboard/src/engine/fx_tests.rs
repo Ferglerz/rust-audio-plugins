@@ -60,6 +60,40 @@ fn at(mut ctx: Context, beat: f64) -> Context {
     ctx
 }
 #[test]
+fn fx_midi_eq_uses_the_pitch_at_its_rack_position_and_filters_sources() {
+    let mut state = MidiFxState::default();
+    state.midi_eq.enabled = true;
+    state.midi_eq.sources = midi_fx::source::MELODY;
+    state.midi_eq.bands[0] = Some(midi_fx::MidiEqBand {
+        gain_db: -6.0,
+        ..Default::default()
+    });
+    let gains = state.midi_eq.prepare_gains();
+    state.harmonizer.enabled = true;
+    state.harmonizer.mode = HarmonizerMode::Fixed;
+    state.harmonizer.voices[0].interval = 6;
+    state.harmonizer.voices[0].velocity = 1.0;
+    state.harmonizer.voices[1].enabled = false;
+
+    for (move_eq_first, harmony_velocity) in [(false, gains[66]), (true, gains[60])] {
+        if move_eq_first {
+            state.move_effect(state.order.len() - 1, 0);
+        }
+        let ctx = context();
+        let mut runtime = Runtime::default();
+        runtime.set_midi_eq_gains(gains);
+        let mut events = Vec::new();
+        runtime.configure(&state, ctx, &mut |event| events.push(event));
+        runtime.capture(input(1, 60, midi_fx::source::MELODY), ctx);
+        runtime.capture(input(2, 61, midi_fx::source::BASS), ctx);
+        runtime.flush(ctx, &mut |event| events.push(event));
+        assert!(events.contains(&Out::On(0, 60, gains[60])));
+        assert!(events.contains(&Out::On(0, 66, harmony_velocity)));
+        assert!(events.contains(&Out::On(0, 61, 1.0)));
+    }
+}
+
+#[test]
 fn fx_harmony_pitch_modes_ties_and_boundaries() {
     let ctx = context();
     assert_eq!(harmony_pitch(60, 2, HarmonizerMode::Scale, ctx), Some(64));

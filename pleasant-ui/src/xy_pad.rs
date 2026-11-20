@@ -1,5 +1,6 @@
 //! Parameter-neutral XY geometry and performance gestures.
 use crate::{graph::Viewport, Draw, LINE, PANEL, TEAL};
+use nih_plug_vizia::vizia::vg::Color;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Interaction {
@@ -72,8 +73,19 @@ impl Drag {
 }
 
 pub fn draw(d: &mut Draw, rect: (f32, f32, f32, f32), value: (f32, f32)) {
+    draw_colored(d, rect, value, TEAL, TEAL);
+}
+
+/// Cursor rules can track the colors of their assigned parameters.
+pub fn draw_colored(
+    d: &mut Draw,
+    rect: (f32, f32, f32, f32),
+    value: (f32, f32),
+    vertical: Color,
+    horizontal: Color,
+) {
     let (x, y, w, h) = rect;
-    d.rounded_rect(x, y, w, h, 8.0, PANEL);
+    d.panel_fill(rect, PANEL);
     for i in 1..4 {
         let t = i as f32 / 4.0;
         d.line(x + t * w, y, x + t * w, y + h, LINE, 1.0);
@@ -81,10 +93,10 @@ pub fn draw(d: &mut Draw, rect: (f32, f32, f32, f32), value: (f32, f32)) {
     }
     let (px, py) = Viewport::from_tuple(rect)
         .from_normalized(value.0.clamp(0.0, 1.0), value.1.clamp(0.0, 1.0));
-    d.line(x, py, x + w, py, TEAL, 1.0);
-    d.line(px, y, px, y + h, TEAL, 1.0);
-    d.circle(px, py, 6.0, TEAL, true);
-    d.outline(rect, LINE);
+    d.line(x, py, x + w, py, horizontal, 1.0);
+    d.line(px, y, px, y + h, vertical, 1.0);
+    d.circle(px, py, 6.0, horizontal, true);
+    d.finish_panel(rect, crate::BG, LINE);
 }
 
 #[cfg(test)]

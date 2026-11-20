@@ -420,6 +420,7 @@ pub type PreparedPage = Page;
 pub struct Prepared {
     pub performance: TrackerRow,
     pub midi_fx: crate::midi_fx::MidiFxState,
+    pub(crate) midi_eq_gains: [f32; 128],
     saved_powers: u8,
     pub generation: u64,
     pub restore_epoch: u64,
@@ -476,6 +477,7 @@ impl Prepared {
             generation,
             restore_epoch,
             midi_fx: state.midi_fx.clone(),
+            midi_eq_gains: state.midi_fx.midi_eq.prepare_gains(),
             saved_powers: power_bits(state),
             rows,
             pages: std::array::from_fn(|p| state.pages[p]),

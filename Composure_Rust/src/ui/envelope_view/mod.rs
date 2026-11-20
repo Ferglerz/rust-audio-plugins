@@ -33,6 +33,7 @@ struct GraphDrag {
     origin: (f32, f32),
     start_norm: f32,
     lookahead_on_graph: bool,
+    time_slider: bool,
     axis: pleasant_ui::pointer::AxisLock,
 }
 
@@ -151,13 +152,25 @@ impl EnvelopeView {
         );
     }
 
-    fn begin_graph(&mut self, cx: &mut EventContext, hit: EnvelopeHit) {
+    fn begin_graph(&mut self, cx: &mut EventContext, hit: EnvelopeHit, time_slider: bool) {
         cx.capture();
         cx.focus();
         self.param(hit).begin_set_parameter(cx);
-        let lookahead_on_graph = hit == EnvelopeHit::Lookahead && Self::point(cx).1 >= GRAPH.1;
-        let start_norm = if hit == EnvelopeHit::Lookahead && !lookahead_on_graph {
-            let ms = quantize_lookahead_ms(lookahead_bar_ms(Self::point(cx).0));
+        let origin = Self::point(cx);
+        let lookahead_on_graph = hit == EnvelopeHit::Lookahead && origin.1 >= GRAPH.1;
+        let start_norm = if time_slider {
+            let current = timing_slider_norm(hit, self.values());
+            if (origin.0 - Self::timing_thumb(hit, current)).abs() <= 3.0 {
+                current
+            } else {
+                let track = Self::timing_track(hit);
+                let norm = ((origin.0 - track.0 - 2.0) / (track.2 - 4.0)).clamp(0.0, 1.0);
+                let plain = timing_slider_plain(hit, norm, cx.modifiers().shift());
+                self.set_plain(cx, hit, plain);
+                norm
+            }
+        } else if hit == EnvelopeHit::Lookahead && !lookahead_on_graph {
+            let ms = quantize_lookahead_ms(lookahead_bar_ms(origin.0));
             self.set_plain(cx, hit, ms);
             self.lookahead.preview_normalized(ms)
         } else {
@@ -166,9 +179,10 @@ impl EnvelopeView {
         self.drag = Some(GraphDrag {
             hit,
             start: self.values(),
-            origin: Self::point(cx),
+            origin,
             start_norm,
             lookahead_on_graph,
+            time_slider,
             axis: pleasant_ui::pointer::AxisLock::default(),
         });
     }

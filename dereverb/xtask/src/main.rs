@@ -8,7 +8,9 @@ fn main() -> nih_plug_xtask::Result<()> {
         .to_owned();
     let runtime = plugin.join("runtime/libonnxruntime.dylib");
     let licenses = plugin.join("licenses");
+    let workspace = plugin.parent().unwrap();
     post_bundle(
+        workspace,
         "Dereverb",
         &[
             BundleCopy {

@@ -5,6 +5,8 @@ pub(super) const HEIGHT: f32 = appearance::ENVELOPE_GRAPH_H;
 pub(super) const LOOK_BAR: (f32, f32, f32, f32) = (12.0, 8.0, WIDTH - 24.0, 30.0);
 pub(super) const GRAPH: (f32, f32, f32, f32) = (12.0, 50.0, WIDTH - 24.0, HEIGHT - 96.0);
 pub(super) const LABEL_H: f32 = 36.0;
+// The duration-scaled graph and its stage drag zones can be enabled together.
+pub(super) const RESIZE_STAGES: bool = false;
 
 // After normalization this permits a 1/14 share, half the previous 1/7 minimum.
 const MIN_STAGE_WEIGHT: f32 = 1.0 / 12.0;
@@ -20,19 +22,31 @@ pub(super) enum EnvelopeHit {
     ReleaseCurve,
 }
 
-// Duration shares with a smaller touchability floor, then normalize.
-// Even a zero hold stays visible and can be dragged open.
 pub(super) fn layout(viewport: Viewport, values: EnvelopeValues) -> EnvelopeLayout {
+    layout_with_stage_resize(viewport, values, RESIZE_STAGES)
+}
+
+pub(super) fn layout_with_stage_resize(
+    viewport: Viewport,
+    values: EnvelopeValues,
+    resize: bool,
+) -> EnvelopeLayout {
     let values = values.clamped();
-    let total = values.attack_ms + values.hold_ms + values.release_ms;
-    let weights = [values.attack_ms, values.hold_ms, values.release_ms]
-        .map(|ms| (ms / total).max(MIN_STAGE_WEIGHT));
-    let sum = weights.iter().sum::<f32>();
+    let [attack, hold, _] = if resize {
+        // Keep every drag zone usable, including a zero hold.
+        let total = values.attack_ms + values.hold_ms + values.release_ms;
+        let weights = [values.attack_ms, values.hold_ms, values.release_ms]
+            .map(|ms| (ms / total).max(MIN_STAGE_WEIGHT));
+        let sum = weights.iter().sum::<f32>();
+        weights.map(|weight| weight / sum)
+    } else {
+        [1.0 / 3.0; 3]
+    };
     let rest_y = viewport.y + viewport.height - 24.0;
     let hold_y = viewport.y + 24.0;
     let start = (viewport.x, rest_y);
-    let attack_end = (viewport.x + viewport.width * weights[0] / sum, hold_y);
-    let hold_end = (attack_end.0 + viewport.width * weights[1] / sum, hold_y);
+    let attack_end = (viewport.x + viewport.width * attack, hold_y);
+    let hold_end = (viewport.x + viewport.width * (attack + hold), hold_y);
     let release_end = (viewport.x + viewport.width, rest_y);
     EnvelopeLayout {
         viewport,
@@ -60,9 +74,8 @@ pub(super) fn lookahead_marker_x(ms: f32, laid: &EnvelopeLayout, values: Envelop
         return laid.start.0 + time / values.attack_ms * (laid.attack_end.0 - laid.start.0);
     }
     let time = time - values.attack_ms;
-    // The zero-time hold is an editing affordance, not a range of lookahead times.
-    // Spread release time across that empty space so dragging does not stick at attack.
-    if values.hold_ms == 0.0 {
+    if RESIZE_STAGES && values.hold_ms == 0.0 {
+        // Keep the draggable marker continuous across the legacy zero-hold zone.
         return laid.attack_end.0
             + (time / values.release_ms).clamp(0.0, 1.0)
                 * (laid.release_end.0 - laid.attack_end.0);
@@ -81,7 +94,7 @@ pub(super) fn lookahead_graph_ms(x: f32, laid: &EnvelopeLayout, values: Envelope
     let x = x.clamp(laid.start.0, laid.release_end.0);
     let ms = if x <= laid.attack_end.0 {
         (x - laid.start.0) / (laid.attack_end.0 - laid.start.0) * values.attack_ms
-    } else if values.hold_ms == 0.0 {
+    } else if RESIZE_STAGES && values.hold_ms == 0.0 {
         values.attack_ms
             + (x - laid.attack_end.0) / (laid.release_end.0 - laid.attack_end.0) * values.release_ms
     } else if x <= laid.hold_end.0 {
@@ -115,6 +128,45 @@ pub(super) fn lookahead_bar_x(ms: f32) -> f32 {
 
 pub(super) fn lookahead_bar_ms(x: f32) -> f32 {
     2000.0 * ((x - LOOK_BAR.0) / LOOK_BAR.2).clamp(0.0, 1.0).powi(3)
+}
+
+fn timing_limits(hit: EnvelopeHit) -> (f32, f32) {
+    use pleasant_ui::envelope::{
+        ATTACK_MAX_MS, ATTACK_MIN_MS, HOLD_MAX_MS, HOLD_MIN_MS, RELEASE_MAX_MS, RELEASE_MIN_MS,
+    };
+    match hit {
+        EnvelopeHit::AttackLength => (ATTACK_MIN_MS, ATTACK_MAX_MS),
+        EnvelopeHit::HoldLength => (HOLD_MIN_MS, HOLD_MAX_MS),
+        EnvelopeHit::ReleaseLength => (RELEASE_MIN_MS, RELEASE_MAX_MS),
+        _ => unreachable!(),
+    }
+}
+
+pub(super) fn timing_slider_norm(hit: EnvelopeHit, values: EnvelopeValues) -> f32 {
+    let ms = match hit {
+        EnvelopeHit::AttackLength => values.attack_ms,
+        EnvelopeHit::HoldLength => values.hold_ms,
+        EnvelopeHit::ReleaseLength => values.release_ms,
+        _ => unreachable!(),
+    };
+    let (min, max) = timing_limits(hit);
+    // The offset gives the hold slider a logarithmic response that includes zero.
+    let offset = if min == 0.0 { 1.0 } else { 0.0 };
+    let base = min + offset;
+    (((ms + offset) / base).ln() / ((max + offset) / base).ln()).clamp(0.0, 1.0)
+}
+
+pub(super) fn timing_slider_plain(hit: EnvelopeHit, norm: f32, fine: bool) -> f32 {
+    let (min, max) = timing_limits(hit);
+    let offset = if min == 0.0 { 1.0 } else { 0.0 };
+    let base = min + offset;
+    let ms = base * ((max + offset) / base).powf(norm.clamp(0.0, 1.0)) - offset;
+    let ms = if fine { ms } else { snap_time_ms(ms) }.clamp(min, max);
+    if hit == EnvelopeHit::HoldLength {
+        ms
+    } else {
+        ms_to_rate(ms)
+    }
 }
 
 pub(super) fn curve_drag(hit: StageHit, laid: &EnvelopeLayout, y: f32) -> f32 {

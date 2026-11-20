@@ -218,12 +218,12 @@ impl FlatteryView {
     pub(super) fn slider_info(&self, id: SliderId) -> (&'static str, String, Color) {
         match id {
             SliderId::OutputGain => (
-                "OUTPUT GAIN",
+                "Output gain",
                 format!("{:.1}dB", self.params.output_gain_db.value()),
                 GOLD,
             ),
             SliderId::StereoLink => (
-                "STEREO LINK",
+                "Stereo link",
                 format!("{:.0}%", self.params.stereo_link.value()),
                 TEAL,
             ),
@@ -234,7 +234,7 @@ impl FlatteryView {
                 } else {
                     format!("{:.0}ms", v)
                 };
-                ("ATTACK", s, COLORS[3])
+                ("Attack", s, COLORS[3])
             }
             SliderId::Release => {
                 let v = self.params.release_ms.value();
@@ -243,10 +243,10 @@ impl FlatteryView {
                 } else {
                     format!("{:.0}ms", v)
                 };
-                ("RELEASE", s, COLORS[3])
+                ("Release", s, COLORS[3])
             }
             SliderId::InputRms => (
-                "INPUT RMS",
+                "Input RMS",
                 format!("{:.1}ms", self.params.input_rms_ms.value()),
                 COLORS[1],
             ),
@@ -254,10 +254,10 @@ impl FlatteryView {
                 if let Some((polarity, node_id)) = self.selected {
                     let nodes = snapshot_nodes(&self.params, polarity);
                     if let Some(node) = nodes.iter().find(|n| n.id == node_id) {
-                        return ("FREQ", fmt_hz(node.freq as f32), GOLD);
+                        return ("Freq", fmt_hz(node.freq as f32), GOLD);
                     }
                 }
-                ("FREQ", "-".to_string(), MUTED)
+                ("Freq", "-".to_string(), MUTED)
             }
             SliderId::NodeGain => {
                 if let Some((polarity, node_id)) = self.selected {
@@ -267,32 +267,32 @@ impl FlatteryView {
                             Polarity::Boost => COLOR_BOOST,
                             Polarity::Cut => COLOR_CUT,
                         };
-                        return ("GAIN", format!("{:.2}x", node.weight), color);
+                        return ("Gain", format!("{:.2}x", node.weight), color);
                     }
                 }
-                ("GAIN", "-".to_string(), MUTED)
+                ("Gain", "-".to_string(), MUTED)
             }
             SliderId::NodeQ => {
                 if let Some((polarity, node_id)) = self.selected {
                     let nodes = snapshot_nodes(&self.params, polarity);
                     if let Some(node) = nodes.iter().find(|n| n.id == node_id) {
                         return (
-                            "WIDTH",
+                            "Width",
                             format!("{:.0}%", q_to_width_pct(node.q)),
                             COLORS[2],
                         );
                     }
                 }
-                ("WIDTH", "-".to_string(), MUTED)
+                ("Width", "-".to_string(), MUTED)
             }
             SliderId::NodeRadius => {
                 if let Some((polarity, node_id)) = self.selected {
                     let nodes = snapshot_nodes(&self.params, polarity);
                     if let Some(node) = nodes.iter().find(|n| n.id == node_id) {
-                        return ("RADIUS", format!("{} bins", node.radius), COLORS[1]);
+                        return ("Radius", format!("{} bins", node.radius), COLORS[1]);
                     }
                 }
-                ("RADIUS", "-".to_string(), MUTED)
+                ("Radius", "-".to_string(), MUTED)
             }
         }
     }

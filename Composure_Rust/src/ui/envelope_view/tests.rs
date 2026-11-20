@@ -18,7 +18,7 @@ fn attack_snap_is_narrow_and_modifiers_bypass_it() {
         release_ms: 1000.0,
         ..test_values()
     };
-    let laid = layout(Viewport::from_tuple(GRAPH), values);
+    let laid = layout_with_stage_resize(Viewport::from_tuple(GRAPH), values, true);
     let x = laid.attack_end.0 + 0.5;
     assert_eq!(lookahead_drag_ms(x, &laid, values, false), 1000.0);
     assert!(lookahead_drag_ms(x, &laid, values, true) > 1000.0);
@@ -26,7 +26,7 @@ fn attack_snap_is_narrow_and_modifiers_bypass_it() {
 }
 
 #[test]
-fn graph_lookahead_drag_round_trips_visually_through_scaled_stages() {
+fn graph_lookahead_drag_round_trips_visually_through_each_timed_stage() {
     for values in [
         EnvelopeValues {
             attack_ms: 0.1,
@@ -46,16 +46,17 @@ fn graph_lookahead_drag_round_trips_visually_through_scaled_stages() {
         let max_x = lookahead_marker_x(2000.0, &laid, values);
         for i in 0..=100 {
             let x = laid.start.0 + (max_x - laid.start.0) * i as f32 / 100.0;
+            if values.hold_ms == 0.0 && x > laid.attack_end.0 && x <= laid.hold_end.0 {
+                assert_eq!(lookahead_graph_ms(x, &laid, values), values.attack_ms);
+                continue;
+            }
             let ms = lookahead_graph_ms(x, &laid, values);
             assert!((lookahead_marker_x(ms, &laid, values) - x).abs() < 0.001);
         }
     }
     let values = test_values();
     let laid = layout(Viewport::from_tuple(GRAPH), values);
-    assert!(
-        lookahead_graph_ms((laid.attack_end.0 + laid.hold_end.0) * 0.5, &laid, values)
-            > values.attack_ms
-    );
+    assert!(lookahead_marker_x(values.attack_ms + 0.1, &laid, values) > laid.hold_end.0);
     assert_eq!(lookahead_graph_ms(laid.start.0 - 20.0, &laid, values), 0.0);
 }
 
@@ -92,7 +93,7 @@ fn autoscale_keeps_extreme_stages_usable_and_tracks_duration_shares() {
             ..test_values()
         },
     ] {
-        let laid = layout(Viewport::from_tuple(GRAPH), values);
+        let laid = layout_with_stage_resize(Viewport::from_tuple(GRAPH), values, true);
         for width in [
             laid.attack_end.0 - laid.start.0,
             laid.hold_end.0 - laid.attack_end.0,
@@ -102,14 +103,31 @@ fn autoscale_keeps_extreme_stages_usable_and_tracks_duration_shares() {
         }
         assert!((laid.release_end.0 - GRAPH.0 - GRAPH.2).abs() < 0.001);
     }
-    let long_attack = layout(
+    let long_attack = layout_with_stage_resize(
         Viewport::from_tuple(GRAPH),
         EnvelopeValues {
             attack_ms: 500.0,
             ..test_values()
         },
+        true,
     );
-    assert!(long_attack.attack_end.0 > envelope_layout().attack_end.0);
+    let default = layout_with_stage_resize(Viewport::from_tuple(GRAPH), test_values(), true);
+    assert!(long_attack.attack_end.0 > default.attack_end.0);
+}
+
+#[test]
+fn timing_changes_move_the_lookahead_marker_and_leave_the_stage_layout_fixed() {
+    let original = test_values();
+    let changed = EnvelopeValues {
+        attack_ms: 40.0,
+        hold_ms: 500.0,
+        release_ms: 5000.0,
+        ..original
+    };
+    let laid = envelope_layout();
+    assert_eq!(laid, layout(Viewport::from_tuple(GRAPH), changed));
+    assert_eq!(lookahead_marker_x(10.0, &laid, original), laid.attack_end.0);
+    assert!(lookahead_marker_x(10.0, &laid, changed) < laid.attack_end.0);
 }
 
 #[test]
@@ -221,7 +239,7 @@ fn lookahead_has_a_graph_zone_and_a_monotonic_marker() {
     let laid = envelope_layout();
     let rect = EnvelopeView::zone_rect(&laid, EnvelopeHit::Lookahead);
     assert_eq!(
-        EnvelopeView::graph_hit(&laid, (rect.0 + rect.2 * 0.5, rect.1 + 12.0)),
+        EnvelopeView::graph_hit(&laid, (rect.0 + rect.2 * 0.5, rect.1 + 12.0), RESIZE_STAGES),
         Some(EnvelopeHit::Lookahead)
     );
     let values = test_values();
@@ -250,7 +268,7 @@ fn rate_controls_snap_in_milliseconds() {
 }
 
 #[test]
-fn stage_zones_cover_graph_even_with_zero_hold() {
+fn stage_zones_are_available_only_with_graph_resizing() {
     let laid = envelope_layout();
     for hit in [
         EnvelopeHit::AttackLength,
@@ -260,18 +278,17 @@ fn stage_zones_cover_graph_even_with_zero_hold() {
         let rect = EnvelopeView::zone_rect(&laid, hit);
         assert!(rect.2 > 0.0);
         for y in [rect.1 + 2.0, rect.1 + rect.3 - 2.0] {
-            assert_eq!(
-                EnvelopeView::graph_hit(&laid, (rect.0 + rect.2 * 0.5, y)),
-                Some(hit)
-            );
+            let point = (rect.0 + rect.2 * 0.5, y);
+            assert_eq!(EnvelopeView::graph_hit(&laid, point, true), Some(hit));
+            assert_eq!(EnvelopeView::graph_hit(&laid, point, RESIZE_STAGES), None);
         }
     }
     assert_eq!(
-        EnvelopeView::graph_hit(&laid, (GRAPH.0 - 1.0, GRAPH.1)),
+        EnvelopeView::graph_hit(&laid, (GRAPH.0 - 1.0, GRAPH.1), true),
         None
     );
     assert_eq!(
-        EnvelopeView::graph_hit(&laid, (GRAPH.0, GRAPH.1 + GRAPH.3 + 1.0)),
+        EnvelopeView::graph_hit(&laid, (GRAPH.0, GRAPH.1 + GRAPH.3 + 1.0), true),
         None
     );
 }
@@ -280,13 +297,47 @@ fn stage_zones_cover_graph_even_with_zero_hold() {
 fn curve_handles_take_priority_over_time_zones() {
     let laid = envelope_layout();
     assert_eq!(
-        EnvelopeView::graph_hit(&laid, laid.attack_curve),
+        EnvelopeView::graph_hit(&laid, laid.attack_curve, RESIZE_STAGES),
         Some(EnvelopeHit::AttackCurve)
     );
     assert_eq!(
-        EnvelopeView::graph_hit(&laid, laid.release_curve),
+        EnvelopeView::graph_hit(&laid, laid.release_curve, RESIZE_STAGES),
         Some(EnvelopeHit::ReleaseCurve)
     );
+}
+
+#[test]
+fn timing_sliders_round_trip_and_go_from_shortest_to_longest() {
+    for (hit, min, max) in [
+        (EnvelopeHit::AttackLength, 0.1, 5000.0),
+        (EnvelopeHit::HoldLength, 0.0, 1000.0),
+        (EnvelopeHit::ReleaseLength, 40.0, 5000.0),
+    ] {
+        let mut previous_ms = -1.0;
+        for norm in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            let plain = timing_slider_plain(hit, norm, true);
+            let ms = if hit == EnvelopeHit::HoldLength {
+                plain
+            } else {
+                rate_to_ms(plain)
+            };
+            assert!(ms > previous_ms);
+            previous_ms = ms;
+            if norm == 0.0 {
+                assert!((ms - min).abs() < 0.001);
+            }
+            if norm == 1.0 {
+                assert!((ms - max).abs() < 0.001);
+            }
+            let values = EnvelopeValues {
+                attack_ms: ms,
+                hold_ms: ms,
+                release_ms: ms,
+                ..test_values()
+            };
+            assert!((timing_slider_norm(hit, values) - norm).abs() < 0.001);
+        }
+    }
 }
 
 #[test]

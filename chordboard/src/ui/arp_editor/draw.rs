@@ -53,20 +53,6 @@ impl ChordboardView {
         }
     }
 
-    pub(super) fn arp_value(&self, d: &mut Draw, r: Rect, label: &str, value: f32) {
-        self.arp_button(d, r, label, false, GOLD);
-        let rail = (r.0 + 8.0, r.1 + r.3 - 4.0, r.2 - 16.0);
-        d.line(rail.0, rail.1, rail.0 + rail.2, rail.1, LINE, 2.0);
-        d.line(
-            rail.0,
-            rail.1,
-            rail.0 + rail.2 * value.clamp(0.0, 1.0),
-            rail.1,
-            GOLD,
-            2.0,
-        );
-    }
-
     fn draw_arp_lane_button(&self, d: &mut Draw, r: Rect, lane: Lane) {
         let on = self.arp_ui.lane == lane;
         let color = if on { GOLD } else { TEXT };
@@ -674,12 +660,14 @@ impl ChordboardView {
         for i in 0..count {
             let r = dropdown_rect(which, i);
             d.rect(r.0, r.1, r.2, r.3, PANEL);
-            let (label, on) = match which {
-                Dropdown::TapLane => (TAP_LANES[i].label(), self.arp_ui.tap_lane == TAP_LANES[i]),
-                Dropdown::Paste(_) => (["Complete row", "Pattern only"][i], false),
+            match which {
+                Dropdown::TapLane => {
+                    let lane = TAP_LANES[i];
+                    d.button_tinted(r, lane.label(), self.arp_ui.tap_lane == lane, GOLD);
+                }
+                Dropdown::Paste(_) => self.arp_button(d, r, ["Complete row", "Pattern only"][i], false, GOLD),
                 Dropdown::Pages => unreachable!(),
-            };
-            self.arp_button(d, r, label, on, GOLD);
+            }
         }
     }
 

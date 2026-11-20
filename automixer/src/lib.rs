@@ -112,14 +112,20 @@ impl Plugin for Automixer {
     }
     fn initialize(
         &mut self,
-        _: &AudioIOLayout,
+        layout: &AudioIOLayout,
         config: &BufferConfig,
         context: &mut impl InitContext<Self>,
     ) -> bool {
         self.sample_rate = config.sample_rate;
         self.engine = dsp::Engine::new(config.sample_rate, config.max_buffer_size);
-        self.spectral = spectral::Spectral::new(config.sample_rate, config.max_buffer_size);
-        self.spectral_mode = self.params.shared.mode.value() == params::MixMode::SpectralSpace;
+        self.spectral = spectral::Spectral::with_channels(
+            config.sample_rate,
+            config.max_buffer_size,
+            layout
+                .main_output_channels
+                .map_or(2, |channels| channels.get() as usize),
+        );
+        self.spectral_mode = !self.params.shared.spectral_bypass.value();
         self.vad.set_sample_rate(config.sample_rate as f64);
         let mic = self.params.mic_index();
         self.vad.start_worker_enabled(
@@ -157,7 +163,7 @@ impl Plugin for Automixer {
         _: &mut AuxiliaryBuffers,
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
-        let spectral_mode = self.params.shared.mode.value() == params::MixMode::SpectralSpace;
+        let spectral_mode = !self.params.shared.spectral_bypass.value();
         if spectral_mode != self.spectral_mode {
             self.spectral_mode = spectral_mode;
             self.reset();

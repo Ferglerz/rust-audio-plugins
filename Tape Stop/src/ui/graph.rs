@@ -1,4 +1,5 @@
 use super::{controls::AXIS_LABEL_Y, *};
+use crate::telemetry::{TransportFrame, TransportStage};
 
 pub(super) const GRAPH_X: f32 = 60.0;
 pub(super) const GRAPH_Y: f32 = 108.0;
@@ -6,6 +7,57 @@ pub(super) const GRAPH_W: f32 = 852.0 * 0.8 * 0.75;
 pub(super) const GRAPH_H: f32 = 252.0;
 
 const CURVE_NODE_HIT: f32 = 16.0;
+const CURVE_SAMPLES: usize = 1840;
+
+#[derive(Clone, Copy, PartialEq)]
+struct CurveGeometryKey {
+    bounds: [f32; 4],
+    curve_exp: f32,
+    divergence: f32,
+    samples: usize,
+}
+
+#[derive(Default)]
+pub(super) struct CurveGeometryCache {
+    key: Option<CurveGeometryKey>,
+    curve: Vec<(f32, f32)>,
+    left: Vec<(f32, f32)>,
+    right: Vec<(f32, f32)>,
+}
+
+impl CurveGeometryCache {
+    fn update(&mut self, key: CurveGeometryKey) {
+        if self.key == Some(key) {
+            return;
+        }
+        let [gx, gy, gw, gh] = key.bounds;
+        self.curve = (0..=key.samples)
+            .map(|i| {
+                let t = i as f32 / key.samples as f32;
+                (gx + t * gw, gy + s_curve(t, key.curve_exp) * gh)
+            })
+            .collect();
+        self.left = stereo_brake_points(
+            gx,
+            gy,
+            gw,
+            gh,
+            key.curve_exp,
+            stereo_time_scale(key.divergence, false),
+            key.samples,
+        );
+        self.right = stereo_brake_points(
+            gx,
+            gy,
+            gw,
+            gh,
+            key.curve_exp,
+            stereo_time_scale(key.divergence, true),
+            key.samples,
+        );
+        self.key = Some(key);
+    }
+}
 
 impl TapeStopView {
     pub(super) fn curve_node_pos() -> (f32, f32) {
@@ -34,7 +86,7 @@ impl TapeStopView {
         dx * dx + dy * dy <= CURVE_NODE_HIT * CURVE_NODE_HIT
     }
 
-    pub(super) fn draw_graph(&self, d: &mut Draw) {
+    pub(super) fn draw_graph(&self, d: &mut Draw, transport: TransportFrame) {
         let gx = GRAPH_X;
         let gy = GRAPH_Y;
         let gw = GRAPH_W;
@@ -46,49 +98,37 @@ impl TapeStopView {
             self.params.tempo.value()
         };
         let drop_time = self.params.timing(bpm as f64).0;
-        let braking = self.telemetry.is_braking.load(Ordering::Relaxed);
-        let crossfading = self.telemetry.is_crossfading.load(Ordering::Relaxed);
-        let prog_l = self.telemetry.brake_progress_l.load(Ordering::Relaxed);
-        let prog_r = self.telemetry.brake_progress_r.load(Ordering::Relaxed);
-        let speed_l = self.telemetry.speed_l.load(Ordering::Relaxed);
-        let speed_r = self.telemetry.speed_r.load(Ordering::Relaxed);
+        let braking = transport.stage == TransportStage::Braking;
+        let [prog_l, prog_r] = transport.brake_progress;
+        let [speed_l, speed_r] = transport.speed;
 
-        d.rect(gx, gy, gw, gh, rgb(23, 27, 33));
+        d.panel_fill((gx, gy, gw, gh), rgb(23, 27, 33));
 
         // Draw Speed grid as percentages
         for i in 0..=4 {
             let y = gy + gh * (i as f32 / 4.0);
-            d.line(
-                gx,
-                y,
-                gx + gw,
-                y,
-                if i == 2 { rgb(75, 82, 92) } else { LINE },
-                1.0,
-            );
+            if i > 0 && i < 4 {
+                d.line(
+                    gx,
+                    y,
+                    gx + gw,
+                    y,
+                    if i == 2 { rgb(75, 82, 92) } else { LINE },
+                    1.0,
+                );
+            }
             let pct = ((1.0 - i as f32 / 4.0) * 100.0).round() as i32;
             d.text(gx - 40.0, y + 4.0, &format!("{pct}%"), 10.5, MUTED);
         }
         for i in 0..=5 {
             let x = gx + gw * (i as f32 / 5.0);
-            d.line(x, gy, x, gy + gh, LINE, 1.0);
+            if i > 0 && i < 5 {
+                d.line(x, gy, x, gy + gh, LINE, 1.0);
+            }
             if i < 5 {
                 let t = drop_time * i as f32 / 5.0;
                 d.text_centered(x, AXIS_LABEL_Y, &format_ms(t), 10.5, MUTED);
             }
-        }
-        d.outline(
-            (gx, gy, gw, gh),
-            if braking || crossfading { TEAL } else { LINE },
-        );
-
-        // High-density curve sampling (2 samples per pixel) to ensure smooth curve without hard corners
-        const CURVE_SAMPLES: usize = 1840;
-        let mut curve = Vec::with_capacity(CURVE_SAMPLES + 1);
-        for i in 0..=CURVE_SAMPLES {
-            let t = i as f32 / CURVE_SAMPLES as f32;
-            let y = gy + s_curve(t, curve_exp) * gh;
-            curve.push((gx + t * gw, y));
         }
 
         // Grey line when bypassing
@@ -96,33 +136,24 @@ impl TapeStopView {
         let curve_color = if is_bypassed { MUTED } else { GOLD };
         let mut fill = curve_color;
         fill.a = 0.12;
-        d.area(&curve, gy + gh, fill);
-
         let div = self.params.stereo_div.value();
-        if !is_bypassed && div.abs() > 0.05 {
-            let (left_color, right_color) = stereo_div_colors();
-            let left = stereo_brake_points(
-                gx,
-                gy,
-                gw,
-                gh,
+        {
+            // Retain the same high-density sampling while transport and reels animate.
+            let mut geometry = self.curve_geometry.borrow_mut();
+            geometry.update(CurveGeometryKey {
+                bounds: [gx, gy, gw, gh],
                 curve_exp,
-                stereo_time_scale(div, false),
-                CURVE_SAMPLES,
-            );
-            let right = stereo_brake_points(
-                gx,
-                gy,
-                gw,
-                gh,
-                curve_exp,
-                stereo_time_scale(div, true),
-                CURVE_SAMPLES,
-            );
-            d.poly(&left, left_color, 2.0);
-            d.poly(&right, right_color, 2.0);
+                divergence: div,
+                samples: CURVE_SAMPLES,
+            });
+            d.area(&geometry.curve, gy + gh, fill);
+            if !is_bypassed && div.abs() > 0.05 {
+                let (left_color, right_color) = stereo_div_colors();
+                d.poly(&geometry.left, left_color, 2.0);
+                d.poly(&geometry.right, right_color, 2.0);
+            }
+            d.poly(&geometry.curve, curve_color, 2.0);
         }
-        d.poly(&curve, curve_color, 2.0);
 
         let (nx, ny) = Self::curve_node_pos();
         let node_hovered = self
@@ -151,7 +182,7 @@ impl TapeStopView {
             }
         }
 
-        if braking || speed_l < 0.99 || speed_r < 0.99 {
+        if braking {
             let (live_x_l, y_l) =
                 Self::live_playhead(speed_l, curve_exp, stereo_time_scale(div, false));
             d.circle(live_x_l, y_l, 6.0, TEAL, false);
@@ -164,7 +195,8 @@ impl TapeStopView {
             }
         }
 
-        self.draw_drop_time(d);
+        d.finish_panel((gx, gy, gw, gh), pleasant_ui::BG, if braking { TEAL } else { LINE });
+        self.draw_drop_time(d, transport.stage == TransportStage::Returning);
     }
 }
 
@@ -206,4 +238,94 @@ fn stereo_div_colors() -> (Color, Color) {
     let mut right = rgb(132, 126, 214);
     right.a = 0.22;
     (left, right)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key() -> CurveGeometryKey {
+        CurveGeometryKey {
+            bounds: [GRAPH_X, GRAPH_Y, GRAPH_W, GRAPH_H],
+            curve_exp: 1.0,
+            divergence: 50.0,
+            samples: CURVE_SAMPLES,
+        }
+    }
+
+    #[test]
+    fn curve_geometry_cache_reuses_paths_for_unchanged_inputs() {
+        let mut cache = CurveGeometryCache::default();
+        cache.update(key());
+        let pointers = [
+            cache.curve.as_ptr(),
+            cache.left.as_ptr(),
+            cache.right.as_ptr(),
+        ];
+        for _ in 0..4 {
+            cache.update(key());
+            assert_eq!(
+                pointers,
+                [
+                    cache.curve.as_ptr(),
+                    cache.left.as_ptr(),
+                    cache.right.as_ptr()
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn curve_geometry_cache_invalidates_each_input_and_matches_uncached_paths() {
+        let original = key();
+        let mut changed = Vec::new();
+        for coordinate in 0..4 {
+            let mut key = original;
+            key.bounds[coordinate] += 17.0;
+            changed.push(key);
+        }
+        for curve_exp in [0.1, 2.0, 4.0] {
+            changed.push(CurveGeometryKey {
+                curve_exp,
+                ..original
+            });
+        }
+        for divergence in [-100.0, 0.0, 100.0] {
+            changed.push(CurveGeometryKey {
+                divergence,
+                ..original
+            });
+        }
+        changed.push(CurveGeometryKey {
+            samples: 200,
+            ..original
+        });
+        let mut cache = CurveGeometryCache::default();
+        for key in changed {
+            cache.update(original);
+            cache.update(key);
+            let [gx, gy, gw, gh] = key.bounds;
+            let mut curve = Vec::with_capacity(key.samples + 1);
+            for i in 0..=key.samples {
+                let t = i as f32 / key.samples as f32;
+                let y = gy + s_curve(t, key.curve_exp) * gh;
+                curve.push((gx + t * gw, y));
+            }
+            assert_eq!(cache.curve, curve);
+            for (actual, right) in [(&cache.left, false), (&cache.right, true)] {
+                assert_eq!(
+                    actual,
+                    &stereo_brake_points(
+                        gx,
+                        gy,
+                        gw,
+                        gh,
+                        key.curve_exp,
+                        stereo_time_scale(key.divergence, right),
+                        key.samples,
+                    )
+                );
+            }
+        }
+    }
 }

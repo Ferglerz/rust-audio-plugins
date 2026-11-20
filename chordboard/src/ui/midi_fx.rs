@@ -2,6 +2,8 @@
 use super::*;
 use crate::midi_fx::{HarmonizerMode, MidiFxId, MidiFxState};
 
+mod eq;
+
 pub(super) const PROGRAMMING_TAB: Rect = (W * 0.5 - 270.0, 0.0, 180.0, HEADER_H);
 pub(super) const PROGRAMMING_TRANSPORT: Rect = (PROGRAMMING_TAB.0 + 12.0, (HEADER_H - 28.0) * 0.5, 28.0, 28.0);
 pub(super) const PERFORMANCE_TAB: Rect = (W * 0.5 - 90.0, 0.0, 180.0, HEADER_H);
@@ -18,6 +20,9 @@ const RATE_NAMES: [&str; 9] = ["1/64", "1/32", "1/16 T", "1/16", "1/8 T", "1/8",
 pub(super) fn source_rect(index: usize) -> Rect {
     (DELAY_SURFACE.0 + DELAY_SURFACE.2 - SOURCE_COLUMN_W + 12.0,
      DELAY_SURFACE.1 + 58.0 + index as f32 * 36.0, SOURCE_COLUMN_W - 24.0, 32.0)
+}
+fn fx_screen_rect((x, y, w, h): Rect, offset: f32) -> Rect {
+    (x, y + offset, w, h)
 }
 fn control_rect(column: usize, row: usize) -> Rect {
     (DELAY_SURFACE.0 + 20.0 + column as f32 * 214.0,
@@ -60,6 +65,7 @@ pub(super) struct FxUi {
     scroll: f32,
     pub drag: Option<ModuleDrag>,
     value_drag: Option<ValueDrag>,
+    eq: eq::Editor,
 }
 #[derive(Clone, Copy)]
 pub(super) struct ModuleDrag {
@@ -81,6 +87,7 @@ impl FxUi {
             MidiFxId::Harmonizer | MidiFxId::VoiceSplitter => 246.0,
             MidiFxId::RhythmGate => 274.0,
             MidiFxId::Delay => DELAY_SURFACE.3,
+            MidiFxId::MidiEq => 312.0,
         }
     }
     fn rect(&self, index: usize, order: &[MidiFxId]) -> Rect {
@@ -155,7 +162,15 @@ impl ChordboardView {
         y - self.effect_stack_offset(MidiFxId::Delay)
     }
     pub(super) fn fx_delay_screen_rect(&self, r: Rect) -> Rect {
-        (r.0, r.1 + self.effect_stack_offset(MidiFxId::Delay), r.2, r.3)
+        fx_screen_rect(r, self.effect_stack_offset(MidiFxId::Delay))
+    }
+
+    pub(super) fn delay_footer_hovered(&self) -> bool {
+        self.fx_ui.open
+            && self.fx_delay_expanded()
+            && self.hover_pointer().is_some_and(|(x, y)| {
+                hit(VIEWPORT, x, y) && hit(DELAY_SURFACE, x, self.fx_delay_local_y(y))
+            })
     }
     pub(super) fn set_fx_page(&mut self, cx: &mut EventContext, open: bool, programming: bool) {
         if self.fx_ui.open == open && self.programming == programming {
@@ -167,6 +182,7 @@ impl ChordboardView {
         self.cancel_arp_editor();
         self.fx_ui.drag = None;
         self.fx_ui.value_drag = None;
+        self.fx_ui.eq.drag = None;
         self.tracker_drag = None;
         self.edit = None;
         self.menu = None;
@@ -246,7 +262,7 @@ impl ChordboardView {
                 continue;
             }
             let enabled = state.midi_fx.enabled(*effect);
-            d.dimmed = dimmed || !enabled;
+            d.dimmed = dimmed || (!enabled && *effect != MidiFxId::Delay);
             self.surface(d, r);
             let grip = self.fx_ui.grip(index, &state.midi_fx.order);
             let hot = self.pointer.is_some_and(|(x, y)| hit(grip, x, y));
@@ -274,26 +290,35 @@ impl ChordboardView {
             let hover = d.hover;
             let offset = r.1 - DELAY_SURFACE.1;
             d.oy += offset * d.s;
-            d.hover = hover.map(|(x, y)| (x, y - offset));
+            d.hover = hover
+                .filter(|&(x, y)| hit(VIEWPORT, x, y))
+                .map(|(x, y)| (x, y - offset));
             let collapsed = self.fx_ui.collapsed.contains(effect);
-            if collapsed {
+            if *effect == MidiFxId::Delay {
+                d.with_readable_style(self.delay_label_font.get(), |d| {
+                    if collapsed {
+                        self.draw_delay_heading(d, enabled);
+                    } else {
+                        self.draw_delay_strings(d, &state.midi_fx.delay);
+                        self.draw_fx_sources(d, *effect, &state.midi_fx, r.3, offset);
+                    }
+                });
+            } else if collapsed {
                 let name = match effect {
                     MidiFxId::Delay => "MIDI DELAY", MidiFxId::Harmonizer => "HARMONIZER",
                     MidiFxId::RhythmGate => "RHYTHM GATE", MidiFxId::VoiceSplitter => "VOICE SPLITTER",
+                    MidiFxId::MidiEq => "MIDI EQ",
                 };
                 d.text(DELAY_SURFACE.0 + 48.0, DELAY_SURFACE.1 + 29.0, name, 16.0, TEXT);
                 let power = delay_editor::delay_power_rect();
                 let hot = d.hover.is_some_and(|(x, y)| hit(power, x, y));
                 d.bypass_button(power, !enabled, TEAL, hot, 0.0);
             } else {
-                match effect {
-                    MidiFxId::Delay => self.draw_delay_strings(d, &state.midi_fx.delay),
-                    _ => self.draw_fx_module(d, *effect, &state.midi_fx),
-                }
-                self.draw_fx_sources(d, *effect, &state.midi_fx, r.3);
+                self.draw_fx_module(d, *effect, &state.midi_fx, offset);
+                self.draw_fx_sources(d, *effect, &state.midi_fx, r.3, offset);
             }
             let button = collapse_rect();
-            self.fx_button(d, button, "", false);
+            self.fx_button(d, button, "", false, offset);
             let x = button.0 + button.2 * 0.5;
             let y = button.1 + button.3 * 0.5;
             let rise = if collapsed { -4.0 } else { 4.0 };
@@ -312,20 +337,57 @@ impl ChordboardView {
             d.line(r.0, y, r.0 + r.2, y, TEAL, 2.0);
         }
         d.reset_scissor();
+        let scroll_limit = self.fx_ui.limit(&state.midi_fx.order);
+        if scroll_limit > 0.0 {
+            let height = VIEWPORT.3;
+            let thumb = height * height / (height + scroll_limit);
+            let y = VIEWPORT.1 + (height - thumb) * (self.fx_ui.scroll / scroll_limit).clamp(0.0, 1.0);
+            d.rect(W - 11.0, VIEWPORT.1, 3.0, height, LINE);
+            d.rect(W - 11.0, y, 3.0, thumb, MUTED);
+        }
     }
     pub(super) fn cancel_fx_value(&mut self) {
         self.fx_ui.value_drag = None;
+        self.fx_ui.eq.drag = None;
     }
-    fn fx_button(&self, d: &mut Draw, r: Rect, label: &str, on: bool) {
-        self.button(d, r, label, on, TEAL);
+    fn fx_button(&self, d: &mut Draw, r: Rect, label: &str, on: bool, offset: f32) {
+        self.button_at(d, r, fx_screen_rect(r, offset), label, on, TEAL);
     }
-    fn draw_fx_sources(&self, d: &mut Draw, effect: MidiFxId, state: &MidiFxState, height: f32) {
+    fn draw_fx_sources(
+        &self,
+        d: &mut Draw,
+        effect: MidiFxId,
+        state: &MidiFxState,
+        height: f32,
+        offset: f32,
+    ) {
         let first = source_rect(0);
         d.line(first.0 - 12.0, DELAY_SURFACE.1 + 8.0, first.0 - 12.0,
             DELAY_SURFACE.1 + height - 12.0, LINE, 1.0);
-        d.text(first.0 + 8.0, DELAY_SURFACE.1 + 29.0, "SOURCES", 13.0, MUTED);
-        for (i, name) in SOURCE_NAMES.iter().enumerate() {
-            self.fx_button(d, source_rect(i), name, state.sources(effect) & (1 << i) != 0);
+        if effect == MidiFxId::Delay {
+            d.with_label_font(|d| {
+                d.text(
+                    first.0 + 8.0,
+                    DELAY_SURFACE.1 + 29.0,
+                    "Sources",
+                    pleasant_ui::draw::READABLE_LABEL_SIZE,
+                    TEXT,
+                );
+            });
+            for (i, name) in SOURCE_NAMES.iter().enumerate() {
+                d.button_tinted(source_rect(i), name, state.sources(effect) & (1 << i) != 0, TEAL);
+            }
+        } else {
+            d.text(first.0 + 8.0, DELAY_SURFACE.1 + 29.0, "SOURCES", 13.0, MUTED);
+            for (i, name) in SOURCE_NAMES.iter().enumerate() {
+                self.fx_button(
+                    d,
+                    source_rect(i),
+                    name,
+                    state.sources(effect) & (1 << i) != 0,
+                    offset,
+                );
+            }
         }
     }
     fn fx_controls(&self, effect: MidiFxId, state: &MidiFxState) -> Vec<(Rect, FxValue, f32, String)> {
@@ -363,16 +425,17 @@ impl ChordboardView {
                     controls.push((control_rect(i, 0), kind, value, text));
                 }
             }
-            MidiFxId::Delay => {}
+            MidiFxId::Delay | MidiFxId::MidiEq => {}
         }
         controls
     }
-    fn draw_fx_module(&self, d: &mut Draw, effect: MidiFxId, state: &MidiFxState) {
+    fn draw_fx_module(&self, d: &mut Draw, effect: MidiFxId, state: &MidiFxState, offset: f32) {
         let s = DELAY_SURFACE;
         let name = match effect {
             MidiFxId::Harmonizer => "HARMONIZER",
             MidiFxId::RhythmGate => "RHYTHM GATE",
             MidiFxId::VoiceSplitter => "VOICE SPLITTER",
+            MidiFxId::MidiEq => "MIDI EQ",
             MidiFxId::Delay => return,
         };
         let enabled = state.enabled(effect);
@@ -382,25 +445,25 @@ impl ChordboardView {
             d.hover.is_some_and(|(x, y)| hit(power, x, y)), 0.0);
         d.line(s.0 + 12.0, s.1 + 43.0, source_rect(0).0 - 24.0, s.1 + 43.0, LINE, 1.0);
         for (r, _, _, label) in self.fx_controls(effect, state) {
-            self.fx_button(d, r, &label, false);
+            self.fx_button(d, r, &label, false, offset);
         }
         match effect {
             MidiFxId::Harmonizer => {
                 let h = &state.harmonizer;
                 let mode = match h.mode { HarmonizerMode::Fixed => "Fixed semitones", HarmonizerMode::Scale => "Scale degrees", HarmonizerMode::Chord => "Chord tones" };
-                self.fx_button(d, control_rect(0, 0), &format!("Mode: {}  ▸", mode), true);
-                self.fx_button(d, control_rect(1, 0), "Original", h.original);
+                self.fx_button(d, control_rect(0, 0), &format!("Mode: {}  ▸", mode), true, offset);
+                self.fx_button(d, control_rect(1, 0), "Original", h.original, offset);
                 for (i, voice) in h.voices.iter().enumerate() {
-                    self.fx_button(d, control_rect(0, i + 1), &format!("Voice {}", i + 1), voice.enabled);
+                    self.fx_button(d, control_rect(0, i + 1), &format!("Voice {}", i + 1), voice.enabled, offset);
                 }
             }
             MidiFxId::RhythmGate => {
                 let g = &state.rhythm_gate;
-                self.fx_button(d, control_rect(2, 1), "Euclidean Fill", false);
+                self.fx_button(d, control_rect(2, 1), "Euclidean Fill", false, offset);
                 for i in 0..g.steps as usize {
                     let r = gate_step_rect(i, g.steps as usize);
                     let velocity = g.pattern[i];
-                    self.fx_button(d, r, "", velocity > 0.0);
+                    self.fx_button(d, r, "", velocity > 0.0, offset);
                     let fill = (r.3 - 40.0) * (velocity / 2.0).clamp(0.0, 1.0);
                     d.rect(r.0 + 5.0, r.1 + r.3 - 8.0 - fill, (r.2 - 10.0).max(1.0), fill, alpha(TEAL, 0.35));
                     d.text_centered(r.0 + r.2 * 0.5, r.1 + 19.0, &format!("{}", i + 1), 12.0, TEXT);
@@ -427,6 +490,7 @@ impl ChordboardView {
                     }
                 }
             }
+            MidiFxId::MidiEq => self.fx_ui.eq.draw(d, &state.midi_eq),
             MidiFxId::Delay => {}
         }
     }
@@ -489,9 +553,9 @@ impl ChordboardView {
     pub(super) fn fx_button_rects(&self) -> Vec<(Rect, bool)> {
         let state = self.arp_state();
         let mut buttons = Vec::new();
-        for &effect in &state.midi_fx.order {
-            let offset = self.effect_stack_offset(effect);
-            let screen = |r: Rect| (r.0, r.1 + offset, r.2, r.3);
+        for (index, &effect) in state.midi_fx.order.iter().enumerate() {
+            let offset = self.fx_ui.rect(index, &state.midi_fx.order).1 - DELAY_SURFACE.1;
+            let screen = |r| fx_screen_rect(r, offset);
             buttons.push((screen(collapse_rect()), false));
             if self.fx_ui.collapsed.contains(&effect) {
                 buttons.push((screen(delay_editor::delay_power_rect()), state.midi_fx.enabled(effect)));
@@ -563,6 +627,7 @@ impl ChordboardView {
                 }
                 MidiFxId::VoiceSplitter =>
                     "Voice Splitter · Drag channels vertically and route them in the host. Lowest goes to Low, highest or a single note to High, and the rest to Inner. Assignments stay until release.",
+                MidiFxId::MidiEq => return self.fx_ui.eq.hint(x, local_y, &fx.midi_eq),
                 MidiFxId::Delay => return self.arp_editor_hint(x, y),
             }.into());
         }
@@ -690,6 +755,9 @@ impl ChordboardView {
             cx.needs_redraw();
             return true;
         }
+        if self.midi_eq_event(cx, event, x, y) {
+            return true;
+        }
         if press && hit(VIEWPORT, x, y) {
             if let Some(index) = (0..count).find(|&i| hit(self.fx_ui.grip(i, &order), x, y)) {
                 self.cancel_arp_editor();
@@ -786,6 +854,49 @@ mod tests {
     }
 
     #[test]
+    fn midi_fx_delay_spotlight_tracks_the_visible_handle_and_clears_with_state() {
+        let has_spotlight = |view: &ChordboardView, x, y| {
+            view.fx_hint(x, y)
+                .is_some_and(|hint| hint.starts_with("Settings preview"))
+        };
+        let mut view = view(2, false);
+        let (mut cx, target, _) = context();
+        click(&mut view, &mut cx, target, FX_TAB);
+        view.params.arpeggiator.edit(|s| {
+            let delay = &mut s.midi_fx.delay;
+            delay.enabled = true;
+            delay.count = 2;
+            delay.taps[0].time = 0.5;
+            delay.taps[1].time = 0.5;
+        });
+        view.fx_ui.scroll = 24.0;
+        let state = view.params.arpeggiator.snapshot();
+        let delay = &state.midi_fx.delay;
+        let domain = delay_editor::time_domain(delay);
+        let x = delay_editor::tap_x(&delay.taps[0], domain);
+        let y = view.fx_delay_screen_rect(delay_editor::tap_graph()).1 - 9.0;
+        event(&mut view, &mut cx, target, x, y, WindowEvent::MouseMove(x, y));
+        let hint = view.hover_hint(&[]).unwrap();
+        assert!(hint.starts_with("Settings preview · Tap 1"));
+        assert_eq!(view.params.arpeggiator.snapshot().midi_fx.delay, *delay);
+
+        event(&mut view, &mut cx, target, x, y, WindowEvent::MouseDown(MouseButton::Left));
+        assert!(view.arp_editor_dragging());
+        assert!(!has_spotlight(&view, x, y));
+        event(&mut view, &mut cx, target, x, y, WindowEvent::MouseUp(MouseButton::Left));
+        view.fx_ui.scroll = 100.0;
+        let y = view.fx_delay_screen_rect(delay_editor::tap_graph()).1 - 9.0;
+        assert!(!has_spotlight(&view, x, y));
+        view.fx_ui.scroll = 0.0;
+        let y = delay_editor::tap_graph().1 - 9.0;
+        view.fx_ui.collapsed.push(MidiFxId::Delay);
+        assert!(!has_spotlight(&view, x, y));
+        view.fx_ui.collapsed.clear();
+        view.params.arpeggiator.edit(|s| s.midi_fx.delay.enabled = false);
+        assert!(!has_spotlight(&view, x, y));
+    }
+
+    #[test]
     fn midi_fx_collapse_compacts_stack_without_changing_processing() {
         let mut view = view(2, false);
         view.fx_ui.open = true;
@@ -815,7 +926,8 @@ mod tests {
         let (mut cx, target, _) = context();
         click(&mut view, &mut cx, target, FX_TAB);
         let grip = grip_rect(0, 0.0);
-        let last = view.fx_ui.rect(3, &view.params.arpeggiator.snapshot().midi_fx.order);
+        let order = view.params.arpeggiator.snapshot().midi_fx.order;
+        let last = view.fx_ui.rect(order.len() - 1, &order);
         for (r, _) in view.arp_editor_button_rects() {
             assert!(r.0 > grip.0 + grip.2);
             assert!(r.1 >= DELAY_SURFACE.1);
@@ -928,6 +1040,7 @@ mod tests {
             scroll: 0.0,
             drag: Some(drag),
             value_drag: None,
+            ..FxUi::default()
         };
         assert!(ui.tick(0.1, &[MidiFxId::Delay; 8]));
         assert_eq!(ui.scroll, 30.0);
@@ -1004,31 +1117,48 @@ mod tests {
         ));
     }
     #[test]
-    fn midi_fx_sources_select_each_module_after_reordering() {
+    fn midi_fx_sources_hover_and_select_independently_after_reordering_and_scrolling() {
         let mut view = view(2, false);
         let (mut cx, target, _) = context();
         click(&mut view, &mut cx, target, FX_TAB);
         view.params.arpeggiator.edit(|s| {
             s.midi_fx = MidiFxState::default();
             s.midi_fx.move_effect(0, 2);
-            for effect in [MidiFxId::Harmonizer, MidiFxId::RhythmGate, MidiFxId::VoiceSplitter, MidiFxId::Delay] {
+            for effect in crate::midi_fx::EFFECTS {
                 s.midi_fx.set_sources(effect, 0);
             }
         });
-        for index in 0..4 {
-            let effect = view.params.arpeggiator.snapshot().midi_fx.order[index];
-            for source in 0..5 {
-                let r = source_rect(source);
-                let r = (r.0, r.1 + view.effect_stack_offset(effect), r.2, r.3);
-                assert!(view.fx_hint(r.0 + 1.0, r.1 + 1.0).unwrap().starts_with(SOURCE_NAMES[source]));
+        let order = view.params.arpeggiator.snapshot().midi_fx.order;
+        for (index, &effect) in order.iter().enumerate() {
+            view.fx_ui.scroll = 0.0;
+            let top = view.fx_ui.rect(index, &order).1 - VIEWPORT.1;
+            view.fx_ui.scroll = top.min(view.fx_ui.limit(&order));
+            let offset = view.effect_stack_offset(effect);
+            for (source, name) in SOURCE_NAMES.iter().enumerate() {
+                let r = fx_screen_rect(source_rect(source), offset);
+                let x = r.0 + r.2 * 0.5;
+                let y = r.1 + r.3 * 0.5;
+                event(&mut view, &mut cx, target, x, y, WindowEvent::MouseMove(x, y));
+                view.tick_motion(0.2);
+                assert!(view.fx_hint(x, y).unwrap().starts_with(*name));
+                for &other in &order {
+                    let other_rect = fx_screen_rect(source_rect(source), view.effect_stack_offset(other));
+                    assert_eq!(
+                        view.hover_amount(other_rect),
+                        (other == effect) as u8 as f32,
+                        "{other:?} {name}",
+                    );
+                }
                 click(&mut view, &mut cx, target, r);
-                assert_eq!(view.params.arpeggiator.snapshot().midi_fx.sources(effect), (1 << (source + 1)) - 1);
+                let state = view.params.arpeggiator.snapshot();
+                for &other in &order {
+                    let expected = if other == effect { (1 << (source + 1)) - 1 } else { 0 };
+                    assert_eq!(state.midi_fx.sources(other), expected, "{other:?} {name}");
+                }
             }
             assert!(!view.params.arpeggiator.snapshot().midi_fx.enabled(effect));
-            for source in 0..5 {
-                let r = source_rect(source);
-                let r = (r.0, r.1 + view.effect_stack_offset(effect), r.2, r.3);
-                click(&mut view, &mut cx, target, r);
+            for source in 0..SOURCE_NAMES.len() {
+                click(&mut view, &mut cx, target, fx_screen_rect(source_rect(source), offset));
             }
             assert_eq!(view.params.arpeggiator.snapshot().midi_fx.sources(effect), 0);
         }
@@ -1088,11 +1218,64 @@ mod tests {
     }
 
     #[test]
+    fn midi_fx_eq_click_creates_and_drag_scroll_and_right_click_edit_the_band() {
+        let mut view = view(2, false);
+        let (mut cx, target, _) = context();
+        click(&mut view, &mut cx, target, FX_TAB);
+        event(&mut view, &mut cx, target, VIEWPORT.0 + 10.0, VIEWPORT.1 + 10.0,
+            WindowEvent::MouseScroll(0.0, -100.0));
+        let offset = view.effect_stack_offset(MidiFxId::MidiEq);
+        let (px, py, w, h) = delay_editor::delay_power_rect();
+        click(&mut view, &mut cx, target, (px, py + offset, w, h));
+
+        let graph = eq::graph();
+        let (x, y) = graph.from_normalized(60.0 / 127.0, 0.75);
+        let y = y + offset;
+        assert!(view.fx_hint(x, y).unwrap().starts_with("MIDI EQ"));
+        event(&mut view, &mut cx, target, x, y, WindowEvent::MouseDown(MouseButton::Left));
+        let created = view.params.arpeggiator.snapshot().midi_fx.midi_eq;
+        assert!(created.enabled);
+        assert_eq!(created.bands.iter().flatten().count(), 1);
+        assert_eq!(created.bands[0].unwrap().note, 60.0);
+
+        let (x, y) = graph.from_normalized(67.0 / 127.0, 0.25);
+        let y = y + offset;
+        event(&mut view, &mut cx, target, x, y, WindowEvent::MouseMove(x, y));
+        event(&mut view, &mut cx, target, x, y, WindowEvent::MouseUp(MouseButton::Left));
+        event(&mut view, &mut cx, target, x, y, WindowEvent::MouseScroll(0.0, 1.0));
+        let band = view.params.arpeggiator.snapshot().midi_fx.midi_eq.bands[0].unwrap();
+        assert_eq!(band.note, 67.0);
+        assert!((band.gain_db + 12.0).abs() < 1.0e-4);
+        assert!(band.q > 1.0);
+        event(&mut view, &mut cx, target, x, y, WindowEvent::MouseDown(MouseButton::Right));
+        assert!(view.params.arpeggiator.snapshot().midi_fx.midi_eq.bands[0].is_none());
+    }
+
+    #[test]
+    fn midi_fx_eq_meter_captures_incoming_midi_even_after_quick_release() {
+        let mut view = view(2, false);
+        view.fx_ui.open = true;
+        let mut engine = crate::engine::Engine::default();
+        let old = engine.snapshot();
+        engine.midi_note(true, 1, 73, 0.63, &mut |_| {});
+        engine.midi_note(false, 1, 73, 0.0, &mut |_| {});
+        engine.midi_note(true, 2, 60, 0.81, &mut |_| {});
+        view.snapshot = engine.snapshot();
+
+        assert!(view.tick_midi_eq(&old, 0.01));
+        assert_eq!(view.fx_ui.eq.levels[73], 0.63);
+        assert_eq!(view.fx_ui.eq.levels[60], 0.81);
+        let old = view.snapshot;
+        assert!(view.tick_midi_eq(&old, 0.3));
+        assert_eq!(view.fx_ui.eq.levels[73], 0.0);
+        assert_eq!(view.fx_ui.eq.levels[60], 0.81);
+    }
+
+    #[test]
     fn midi_fx_source_column_reserves_space_for_all_module_controls() {
         let view = view(2, false);
         let state = view.params.arpeggiator.snapshot();
         let left = source_rect(0).0 - 12.0;
-        assert_eq!(view.fx_ui.limit(&state.midi_fx.order), 0.0);
         for &effect in &state.midi_fx.order {
             let bottom = DELAY_SURFACE.1 + view.fx_ui.height(effect);
             for (r, _, _, _) in view.fx_controls(effect, &state.midi_fx) {

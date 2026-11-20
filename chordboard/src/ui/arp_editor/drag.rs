@@ -546,6 +546,9 @@ impl ChordboardView {
     }
     pub(in crate::ui) fn arp_editor_hint(&self, x: f32, y: f32) -> Option<String> {
         if self.fx_ui.open {
+            if let Some(hint) = self.delay_spotlight_hint(x, y) {
+                return Some(hint);
+            }
             let y = self.fx_delay_local_y(y);
             if hit(delay_sync_rect(), x, y) {
                 return Some(
