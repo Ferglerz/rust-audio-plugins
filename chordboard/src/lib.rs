@@ -281,11 +281,12 @@ impl Chordboard {
                 tuning,
                 ..
             } => {
-                if self.engine.melody_note_held(channel, note)
-                    || self
-                        .engine
-                        .root
-                        .is_some_and(|s| s.held && s.channel == channel && s.note == note)
+                if (channel as usize) < self.engine.input_bend.len()
+                    && (self.engine.melody_note_held(channel, note)
+                        || self
+                            .engine
+                            .root
+                            .is_some_and(|s| s.held && s.channel == channel && s.note == note))
                 {
                     let range = self.engine.input_bend[channel as usize].max(1.0);
                     self.engine

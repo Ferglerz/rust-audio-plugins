@@ -259,10 +259,23 @@ pub(super) fn paint_glass_modal(
 
 /// Channel meter from `UI_Meters.js`: a thin beam whose width grows with level,
 /// fading from transparent at the peak to opaque blue at the bottom.
-pub(super) fn draw_all_chan_meters(draw: &mut Draw<'_>, kit_vu: &[f32; KitPieceId::COUNT]) {
-    let mixer_x = ScdEditorView::mixer_x();
-    for (idx, _) in KitPieceId::ALL.iter().enumerate() {
-        draw_chan_meter(draw, mixer_x + idx as f32 * STRIP_W, kit_vu[idx]);
+pub(super) fn draw_all_chan_meters(
+    draw: &mut Draw<'_>,
+    kit_vu: &[f32; KitPieceId::COUNT],
+    snare_wires_off: bool,
+) {
+    for kit_piece in KitPieceId::ALL {
+        if kit_piece == KitPieceId::OpenSnare && !snare_wires_off {
+            continue;
+        }
+        if kit_piece == KitPieceId::Snare && snare_wires_off {
+            continue;
+        }
+        draw_chan_meter(
+            draw,
+            ScdEditorView::strip_x(kit_piece),
+            kit_vu[kit_piece as usize],
+        );
     }
 }
 

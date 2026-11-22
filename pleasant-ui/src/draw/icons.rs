@@ -40,6 +40,47 @@ fn palette_outline() -> &'static [(f32, f32); 57] {
     })
 }
 
+fn filter_curve_kind_index(kind: pleasant_dsp::filters::BiquadKind) -> usize {
+    match kind {
+        pleasant_dsp::filters::BiquadKind::Bell => 0,
+        pleasant_dsp::filters::BiquadKind::LowCut => 1,
+        pleasant_dsp::filters::BiquadKind::HighCut => 2,
+        pleasant_dsp::filters::BiquadKind::Notch => 3,
+        pleasant_dsp::filters::BiquadKind::BandPass => 4,
+        pleasant_dsp::filters::BiquadKind::LowShelf => 5,
+        pleasant_dsp::filters::BiquadKind::HighShelf => 6,
+    }
+}
+
+fn filter_curve_ys(kind: pleasant_dsp::filters::BiquadKind) -> &'static [f32; 33] {
+    static CACHE: OnceLock<[[f32; 33]; 7]> = OnceLock::new();
+    let table = CACHE.get_or_init(|| {
+        let kinds = [
+            pleasant_dsp::filters::BiquadKind::Bell,
+            pleasant_dsp::filters::BiquadKind::LowCut,
+            pleasant_dsp::filters::BiquadKind::HighCut,
+            pleasant_dsp::filters::BiquadKind::Notch,
+            pleasant_dsp::filters::BiquadKind::BandPass,
+            pleasant_dsp::filters::BiquadKind::LowShelf,
+            pleasant_dsp::filters::BiquadKind::HighShelf,
+        ];
+        let mut t = [[0.0_f32; 33]; 7];
+        for (k_idx, &k) in kinds.iter().enumerate() {
+            let coeff = pleasant_dsp::filters::BiquadCoefficients::design(
+                k, 1000.0, 9.0, 0.707, 48000.0,
+            );
+            for i in 0..33 {
+                let frac = i as f32 / 32.0;
+                let freq = 100.0 * 100.0_f64.powf(frac as f64);
+                let db = coeff.response_db(freq, 48000.0);
+                t[k_idx][i] = ((12.0 - db.clamp(-24.0, 12.0)) / 36.0) as f32;
+            }
+        }
+        t
+    });
+    &table[filter_curve_kind_index(kind)]
+}
+
 impl Draw<'_> {
     /// Small response diagram for filter-shape choices, with a common 0 dB guide.
     pub fn filter_curve(
@@ -49,16 +90,14 @@ impl Draw<'_> {
         color: Color,
     ) {
         let (x, y, w, h) = rect;
-        let coeff =
-            pleasant_dsp::filters::BiquadCoefficients::design(kind, 1000.0, 9.0, 0.707, 48000.0);
-        let ordinate = |db: f64| y + h * ((12.0 - db.clamp(-24.0, 12.0)) / 36.0) as f32;
+        let zero_y = y + h * (12.0 / 36.0);
         let mut guide = color;
         guide.a *= 0.25;
-        self.line(x, ordinate(0.0), x + w, ordinate(0.0), guide, 0.8);
+        self.line(x, zero_y, x + w, zero_y, guide, 0.8);
+        let ys = filter_curve_ys(kind);
         let points: [(f32, f32); 33] = std::array::from_fn(|i| {
             let t = i as f32 / 32.0;
-            let freq = 100.0 * 100.0_f64.powf(t as f64);
-            (x + w * t, ordinate(coeff.response_db(freq, 48000.0)))
+            (x + w * t, y + h * ys[i])
         });
         self.poly(&points, color, 1.4);
     }

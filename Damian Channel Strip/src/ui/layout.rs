@@ -7,7 +7,7 @@ use std::time::Duration;
 
 pub(super) const LIFT_COLOR: C = rgb(110, 215, 255);
 pub(super) const UI_W: f32 = 1282.0;
-pub(super) const UI_H: f32 = 672.0;
+pub(super) const UI_H: f32 = 672.0 + pleasant_ui::draw::TOOLTIP_HEIGHT;
 pub(super) const HEADER_H: f32 = 82.0;
 pub(super) const MARGIN: f32 = 16.0;
 pub(super) const GAP: f32 = 12.0;

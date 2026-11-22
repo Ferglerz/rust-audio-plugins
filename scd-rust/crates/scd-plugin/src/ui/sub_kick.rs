@@ -18,7 +18,7 @@ impl ScdEditorView {
             modal_w,
             modal_h,
         );
-        draw_all_chan_meters(draw, kit_vu);
+        draw_all_chan_meters(draw, kit_vu, self.params.snare_wires_off.value());
 
         let knobs = [
             (

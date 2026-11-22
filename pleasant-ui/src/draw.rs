@@ -7,6 +7,9 @@ mod text;
 pub use controls::KnobLayout;
 pub use primitives::TRACE_REST_PX;
 pub const READABLE_LABEL_SIZE: f32 = 12.0;
+/// Reserved below the last module: 16 px above 12 px text, with 12 px below its baseline.
+pub const TOOLTIP_HEIGHT: f32 = 40.0;
+pub const TOOLTIP_BASELINE_INSET: f32 = 12.0;
 pub const READABLE_AXIS_SIZE: f32 = 11.0;
 
 use crate::theme;

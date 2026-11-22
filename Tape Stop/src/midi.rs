@@ -43,6 +43,7 @@ pub(crate) struct MidiTape {
     pitch_interval: u32,
     pitch_countdown: u32,
     braking: bool,
+    last_semitones: f32,
 }
 
 impl MidiTape {
@@ -58,6 +59,7 @@ impl MidiTape {
             pitch_interval: 192,
             pitch_countdown: 0,
             braking: false,
+            last_semitones: 0.0,
         }
     }
 
@@ -109,7 +111,11 @@ impl MidiTape {
     ) {
         let active = self.enabled && !self.overflow;
         let semitones = if active {
-            (12.0 * speed.max(1.0 / 16.0).log2()).clamp(-BEND_RANGE, BEND_RANGE)
+            if (speed - 1.0).abs() < 1e-6 {
+                0.0
+            } else {
+                (12.0 * speed.max(1.0 / 16.0).log2()).clamp(-BEND_RANGE, BEND_RANGE)
+            }
         } else {
             0.0
         };
@@ -121,7 +127,9 @@ impl MidiTape {
         self.braking = braking;
         // Emit at most 250 pitch updates/sec/channel, plus exact note/controller
         // initialization and restoration. Keep this cadence across host blocks.
-        if self.pitch_countdown == 0 || semitones == 0.0 {
+        if (self.pitch_countdown == 0 && semitones != 0.0)
+            || (semitones == 0.0 && self.last_semitones != 0.0)
+        {
             for (index, channel) in self.channels.iter_mut().enumerate() {
                 if channel.used {
                     channel.pitch(index as u8, timing, semitones, out);
@@ -130,6 +138,7 @@ impl MidiTape {
             self.pitch_countdown = self.pitch_interval;
         }
         self.pitch_countdown = self.pitch_countdown.saturating_sub(1);
+        self.last_semitones = semitones;
         while self
             .queue
             .front()

@@ -5,6 +5,20 @@ use nih_plug_vizia::vizia::vg::{Baseline, Color, FontId, Paint};
 use super::Draw;
 
 impl Draw<'_> {
+    /// Draw a single readable help line inside the editor's reserved bottom strip.
+    pub fn bottom_tooltip(&mut self, rect: (f32, f32, f32, f32), text: &str, color: Color) {
+        self.with_label_font(|d| {
+            let text = d.fit_text(text, rect.2, super::READABLE_LABEL_SIZE);
+            d.text(
+                rect.0,
+                rect.1 + rect.3 - super::TOOLTIP_BASELINE_INSET,
+                &text,
+                super::READABLE_LABEL_SIZE,
+                color,
+            );
+        });
+    }
+
     // femtovg falls back per word, not per glyph. Split SMuFL symbols explicitly.
     // Runs are visited in place: allocating a run list per text call would
     // allocate on every redraw.
@@ -103,11 +117,34 @@ impl Draw<'_> {
         color: Color,
         middle: bool,
     ) {
-        let mut x = self.ox + (x + self.offset_x) * self.s;
+        if text.is_empty() {
+            return;
+        }
+        let x = self.ox + (x + self.offset_x) * self.s;
         let y = self.oy + y * self.s;
         let transformed = self.color(color);
         let scale = self.s;
         let canvas = &mut *self.c;
+
+        // Fast path for text with no private-use (SMuFL) fallback characters:
+        // single run, no separate text shaping / measure_text needed.
+        let has_fallback = self.fallback_font.is_some()
+            && text.chars().any(|ch| ('\u{e000}'..='\u{f8ff}').contains(&ch));
+
+        if !has_fallback {
+            let mut paint = Paint::color(transformed);
+            if let Some(font) = self.font {
+                paint.set_font(&[font]);
+            }
+            paint.set_font_size(size * scale);
+            if middle {
+                paint.set_text_baseline(Baseline::Middle);
+            }
+            let _ = canvas.fill_text(x, y, text, &paint);
+            return;
+        }
+
+        let mut cur_x = x;
         Self::for_each_text_run(text, self.font, self.fallback_font, |run, font| {
             let mut paint = Paint::color(transformed);
             if let Some(font) = font {
@@ -119,9 +156,11 @@ impl Draw<'_> {
             }
             let width = canvas
                 .measure_text(0.0, 0.0, run, &paint)
-                .map_or(run.chars().count() as f32 * size * scale * 0.55, |m| m.width());
-            let _ = canvas.fill_text(x, y, run, &paint);
-            x += width;
+                .map_or(run.chars().count() as f32 * size * scale * 0.55, |m| {
+                    m.width()
+                });
+            let _ = canvas.fill_text(cur_x, y, run, &paint);
+            cur_x += width;
         });
     }
 

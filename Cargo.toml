@@ -42,6 +42,14 @@ vizia_baseview = { path = "Damian Channel Strip/vendor/vizia_baseview" }
 [patch.crates-io]
 block = { path = "vendor/block-0.1.6" }
 
+[profile.release]
+lto = "thin"
+opt-level = 3
+strip = "symbols"
+
+[profile.dev]
+opt-level = 1
+
 [profile.profiling]
 inherits = "release"
 debug = true

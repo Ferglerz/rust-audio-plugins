@@ -134,6 +134,46 @@ impl FlatteryView {
         )
     }
 
+    pub(super) fn control_hint(&self) -> Option<&'static str> {
+        let (x, y) = self.hover?;
+        for (rect, text) in [
+            (THEME_BUTTON, "Cycle Dark, Light, and Auto appearance."),
+            (self.fft_button_rect(), "FFT size: choose spectral resolution; larger sizes add latency."),
+            (self.domain_button_rect(), "Switch between left/right and mid/side processing."),
+        ] {
+            if Self::inside(x, y, rect) { return Some(text); }
+        }
+        for (id, text) in [
+            (SliderId::Attack, "Attack: set how quickly spectral gain changes begin. Drag to adjust; click the value to type."),
+            (SliderId::Release, "Release: set how quickly spectral gain returns. Shift for fine adjustment."),
+            (SliderId::InputRms, "Input RMS: set the level detector's averaging time. Click the value to type."),
+            (SliderId::StereoLink, "Stereo link: link gain changes between the two processing channels."),
+            (SliderId::OutputGain, "Output gain: drag to adjust; click the value to type; double-click to reset."),
+        ] {
+            if Self::inside(x, y, Self::slider_rect(id)) { return Some(text); }
+        }
+        if self.selected.is_some() {
+            for (id, text) in [
+                (SliderId::NodeFreq, "Selected node frequency: drag to adjust or click the value to type."),
+                (SliderId::NodeGain, "Selected node gain: drag to adjust or click the value to type."),
+                (SliderId::NodeQ, "Selected node Q: adjust the width around its center frequency."),
+                (SliderId::NodeRadius, "Selected node radius: adjust how far its influence extends."),
+            ] {
+                if Self::inside(x, y, Self::slider_rect(id)) { return Some(text); }
+            }
+        }
+        if self.hover_node.is_some() {
+            return Some("Drag the node to adjust its frequency and strength · Scroll to adjust width · Shift for fine adjustment");
+        }
+        if self.hover_low_cut || self.hover_high_cut {
+            return Some("Drag the frequency limit to set the processing range · Shift for fine adjustment");
+        }
+        if self.hover_max_boost || self.hover_max_cut {
+            return Some("Drag to set the maximum spectral boost or cut · Shift for fine adjustment");
+        }
+        None
+    }
+
     pub(super) fn idle_hover(&self) -> Option<(f32, f32)> {
         pleasant_ui::idle_hover(self.hover, self.drag.is_some())
     }

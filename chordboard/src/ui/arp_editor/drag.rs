@@ -252,8 +252,9 @@ impl ChordboardView {
             return;
         }
         let state = self.arp_state();
-        {
-            let row = state.editor_row(self.arp_ui.edit_page, !self.programming);
+        let row = state.editor_row(self.arp_ui.edit_page, !self.programming);
+        let needed = (row.settings.octaves as usize).clamp(1, LOOPS);
+        if (row.page.initialized as usize) < needed {
             self.params.arpeggiator.edit(|s| {
                 s.editor_row_mut(self.arp_ui.edit_page, !self.programming)
                     .page

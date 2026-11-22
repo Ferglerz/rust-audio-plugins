@@ -66,19 +66,20 @@ pub fn transform_color(c: Color, light: bool) -> Color {
     if !light {
         return c;
     }
-    let mut result = if c == BG {
+    let role = with_alpha(c, 1.0);
+    let mut result = if role == BG {
         rgb(245, 243, 238)
-    } else if c == PANEL {
+    } else if role == PANEL {
         rgb(233, 230, 223)
-    } else if c == LINE {
+    } else if role == LINE {
         rgb(201, 201, 195)
-    } else if c == TEXT {
+    } else if role == TEXT {
         rgb(30, 37, 44)
-    } else if c == MUTED {
+    } else if role == MUTED {
         rgb(95, 105, 114)
-    } else if c == GOLD {
+    } else if role == GOLD {
         rgb(214, 148, 22)
-    } else if c == TEAL {
+    } else if role == TEAL {
         rgb(12, 154, 128)
     } else if c.r.max(c.g).max(c.b) < 0.35 {
         Color {
@@ -110,6 +111,23 @@ mod tests {
             assert_eq!(
                 readable_color(with_alpha(role, 0.4), true),
                 with_alpha(original, 0.4)
+            );
+        }
+    }
+
+    #[test]
+    fn transform_color_preserves_alpha_for_palette_roles() {
+        for (role, expected) in [
+            (TEXT, rgb(30, 37, 44)),
+            (MUTED, rgb(95, 105, 114)),
+            (LINE, rgb(201, 201, 195)),
+            (BG, rgb(245, 243, 238)),
+            (PANEL, rgb(233, 230, 223)),
+        ] {
+            assert_eq!(transform_color(role, true), expected);
+            assert_eq!(
+                transform_color(with_alpha(role, 0.5), true),
+                with_alpha(expected, 0.5)
             );
         }
     }

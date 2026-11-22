@@ -27,8 +27,11 @@ impl StereoRingBuffer {
 
     /// Reset all samples and pointers.
     pub fn reset(&mut self) {
-        self.left.fill(0.0);
-        self.right.fill(0.0);
+        let guard_len = 1024.min(BUFFER_SIZE);
+        self.left[..guard_len].fill(0.0);
+        self.left[BUFFER_SIZE - guard_len..].fill(0.0);
+        self.right[..guard_len].fill(0.0);
+        self.right[BUFFER_SIZE - guard_len..].fill(0.0);
         self.write_head = 0;
     }
 

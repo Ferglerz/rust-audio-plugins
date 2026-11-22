@@ -10,7 +10,7 @@ use crate::presets::{default_send_db, UserPresetState};
 use crate::vel_map::VelMapState;
 
 pub const EDITOR_WIDTH: u32 = 1181;
-pub const EDITOR_HEIGHT: u32 = 611;
+pub const EDITOR_HEIGHT: u32 = 611 + pleasant_ui::draw::TOOLTIP_HEIGHT as u32;
 pub const EDITOR_ZOOM_MIN: f64 = 0.5;
 pub const EDITOR_ZOOM_MAX: f64 = 2.0;
 pub const FADER_MIN_DB: f32 = -72.0;

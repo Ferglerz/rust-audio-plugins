@@ -31,6 +31,7 @@ mod graph;
 mod performance;
 mod reels;
 mod render;
+mod tooltip;
 use performance::PerformanceTick;
 
 pleasant_ui::appearance_store!("Tape Stop");
@@ -38,8 +39,9 @@ pleasant_ui::appearance_store!("Tape Stop");
 // Outer margin matches y-axis % label left edge (GRAPH_X - 40 = 20).
 // Fit the graph, equally spaced time controls, and square performance pad.
 const UI_W: f32 = controls::XY_PAD.0 + controls::XY_PAD.2 + 20.0;
-// The expanded cog controls share the graph's readout row.
-const UI_H: f32 = 430.0;
+// Keep the settings row below the graph, time controls, and performance pad.
+const CONTENT_H: f32 = 492.0;
+const UI_H: f32 = CONTENT_H + pleasant_ui::draw::TOOLTIP_HEIGHT;
 const HEADER_HEIGHT: f32 = 70.0;
 
 pub fn format_ms(seconds: f32) -> String {
@@ -100,8 +102,6 @@ pub struct TapeStopView {
     curve_hover_anim: Cell<f32>,
     curve_geometry: RefCell<graph::CurveGeometryCache>,
     auto_restart_anim: ButtonAnim,
-    show_axis_controls: bool,
-    axis_controls_progress: f32,
     gesture_params: [Option<ParamPtr>; 2],
     pad_binding: Option<(XAxis, PadMode, bool)>,
 }
@@ -148,8 +148,6 @@ pub fn create(
                 curve_hover_anim: Cell::new(0.0),
                 curve_geometry: RefCell::default(),
                 auto_restart_anim: ButtonAnim::new(),
-                show_axis_controls: false,
-                axis_controls_progress: 0.0,
                 gesture_params: [None; 2],
                 pad_binding: None,
             }
@@ -187,7 +185,10 @@ mod tests {
         let ret = axis_slot(0);
         assert_eq!(midi.1, ret.1);
         assert!(midi.0 + midi.2 < ret.0);
-        assert!(midi.1 >= GRAPH_Y + GRAPH_H);
+        assert!(midi.1 > XY_MODE.1 + XY_MODE.3);
+        assert!(AFFECT_MIDI.0 + AFFECT_MIDI.2 < midi.0);
+        assert!(AFFECT_MIDI.1 >= midi.1);
+        assert!(AFFECT_MIDI.1 + AFFECT_MIDI.3 <= midi.1 + midi.3);
         assert_eq!(midi.2, 66.0);
         assert!(midi_value_rect().2 >= 24.0);
         assert!(midi_value_rect().0 >= midi_label_rect().0 + midi_label_rect().2 - 0.5);
@@ -217,8 +218,9 @@ mod tests {
         let slots = [axis_slot(0), axis_slot(1), trigger_column()];
         assert_eq!(slots[0].2, slots[1].2);
         for (i, slot) in slots.iter().enumerate() {
-            assert!(slot.1 + slot.3 < UI_H);
-            assert!(slot.0 + slot.2 < cog_rect().0);
+            assert!(slot.1 > XY_MODE.1 + XY_MODE.3);
+            assert!(slot.1 + slot.3 < CONTENT_H);
+            assert!(slot.0 + slot.2 <= UI_W - 20.0 + 1e-3);
             if i > 0 {
                 assert!(slots[i - 1].0 + slots[i - 1].2 < slot.0);
             }

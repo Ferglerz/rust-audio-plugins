@@ -10,6 +10,7 @@ mod mixer;
 mod presets;
 use presets::*;
 mod render;
+mod tooltip;
 mod sub_kick;
 mod velocity_map;
 #[cfg(test)]
@@ -47,6 +48,7 @@ use std::time::Instant;
 
 pub const WINDOW_W: f32 = EDITOR_WIDTH as f32;
 pub const WINDOW_H: f32 = EDITOR_HEIGHT as f32;
+const CONTENT_H: f32 = WINDOW_H - pleasant_ui::draw::TOOLTIP_HEIGHT;
 
 const HEADER: Color = rgb(23, 18, 24);
 const SCRIM: Color = Color {

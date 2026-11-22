@@ -208,6 +208,11 @@ impl StripView {
             d.rect(mid_x - fill_w, bar_y, fill_w, bar_h, GOLD);
         }
         d.line(mid_x, bar_y - 1.0, mid_x, bar_y + bar_h + 1.0, TEXT, 1.0);
+        d.bottom_tooltip(
+            (32.0, 672.0, UI_W - 64.0, pleasant_ui::draw::TOOLTIP_HEIGHT),
+            self.tooltip(),
+            MUTED,
+        );
         if let Some(menu) = self.menu {
             let menu_info = self
                 .selected

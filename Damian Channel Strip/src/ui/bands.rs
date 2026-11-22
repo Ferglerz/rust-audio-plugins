@@ -504,7 +504,7 @@ impl StripView {
                     let bar_w = r.2 - 16.0;
                     let norm = if shift {
                         let cur = p.unmodulated_normalized_value();
-                        let dx = x - self.last_drag.0;
+                        let dx = x - lx;
                         (cur + (dx / bar_w) * 0.1).clamp(0.0, 1.0)
                     } else {
                         ((x - bar_x) / bar_w).clamp(0.0, 1.0)

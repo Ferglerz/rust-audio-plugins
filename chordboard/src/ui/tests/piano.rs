@@ -215,7 +215,7 @@ fn module_grid_and_keyboard_midi_controls_fit_without_overlapping() {
     assert_eq!(MOD_SURFACE.1 + MOD_SURFACE.3, ARP_SURFACE.1 + ARP_SURFACE.3);
     assert_eq!(PIANO_SURFACE.1 - ARP_SURFACE.1 - ARP_SURFACE.3, 12.0);
     assert_eq!(TRACKER_SURFACE.1 + TRACKER_SURFACE.3 + 12.0, ARP_SURFACE.1);
-    assert_eq!(H, MODULE_BOTTOM + 22.0);
+    assert_eq!(H, MODULE_BOTTOM + pleasant_ui::draw::TOOLTIP_HEIGHT);
     let globals = globals::global_controls();
     for (index, (_, r)) in globals.iter().enumerate() {
         let surface = if index < 3 { PIANO_SURFACE } else { GLOBAL_SURFACE };

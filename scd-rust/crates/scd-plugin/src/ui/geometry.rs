@@ -195,11 +195,12 @@ impl ScdEditorView {
     }
 
     pub(super) fn mapping_menu_rect() -> (f32, f32, f32, f32) {
+        let (_, helper_y, _, helper_h) = Self::mapping_helper_rect();
         (
             SAMPLES_X,
             SAMPLES_Y + SAMPLES_H + 4.0,
             SAMPLES_MENU_W,
-            (KitPieceId::COUNT + 2) as f32 * PRESET_ITEM_H + 8.0,
+            helper_y + helper_h + 4.0 - (SAMPLES_Y + SAMPLES_H + 4.0),
         )
     }
 

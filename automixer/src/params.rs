@@ -224,7 +224,7 @@ impl AutomixerParams {
         Self {
             auto_mic: AtomicU32::new(0),
             slot,
-            editor_state: ViziaState::new_screen_sized("Automixer", || (1120, 960)),
+            editor_state: ViziaState::new_screen_sized("Automixer", || (1120, 922 + pleasant_ui::draw::TOOLTIP_HEIGHT as u32)),
             mic: IntParam::new(
                 "This microphone (0 = Auto)",
                 0,

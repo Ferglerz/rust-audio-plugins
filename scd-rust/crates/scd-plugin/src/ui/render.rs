@@ -46,7 +46,7 @@ impl ScdEditorView {
         }
 
         if let Some(id) = self.bg_img.get() {
-            blit(&mut draw, id, 0.0, 0.0, WINDOW_W, WINDOW_H);
+            blit(&mut draw, id, 0.0, 0.0, WINDOW_W, CONTENT_H);
         } else {
             draw.rect(0.0, 0.0, WINDOW_W, WINDOW_H, HEADER);
         }
@@ -87,6 +87,14 @@ impl ScdEditorView {
         self.draw_cc_menu(&mut draw);
 
         self.draw_add_preset(&mut draw, &kit_vu);
+
+        draw.rect(0.0, CONTENT_H, WINDOW_W, pleasant_ui::draw::TOOLTIP_HEIGHT, HEADER);
+        draw.bottom_tooltip(
+            (24.0, CONTENT_H, WINDOW_W - 48.0, pleasant_ui::draw::TOOLTIP_HEIGHT),
+            self.tooltip(),
+            THEME,
+        );
+
 
         for v in vu.iter_mut() {
             *v *= VU_DECAY;

@@ -120,10 +120,13 @@ impl BiquadCoefficients {
 
     pub fn response_db(self, frequency_hz: f64, sample_rate: f64) -> f64 {
         let angular = 2.0 * PI * frequency_hz / sample_rate.max(1.0);
-        let real = self.b[0] + self.b[1] * angular.cos() + self.b[2] * (2.0 * angular).cos();
-        let imaginary = -self.b[1] * angular.sin() - self.b[2] * (2.0 * angular).sin();
-        let denominator_real = 1.0 + self.a[0] * angular.cos() + self.a[1] * (2.0 * angular).cos();
-        let denominator_imaginary = -self.a[0] * angular.sin() - self.a[1] * (2.0 * angular).sin();
+        let (sin1, cos1) = angular.sin_cos();
+        let cos2 = 2.0 * cos1 * cos1 - 1.0;
+        let sin2 = 2.0 * sin1 * cos1;
+        let real = self.b[0] + self.b[1] * cos1 + self.b[2] * cos2;
+        let imaginary = -self.b[1] * sin1 - self.b[2] * sin2;
+        let denominator_real = 1.0 + self.a[0] * cos1 + self.a[1] * cos2;
+        let denominator_imaginary = -self.a[0] * sin1 - self.a[1] * sin2;
         10.0 * ((real * real + imaginary * imaginary).max(1.0e-24)
             / (denominator_real * denominator_real + denominator_imaginary * denominator_imaginary)
                 .max(1.0e-24))

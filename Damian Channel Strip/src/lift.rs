@@ -120,7 +120,7 @@ pub struct LiftProcessor {
     out_buf: [[f32; LIFT_FFT_SIZE]; 2],
     out_pos: usize,
     spec: [Vec<Complex<f32>>; 2],
-    env: [[f32; LIFT_FFT_SIZE / 2 + 1]; 2],
+    env: [[[f32; LIFT_FFT_SIZE / 2 + 1]; 2]; 8],
     eq_delay: Delay,
     dry_delay: Delay,
     /// Per-band live gain reduction in dB (up to 8 lift bands), updated each hop with smooth ballistics.
@@ -171,7 +171,7 @@ impl LiftProcessor {
                 vec![Complex::default(); LIFT_FFT_SIZE],
                 vec![Complex::default(); LIFT_FFT_SIZE],
             ],
-            env: [[0.0; LIFT_FFT_SIZE / 2 + 1]; 2],
+            env: [[[0.0; LIFT_FFT_SIZE / 2 + 1]; 2]; 8],
             eq_delay: Delay::new(LIFT_LATENCY),
             dry_delay: Delay::new(LIFT_LATENCY),
             band_gr: [0.0; 8],
@@ -187,7 +187,7 @@ impl LiftProcessor {
         self.hop_count = 0;
         self.out_buf = [[0.0; LIFT_FFT_SIZE]; 2];
         self.out_pos = 0;
-        self.env = [[0.0; LIFT_FFT_SIZE / 2 + 1]; 2];
+        self.env = [[[0.0; LIFT_FFT_SIZE / 2 + 1]; 2]; 8];
         self.eq_delay.reset();
         self.dry_delay.reset();
         self.bin_gr = [0.0; 256];
@@ -301,7 +301,7 @@ impl LiftProcessor {
                         continue;
                     }
 
-                    let env = &mut self.env[ch][k];
+                    let env = &mut self.env[b_idx][ch][k];
                     let k_coeff = if mag > *env {
                         att_ks[b_idx]
                     } else {

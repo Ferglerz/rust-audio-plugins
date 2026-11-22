@@ -1,8 +1,7 @@
 use crate::{BandSettings, EqShape};
-use pleasant_dsp::{
-    filters::{BiquadCoefficients, BiquadKind, TransposedDirectForm2},
-    units::linear_to_db_with_floor,
-};
+#[cfg(feature = "dynamic")]
+use pleasant_dsp::{filters::BiquadKind, units::linear_to_db_with_floor};
+use pleasant_dsp::filters::{BiquadCoefficients, TransposedDirectForm2};
 use std::f64::consts::PI;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -89,6 +88,7 @@ struct Cascade {
 }
 
 impl Cascade {
+    #[inline(always)]
     fn process(&mut self, mut input: f64, coefficients: BandCoefficients) -> f64 {
         for (state, coefficients) in self
             .stages
@@ -111,6 +111,7 @@ pub struct BandProcessor {
     filters: [Cascade; 2],
     detectors: [TransposedDirectForm2; 2],
     coefficients: BandCoefficients,
+    #[cfg(feature = "dynamic")]
     detector_coefficients: BiquadCoefficients,
     envelope: f64,
     reduction_db: f64,
@@ -118,7 +119,9 @@ pub struct BandProcessor {
     current_gain_db: f64,
     current_frequency_hz: f64,
     current_q: f64,
+    #[cfg(feature = "dynamic")]
     attack_coefficient: f64,
+    #[cfg(feature = "dynamic")]
     release_coefficient: f64,
     coefficient_phase: usize,
     coefficients_dirty: bool,
@@ -132,6 +135,7 @@ impl BandProcessor {
             filters: [Cascade::default(); 2],
             detectors: [TransposedDirectForm2::default(); 2],
             coefficients: BandCoefficients::prepare(&settings, sample_rate),
+            #[cfg(feature = "dynamic")]
             detector_coefficients: BiquadCoefficients::design(
                 BiquadKind::BandPass,
                 settings.frequency_hz,
@@ -145,7 +149,9 @@ impl BandProcessor {
             current_gain_db: settings.gain_db,
             current_frequency_hz: settings.frequency_hz,
             current_q: settings.q,
+            #[cfg(feature = "dynamic")]
             attack_coefficient: (-1.0 / (sample_rate * settings.attack_ms * 0.001)).exp(),
+            #[cfg(feature = "dynamic")]
             release_coefficient: (-1.0 / (sample_rate * settings.release_ms * 0.001)).exp(),
             coefficient_phase: 0,
             coefficients_dirty: false,
@@ -204,6 +210,7 @@ impl BandProcessor {
         self.uncapped_reduction_db = 0.0;
     }
 
+    #[inline]
     pub fn process(&mut self, mut input: [f64; 2], sample_rate: f64) -> [f64; 2] {
         if !self.settings.enabled {
             return input;

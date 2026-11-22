@@ -181,7 +181,7 @@ impl ScdEditorView {
             modal_w,
             modal_h,
         );
-        draw_all_chan_meters(draw, kit_vu);
+        draw_all_chan_meters(draw, kit_vu, self.params.snare_wires_off.value());
         draw.text(
             modal_x + 24.0,
             modal_y + 31.0,

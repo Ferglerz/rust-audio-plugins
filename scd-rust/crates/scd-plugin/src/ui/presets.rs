@@ -259,7 +259,7 @@ impl ScdEditorView {
             mw,
             mh,
         );
-        draw_all_chan_meters(draw, kit_vu);
+        draw_all_chan_meters(draw, kit_vu, self.params.snare_wires_off.value());
         draw.text(mx + 20.0, my + 28.0, "Add Preset", 14.0, THEME);
         let name_r = Self::add_name_rect((mx, my, mw, mh));
         draw.rounded_rect(name_r.0, name_r.1, name_r.2, name_r.3, 4.0, THEME_DIM);

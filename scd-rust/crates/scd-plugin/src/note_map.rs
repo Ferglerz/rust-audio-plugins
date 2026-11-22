@@ -3,7 +3,7 @@ use nih_plug::params::persist::PersistentField;
 use scd_core::kit::{stonehouse, ArticulationDef};
 use scd_core::KitPieceId;
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicU16, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 const UNMAPPED: u8 = 255;
@@ -46,6 +46,23 @@ impl Default for NoteMapBank {
     }
 }
 
+#[inline]
+fn pack_entry(pack_note: u8, art_key: u16, silenced: bool, explicit: bool) -> u32 {
+    (pack_note as u32)
+        | ((art_key as u32) << 8)
+        | ((silenced as u32) << 24)
+        | ((explicit as u32) << 25)
+}
+
+#[inline]
+fn unpack_entry(val: u32) -> (u8, u16, bool, bool) {
+    let pack_note = (val & 0xFF) as u8;
+    let art_key = ((val >> 8) & 0xFFFF) as u16;
+    let silenced = (val & (1 << 24)) != 0;
+    let explicit = (val & (1 << 25)) != 0;
+    (pack_note, art_key, silenced, explicit)
+}
+
 pub struct ResolvedNote {
     pub pack_note: u8,
     pub kit_piece: Option<KitPieceId>,
@@ -56,67 +73,63 @@ pub struct ResolvedNote {
 
 pub struct NoteMapState {
     bank: Mutex<NoteMapBank>,
-    pack_of: [AtomicU8; 128],
-    silenced: [AtomicU8; 128],
-    explicit: [AtomicU8; 128],
-    art_of: [AtomicU16; 128],
-    learn_armed: AtomicU8,
-    learn_note: AtomicU8,
+    entries: [AtomicU32; 128],
+    learn: AtomicU16,
 }
 
 impl NoteMapState {
     pub fn identity() -> Self {
         let state = Self {
             bank: Mutex::new(NoteMapBank::default()),
-            pack_of: std::array::from_fn(|i| AtomicU8::new(i as u8)),
-            silenced: std::array::from_fn(|_| AtomicU8::new(0)),
-            explicit: std::array::from_fn(|_| AtomicU8::new(0)),
-            art_of: std::array::from_fn(|_| AtomicU16::new(ART_NONE)),
-            learn_armed: AtomicU8::new(0),
-            learn_note: AtomicU8::new(255),
+            entries: std::array::from_fn(|i| {
+                AtomicU32::new(pack_entry(i as u8, ART_NONE, false, false))
+            }),
+            learn: AtomicU16::new(0),
         };
         state.rebuild();
         state
     }
 
     pub fn arm_learn(&self) {
-        self.learn_note.store(255, Ordering::Relaxed);
-        self.learn_armed.store(1, Ordering::Relaxed);
+        self.learn.store(1, Ordering::Release);
     }
 
     pub fn disarm_learn(&self) {
-        self.learn_armed.store(0, Ordering::Relaxed);
-        self.learn_note.store(255, Ordering::Relaxed);
+        self.learn.store(0, Ordering::Release);
     }
 
     pub fn offer_learn(&self, note: u8) {
-        if self.learn_armed.load(Ordering::Relaxed) != 0 && note <= 127 {
-            self.learn_note.store(note, Ordering::Relaxed);
+        if note <= 127 {
+            let _ = self.learn.compare_exchange(
+                1,
+                note as u16 + 2,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            );
         }
     }
 
     pub fn take_learn(&self) -> Option<u8> {
-        if self.learn_armed.load(Ordering::Relaxed) == 0 {
-            return None;
+        let val = self.learn.load(Ordering::Acquire);
+        if val >= 2 {
+            self.learn.store(0, Ordering::Release);
+            Some((val - 2) as u8)
+        } else {
+            None
         }
-        let n = self.learn_note.load(Ordering::Relaxed);
-        if n > 127 {
-            return None;
-        }
-        self.disarm_learn();
-        Some(n)
     }
 
     pub fn resolve(&self, incoming: u8) -> ResolvedNote {
         let i = incoming.min(127) as usize;
-        let key = self.art_of[i].load(Ordering::Relaxed);
+        let packed = self.entries[i].load(Ordering::Acquire);
+        let (pack_note, key, silenced, explicit) = unpack_entry(packed);
         let (kit_piece, art) = decode_art(key);
         ResolvedNote {
-            pack_note: self.pack_of[i].load(Ordering::Relaxed),
+            pack_note,
             kit_piece,
             art,
-            silenced: self.silenced[i].load(Ordering::Relaxed) != 0,
-            explicit: self.explicit[i].load(Ordering::Relaxed) != 0,
+            silenced,
+            explicit,
         }
     }
 
@@ -275,10 +288,8 @@ impl NoteMapState {
         }
 
         for i in 0..128 {
-            self.pack_of[i].store(pack_of[i], Ordering::Relaxed);
-            self.silenced[i].store(silenced[i], Ordering::Relaxed);
-            self.art_of[i].store(art_of[i], Ordering::Relaxed);
-            self.explicit[i].store(explicit[i], Ordering::Relaxed);
+            let packed = pack_entry(pack_of[i], art_of[i], silenced[i] != 0, explicit[i] != 0);
+            self.entries[i].store(packed, Ordering::Release);
         }
         let _ = (UNMAPPED, N2_OFF, DEFAULT_SLOT);
     }

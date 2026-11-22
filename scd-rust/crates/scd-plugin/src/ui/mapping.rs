@@ -301,14 +301,7 @@ impl ScdEditorView {
                 THEME,
             );
         }
-        let (hx, hy, hw, _) = Self::mapping_helper_rect();
-        draw.text_centered(
-            hx + hw * 0.5,
-            hy + 15.0,
-            "Alt click to reset notes",
-            10.0,
-            THEME_DIM,
-        );
+
     }
 
     pub(super) fn draw_cc_menu(&self, draw: &mut Draw<'_>) {

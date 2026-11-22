@@ -216,6 +216,7 @@ impl FlatteryView {
                             start_y: mouse_y,
                             start_val: self.params.output_gain_db.value(),
                         });
+                        cx.capture();
                         cx.needs_redraw();
                         return;
                     }
@@ -766,8 +767,10 @@ impl FlatteryView {
                                 );
                             }
                             DragState::OutputGainKnob { start_y, start_val } => {
+                                let sensitivity = if cx.modifiers().shift() { 0.04 } else { 0.2 };
                                 let delta_y = start_y - mouse_y;
-                                let new_val = (start_val + delta_y * 0.2).clamp(-24.0, 24.0);
+                                let new_val =
+                                    (start_val + delta_y * sensitivity).clamp(-12.0, 12.0);
                                 let norm = self.params.output_gain_db.preview_normalized(new_val);
                                 self.emit_param_norm(cx, self.params.output_gain_db.as_ptr(), norm);
                                 cx.needs_redraw();

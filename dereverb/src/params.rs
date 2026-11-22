@@ -125,7 +125,7 @@ impl Default for DereverbParams {
             .with_value_to_string(formatters::v2s_f32_rounded(1))
         };
         Self {
-            editor_state: ViziaState::new_screen_sized("Dereverb", || (800, 620)),
+            editor_state: ViziaState::new_screen_sized("Dereverb", || (800, 588 + pleasant_ui::draw::TOOLTIP_HEIGHT as u32)),
             strength: FloatParam::new(
                 "Strength",
                 100.0,

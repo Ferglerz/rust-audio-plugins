@@ -10,6 +10,7 @@ mod layout;
 mod lift;
 mod preferences;
 mod render;
+mod tooltip;
 #[cfg(test)]
 mod tests;
 mod value_input;

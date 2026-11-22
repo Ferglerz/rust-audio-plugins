@@ -200,7 +200,11 @@ impl ChordboardView {
         self.draw_surface_midi_targets(d);
         d.light = false;
         d.font = self.ui_font.get();
-        d.text(32.0, H - 10.0, &self.midi_learn_status(), MODULE_TITLE_SIZE, GOLD);
+        d.bottom_tooltip(
+            (32.0, MODULE_BOTTOM, W - 64.0, pleasant_ui::draw::TOOLTIP_HEIGHT),
+            &self.midi_learn_status(),
+            GOLD,
+        );
         d.light = light;
     }
 

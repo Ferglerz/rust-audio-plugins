@@ -2,7 +2,7 @@ use crate::{params::EngineKind, telemetry::POINTS};
 use pleasant_ui::draw::KnobLayout;
 
 pub(super) type Rect = (f32, f32, f32, f32);
-pub(super) const SIZE: (f32, f32) = (800.0, 620.0);
+pub(super) const SIZE: (f32, f32) = (800.0, 588.0 + pleasant_ui::draw::TOOLTIP_HEIGHT);
 pub(super) const KNOB: Rect = (600.0, 146.0, 160.0, 198.0);
 pub(super) const THEME: Rect = (688.0, 23.0, 76.0, 28.0);
 pub(super) const DPDFNET: Rect = (200.0, 23.0, 86.0, 28.0);

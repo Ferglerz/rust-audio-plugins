@@ -372,8 +372,8 @@ fn pleasant_meter_accent(index: usize) -> VgColor {
     }
 }
 
-/// The hint belongs to the empty track below the handle, under trails and live fill.
-fn draw_release_hint(
+/// Both hints belong to the track background, under trails and live fill.
+fn draw_release_hints(
     d: &mut pleasant_ui::Draw,
     track: BoundingBox,
     threshold: f32,
@@ -381,32 +381,37 @@ fn draw_release_hint(
 ) {
     use nih_plug_vizia::vizia::vg::{Align, Baseline, Paint};
 
-    let label = if faster { "Faster" } else { "Slower" };
-    let size = 12.0;
-    let top = (threshold + 8.0).max(track.y);
-    let bottom = track.y + track.h;
+    let size = 14.0;
     let padding = 8.0;
-    if bottom - top < d.text_width(label, size) + padding * 2.0
-        || track.w < size + padding * 2.0
-    {
-        return;
-    }
-
+    let bottom = track.y + track.h;
     let mut paint = Paint::color(d.color(pleasant_ui::with_alpha(pleasant_ui::MUTED, 0.38)));
     if let Some(font) = d.font {
         paint.set_font(&[font]);
     }
     paint.set_font_size(size * d.s);
+    paint.set_line_width(0.35 * d.s);
     paint.set_text_align(Align::Center);
     paint.set_text_baseline(Baseline::Middle);
-    d.c.save();
-    d.c.translate(
-        d.ox + (track.x + track.w * 0.5 + d.offset_x) * d.s,
-        d.oy + (top + bottom) * 0.5 * d.s,
-    );
-    d.c.rotate(-std::f32::consts::FRAC_PI_2);
-    let _ = d.c.fill_text(0.0, 0.0, label, &paint);
-    d.c.restore();
+    for (top, bottom, faster) in [
+        (track.y, (threshold - 8.0).min(bottom), !faster),
+        ((threshold + 8.0).max(track.y), bottom, faster),
+    ] {
+        let label = if faster { "FASTER" } else { "SLOWER" };
+        if bottom - top < d.text_width(label, size) + padding * 2.0
+            || track.w < size + padding * 2.0
+        {
+            continue;
+        }
+        d.c.save();
+        d.c.translate(
+            d.ox + (track.x + track.w * 0.5 + d.offset_x) * d.s,
+            d.oy + (top + bottom) * 0.5 * d.s,
+        );
+        d.c.rotate(-std::f32::consts::FRAC_PI_2);
+        let _ = d.c.fill_text(0.0, 0.0, label, &paint);
+        let _ = d.c.stroke_text(0.0, 0.0, label, &paint);
+        d.c.restore();
+    }
 }
 
 fn draw_pleasant_meters(
@@ -444,7 +449,7 @@ fn draw_pleasant_meters(
             } else {
                 params.gr_dependence.value() < 0.0
             };
-            draw_release_hint(
+            draw_release_hints(
                 &mut d,
                 track,
                 threshold_y(*line, track, *db, range),

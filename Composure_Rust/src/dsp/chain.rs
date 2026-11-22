@@ -306,6 +306,10 @@ impl ProcessingChain {
 
     pub fn update_settings(&mut self, block: BlockParamState, snapshot: Arc<GraphSnapshot>) {
         self.sync_graph(snapshot);
+        self.update_block_params(block);
+    }
+
+    pub fn update_block_params(&mut self, block: BlockParamState) {
         if self.cached_block_params.as_ref() == Some(&block) {
             return;
         }

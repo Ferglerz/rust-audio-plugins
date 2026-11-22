@@ -93,6 +93,9 @@ impl Plugin for Damian {
         );
         self.engine
             .set_display_enabled(self.params.editor_state.is_open());
+        let vad_needed = self.params.editor_state.is_open()
+            || (self.params.pse_on.value() && self.params.pse_voice_det.value() > 0.0);
+        self.engine.set_vad_enabled(vad_needed);
         self.engine.sync();
         context.set_latency_samples(self.engine.latency());
         let speech_env = self.engine.speech_env() as f64;

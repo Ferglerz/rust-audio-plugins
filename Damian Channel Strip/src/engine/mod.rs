@@ -166,7 +166,7 @@ impl Engine {
             Ordering::Relaxed,
         );
         let mut vad = SpeechVad::new(sr);
-        vad.start_worker();
+        vad.start_worker_enabled(false);
         Self {
             shared,
             bank,
@@ -232,6 +232,10 @@ impl Engine {
                 }
             }
         }
+    }
+
+    pub fn set_vad_enabled(&mut self, enabled: bool) {
+        self.vad.set_enabled(enabled);
     }
 
     pub fn reset(&mut self) {

@@ -16,8 +16,6 @@ pub(super) fn view() -> TapeStopView {
         curve_hover_anim: Cell::new(0.0),
         curve_geometry: RefCell::default(),
         auto_restart_anim: ButtonAnim::new(),
-        show_axis_controls: false,
-        axis_controls_progress: 0.0,
         gesture_params: [None; 2],
         pad_binding: None,
     }
@@ -139,7 +137,15 @@ fn return_is_always_editable_and_synced_pad_targets_divisions() {
         view.readout_at(RETURN_TIME_READOUT.0 + 5.0, RETURN_TIME_READOUT.1 + 5.0),
         Some(KnobId::Return)
     );
-    assert!(!view.show_axis_controls);
+    let midi = midi_value_rect();
+    assert_eq!(
+        view.readout_at(midi.0 + 5.0, midi.1 + 5.0),
+        Some(view.midi_number_id())
+    );
+    for id in [KnobId::Xfade, KnobId::StereoDiv] {
+        let rect = axis_value_rect(TapeStopView::slider_rect(id));
+        assert_eq!(view.readout_at(rect.0 + 5.0, rect.1 + 5.0), Some(id));
+    }
     let params = Arc::get_mut(&mut view.params).unwrap();
     params.time_sync = BoolParam::new("Sync", true);
     params.xy_x_axis = EnumParam::new("X", XAxis::Return);

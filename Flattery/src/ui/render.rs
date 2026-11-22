@@ -38,7 +38,6 @@ impl FlatteryView {
         d.rounded_rect(0.0, 0.0, WINDOW_W, WINDOW_H, 0.0, BG);
         d.rounded_rect(0.0, 0.0, WINDOW_W, HEADER_HEIGHT, 0.0, PANEL);
         d.text(36.0, 44.0, "FLATTERY", 24.0, GOLD);
-        d.with_label_font(|d| d.text(192.0, 44.0, "Spectral leveler & shaper", 13.0, TEXT));
 
         d.appearance_button(THEME_BUTTON, appearance);
 
@@ -46,7 +45,7 @@ impl FlatteryView {
             16.0,
             HEADER_HEIGHT + 16.0,
             WINDOW_W - 32.0,
-            WINDOW_H - HEADER_HEIGHT - 32.0,
+            graph::CONTENT_H - HEADER_HEIGHT - 32.0,
         );
         d.panel(module, PANEL, LINE);
 
@@ -345,7 +344,7 @@ impl FlatteryView {
             }
         }
 
-        let footer_y = WINDOW_H - 23.0;
+        let footer_y = WINDOW_H - pleasant_ui::draw::TOOLTIP_BASELINE_INSET;
         if let Some(reading) = reading {
             reading.paint_footer(d, GRAPH_X, footer_y);
         } else {
@@ -355,6 +354,8 @@ impl FlatteryView {
                 "Reset graph zoom."
             } else if self.edit.is_some() {
                 "Enter applies the value. Escape cancels."
+            } else if let Some(hint) = self.control_hint() {
+                hint
             } else if probe_x.is_some() {
                 "No analysis at this frequency."
             } else if bypassed {
@@ -362,7 +363,11 @@ impl FlatteryView {
             } else {
                 "Hover the graph to inspect input level and applied filter gain."
             };
-            d.with_label_font(|d| d.text(GRAPH_X, footer_y, hint, READABLE_LABEL_SIZE, MUTED));
+            d.bottom_tooltip(
+                (GRAPH_X, graph::CONTENT_H, WINDOW_W - GRAPH_X - 30.0, pleasant_ui::draw::TOOLTIP_HEIGHT),
+                hint,
+                MUTED,
+            );
         }
     }
 

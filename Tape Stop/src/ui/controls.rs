@@ -49,7 +49,8 @@ pub(super) const XY_PAD: (f32, f32, f32, f32) = (
 pub(super) const XY_AXIS: (f32, f32, f32, f32) = (XY_PAD.0, 376.0, 124.0, 28.0);
 pub(super) const XY_MODE: (f32, f32, f32, f32) = (XY_PAD.0 + 132.0, 376.0, 120.0, 28.0);
 pub(super) const TIME_SYNC: (f32, f32, f32, f32) = (490.0, 22.0, 96.0, 30.0);
-pub(super) const AFFECT_MIDI: (f32, f32, f32, f32) = (340.0, 22.0, 138.0, 30.0);
+pub(super) const SETTINGS_Y: f32 = 434.0;
+pub(super) const AFFECT_MIDI: (f32, f32, f32, f32) = (GRAPH_X, SETTINGS_Y + 7.0, 138.0, 30.0);
 pub(super) const TEMPO_HEADER: pleasant_ui::tempo::Header = pleasant_ui::tempo::Header {
     source: (600.0, 22.0, 136.0, 30.0),
     bpm: (746.0, 22.0, 150.0, 30.0),
@@ -67,7 +68,6 @@ pub(super) const STOP_BUTTON: (f32, f32, f32, f32) = (
 const MIDI_SLOT_W: f32 = 66.0;
 
 pub(super) const TRIGGER_BYPASS: f32 = 22.0;
-const COG_SIZE: f32 = 22.0;
 const AXIS_GAP: f32 = 8.0;
 const AXIS_VALUE_W: f32 = 60.0;
 
@@ -89,7 +89,12 @@ pub(super) fn trigger_bar_rect() -> (f32, f32, f32, f32) {
 }
 
 pub(super) fn midi_slot() -> (f32, f32, f32, f32) {
-    (GRAPH_X, DROP_TIME_READOUT.1, MIDI_SLOT_W, DROP_READOUT_H)
+    (
+        AFFECT_MIDI.0 + AFFECT_MIDI.2 + AXIS_GAP,
+        SETTINGS_Y,
+        MIDI_SLOT_W,
+        44.0,
+    )
 }
 
 pub(super) fn midi_label_rect() -> (f32, f32, f32, f32) {
@@ -103,25 +108,15 @@ pub(super) fn midi_value_rect() -> (f32, f32, f32, f32) {
     (label.0 + label.2, slot.1, slot.2 - label.2, slot.3)
 }
 
-pub(super) fn cog_rect() -> (f32, f32, f32, f32) {
-    let readout = DROP_TIME_READOUT;
-    (
-        readout.0 - AXIS_GAP - COG_SIZE,
-        readout.1 + (readout.3 - COG_SIZE) * 0.5,
-        COG_SIZE,
-        COG_SIZE,
-    )
-}
-
 pub(super) fn axis_slot(index: usize) -> (f32, f32, f32, f32) {
     let midi = midi_slot();
     let start = midi.0 + midi.2 + AXIS_GAP;
-    // Preserve the trigger's extra label space while shortening all four sliders equally.
+    // Give the trigger extra room for its power button and label.
     let trigger_extra = 40.0;
-    let width = (cog_rect().0 - AXIS_GAP - start - AXIS_GAP * 2.0 - trigger_extra) / 3.0;
+    let width = (UI_W - 20.0 - start - AXIS_GAP * 2.0 - trigger_extra) / 3.0;
     (
         start + index as f32 * (width + AXIS_GAP),
-        DROP_TIME_READOUT.1,
+        SETTINGS_Y,
         if index == 2 {
             width + trigger_extra
         } else {
@@ -173,21 +168,15 @@ impl TapeStopView {
         if Self::inside(x, y, DROP_TIME_READOUT) {
             return Some(KnobId::DropTime);
         }
-        if self.axis_controls_interactive()
-            && self.knob_enabled(KnobId::RestartThresh)
-            && Self::inside(x, y, trigger_value_rect())
-        {
+        if self.knob_enabled(KnobId::RestartThresh) && Self::inside(x, y, trigger_value_rect()) {
             return Some(KnobId::RestartThresh);
         }
-        if self.axis_controls_interactive() {
-            if Self::inside(x, y, midi_value_rect()) {
-                return Some(self.midi_number_id());
-            }
-            return [KnobId::Xfade, KnobId::StereoDiv]
-                .into_iter()
-                .find(|id| Self::inside(x, y, axis_value_rect(Self::slider_rect(*id))));
+        if Self::inside(x, y, midi_value_rect()) {
+            return Some(self.midi_number_id());
         }
-        None
+        [KnobId::Xfade, KnobId::StereoDiv]
+            .into_iter()
+            .find(|id| Self::inside(x, y, axis_value_rect(Self::slider_rect(*id))))
     }
 
     pub(super) fn press_value(
@@ -542,19 +531,6 @@ impl TapeStopView {
                 }
             }
         }
-    }
-
-    pub(super) fn draw_axis_cog(&self, d: &mut Draw) {
-        let cog = cog_rect();
-        let hovered = self
-            .idle_hover()
-            .is_some_and(|(hx, hy)| Self::inside(hx, hy, cog));
-        let color = if self.show_axis_controls || hovered {
-            GOLD
-        } else {
-            MUTED
-        };
-        d.cog_icon(cog.0 + cog.2 * 0.5, cog.1 + cog.3 * 0.5, color);
     }
 
     pub(super) fn draw_axis_slider(&self, d: &mut Draw, id: KnobId) {

@@ -1,4 +1,4 @@
-use super::{controls::*, graph::*, *};
+use super::{controls::*, *};
 use std::time::Instant;
 
 impl TapeStopView {
@@ -31,16 +31,6 @@ impl TapeStopView {
         d.rounded_rect(0.0, 0.0, UI_W, HEADER_HEIGHT, 0.0, PANEL);
         d.text(36.0, 44.0, "TAPE STOP", 24.0, GOLD);
         reels.draw(d, transport, enabled, now);
-        let affect_midi = self.params.affect_midi.value();
-        d.button_surface(AFFECT_MIDI, TEAL, affect_midi as u8 as f32, 0.0, 0.0);
-        d.text_centered(
-            AFFECT_MIDI.0 + AFFECT_MIDI.2 * 0.5,
-            AFFECT_MIDI.1 + 20.0,
-            if affect_midi { "Affect MIDI: On" } else { "Affect MIDI: Off" },
-            12.0,
-            if affect_midi { TEAL } else { TEXT },
-        );
-
         d.appearance_button(THEME_BUTTON, prefs().label());
 
         self.draw_graph(d, transport);
@@ -75,26 +65,34 @@ impl TapeStopView {
             if stop_active { GOLD } else { TEXT },
         );
 
-        if self.axis_controls_progress > 0.0 {
-            // Slide an opaque settings tray over the X-axis values, keeping both
-            // the plot and cog fixed. Clip the tray so it cannot cover Drop.
-            let left = GRAPH_X - 20.0;
-            let top = GRAPH_Y + GRAPH_H + 4.0;
-            let width = cog_rect().0 - 4.0 - left;
-            let height = UI_H - 8.0 - top;
-            let progress = self.axis_controls_progress;
-            let eased = progress * progress * (3.0 - 2.0 * progress);
-            d.scissor(left, top, width, height);
-            d.offset_x = width * (1.0 - eased);
-            d.rounded_rect(left, top, width, height, 0.0, pleasant_ui::theme::BG);
-            self.draw_midi_slot(d);
-            self.draw_audio_trigger(d);
-            for &id in &[KnobId::Xfade, KnobId::StereoDiv] {
-                self.draw_axis_slider(d, id);
-            }
-            d.offset_x = 0.0;
-            d.reset_scissor();
+        d.rect(20.0, SETTINGS_Y - 14.0, UI_W - 40.0, 1.0, LINE);
+        let affect_midi = self.params.affect_midi.value();
+        d.button_surface(AFFECT_MIDI, TEAL, affect_midi as u8 as f32, 0.0, 0.0);
+        d.text_centered(
+            AFFECT_MIDI.0 + AFFECT_MIDI.2 * 0.5,
+            AFFECT_MIDI.1 + 20.0,
+            if affect_midi {
+                "Affect MIDI: On"
+            } else {
+                "Affect MIDI: Off"
+            },
+            12.0,
+            if affect_midi { TEAL } else { TEXT },
+        );
+        self.draw_midi_slot(d);
+        self.draw_audio_trigger(d);
+        for &id in &[KnobId::Xfade, KnobId::StereoDiv] {
+            self.draw_axis_slider(d, id);
         }
-        self.draw_axis_cog(d);
+        d.bottom_tooltip(
+            (
+                20.0,
+                CONTENT_H,
+                UI_W - 40.0,
+                pleasant_ui::draw::TOOLTIP_HEIGHT,
+            ),
+            self.tooltip(),
+            MUTED,
+        );
     }
 }

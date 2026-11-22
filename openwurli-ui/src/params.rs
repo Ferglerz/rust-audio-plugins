@@ -62,7 +62,7 @@ pub struct OpenWurliUiParams {
 impl Default for OpenWurliUiParams {
     fn default() -> Self {
         Self {
-            editor_state: ViziaState::new_screen_sized("OpenWurli UI", || (720, 550)),
+            editor_state: ViziaState::new_screen_sized("OpenWurli UI", || (720, 516 + pleasant_ui::draw::TOOLTIP_HEIGHT as u32)),
             volume: percent_param("Volume", 0.5, 5.0),
             tremolo_depth: percent_param("Tremolo Depth", 0.5, 50.0),
             speaker_character: percent_param("Speaker Character", 0.0, 50.0),

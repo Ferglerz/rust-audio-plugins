@@ -15,7 +15,7 @@ pub mod params;
 pub mod ui;
 
 use dsp::ProcessingChain;
-use params::ComposureParams;
+use params::{ComposureParams, GraphRangeMode};
 use ui::UiDisplay;
 
 /// Main plugin struct implementing the nih-plug `Plugin` trait.
@@ -23,6 +23,8 @@ pub struct Composure {
     params: Arc<ComposureParams>,
     chain: ProcessingChain,
     ui_display: Arc<UiDisplay>,
+    last_graph_generation: u32,
+    last_range_mode: GraphRangeMode,
 }
 
 impl Default for Composure {
@@ -31,6 +33,8 @@ impl Default for Composure {
             params: Arc::new(ComposureParams::default()),
             chain: ProcessingChain::new(44100.0),
             ui_display: Arc::new(UiDisplay::default()),
+            last_graph_generation: u32::MAX,
+            last_range_mode: GraphRangeMode::Range48,
         }
     }
 }
@@ -86,6 +90,8 @@ impl Plugin for Composure {
             parameter_adapter::capture_block_state(&self.params),
             self.params.graph_store.load_for_range(graph_range_mode),
         );
+        self.last_graph_generation = self.params.graph_store.generation();
+        self.last_range_mode = graph_range_mode;
         self.chain.snap_runtime_params();
         context.set_latency_samples(self.chain.latency_samples());
         true
@@ -107,11 +113,18 @@ impl Plugin for Composure {
     ) -> ProcessStatus {
         let editor_open = self.params.editor_state.is_open();
         let graph_range_mode = self.params.graph_range_mode.value();
-        self.params.graph_store.select_range(graph_range_mode);
-        self.chain.update_settings(
-            parameter_adapter::capture_block_state(&self.params),
-            self.params.graph_store.load_for_range(graph_range_mode),
-        );
+        let cur_generation = self.params.graph_store.generation();
+        if cur_generation != self.last_graph_generation
+            || graph_range_mode != self.last_range_mode
+        {
+            self.params.graph_store.select_range(graph_range_mode);
+            self.chain
+                .sync_graph(self.params.graph_store.load_for_range(graph_range_mode));
+            self.last_graph_generation = cur_generation;
+            self.last_range_mode = graph_range_mode;
+        }
+        self.chain
+            .update_block_params(parameter_adapter::capture_block_state(&self.params));
         self.chain
             .set_filter_preview_drag(self.ui_display.filter_preview_active());
         if let Some(latency) = self.chain.latency_changed() {

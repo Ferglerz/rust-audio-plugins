@@ -87,8 +87,11 @@ impl ScdEditorView {
                 }
                 WindowEvent::MouseMove(..) => {
                     self.handle_drag_move(cx, window_event, meta, mouse_x, mouse_y, prev_y);
+                    cx.needs_redraw();
                 }
                 WindowEvent::MouseOut => {
+                    self.mouse = (-1.0, -1.0);
+                    cx.needs_redraw();
                     if self.hover_sof.is_some()
                         || self.hover_lock
                         || self.hover_invert

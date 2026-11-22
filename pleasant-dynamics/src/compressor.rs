@@ -195,6 +195,16 @@ impl VocalComp {
     ) -> ([f64; 2], f64, f64) {
         let coefficients = self.coefficients(sample_rate, settings);
         self.update_link_mix(settings.stereo_link, coefficients.link);
+        self.tick_comp_with_coefficients(input, sidechain, settings, coefficients)
+    }
+
+    fn tick_comp_with_coefficients(
+        &mut self,
+        input: [f64; 2],
+        sidechain: [f64; 2],
+        settings: CompSettings,
+        coefficients: CoefficientCache,
+    ) -> ([f64; 2], f64, f64) {
         let peaks = Self::stereo_peaks(sidechain);
         let makeup_target = if settings.auto_makeup {
             -settings.threshold * 0.35 * (1.0 - 1.0 / settings.ratio.clamp(1.0, 20.0)) / 0.75
@@ -263,7 +273,7 @@ impl VocalComp {
             input[1] * self.linked(pse_gains[1], pse_gains[2]),
         ];
         let (output, reduction, sidechain_level) =
-            self.tick_comp(gated, sidechain, settings, sample_rate);
+            self.tick_comp_with_coefficients(gated, sidechain, settings, coefficients);
         (output, reduction, sidechain_level, pse_reduction)
     }
 

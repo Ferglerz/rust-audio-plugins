@@ -113,7 +113,7 @@ impl Default for StripParams {
                 }))
         }
         Self {
-            editor_state: ViziaState::new_screen_sized("Damian Channel Strip", || (1282, 672)),
+            editor_state: ViziaState::new_screen_sized("Damian Channel Strip", || (1282, 672 + pleasant_ui::draw::TOOLTIP_HEIGHT as u32)),
             bands: Arc::new(Mutex::new(Vec::new())),
             eq2_bands: Arc::new(Mutex::new(Vec::new())),
             sc_eq_bands: Arc::new(Mutex::new(vec![Band {

@@ -53,7 +53,8 @@ pub const PROG_Y: f32 = ENV_Y + ENVELOPE_H + MODULE_GAP;
 pub const PROG_H: f32 = 175.0;
 pub const PROG_KNOB_Y: f32 = PROG_Y + MODULE_HEADER_H + 10.0;
 pub const SIDE_H: f32 = ENVELOPE_H + MODULE_GAP + PROG_H; // 656.0
-pub const PLEASANT_EDITOR_HEIGHT: u32 = 740;
+pub const PLEASANT_EDITOR_HEIGHT: u32 =
+    (HEADER_H + ENV_Y + SIDE_H + pleasant_ui::draw::TOOLTIP_HEIGHT) as u32;
 
 /// Square graph fills the transfer module while reserving the axis and meter gutters.
 pub const PLEASANT_GRAPH_X: f32 = TRANS_X + 46.0;
@@ -611,7 +612,6 @@ impl View for Background {
         d.square_rect(0.0, 0.0, width, HEADER_H, PANEL);
         d.line(24.0, HEADER_H, width - 24.0, HEADER_H, LINE, 1.0);
         d.text(30.0, 40.0, "COMPOSURE", 24.0, GOLD);
-        d.text(220.0, 39.0, "CURVE DYNAMICS", 13.0, MUTED);
 
         let y = ENV_Y + HEADER_H;
         let expansion =

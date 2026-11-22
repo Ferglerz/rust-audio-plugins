@@ -477,7 +477,7 @@ fn tracker_replaces_performance_modules_and_removes_the_bottom_row() {
     assert_eq!(r, EXPANDED_SURFACE);
     assert_eq!(r.0, CHORDS_SURFACE.0);
     assert_eq!(r.0 + r.2, PERF_SURFACE.0 + PERF_SURFACE.2);
-    assert_eq!(H, MODULE_BOTTOM + 22.0);
+    assert_eq!(H, MODULE_BOTTOM + pleasant_ui::draw::TOOLTIP_HEIGHT);
     assert!(r.1 + r.3 < ARP_SURFACE.1);
     for i in 0..tracker::ACTIONS.len() {
         let button = tracker::action_rect(i);

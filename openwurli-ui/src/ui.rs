@@ -17,7 +17,7 @@ use pleasant_ui::{
 use std::{cell::Cell, sync::Arc, time::Duration};
 
 const WIDTH: f32 = 720.0;
-const HEIGHT: f32 = 550.0;
+const HEIGHT: f32 = 516.0 + pleasant_ui::draw::TOOLTIP_HEIGHT;
 const KNOB_W: f32 = 150.0;
 const KNOB_H: f32 = 140.0;
 const CPU_BUTTON: (f32, f32, f32, f32) = (551.0, 328.0, 104.0, 42.0);
@@ -106,6 +106,30 @@ impl OpenWurliView {
             .iter()
             .copied()
             .find(|knob| point_in_rect(x, y, knob.rect()))
+    }
+
+    fn tooltip(&self) -> &'static str {
+        let Some((x, y)) = self.hover else {
+            return "DSP: HAL0ZER0 / OpenWurli · GPL-3.0-or-later · Hover controls for help";
+        };
+        for (rect, text) in [
+            (THEME_BUTTON, "Cycle Dark, Light, and Auto appearance."),
+            (CPU_BUTTON, "Fast uses less CPU; Heavy uses the more detailed processing mode."),
+            (EXTENDED_BUTTON, "Enable notes beyond the original Wurlitzer keyboard range."),
+            (SAG_BUTTON, "Enable extra power-supply sag for a softer response on strong notes."),
+        ] {
+            if point_in_rect(x, y, rect) { return text; }
+        }
+        match self.knob_at(x, y) {
+            Some(Knob::Volume) => "Volume: adjust the instrument's output level. Double-click to reset.",
+            Some(Knob::Tremolo) => "Tremolo depth: adjust the amount of volume modulation. Double-click to reset.",
+            Some(Knob::Speaker) => "Speaker character: blend the speaker coloration. Double-click to reset.",
+            Some(Knob::ReedDecay) => "Reed decay: adjust how long notes ring. Double-click to reset.",
+            Some(Knob::HammerHardness) => "Hammer hardness: adjust the attack character. Double-click to reset.",
+            Some(Knob::PickupDrive) => "Pickup drive: adjust the pickup's nonlinear response. Double-click to reset.",
+            Some(Knob::TremoloResponse) => "Tremolo response: adjust the tremolo behavior. Double-click to reset.",
+            None => "DSP: HAL0ZER0 / OpenWurli · GPL-3.0-or-later · Hover controls for help",
+        }
     }
 
     fn emit_once(cx: &mut EventContext, ptr: ParamPtr, norm: f32) {
@@ -326,11 +350,9 @@ impl View for OpenWurliView {
             if sag { "ON" } else { "OFF" },
             GOLD,
         );
-        d.text(
-            45.0,
-            544.0,
-            "DSP: HAL0ZER0 / OPENWURLI  •  GPL-3.0-OR-LATER",
-            8.0,
+        d.bottom_tooltip(
+            (40.0, 516.0, WIDTH - 80.0, pleasant_ui::draw::TOOLTIP_HEIGHT),
+            self.tooltip(),
             MUTED,
         );
     }

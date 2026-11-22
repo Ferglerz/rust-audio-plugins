@@ -119,19 +119,16 @@ impl ChordboardView {
         };
         if !feedback && hint.is_some() && self.delay_footer_hovered() {
             d.with_readable_style(self.delay_label_font.get(), |d| {
-                d.with_label_font(|d| {
-                    let size = pleasant_ui::draw::READABLE_LABEL_SIZE;
-                    let footer = d.fit_text(footer, W - 64.0, size);
-                    d.text(32.0, H - 10.0, &footer, size, TEXT);
-                });
+                d.bottom_tooltip(
+                    (32.0, MODULE_BOTTOM, W - 64.0, pleasant_ui::draw::TOOLTIP_HEIGHT),
+                    footer,
+                    TEXT,
+                );
             });
         } else {
-            let footer = self.fit_text(&d, footer, W - 64.0, TEXT_LABEL);
-            d.text(
-                32.0,
-                H - 10.0,
-                &footer,
-                TEXT_LABEL,
+            d.bottom_tooltip(
+                (32.0, MODULE_BOTTOM, W - 64.0, pleasant_ui::draw::TOOLTIP_HEIGHT),
+                footer,
                 if feedback { GOLD } else { MUTED },
             );
         }

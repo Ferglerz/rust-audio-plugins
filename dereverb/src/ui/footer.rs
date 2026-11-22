@@ -132,9 +132,10 @@ impl DereverbView {
         } else {
             "Hover the history to inspect aligned levels. The In and Out readouts average the last 200 ms.".into()
         };
-        d.with_label_font(|d| {
-            let tooltip = d.fit_text(&tooltip, SIZE.0 - 72.0, READABLE_LABEL_SIZE);
-            d.text(36.0, 605.0, &tooltip, READABLE_LABEL_SIZE, TEXT);
-        });
+        d.bottom_tooltip(
+            (36.0, 588.0, SIZE.0 - 72.0, pleasant_ui::draw::TOOLTIP_HEIGHT),
+            &tooltip,
+            TEXT,
+        );
     }
 }

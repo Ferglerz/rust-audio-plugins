@@ -28,7 +28,7 @@ mod pulls;
 use pulls::PullMotion;
 
 type Rect = (f32, f32, f32, f32);
-const SIZE: (f32, f32) = (1120.0, 960.0);
+const SIZE: (f32, f32) = (1120.0, 922.0 + pleasant_ui::draw::TOOLTIP_HEIGHT);
 const THEME: Rect = (1016.0, 17.0, 72.0, 30.0);
 const PAGE_PREV: Rect = (848.0, 17.0, 28.0, 28.0);
 const PAGE_NEXT: Rect = (968.0, 17.0, 28.0, 28.0);
@@ -1330,11 +1330,9 @@ impl AutomixerView {
             d.text(32.0, 906.0, warning, 11.0, GOLD);
         }
         d.line(32.0, 922.0, 1088.0, 922.0, LINE, 1.0);
-        d.text(
-            32.0,
-            942.0,
+        d.bottom_tooltip(
+            (32.0, 922.0, SIZE.0 - 64.0, pleasant_ui::draw::TOOLTIP_HEIGHT),
             pull_hint.as_deref().unwrap_or_else(|| self.tooltip()),
-            10.0,
             MUTED,
         );
         self.paint_menu(d);

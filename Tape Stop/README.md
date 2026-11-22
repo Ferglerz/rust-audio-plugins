@@ -4,7 +4,7 @@ An audio tape brake with MIDI-triggered slowdown and return.
 
 ## Affect MIDI
 
-**Affect MIDI** in the header is on by default and saved with the preset. Place
+**Affect MIDI** in the bottom settings row is on by default and saved with the preset. Place
 Tape Stop before an instrument and route its MIDI output to that instrument.
 
 Outgoing MIDI follows the tape speed: notes and controllers slow down, wait while

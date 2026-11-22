@@ -32,6 +32,7 @@ mod param_widget_ext;
 #[path = "controls/step_points.rs"]
 mod step_points;
 mod theme;
+mod tooltip;
 #[path = "graph/threshold_lines.rs"]
 mod threshold_lines;
 
@@ -181,6 +182,7 @@ fn build_editor_contents(cx: &mut Context, params: Arc<ComposureParams>, display
         .height(EditorData::appearance.map(|mode| Pixels(appearance::editor_height(*mode) as f32)));
 
         appearance::build_selector(cx);
+        tooltip::build(cx);
     })
     .id("root")
     .class("composure")
