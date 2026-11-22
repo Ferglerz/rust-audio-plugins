@@ -32,14 +32,8 @@ where
     Label::new(cx, point_lens)
         .class("graph-point-count")
         .position_type(PositionType::SelfDirected)
-        .left(
-            super::EditorData::appearance
-                .map(|mode| Pixels(AXIS_W + super::appearance::graph_size(*mode) - 64.0)),
-        )
-        .top(
-            super::EditorData::appearance
-                .map(|mode| Pixels(12.0 + super::appearance::graph_size(*mode) - 36.0)),
-        )
+        .left(Pixels(AXIS_W + super::appearance::graph_size() - 64.0))
+        .top(Pixels(12.0 + super::appearance::graph_size() - 36.0))
         .width(Pixels(44.0))
         .height(Pixels(16.0));
 
@@ -57,11 +51,8 @@ where
     Label::new(cx, hint_lens)
         .class("graph-ctrl-hint")
         .position_type(PositionType::SelfDirected)
-        .left(super::EditorData::appearance.map(|_| Pixels(AXIS_W + 16.0)))
-        .top(
-            super::EditorData::appearance
-                .map(|mode| Pixels(12.0 + super::appearance::graph_size(*mode) - 20.0)),
-        )
+        .left(Pixels(AXIS_W + 16.0))
+        .top(Pixels(12.0 + super::appearance::graph_size() - 20.0))
         .width(Pixels(160.0))
         .height(Pixels(14.0));
 }
@@ -72,9 +63,8 @@ where
 {
     for index in 1..=MAX_AXIS_LABELS {
         {
-            let mode = 0;
             let top_lens = params.clone().map(move |p: &Arc<ComposureParams>| {
-                Pixels(axis_label_y(p, index, mode) - super::appearance::graph_y(mode) + 12.0)
+                Pixels(axis_label_y(p, index) - super::appearance::graph_y() + 12.0)
             });
             let label_lens = params.map(move |p: &Arc<ComposureParams>| {
                 let labels = graph_display::axis_label_db_values(graph_range_db(p));
@@ -105,20 +95,19 @@ fn axis_label_text(p: &ComposureParams, index: usize) -> Option<String> {
     labels.get(idx).map(|db| db.to_string())
 }
 
-fn axis_label_y(p: &ComposureParams, index: usize, mode: u8) -> f32 {
+fn axis_label_y(p: &ComposureParams, index: usize) -> f32 {
     let labels = graph_display::axis_label_db_values(graph_range_db(p));
-    let idx = match index.checked_sub(1) {
-        Some(i) if i < labels.len() => i,
-        _ => return super::appearance::graph_y(mode),
+    let idx = index - 1;
+    let Some(&db) = labels.get(idx) else {
+        return super::appearance::graph_y();
     };
-    let db = labels[idx] as f64;
     let op_min = -graph_range_db(p);
     graph_display::axis_label_y(
-        db,
+        db as f64,
         op_min,
         graph_range_db(p),
-        super::appearance::graph_size(mode),
-    ) + super::appearance::graph_y(mode)
+        super::appearance::graph_size(),
+    ) + super::appearance::graph_y()
         - 5.0
 }
 
@@ -202,7 +191,7 @@ impl View for RangeMenu {
             if matches!(e, WindowEvent::MouseDown(MouseButton::Left)) {
                 let row =
                     ((cx.mouse().cursory - cx.bounds().y) / (18.0 * cx.scale_factor())) as usize;
-                if let Some(mode) = crate::params::GraphRangeMode::PLEASANT.get(row) {
+                if let Some(mode) = crate::params::GraphRangeMode::ALL.get(row) {
                     self.param.begin_set_parameter(cx);
                     self.param.set_normalized_value(
                         cx,
@@ -220,7 +209,7 @@ impl View for RangeMenu {
         let mut d = super::appearance::painter(cx, canvas, 76.0);
         d.rect(0.0, 0.0, 76.0, 216.0, pleasant_ui::PANEL);
         d.outline((0.0, 0.0, 76.0, 216.0), pleasant_ui::LINE);
-        for (i, mode) in crate::params::GraphRangeMode::PLEASANT.iter().enumerate() {
+        for (i, mode) in crate::params::GraphRangeMode::ALL.iter().enumerate() {
             let y = i as f32 * 18.0;
             if range == mode.range_db() {
                 d.rect(1.0, y, 74.0, 18.0, pleasant_ui::LINE);

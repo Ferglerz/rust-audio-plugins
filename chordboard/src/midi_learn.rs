@@ -225,7 +225,7 @@ pub fn base(params: &ChordboardParams, target: usize) -> i32 {
         4 => params.quality.value(),
         5 => params.latch.value() as i32,
         6 => params.arp_enabled.value() as i32,
-        7 => params.arp_page.value(),
+        7 => 0,
         BASE_INVERSION => params.base_inversion.value(),
         COMPLEXITY => params.complexity.value(),
         VELOCITY => float_base(&params.velocity),

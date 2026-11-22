@@ -2,41 +2,74 @@ use super::*;
 
 impl GraphLayout {
     pub fn draw_background(&self, d: &mut Draw, fft_size: usize, srate: f64) {
-        let bin_hz = srate / fft_size as f64;
-        let bin_hz_inv = 1.0 / bin_hz;
-        let right = self.gx + self.gw;
-        let columns = self.gw.ceil() as usize;
-
-        for i in 0..columns {
-            let x0 = self.gx + i as f32;
-            let x1 = (self.gx + (i + 1) as f32).min(right);
-            let w = x1 - x0;
-            if w <= 0.0 {
-                continue;
-            }
-
-            let norm = (i as f32 / self.gw).clamp(0.0, 1.0) as f64;
-            let pixel_bin = flattery_pos_to_freq(norm, self.min_freq, self.max_freq) * bin_hz_inv;
-            let bin_start = pixel_bin.max(0.0) as usize;
-
-            let next_norm = ((i + 1) as f32 / self.gw).min(1.0) as f64;
-            let next_bin =
-                flattery_pos_to_freq(next_norm, self.min_freq, self.max_freq) * bin_hz_inv;
-            let bins_per_pixel = (next_bin - pixel_bin).max(0.0);
-            let band_width_px = if bins_per_pixel > 0.0 {
-                1.0 / bins_per_pixel
-            } else {
-                9999.0
-            };
-
-            d.rect(
-                x0,
-                self.gy,
-                w,
-                self.gh,
-                stripe_color(bin_start, band_width_px),
-            );
+        type StripeKey = (u32, u32, u64, u64, usize, u64);
+        thread_local! {
+            static STRIPE_CACHE: std::cell::RefCell<Option<(StripeKey, Vec<(f32, f32, Color)>)>> =
+                const { std::cell::RefCell::new(None) };
         }
+
+        let key: StripeKey = (
+            self.gx.to_bits(),
+            self.gw.to_bits(),
+            self.min_freq.to_bits(),
+            self.max_freq.to_bits(),
+            fft_size,
+            srate.to_bits(),
+        );
+
+        d.rect(self.gx, self.gy, self.gw, self.gh, STRIPE_LIGHT);
+
+        STRIPE_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            let rebuild = cache.as_ref().is_none_or(|(k, _)| *k != key);
+            if rebuild {
+                let bin_hz_inv = fft_size as f64 / srate;
+                let right = self.gx + self.gw;
+                let columns = self.gw.ceil() as usize;
+                let mut spans: Vec<(f32, f32, Color)> = Vec::new();
+                let mut pixel_bin =
+                    flattery_pos_to_freq(0.0, self.min_freq, self.max_freq) * bin_hz_inv;
+
+                for i in 0..columns {
+                    let x0 = self.gx + i as f32;
+                    let x1 = (self.gx + (i + 1) as f32).min(right);
+                    let w = x1 - x0;
+                    let next_norm = ((i + 1) as f32 / self.gw).min(1.0) as f64;
+                    let next_bin =
+                        flattery_pos_to_freq(next_norm, self.min_freq, self.max_freq) * bin_hz_inv;
+                    if w > 0.0 {
+                        let bin_start = pixel_bin.max(0.0) as usize;
+                        if bin_start % 2 == 0 {
+                            let bins_per_pixel = (next_bin - pixel_bin).max(0.0);
+                            let band_width_px = if bins_per_pixel > 0.0 {
+                                1.0 / bins_per_pixel
+                            } else {
+                                9999.0
+                            };
+                            let color = stripe_color(bin_start, band_width_px);
+                            if color != STRIPE_LIGHT {
+                                if let Some(last) = spans.last_mut() {
+                                    if (last.0 + last.1 - x0).abs() < 0.01 && last.2 == color {
+                                        last.1 += w;
+                                    } else {
+                                        spans.push((x0, w, color));
+                                    }
+                                } else {
+                                    spans.push((x0, w, color));
+                                }
+                            }
+                        }
+                    }
+                    pixel_bin = next_bin;
+                }
+                *cache = Some((key, spans));
+            }
+            if let Some((_, spans)) = cache.as_ref() {
+                for &(x0, w, color) in spans {
+                    d.rect(x0, self.gy, w, self.gh, color);
+                }
+            }
+        });
 
         d.outline((self.gx, self.gy, self.gw, self.gh), LINE);
     }

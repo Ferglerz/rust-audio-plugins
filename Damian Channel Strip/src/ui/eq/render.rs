@@ -126,15 +126,6 @@ impl StripView {
         let config = self.params.processing_config();
         let eq_sr = config.mode.rate(sr);
 
-        let mut raw_lift_gr = [0.0_f64; 256];
-        let mut raw_lift_uncapped = [0.0_f64; 256];
-        for k in 0..256 {
-            raw_lift_gr[k] = self.shared.lift_bin_gr[k].load(Ordering::Relaxed) as f64;
-            raw_lift_uncapped[k] =
-                self.shared.lift_bin_gr_uncapped[k].load(Ordering::Relaxed) as f64;
-        }
-        let smooth_lift_gr = smooth_lift_bins(&raw_lift_gr);
-        let smooth_lift_uncapped = smooth_lift_bins(&raw_lift_uncapped);
         let dyn_uncapped = self
             .shared
             .dyn_gr_uncapped
@@ -448,24 +439,35 @@ impl StripView {
             }
         }
 
-        self.render_lift_page(
-            &mut d,
-            LiftRenderFrame {
-                offset_lift,
-                lift_on,
-                page,
-                next_p,
-                target_p,
-                gx,
-                gw,
-                eq_b,
-                spectrum: &spectrum,
-                sr,
-                lift_bands: &lift_bands,
-                smooth_lift_gr: &smooth_lift_gr,
-                smooth_lift_uncapped: &smooth_lift_uncapped,
-            },
-        );
+        if offset_lift > -GRAPH_CLIP_W && offset_lift < GRAPH_CLIP_W {
+            let mut raw_lift_gr = [0.0_f64; 256];
+            let mut raw_lift_uncapped = [0.0_f64; 256];
+            for k in 0..256 {
+                raw_lift_gr[k] = self.shared.lift_bin_gr[k].load(Ordering::Relaxed) as f64;
+                raw_lift_uncapped[k] =
+                    self.shared.lift_bin_gr_uncapped[k].load(Ordering::Relaxed) as f64;
+            }
+            let smooth_lift_gr = smooth_lift_bins(&raw_lift_gr);
+            let smooth_lift_uncapped = smooth_lift_bins(&raw_lift_uncapped);
+            self.render_lift_page(
+                &mut d,
+                LiftRenderFrame {
+                    offset_lift,
+                    lift_on,
+                    page,
+                    next_p,
+                    target_p,
+                    gx,
+                    gw,
+                    eq_b,
+                    spectrum: &spectrum,
+                    sr,
+                    lift_bands: &lift_bands,
+                    smooth_lift_gr: &smooth_lift_gr,
+                    smooth_lift_uncapped: &smooth_lift_uncapped,
+                },
+            );
+        }
 
         // --- DRAW EQ 2 / SC EQ (if visible) ---
         for (page_idx, offset, page_bands, page_on, allow_dyn) in [

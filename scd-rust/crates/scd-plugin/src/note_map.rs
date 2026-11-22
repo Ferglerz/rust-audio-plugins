@@ -6,19 +6,15 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-const UNMAPPED: u8 = 255;
 const ART_NONE: u16 = u16::MAX;
-const N2_OFF: u8 = 254;
-const DEFAULT_SLOT: u8 = 255;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ArtNotes {
     /// `None` = factory note 1.
     pub n1: Option<u8>,
-    /// `Some(254)` is not used. `None` = factory note 2. `Some(n)` override.
+    /// `None` = factory note 2. `Some(n)` override.
     /// Use `n2_off` to disable a factory note 2.
     pub n2: Option<u8>,
-    #[serde(default)]
     pub n2_off: bool,
 }
 
@@ -34,7 +30,6 @@ impl Default for ArtNotes {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct NoteMapBank {
-    #[serde(default)]
     pub notes: [[ArtNotes; MAX_ARTS]; KitPieceId::COUNT],
 }
 
@@ -291,7 +286,6 @@ impl NoteMapState {
             let packed = pack_entry(pack_of[i], art_of[i], silenced[i] != 0, explicit[i] != 0);
             self.entries[i].store(packed, Ordering::Release);
         }
-        let _ = (UNMAPPED, N2_OFF, DEFAULT_SLOT);
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, NoteMapBank> {
@@ -299,18 +293,8 @@ impl NoteMapState {
     }
 }
 
-fn factory_art(kit_piece: KitPieceId, art: usize) -> ArticulationDef {
-    stonehouse()
-        .arts(kit_piece)
-        .get(art)
-        .cloned()
-        .unwrap_or(ArticulationDef {
-            name: String::new(),
-            layers: 0,
-            rem_vol: 0,
-            note1: 0,
-            note2: None,
-        })
+fn factory_art(kit_piece: KitPieceId, art: usize) -> &'static ArticulationDef {
+    &stonehouse().arts(kit_piece)[art]
 }
 
 fn claim(

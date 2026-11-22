@@ -103,11 +103,8 @@ impl Config {
 
     pub fn decode(value: u32) -> Self {
         Self {
-            mode: MODES.get((value / 8) as usize).copied().unwrap_or_default(),
-            resolution: RESOLUTIONS
-                .get((value % 8) as usize)
-                .copied()
-                .unwrap_or_default(),
+            mode: MODES[(value / 8) as usize],
+            resolution: RESOLUTIONS[(value % 8) as usize],
         }
     }
 

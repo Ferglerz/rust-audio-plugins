@@ -65,7 +65,6 @@ impl From<Shape> for pleasant_eq::EqShape {
     }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
 pub struct Band {
     pub id: u64,
     pub shape: Shape,
@@ -167,12 +166,6 @@ pub fn infer_shape(x: f32, y: f32, curve_drag: bool) -> Shape {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn old_sessions_default_to_second_order() {
-        let b: Band = serde_json::from_str(r#"{"shape":"LowCut","freq":80.0,"q":0.707}"#).unwrap();
-        assert_eq!(b.order, 2);
-        assert_eq!(b.shape, Shape::LowCut);
-    }
     #[test]
     fn shapes_and_orders_round_trip() {
         for shape in Shape::ALL {

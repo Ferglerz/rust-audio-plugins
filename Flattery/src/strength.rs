@@ -47,9 +47,7 @@ pub struct StrengthNode {
     pub freq: f64,
     /// 1.0 sits on the global rest line; 0.0 sits on 0 dB. May exceed 1.0 toward max boost/cut.
     pub weight: f64,
-    #[serde(default = "default_node_q")]
     pub q: f64,
-    #[serde(default = "default_node_radius")]
     pub radius: usize,
 }
 
@@ -91,7 +89,7 @@ pub fn next_node_id(nodes: &[StrengthNode]) -> u64 {
 ///
 /// Each node is an independent bell, summed around the rest line so neighbors
 /// do not pull a spline through each other.
-pub fn weight_at(nodes: &[StrengthNode], freq: f64, _min_freq: f64, _max_freq: f64) -> f64 {
+pub fn weight_at(nodes: &[StrengthNode], freq: f64) -> f64 {
     if nodes.is_empty() {
         return 1.0;
     }
@@ -107,14 +105,14 @@ pub fn fill_bin_weights(
     nodes: &[StrengthNode],
     bin_count: usize,
     bin_hz: f64,
-    min_freq: f64,
-    max_freq: f64,
+    _min_freq: f64,
+    _max_freq: f64,
     out: &mut [f64],
 ) {
     let n = bin_count.min(out.len());
     for (k, slot) in out.iter_mut().enumerate().take(n) {
         let freq = (k as f64 + 0.5) * bin_hz;
-        *slot = weight_at(nodes, freq, min_freq, max_freq);
+        *slot = weight_at(nodes, freq);
     }
 }
 
@@ -267,16 +265,16 @@ mod tests {
 
     #[test]
     fn empty_curve_is_unity() {
-        assert_eq!(weight_at(&[], 1000.0, 10.0, 22050.0), 1.0);
-        assert_eq!(weight_at(&[], 80.0, 10.0, 22050.0), 1.0);
+        assert_eq!(weight_at(&[], 1000.0), 1.0);
+        assert_eq!(weight_at(&[], 80.0), 1.0);
     }
 
     #[test]
     fn single_node_dips_at_center_and_holds_edges() {
         let nodes = [node(1, 1000.0, 0.0)];
-        let mid = weight_at(&nodes, 1000.0, 10.0, 22050.0);
-        let low = weight_at(&nodes, 20.0, 10.0, 22050.0);
-        let high = weight_at(&nodes, 20000.0, 10.0, 22050.0);
+        let mid = weight_at(&nodes, 1000.0);
+        let low = weight_at(&nodes, 20.0);
+        let high = weight_at(&nodes, 20000.0);
         assert!(mid < 0.15, "expected a dip at the node, got {mid}");
         assert!(low > 0.85, "low edge should stay near 1, got {low}");
         assert!(high > 0.85, "high edge should stay near 1, got {high}");
@@ -285,14 +283,14 @@ mod tests {
     #[test]
     fn distant_nodes_do_not_tie_the_midband() {
         let nodes = [node(1, 80.0, 0.0), node(2, 12000.0, 0.0)];
-        let mid = weight_at(&nodes, 1000.0, 10.0, 22050.0);
+        let mid = weight_at(&nodes, 1000.0);
         assert!(mid > 0.7, "bells should not drag 1 kHz toward 0, got {mid}");
     }
 
     #[test]
     fn weights_are_clamped() {
         let nodes = [node(1, 1000.0, 40.0)];
-        let w = weight_at(&nodes, 1000.0, 10.0, 22050.0);
+        let w = weight_at(&nodes, 1000.0);
         assert!(w <= WEIGHT_MAX + 1e-9);
     }
 
@@ -303,7 +301,7 @@ mod tests {
         let mut out = vec![0.0; 256];
         fill_bin_weights(&nodes, 256, bin_hz, 10.0, 22050.0, &mut out);
         let k = (1800.0 / bin_hz).floor() as usize;
-        let expected = weight_at(&nodes, (k as f64 + 0.5) * bin_hz, 10.0, 22050.0);
+        let expected = weight_at(&nodes, (k as f64 + 0.5) * bin_hz);
         assert!((out[k] - expected).abs() < 1e-9);
     }
 }

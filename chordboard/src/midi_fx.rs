@@ -298,19 +298,13 @@ pub const EFFECTS: [MidiFxId; 5] = [
     MidiFxId::MidiEq,
 ];
 
-fn legacy_order() -> Vec<MidiFxId> {
-    vec![MidiFxId::Delay]
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
 pub struct MidiFxState {
     pub delay: DelaySettings,
     pub harmonizer: HarmonizerSettings,
     pub rhythm_gate: RhythmGateSettings,
     pub voice_splitter: VoiceSplitterSettings,
     pub midi_eq: MidiEqSettings,
-    #[serde(default = "legacy_order")]
     pub order: Vec<MidiFxId>,
 }
 impl Default for MidiFxState {

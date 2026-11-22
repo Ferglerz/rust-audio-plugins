@@ -97,14 +97,20 @@ impl OnlineWpe {
     /// Returns false if numerical recovery required a frame of dry passthrough.
     pub fn process(&mut self, spectrum: &mut [C]) -> bool {
         debug_assert_eq!(spectrum.len(), self.bins.len());
+        let lag_indices: [usize; TAPS] =
+            std::array::from_fn(|i| (self.position + self.history - self.lags[i]) % self.history);
+        let inv_history = 1.0 / self.history as f64;
+        let inv_alpha = 1.0 / self.alpha;
+        let use_room_filter = self.room_rate < 1.0;
+
         let mut largest = 0.0_f64;
         for (bin, &current) in self.bins.iter_mut().zip(spectrum.iter()) {
             bin.history[self.position] = current;
             // Upstream online_wpe_step excludes delay+1 frames including current.
             for (i, x) in bin.window.iter_mut().enumerate() {
-                *x = bin.history[(self.position + self.history - self.lags[i]) % self.history];
+                *x = bin.history[lag_indices[i]];
             }
-            bin.power = bin.history.iter().map(|v| v.norm_sqr()).sum::<f64>() / self.history as f64;
+            bin.power = bin.history.iter().map(|v| v.norm_sqr()).sum::<f64>() * inv_history;
             bin.prediction = current;
             for (g, x) in bin.filter.iter().zip(&bin.window) {
                 bin.prediction -= g.conj() * x;
@@ -131,7 +137,7 @@ impl OnlineWpe {
                 *output = C::ZERO;
                 continue;
             }
-            let audible = if self.room_rate < 1.0 {
+            let audible = if use_room_filter {
                 *output
                     - bin
                         .room_filter
@@ -143,14 +149,14 @@ impl OnlineWpe {
                 bin.prediction
             };
             let inverse = 1.0 / bin.denominator.max(floor);
+            let pred_conj = bin.prediction.conj();
             for i in 0..TAPS {
-                bin.filter[i] += bin.numerator[i] * inverse * bin.prediction.conj();
+                let k_i = bin.numerator[i] * inverse;
+                bin.filter[i] += k_i * pred_conj;
                 // P is Hermitian, hence x^H P = (P x)^H. Preserve that symmetry
                 // explicitly to avoid accumulated complex roundoff in long sessions.
                 for j in i..TAPS {
-                    let p = (bin.covariance[i][j]
-                        - bin.numerator[i] * bin.numerator[j].conj() * inverse)
-                        / self.alpha;
+                    let p = (bin.covariance[i][j] - k_i * bin.numerator[j].conj()) * inv_alpha;
                     bin.covariance[i][j] = p;
                     bin.covariance[j][i] = p.conj();
                 }
@@ -183,11 +189,13 @@ impl OnlineWpe {
                 });
             if healthy {
                 *output = audible;
-                // Keep a slower frequency/phase/delay estimate of the component
-                // being removed. The instantaneous residual still drives RLS;
-                // only the audible predictor uses this history, never a notch EQ.
-                for (room, current) in bin.room_filter.iter_mut().zip(&bin.filter) {
-                    *room += self.room_rate * (*current - *room);
+                if use_room_filter {
+                    // Keep a slower frequency/phase/delay estimate of the component
+                    // being removed. The instantaneous residual still drives RLS;
+                    // only the audible predictor uses this history, never a notch EQ.
+                    for (room, current) in bin.room_filter.iter_mut().zip(&bin.filter) {
+                        *room += self.room_rate * (*current - *room);
+                    }
                 }
             } else {
                 bin.reset();

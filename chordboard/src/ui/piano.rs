@@ -972,7 +972,7 @@ impl ChordboardView {
             .chain(visible)
             .copied()
             .min()
-            .unwrap_or(48);
+            .expect("visible slice is non-empty");
         let high = self
             .snapshot
             .leading_from
@@ -982,7 +982,7 @@ impl ChordboardView {
             .chain(visible)
             .copied()
             .max()
-            .unwrap_or(67);
+            .expect("visible slice is non-empty");
         let x = piano_note_x(low) - 10.0;
         (
             x,

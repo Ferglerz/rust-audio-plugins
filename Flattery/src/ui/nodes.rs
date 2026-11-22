@@ -59,11 +59,9 @@ impl FlatteryView {
 
     pub(super) fn create_node(&mut self, polarity: Polarity, x: f32) -> u64 {
         let freq = self.snap_hz(self.layout.x_to_freq(x));
-        let min_freq = self.layout.min_freq;
-        let max_freq = self.layout.max_freq;
         self.with_nodes_mut(polarity, |nodes| {
             let id = next_node_id(nodes);
-            let weight = weight_at(nodes, freq, min_freq, max_freq);
+            let weight = weight_at(nodes, freq);
             nodes.push(StrengthNode::new(id, freq, weight));
             id
         })

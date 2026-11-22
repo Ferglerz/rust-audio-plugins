@@ -26,10 +26,6 @@ pub struct VelCurve {
     pub nodes: Vec<VelNode>,
 }
 
-pub type Handle = VelHandle;
-pub type Node = VelNode;
-pub type BezierCurve = VelCurve;
-
 impl VelHandle {
     pub fn new(x: f32, y: f32) -> Self {
         Self { x, y }
@@ -217,12 +213,8 @@ impl VelCurve {
             return None;
         }
         let y = self.eval_y(x);
-        let index = self
-            .nodes
-            .iter()
-            .position(|node| node.x > x)
-            .unwrap_or(self.nodes.len());
-        if index == 0 || index >= self.nodes.len() {
+        let index = self.nodes.iter().position(|node| node.x > x)?;
+        if index == 0 {
             return None;
         }
         let previous = self.nodes[index - 1];

@@ -63,8 +63,6 @@ macro_rules! control_catalog {
                 for route in &self.routes {
                     for value in route.values() { visit(value); }
                 }
-                // The last two legacy adapter values are now global host parameters above.
-                for value in self.arp_pages[self.arp_page.value() as usize].values().into_iter().take(6) { visit(value); }
                 changed |= signature.len() != index;
                 signature.truncate(index);
                 changed
@@ -74,14 +72,13 @@ macro_rules! control_catalog {
                 let mut controls = vec![$($builder(stringify!($field), $group, &self.$field)),*];
                 for modulator in &self.modulators { controls.push(toggle("modulator_bypass", 6, &modulator.bypass)); }
                 for route in &self.routes { controls.extend(route.controls()); }
-                controls.extend(self.arp_pages[self.arp_page.value() as usize].controls().into_iter().filter(|c| !matches!(c.id, "swing" | "humanize")));
                 controls
             }
 
             pub fn control(&self, id: &str) -> Option<Control> {
                 match id {
                     $(stringify!($field) => Some($builder(stringify!($field), $group, &self.$field)),)*
-                    _ => self.arp_pages[self.arp_page.value() as usize].control(id),
+                    _ => None,
                 }
             }
 
@@ -92,7 +89,7 @@ macro_rules! control_catalog {
                         norm: self.$field.unmodulated_normalized_value(),
                         toggle: summary_is_toggle!($builder),
                     }),)*
-                    _ => self.arp_pages[self.arp_page.value() as usize].control_summary(id),
+                    _ => None,
                 }
             }
         }
@@ -126,20 +123,15 @@ control_catalog! {
     toggle(strum_chord_latch, 1),
     control(velocity, 0),
     control(length_ms, 0),
-    control(strings, 1),
     control(strings_played, 1),
     control(gliss_ms, 0),
     control(gliss_direction, 0),
     control(strum_ms, 1),
     toggle(strum_sync, 1),
-    control(strum_beats, 1),
     toggle(strum_hold, 1),
     toggle(tempo_sync, 1),
     toggle(daw_alignment, 1),
     control(tempo, 1),
-    control(direction, 1),
-    control(contour, 1),
-    control(contour_curve, 1),
     control(octaves, 1),
     control(output_mode, 2),
     toggle(upper, 2),
@@ -259,9 +251,7 @@ mod signature_tests {
 
     #[test]
     fn nested_control_lookups_match_catalog_values_and_parameter_pointers() {
-        let mut params = ChordboardParams::default();
-        params.arp_page = IntParam::new("Arp page", 5, IntRange::Linear { min: 0, max: 7 });
-        let page = &params.arp_pages[5];
+        let params = ChordboardParams::default();
         let route = &params.routes[0];
         let route_controls = route.controls();
         assert_eq!(
@@ -286,33 +276,6 @@ mod signature_tests {
         );
         assert!(route.control("missing").is_none());
         assert!(route.control_summary("missing").is_none());
-
-        let page_controls = page.controls();
-        assert_eq!(
-            page_controls.iter().map(|c| c.id).collect::<Vec<_>>(),
-            [
-                "arp_mode",
-                "arp_pattern",
-                "arp_octaves",
-                "arp_sync",
-                "arp_free_ms",
-                "rate",
-                "swing",
-                "humanize",
-            ],
-        );
-        for expected in &page_controls {
-            assert_control_matches(page.control(expected.id).unwrap(), expected);
-            assert_summary_matches(page.control_summary(expected.id), expected);
-            if !matches!(expected.id, "swing" | "humanize") {
-                assert_control_matches(params.control(expected.id).unwrap(), expected);
-                assert_summary_matches(params.control_summary(expected.id), expected);
-            }
-        }
-        assert_eq!(
-            page.values().as_slice(),
-            page_controls.iter().map(|c| c.norm).collect::<Vec<_>>(),
-        );
         assert_eq!(params.control("swing").unwrap().ptr, params.swing.as_ptr());
         assert_eq!(params.control("humanize").unwrap().ptr, params.humanize.as_ptr());
         let host = params.param_map();
@@ -320,35 +283,21 @@ mod signature_tests {
             assert_eq!(host.iter().filter(|entry| entry.0 == id).count(), 1);
             assert_eq!(params.controls().iter().filter(|c| c.id == id).count(), 1);
         }
-        assert!(page.control("missing").is_none());
         assert!(params.control("missing").is_none());
-        assert!(page.control_summary("missing").is_none());
         assert!(params.control_summary("missing").is_none());
     }
 
     #[test]
-    fn control_summaries_match_catalog_after_changes_and_keep_global_precedence() {
+    fn control_summaries_match_catalog_after_changes() {
         let mut params = ChordboardParams::default();
-        params.arp_page = IntParam::new("Arp page", 5, IntRange::Linear { min: 0, max: 7 });
         params.latch = BoolParam::new("Latch", !params.latch.value());
         params.swing = FloatParam::new("Swing", 0.23, FloatRange::Linear { min: 0.0, max: 1.0 });
-        params.arp_pages[5].swing =
-            FloatParam::new("Swing", 0.8, FloatRange::Linear { min: 0.0, max: 1.0 });
         params.humanize =
             FloatParam::new("Humanize", 0.37, FloatRange::Linear { min: 0.0, max: 1.0 });
-        params.arp_pages[5].humanize =
-            FloatParam::new("Humanize", 0.7, FloatRange::Linear { min: 0.0, max: 1.0 });
-        params.arp_pages[5].arp_sync = BoolParam::new("Sync", false);
         for expected in params.controls() {
             if !expected.id.starts_with("route_") && expected.id != "modulator_bypass" {
                 assert_summary_matches(params.control_summary(expected.id), &expected);
             }
-        }
-        for id in ["swing", "humanize"] {
-            assert_ne!(
-                params.control_summary(id).unwrap().norm,
-                params.arp_pages[5].control_summary(id).unwrap().norm,
-            );
         }
     }
 

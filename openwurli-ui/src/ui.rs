@@ -358,12 +358,32 @@ impl View for OpenWurliView {
     }
 }
 
+fn ui_state_key(params: &OpenWurliUiParams) -> ([u32; 7], u8, bool, bool, bool) {
+    (
+        [
+            params.volume.value().to_bits(),
+            params.tremolo_depth.value().to_bits(),
+            params.speaker_character.value().to_bits(),
+            params.reed_decay.value().to_bits(),
+            params.hammer_hardness.value().to_bits(),
+            params.pickup_drive.value().to_bits(),
+            params.tremolo_response.value().to_bits(),
+        ],
+        params.cpu_mode.value() as u8,
+        params.extended_notes.value(),
+        params.rail_sag.value(),
+        prefs().light(),
+    )
+}
+
 pub fn create(params: Arc<OpenWurliUiParams>) -> Option<Box<dyn Editor>> {
     create_vizia_editor(
         params.editor_state.clone(),
         ViziaTheming::Custom,
         move |cx, _| {
             nih_plug_vizia::assets::register_noto_sans_light(cx);
+            let timer_params = params.clone();
+            let last_key = Cell::new(ui_state_key(&timer_params));
             OpenWurliView {
                 params: params.clone(),
                 font: Cell::new(None),
@@ -371,7 +391,13 @@ pub fn create(params: Arc<OpenWurliUiParams>) -> Option<Box<dyn Editor>> {
                 hover: None,
             }
             .build(cx, |cx| {
-                start_frame_timer(cx, Duration::from_millis(33), |cx| cx.needs_redraw());
+                start_frame_timer(cx, Duration::from_millis(33), move |cx| {
+                    let key = ui_state_key(&timer_params);
+                    if key != last_key.get() {
+                        last_key.set(key);
+                        cx.needs_redraw();
+                    }
+                });
             })
             .width(Stretch(1.0))
             .height(Stretch(1.0));

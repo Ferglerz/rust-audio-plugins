@@ -311,7 +311,7 @@ impl ChordboardView {
             .filter_map(|(id, r)| {
                 TARGETS
                     .iter()
-                    .position(|t| t.available() && t.id == id)
+                    .position(|t| t.id == id)
                     .map(|i| (i, r))
             })
             .collect();

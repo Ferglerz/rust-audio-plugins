@@ -1,6 +1,6 @@
 use super::{Draw, READABLE_LABEL_SIZE};
 use crate::theme::{rgb, LINE, MUTED, PANEL, TEXT};
-use nih_plug_vizia::vizia::vg::{Color, Paint};
+use nih_plug_vizia::vizia::vg::Color;
 
 /// Shared geometry for knob drawing, captions, and editable readouts.
 pub struct KnobLayout {
@@ -150,16 +150,7 @@ impl Draw<'_> {
         };
         const ICON_WIDTH: f32 = 14.0;
         const GAP: f32 = 6.0;
-        let mut paint = Paint::color(self.color(MUTED));
-        if let Some(font) = self.font {
-            paint.set_font(&[font]);
-        }
-        paint.set_font_size(text_size * self.s);
-        let text_width = self
-            .c
-            .measure_text(0.0, 0.0, label, &paint)
-            .map(|metrics| metrics.width() / self.s)
-            .unwrap_or(label.len() as f32 * text_size * 0.6);
+        let text_width = self.text_width(label, text_size);
         let left = r.0 + (r.2 - ICON_WIDTH - GAP - text_width) * 0.5;
         let center_y = r.1 + r.3 * 0.5;
         self.button_surface(r, MUTED, 0.0, self.is_hovered(r) as u8 as f32, 0.0);
@@ -495,69 +486,7 @@ impl Draw<'_> {
         color: Color,
         bypassed: bool,
     ) {
-        let layout = KnobLayout::new(r);
-        let (cx, cy, rad) = (layout.cx, layout.cy, layout.radius);
-        let scale = rad / 17.0;
-
-        self.text_centered(
-            cx,
-            layout.label_y,
-            label,
-            layout.label_size,
-            if bypassed { MUTED } else { TEXT },
-        );
-
-        let start_angle = 135.0_f32.to_radians();
-        let total_sweep = 270.0_f32.to_radians();
-        let center_angle = start_angle + total_sweep * 0.5;
-        let cur_angle = start_angle + total_sweep * n.clamp(0.0, 1.0);
-
-        let (bg_pts, bg_len) = arc_points(cx, cy, rad, start_angle, total_sweep, 24);
-        self.poly(&bg_pts[..bg_len], LINE, 2.5 * scale);
-
-        if !bypassed && (cur_angle - center_angle).abs() > 0.01 {
-            let (a_start, a_end) = if cur_angle > center_angle {
-                (center_angle, cur_angle)
-            } else {
-                (cur_angle, center_angle)
-            };
-            let steps = (((a_end - a_start) / total_sweep * 24.0).ceil() as usize).max(2);
-            let (val_pts, val_len) = arc_points(cx, cy, rad, a_start, a_end - a_start, steps);
-            self.poly(&val_pts[..val_len], color, 2.5 * scale);
-        }
-
-        self.circle(cx, cy, 13.0 * scale, rgb(28, 33, 40), true);
-        self.circle(
-            cx,
-            cy,
-            13.0 * scale,
-            if bypassed {
-                LINE
-            } else {
-                Color {
-                    r: (rgb(48, 56, 68).r + color.r * 0.25).min(1.0),
-                    g: (rgb(48, 56, 68).g + color.g * 0.25).min(1.0),
-                    b: (rgb(48, 56, 68).b + color.b * 0.25).min(1.0),
-                    a: 1.0,
-                }
-            },
-            false,
-        );
-
-        let ind_color = if bypassed { MUTED } else { color };
-        let nx = cx + (rad - 5.5 * scale) * cur_angle.cos();
-        let ny = cy + (rad - 5.5 * scale) * cur_angle.sin();
-        let n_inner_x = cx + 5.0 * scale * cur_angle.cos();
-        let n_inner_y = cy + 5.0 * scale * cur_angle.sin();
-        self.line(n_inner_x, n_inner_y, nx, ny, ind_color, 2.0 * scale);
-
-        self.text_centered(
-            cx,
-            layout.value_y,
-            value,
-            layout.value_size,
-            if bypassed { MUTED } else { color },
-        );
+        self.knob_with_layout_bipolar(&KnobLayout::new(r), label, value, n, color, bypassed);
     }
 
     pub fn control(
@@ -602,16 +531,7 @@ impl Draw<'_> {
             },
         );
         self.text(r.0 + 12.0, r.1 + 18.0, label, 9.5, MUTED);
-        let mut paint = Paint::color(self.color(TEXT));
-        if let Some(font) = self.font {
-            paint.set_font(&[font]);
-        }
-        paint.set_font_size(11.0 * self.s);
-        let width = self
-            .c
-            .measure_text(0.0, 0.0, value, &paint)
-            .map(|m| m.width() / self.s)
-            .unwrap_or(70.0);
+        let width = self.text_width(value, 11.0);
         self.text(r.0 + r.2 - 12.0 - width, r.1 + 18.0, value, 11.0, TEXT);
         let y = r.1 + 28.0 + crate::value_edit::SLIDER_SPACING_EXTRA;
         let bx = r.0 + 12.0;

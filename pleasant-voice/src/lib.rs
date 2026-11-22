@@ -249,15 +249,16 @@ fn vad_worker_loop(shared: Arc<VadShared>) {
             thread::sleep(Duration::from_millis(20));
             continue;
         }
-        if session.is_none() {
-            match build_session() {
-                Ok(s) => session = Some(s),
+        let session = match &mut session {
+            Some(s) => s,
+            None => match build_session() {
+                Ok(s) => session.insert(s),
                 Err(_) => {
                     shared.running.store(false, Ordering::Release);
                     return;
                 }
-            }
-        }
+            },
+        };
         if shared.reset.swap(false, Ordering::AcqRel) {
             state.fill(0.0);
             context.fill(0.0);
@@ -279,9 +280,6 @@ fn vad_worker_loop(shared: Arc<VadShared>) {
         input[CONTEXT_SAMPLES..].copy_from_slice(&chunk);
         context.copy_from_slice(&input[CHUNK_SAMPLES..]);
 
-        let Some(session) = &mut session else {
-            continue;
-        };
         match run_chunk(session, &input, &mut state) {
             Ok(prob) if prob.is_finite() => {
                 shared
@@ -325,46 +323,24 @@ fn run_chunk(
         "sr" => sr,
     ])?;
 
-    let prob = extract_f32(&outputs, "output")
-        .or_else(|| extract_index(&outputs, 0))
-        .unwrap_or(0.0);
+    let (_, prob_data) = outputs
+        .get("output")
+        .ok_or_else(|| ort::Error::new("missing Silero VAD 'output' tensor"))?
+        .try_extract_tensor::<f32>()?;
+    let prob = *prob_data
+        .first()
+        .ok_or_else(|| ort::Error::new("empty Silero VAD 'output' tensor"))?;
 
-    if let Some(next) = extract_state(&outputs) {
-        if next.len() == state.len() {
-            state.copy_from_slice(&next);
-        }
+    let (_, next_state) = outputs
+        .get("stateN")
+        .ok_or_else(|| ort::Error::new("missing Silero VAD 'stateN' tensor"))?
+        .try_extract_tensor::<f32>()?;
+    if next_state.len() != state.len() {
+        return Err(ort::Error::new("unexpected Silero VAD 'stateN' tensor length"));
     }
+    state.copy_from_slice(next_state);
 
     Ok(prob)
-}
-
-fn extract_f32(outputs: &ort::session::SessionOutputs<'_>, name: &str) -> Option<f32> {
-    let (_shape, data) = outputs.get(name)?.try_extract_tensor::<f32>().ok()?;
-    data.first().copied()
-}
-
-fn extract_index(outputs: &ort::session::SessionOutputs<'_>, idx: usize) -> Option<f32> {
-    if idx >= outputs.len() {
-        return None;
-    }
-    let (_shape, data) = outputs[idx].try_extract_tensor::<f32>().ok()?;
-    data.first().copied()
-}
-
-fn extract_state(outputs: &ort::session::SessionOutputs<'_>) -> Option<Vec<f32>> {
-    for name in ["stateN", "state", "hn"] {
-        if let Some(v) = outputs.get(name) {
-            if let Ok((_shape, data)) = v.try_extract_tensor::<f32>() {
-                return Some(data.to_vec());
-            }
-        }
-    }
-    if outputs.len() > 1 {
-        if let Ok((_shape, data)) = outputs[1].try_extract_tensor::<f32>() {
-            return Some(data.to_vec());
-        }
-    }
-    None
 }
 
 #[cfg(test)]

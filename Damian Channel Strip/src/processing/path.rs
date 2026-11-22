@@ -1,6 +1,8 @@
 use super::{
     config::{Config, ProcessingMode},
-    Delay, LinearPhase, Oversampled,
+    linear_phase::LinearPhase,
+    oversampled::Oversampled,
+    Delay,
 };
 use crate::{band::Band, dsp::BandRuntime};
 

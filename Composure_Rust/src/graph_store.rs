@@ -10,8 +10,6 @@ use crate::dsp::graph::CompressionGraph;
 pub use crate::dsp::graph_snapshot::GraphSnapshot;
 use crate::params::GraphRangeMode;
 
-const ORIGINAL_RANGE: u8 = GraphRangeMode::ALL.len() as u8;
-
 fn range_index(range_db: f64) -> Option<u8> {
     GraphRangeMode::ALL
         .iter()
@@ -25,17 +23,11 @@ fn mode_index(mode: GraphRangeMode) -> u8 {
 
 struct GraphVersions {
     prepared: [Arc<GraphSnapshot>; GraphRangeMode::ALL.len()],
-    // A saved graph may use an older arbitrary range. Preserve it until the
-    // host's discrete range parameter selects a supported variant.
-    original: Option<Arc<GraphSnapshot>>,
 }
 
 impl GraphVersions {
     fn new(graph: CompressionGraph) -> Self {
         let source_index = range_index(graph.range_db);
-        let original = source_index
-            .is_none()
-            .then(|| Arc::new(GraphSnapshot::from_graph(graph)));
         let prepared = std::array::from_fn(|index| {
             let mut variant = graph;
             if Some(index as u8) != source_index {
@@ -43,25 +35,17 @@ impl GraphVersions {
             }
             Arc::new(GraphSnapshot::from_graph(variant))
         });
-        Self { prepared, original }
+        Self { prepared }
     }
 
     fn at(&self, index: u8) -> &Arc<GraphSnapshot> {
-        if index == ORIGINAL_RANGE {
-            self.original.as_ref().unwrap_or(&self.prepared[0])
-        } else {
-            &self.prepared[index as usize]
-        }
+        &self.prepared[index as usize]
     }
 
     fn has_external_reader(&self) -> bool {
         self.prepared
             .iter()
             .any(|snapshot| Arc::strong_count(snapshot) > 1)
-            || self
-                .original
-                .as_ref()
-                .is_some_and(|snapshot| Arc::strong_count(snapshot) > 1)
     }
 }
 
@@ -79,9 +63,10 @@ pub struct GraphStore {
 impl Default for GraphStore {
     fn default() -> Self {
         let graph = CompressionGraph::new();
+        let selected = range_index(graph.range_db).unwrap_or(mode_index(GraphRangeMode::Range48));
         Self {
             versions: Arc::new(ArcSwap::from_pointee(GraphVersions::new(graph))),
-            selected_range: Arc::new(AtomicU8::new(0)),
+            selected_range: Arc::new(AtomicU8::new(selected)),
             generation: Arc::new(AtomicU32::new(0)),
             retired: Arc::new(Mutex::new(Vec::new())),
         }
@@ -116,22 +101,6 @@ impl GraphStore {
         }
     }
 
-    /// Match an arbitrary persisted graph range. The host's discrete modes
-    /// take the prepared fast path; other values are prepared on this caller.
-    /// This method must not be called from the audio callback.
-    pub fn sync_range_if_needed(&self, range_db: f64) {
-        match range_index(range_db) {
-            Some(index) => self.select_range(GraphRangeMode::ALL[index as usize]),
-            _ => {
-                let mut graph = self.load().graph;
-                if (graph.range_db - range_db).abs() > 0.01 {
-                    graph.remap_points_for_range(range_db);
-                    self.replace(graph);
-                }
-            }
-        }
-    }
-
     fn publish_graph(&self, graph: CompressionGraph) {
         let versions = Arc::new(GraphVersions::new(graph));
         let old = self.versions.swap(versions);
@@ -160,16 +129,12 @@ impl GraphStore {
         self.publish_graph(graph);
     }
 
-    /// Replace from a preset or host state. Keep its original range until the
-    /// range parameter is selected again during processing or editor redraw.
+    /// Replace from a preset or host state.
     pub fn replace(&self, graph: CompressionGraph) {
         if graph.validate().is_err() {
             return;
         }
-        let selected = range_index(graph.range_db).unwrap_or(ORIGINAL_RANGE);
-        // Prepare and publish first. Otherwise an old generation without an
-        // arbitrary-range snapshot could be read under ORIGINAL_RANGE while
-        // the new LUTs are still being built.
+        let selected = range_index(graph.range_db).unwrap_or(mode_index(GraphRangeMode::Range48));
         self.publish_graph(graph);
         self.selected_range.store(selected, Ordering::Release);
     }
@@ -219,9 +184,9 @@ mod tests {
     }
 
     #[test]
-    fn persisted_graph_round_trip_keeps_legacy_range_and_curve() {
+    fn persisted_graph_round_trip_keeps_range_and_curve() {
         let store = GraphStore::default();
-        store.sync_range_if_needed(31.0);
+        store.select_range(GraphRangeMode::Range36);
         store.mutate_and_publish(|graph| {
             graph.adjust_interior_output_y(1, 2.0);
             graph.finalize_after_edit();
@@ -241,57 +206,36 @@ mod tests {
     #[test]
     fn range_change_uses_prepared_graph_and_lut() {
         let store = GraphStore::default();
-        let range20 = store.load();
+        let range48 = store.load();
         let before_gen = store.generation();
-        store.select_range(GraphRangeMode::Range40);
-        let range40 = store.load();
-        assert_eq!(range40.graph.range_db, 40.0);
-        assert_eq!(range40.graph.min_db, -40.0);
-        assert!(range40.lut.threshold().is_finite());
+        store.select_range(GraphRangeMode::Range36);
+        let range36 = store.load();
+        assert_eq!(range36.graph.range_db, 36.0);
+        assert_eq!(range36.graph.min_db, -36.0);
+        assert!(range36.lut.threshold().is_finite());
         assert!(store.generation() > before_gen);
-        store.select_range(GraphRangeMode::Range20);
-        assert!(Arc::ptr_eq(&range20, &store.load()));
+        store.select_range(GraphRangeMode::Range48);
+        assert!(Arc::ptr_eq(&range48, &store.load()));
         assert!(Arc::ptr_eq(
-            &range40,
-            &store.load_for_range(GraphRangeMode::Range40)
+            &range36,
+            &store.load_for_range(GraphRangeMode::Range36)
         ));
-    }
-
-    #[test]
-    fn callback_load_ignores_a_concurrent_legacy_selector() {
-        let store = GraphStore::default();
-        store
-            .selected_range
-            .store(ORIGINAL_RANGE, Ordering::Release);
-        assert_eq!(
-            store.load_for_range(GraphRangeMode::Range60).graph.range_db,
-            60.0
-        );
     }
 
     #[test]
     fn unchanged_range_does_not_advance_generation() {
         let store = GraphStore::default();
         let generation = store.generation();
-        store.select_range(GraphRangeMode::Range20);
+        store.select_range(GraphRangeMode::Range48);
         assert_eq!(store.generation(), generation);
     }
 
     #[test]
-    fn legacy_range_is_preserved_until_host_selects_a_prepared_mode() {
+    fn ranges_are_negative_only_and_use_prepared_snapshots() {
         let store = GraphStore::default();
-        store.sync_range_if_needed(31.0);
-        assert_eq!(store.load().graph.range_db, 31.0);
-        store.select_range(GraphRangeMode::Range40);
-        assert_eq!(store.load().graph.range_db, 40.0);
-    }
-
-    #[test]
-    fn damian_ranges_are_negative_only_and_use_prepared_snapshots() {
-        let store = GraphStore::default();
-        for mode in GraphRangeMode::PLEASANT {
+        for mode in GraphRangeMode::ALL {
             let prepared = store.load_for_range(mode);
-            store.sync_range_if_needed(mode.range_db());
+            store.select_range(mode);
             let selected = store.load();
             assert!(Arc::ptr_eq(&prepared, &selected));
             assert_eq!(selected.graph.min_db, -mode.range_db());

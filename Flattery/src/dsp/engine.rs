@@ -93,8 +93,8 @@ impl Engine {
             .filter(|size| *size != fft_size)
             .map(FftAnalyzer::new)
             .collect();
-        let boost_nodes = shared.node_snapshot(true).unwrap_or_default();
-        let cut_nodes = shared.node_snapshot(false).unwrap_or_default();
+        let boost_nodes = shared.node_snapshot(true).expect("initial boost node lock");
+        let cut_nodes = shared.node_snapshot(false).expect("initial cut node lock");
 
         Self {
             shared,
@@ -471,7 +471,7 @@ mod tests {
         ] {
             for k in 0..engine.fft_size / 2 {
                 let freq = (k as f64 + 0.5) * bin_hz;
-                assert_eq!(weights[k], weight_at(curve.nodes(), freq, 10.0, 22050.0));
+                assert_eq!(weights[k], weight_at(curve.nodes(), freq));
                 assert_eq!(
                     radii[k],
                     (radius_at(curve.nodes(), freq, default_radius).round() as usize).clamp(1, 12)

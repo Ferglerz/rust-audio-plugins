@@ -32,10 +32,10 @@ use nih_plug_vizia::{
     },
     ViziaTheming,
 };
+use pleasant_dsp::axis::{flattery_freq_to_pos, flattery_pos_to_freq};
 use pleasant_ui::{
     draw::{Draw, KnobLayout, READABLE_LABEL_SIZE},
     load_font_once,
-    math::{flattery_freq_to_pos, flattery_pos_to_freq},
     start_frame_timer,
     theme::{BG, COLORS, GOLD, LINE, MUTED, PANEL, TEAL, TEXT},
     value_edit::{parse_number_with_units, slider_value_rect, ValueEdit},

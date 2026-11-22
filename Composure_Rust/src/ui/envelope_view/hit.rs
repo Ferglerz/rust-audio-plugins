@@ -74,7 +74,6 @@ impl EnvelopeView {
     pub(super) fn graph_hit(
         laid: &EnvelopeLayout,
         point: (f32, f32),
-        resize: bool,
     ) -> Option<EnvelopeHit> {
         if point.0 >= LOOK_BAR.0
             && point.0 <= LOOK_BAR.0 + LOOK_BAR.2
@@ -102,18 +101,7 @@ impl EnvelopeView {
             (distance <= 14.0).then_some((hit, distance))
         })
         .min_by(|a, b| a.1.total_cmp(&b.1));
-        if let Some((hit, _)) = curve {
-            return Some(hit);
-        }
-        resize.then(|| {
-            if point.0 < laid.attack_end.0 {
-                EnvelopeHit::AttackLength
-            } else if point.0 < laid.hold_end.0 {
-                EnvelopeHit::HoldLength
-            } else {
-                EnvelopeHit::ReleaseLength
-            }
-        })
+        curve.map(|(hit, _)| hit)
     }
 
     pub(super) fn interactive_hit(
@@ -121,22 +109,6 @@ impl EnvelopeView {
         laid: &EnvelopeLayout,
         point: (f32, f32),
     ) -> Option<EnvelopeHit> {
-        let hit = Self::graph_hit(laid, point, RESIZE_STAGES);
-        if RESIZE_STAGES
-            && !matches!(
-                hit,
-                Some(EnvelopeHit::AttackCurve | EnvelopeHit::ReleaseCurve)
-            )
-        {
-            let x = lookahead_marker_x(
-                self.lookahead.unmodulated_plain_value(),
-                laid,
-                self.values(),
-            );
-            if lookahead_line_hit(laid, point, x) {
-                return Some(EnvelopeHit::Lookahead);
-            }
-        }
-        hit
+        Self::graph_hit(laid, point)
     }
 }

@@ -58,13 +58,9 @@ impl VoicePool {
                 self.voices
                     .iter()
                     .enumerate()
-                    .max_by(|(_, a), (_, b)| {
-                        a.playhead_frame
-                            .partial_cmp(&b.playhead_frame)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    })
-                    .map(|(i, _)| i)
-                    .unwrap_or(0)
+                    .max_by(|(_, a), (_, b)| a.playhead_frame.total_cmp(&b.playhead_frame))
+                    .expect("MAX_VOICES is non-zero")
+                    .0
             });
 
         self.voices[voice_idx].trigger(strike, pack, velocity, pitch_semi, punch, pan, sample_rate);

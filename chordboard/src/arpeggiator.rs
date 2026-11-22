@@ -19,11 +19,7 @@ pub enum Fill {
     Evolve,
 }
 
-fn legacy_fill() -> Fill {
-    Fill::Repeat
-}
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
 pub struct CustomStep {
     pub degree: u8,
     pub octave: i8,
@@ -80,13 +76,11 @@ impl ArpMode {
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
 pub struct Settings {
     pub mode: ArpMode,
     pub pattern: u8,
     pub lock_length: bool,
     pub steps: u8,
-    #[serde(default = "legacy_fill")]
     pub fill: Fill,
     pub custom: [CustomStep; CUSTOM_STEPS],
     /// Number of pattern passes (historical parameter ID: arp_octaves).
@@ -415,7 +409,6 @@ impl State {
         }
     }
 }
-pub type PreparedPage = Page;
 #[derive(Debug)]
 pub struct Prepared {
     pub performance: TrackerRow,
@@ -425,7 +418,7 @@ pub struct Prepared {
     pub generation: u64,
     pub restore_epoch: u64,
     pub rows: Vec<TrackerRow>,
-    pub pages: [PreparedPage; PAGES],
+    pub pages: [Page; PAGES],
 }
 impl Prepared {
     pub(crate) fn power_stamp(&self) -> u16 {

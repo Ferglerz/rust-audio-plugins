@@ -20,21 +20,21 @@ impl ScdEditorView {
             }
         });
         event.map(|_: &NoteLearnPoll, _| {
-            let now = Instant::now();
-            self.vel_hits
-                .retain(|(_, _, _, at)| now.duration_since(*at).as_secs_f32() < 2.5);
-            for piece in KitPieceId::ALL {
-                for art in 0..crate::vel_map::MAX_ARTS {
-                    let velocity =
-                        self.params.midi_velocities[piece as usize][art].swap(0, Ordering::Relaxed);
-                    if velocity != 0
-                        && self.vel_map_open == Some(piece)
-                        && Self::vel_art_members(piece, self.vel_art).contains(&art)
-                    {
-                        // One trail per velocity keeps memory bounded even under dense MIDI.
-                        self.vel_hits
-                            .retain(|(p, a, v, _)| (*p, *a, *v) != (piece, art, velocity));
-                        self.vel_hits.push((piece, art, velocity, now));
+            if !self.vel_hits.is_empty() || self.vel_map_open.is_some() {
+                let now = Instant::now();
+                self.vel_hits
+                    .retain(|(_, _, _, at)| now.duration_since(*at).as_secs_f32() < 2.5);
+                if let Some(piece) = self.vel_map_open {
+                    let members = Self::vel_art_members(piece, self.vel_art);
+                    for art in 0..crate::vel_map::MAX_ARTS {
+                        let velocity = self.params.midi_velocities[piece as usize][art]
+                            .swap(0, Ordering::Relaxed);
+                        if velocity != 0 && members.contains(&art) {
+                            // One trail per velocity keeps memory bounded even under dense MIDI.
+                            self.vel_hits
+                                .retain(|(p, a, v, _)| (*p, *a, *v) != (piece, art, velocity));
+                            self.vel_hits.push((piece, art, velocity, now));
+                        }
                     }
                 }
             }

@@ -158,7 +158,6 @@ pub struct UserPreset {
     pub scope: PresetScope,
     pub values: HashMap<String, f32>,
     pub vel_maps: Option<VelMapBank>,
-    #[serde(default)]
     pub note_maps: Option<NoteMapBank>,
 }
 

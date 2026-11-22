@@ -19,6 +19,7 @@ pub struct RmsDetector {
     target_one_minus: f64,
     rms_max: f64,
     normalization_decay_coeff: f64,
+    norm_peak_fallback_coeff: f64,
     peak_for_normalize_smooth: f64,
     rms_size_ms: f64,
     srate: f64,
@@ -35,6 +36,7 @@ impl RmsDetector {
             target_one_minus,
             rms_max: 0.5,
             normalization_decay_coeff: normalization_decay_coefficient(srate),
+            norm_peak_fallback_coeff: (-1.0 / (0.02 * srate)).exp(),
             peak_for_normalize_smooth: 0.0,
             rms_size_ms: 0.0,
             srate,
@@ -44,6 +46,7 @@ impl RmsDetector {
     pub fn set_sample_rate(&mut self, srate: f64) {
         self.srate = srate;
         self.normalization_decay_coeff = normalization_decay_coefficient(srate);
+        self.norm_peak_fallback_coeff = (-1.0 / (0.02 * srate)).exp();
         self.update_rms_targets(self.rms_size_ms);
     }
 
@@ -101,7 +104,7 @@ impl RmsDetector {
             let norm_peak_c = if self.rms_size_ms > 0.0 {
                 self.smoothing_coeff
             } else {
-                (-1.0 / (0.02 * self.srate)).exp()
+                self.norm_peak_fallback_coeff
             };
             let norm_peak_1m = 1.0 - norm_peak_c;
             self.peak_for_normalize_smooth =

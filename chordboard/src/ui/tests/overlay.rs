@@ -448,10 +448,10 @@ fn keyboard_module_sits_below_the_arpeggiator() {
 }
 #[test]
 fn arp_repeat_exposes_four_modes_and_sync_loop_default() {
-    let params = ChordboardParams::default();
-    assert_eq!(params.arp_pages[0].arp_mode.preview_plain(1.0), 3);
-    assert_eq!(params.arp_pages[0].arp_mode.value(), 2);
-    assert!(!params.arp_enabled.value());
+    let page = crate::params::ArpPageParams::default();
+    assert_eq!(page.arp_mode.preview_plain(1.0), 3);
+    assert_eq!(page.arp_mode.value(), 2);
+    assert!(!ChordboardParams::default().arp_enabled.value());
 }
 
 #[test]

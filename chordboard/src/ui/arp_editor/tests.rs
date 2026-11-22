@@ -442,8 +442,7 @@ fn full_cycles_stay_even_and_inside_the_module() {
 }
 
 #[test]
-fn tracker_loop_geometry_ignores_obsolete_modulation_and_live_playhead() {
-    use crate::engine::routing::TARGETS;
+fn tracker_loop_geometry_ignores_live_playhead() {
     let mut view = ChordboardView::new(
         Arc::new(ChordboardParams::default()),
         Arc::new(Bridge::default()),
@@ -452,25 +451,6 @@ fn tracker_loop_geometry_ignores_obsolete_modulation_and_live_playhead() {
     view.programming = true;
     view.row_slide.tick(pleasant_ui::page_slide::DURATION);
     view.snapshot.notes = harmony::voice(60, 0, None, 0, 0, 0);
-    let target = TARGETS.iter().position(|t| t.id == "arp_octaves").unwrap();
-    let route = &mut Arc::get_mut(&mut view.params).unwrap().routes[1];
-    route.source = IntParam::new(
-        "Source",
-        1,
-        IntRange::Linear {
-            min: 0,
-            max: crate::engine::routing::SOURCE_COUNT as i32,
-        },
-    );
-    route.target = IntParam::new(
-        "Target",
-        target as i32,
-        IntRange::Linear {
-            min: 0,
-            max: TARGETS.len() as i32 - 1,
-        },
-    );
-    assert!(!TARGETS[target].available());
     view.params.arpeggiator.edit(|state| {
         state.rows[0].settings.octaves = 4;
         state.rows[0].settings.swing = 0.5;
@@ -484,13 +464,11 @@ fn tracker_loop_geometry_ignores_obsolete_modulation_and_live_playhead() {
     let before = view.arp_string_layout(0, count);
     view.snapshot.arp_phase = 25;
     view.snapshot.arp_step = 1;
-    view.snapshot.routed[target] = Some(1.0);
     view.snapshot.arp_len = 24;
     let (_, after_count) = view.arp_cycle_for_editor();
     let after = view.arp_string_layout(0, after_count);
     assert_eq!(before.x, after.x);
     assert_eq!(before.status(11), after.status(11));
-    view.snapshot.routed[target] = Some(0.0);
     view.snapshot.arp_len = 3;
     assert_eq!(view.arp_cycle_for_editor().1, count);
 }

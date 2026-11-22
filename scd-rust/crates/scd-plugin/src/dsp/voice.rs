@@ -127,10 +127,13 @@ impl Voice {
                 continue;
             }
             any_slice_alive = true;
+            let mic_gain = gain * mic_gains[mic_idx];
+            if mic_gain == 0.0 {
+                continue;
+            }
             let Some(data) = audio_samples.get(tap.start..tap.start + tap.len) else {
                 continue;
             };
-            let mic_gain = gain * mic_gains[mic_idx];
             let (out_l, out_r) = if tap.channels == 2 {
                 let base = frame_idx * 2;
                 if base + 3 >= data.len() {

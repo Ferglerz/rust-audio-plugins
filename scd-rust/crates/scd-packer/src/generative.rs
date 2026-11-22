@@ -13,10 +13,10 @@ pub fn pack_from_kit(
     let mut missing = Vec::new();
 
     for kit_piece in &kit.order {
-        let articulations = kit
-            .pieces
-            .get(kit_piece)
-            .ok_or_else(|| format!("kit definition missing piece: {}", kit_piece.name()))?;
+        let articulations = kit.arts(*kit_piece);
+        if articulations.is_empty() {
+            return Err(format!("kit definition missing piece: {}", kit_piece.name()).into());
+        }
 
         let templates = generate_kit_piece_strikes(*kit_piece, articulations);
 

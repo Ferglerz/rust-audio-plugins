@@ -352,93 +352,79 @@ impl UiDisplay {
     }
 
     pub fn set_graph_readout(&self, text: String) {
-        if let Ok(mut r) = self.readout.write() {
-            r.graph = text;
-        }
+        self.readout.write().unwrap_or_else(|e| e.into_inner()).graph = text;
         self.bump_readout();
     }
 
     pub fn clear_graph_readout(&self) {
-        if let Ok(mut r) = self.readout.write() {
-            r.graph.clear();
-        }
+        self.readout.write().unwrap_or_else(|e| e.into_inner()).graph.clear();
         self.bump_readout();
     }
 
     pub fn set_param_readout(&self, text: String) {
-        if let Ok(mut r) = self.readout.write() {
-            r.param = text;
-        }
+        self.readout.write().unwrap_or_else(|e| e.into_inner()).param = text;
         self.bump_readout();
     }
 
     pub fn clear_param_readout(&self) {
-        if let Ok(mut r) = self.readout.write() {
-            r.param.clear();
-        }
+        self.readout.write().unwrap_or_else(|e| e.into_inner()).param.clear();
         self.bump_readout();
     }
 
     pub fn active_readout(&self) -> String {
         let _v = self.readout_version.load(Ordering::Relaxed);
-        if let Ok(r) = self.readout.read() {
-            if !r.param.is_empty() {
-                r.param.clone()
-            } else {
-                r.graph.clone()
-            }
+        let r = self.readout.read().unwrap_or_else(|e| e.into_inner());
+        if !r.param.is_empty() {
+            r.param.clone()
         } else {
-            String::new()
+            r.graph.clone()
         }
     }
 
     pub fn drain_queue(&self) {
-        if let Ok(mut v) = self.block_visuals.write() {
-            while let Some((detector_db, gr_db)) = self.block_visuals_queue.pop() {
-                // One histogram sample per two blocks, retaining both blocks' peaks.
-                if let Some((input, gr)) = v.histogram_pending.take() {
-                    v.input_hist.push(input.max(detector_db));
-                    v.gr_hist
-                        .push(if gr.abs() > gr_db.abs() { gr } else { gr_db });
-                } else {
-                    v.histogram_pending = Some((detector_db, gr_db));
-                }
-                v.dots.push(detector_db);
-                if gr_db.abs() > 0.01 {
-                    v.trails.push(gr_db);
-                }
+        let mut v = self.block_visuals.write().unwrap_or_else(|e| e.into_inner());
+        while let Some((detector_db, gr_db)) = self.block_visuals_queue.pop() {
+            // One histogram sample per two blocks, retaining both blocks' peaks.
+            if let Some((input, gr)) = v.histogram_pending.take() {
+                v.input_hist.push(input.max(detector_db));
+                v.gr_hist
+                    .push(if gr.abs() > gr_db.abs() { gr } else { gr_db });
+            } else {
+                v.histogram_pending = Some((detector_db, gr_db));
+            }
+            v.dots.push(detector_db);
+            if gr_db.abs() > 0.01 {
+                v.trails.push(gr_db);
             }
         }
     }
 
     pub fn age_dot_trails_one_frame(&self) {
         self.drain_queue();
-        if let Ok(mut v) = self.block_visuals.write() {
-            let now = Instant::now();
-            let dt = now.duration_since(v.last_update).as_secs_f32();
-            v.last_update = now;
-            v.dots.age_time(dt, DOT_TRAIL_MAX_AGE_SECS);
-            v.trails.age_time(dt, TRAIL_MAX_AGE_SECS);
+        let mut v = self.block_visuals.write().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        let dt = now.duration_since(v.last_update).as_secs_f32();
+        if dt < 0.004 {
+            return;
         }
+        v.last_update = now;
+        v.dots.age_time(dt, DOT_TRAIL_MAX_AGE_SECS);
+        v.trails.age_time(dt, TRAIL_MAX_AGE_SECS);
     }
 
     pub fn read_dot_trails<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&[DotTrail]) -> R,
     {
-        if let (Ok(mut scratch), Ok(visuals)) =
-            (self.dot_scratch.write(), self.block_visuals.read())
-        {
-            visuals
-                .dots
-                .collect_active(&mut scratch, |val, age| DotTrail {
-                    input_db: val,
-                    age_secs: age,
-                });
-            f(&scratch)
-        } else {
-            f(&[])
-        }
+        let mut scratch = self.dot_scratch.write().unwrap_or_else(|e| e.into_inner());
+        let visuals = self.block_visuals.read().unwrap_or_else(|e| e.into_inner());
+        visuals
+            .dots
+            .collect_active(&mut scratch, |val, age| DotTrail {
+                input_db: val,
+                age_secs: age,
+            });
+        f(&scratch)
     }
 
     pub fn update_block(&self, detector_db: f32, gr_db: f32, input_meter_db: f32) {
@@ -452,31 +438,22 @@ impl UiDisplay {
     where
         F: FnOnce(&[TrailLine]) -> R,
     {
-        if let (Ok(mut scratch), Ok(visuals)) =
-            (self.trail_scratch.write(), self.block_visuals.read())
-        {
-            visuals
-                .trails
-                .collect_active(&mut scratch, |val, age| TrailLine {
-                    gr_db: val,
-                    age_secs: age,
-                });
-            f(&scratch)
-        } else {
-            f(&[])
-        }
+        let mut scratch = self.trail_scratch.write().unwrap_or_else(|e| e.into_inner());
+        let visuals = self.block_visuals.read().unwrap_or_else(|e| e.into_inner());
+        visuals
+            .trails
+            .collect_active(&mut scratch, |val, age| TrailLine {
+                gr_db: val,
+                age_secs: age,
+            });
+        f(&scratch)
     }
 
     pub fn read_histograms<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&HistogramBuffer, &HistogramBuffer) -> R,
     {
-        if let Ok(v) = self.block_visuals.read() {
-            f(&v.gr_hist, &v.input_hist)
-        } else {
-            let dummy_gr = HistogramBuffer::default();
-            let dummy_input = HistogramBuffer::default();
-            f(&dummy_gr, &dummy_input)
-        }
+        let v = self.block_visuals.read().unwrap_or_else(|e| e.into_inner());
+        f(&v.gr_hist, &v.input_hist)
     }
 }

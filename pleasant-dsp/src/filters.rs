@@ -34,28 +34,31 @@ impl BiquadCoefficients {
         let angular = 2.0 * PI * frequency_hz.clamp(5.0, sample_rate * 0.45) / sample_rate;
         let (sin, cos) = angular.sin_cos();
         let alpha = sin / (2.0 * q.clamp(0.15, 18.0));
-        let amplitude = 10.0_f64.powf(gain_db / 40.0);
         let (b0, b1, b2, a0, a1, a2) = match kind {
-            BiquadKind::Bell => (
-                1.0 + alpha * amplitude,
-                -2.0 * cos,
-                1.0 - alpha * amplitude,
-                1.0 + alpha / amplitude,
-                -2.0 * cos,
-                1.0 - alpha / amplitude,
-            ),
+            BiquadKind::Bell => {
+                let amplitude = 10.0_f64.powf(gain_db / 40.0);
+                let inv_amp = 1.0 / amplitude;
+                (
+                    1.0 + alpha * amplitude,
+                    -2.0 * cos,
+                    1.0 - alpha * amplitude,
+                    1.0 + alpha * inv_amp,
+                    -2.0 * cos,
+                    1.0 - alpha * inv_amp,
+                )
+            }
             BiquadKind::LowCut => (
-                (1.0 + cos) / 2.0,
+                (1.0 + cos) * 0.5,
                 -(1.0 + cos),
-                (1.0 + cos) / 2.0,
+                (1.0 + cos) * 0.5,
                 1.0 + alpha,
                 -2.0 * cos,
                 1.0 - alpha,
             ),
             BiquadKind::HighCut => (
-                (1.0 - cos) / 2.0,
+                (1.0 - cos) * 0.5,
                 1.0 - cos,
-                (1.0 - cos) / 2.0,
+                (1.0 - cos) * 0.5,
                 1.0 + alpha,
                 -2.0 * cos,
                 1.0 - alpha,
@@ -63,6 +66,7 @@ impl BiquadCoefficients {
             BiquadKind::Notch => (1.0, -2.0 * cos, 1.0, 1.0 + alpha, -2.0 * cos, 1.0 - alpha),
             BiquadKind::BandPass => (alpha, 0.0, -alpha, 1.0 + alpha, -2.0 * cos, 1.0 - alpha),
             BiquadKind::LowShelf | BiquadKind::HighShelf => {
+                let amplitude = 10.0_f64.powf(gain_db / 40.0);
                 let beta = 2.0 * amplitude.sqrt() * alpha;
                 if kind == BiquadKind::LowShelf {
                     (
@@ -85,9 +89,10 @@ impl BiquadCoefficients {
                 }
             }
         };
+        let inv_a0 = 1.0 / a0;
         Self {
-            b: [b0 / a0, b1 / a0, b2 / a0],
-            a: [a1 / a0, a2 / a0],
+            b: [b0 * inv_a0, b1 * inv_a0, b2 * inv_a0],
+            a: [a1 * inv_a0, a2 * inv_a0],
         }
     }
 

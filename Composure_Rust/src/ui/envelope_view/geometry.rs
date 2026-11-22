@@ -5,11 +5,6 @@ pub(super) const HEIGHT: f32 = appearance::ENVELOPE_GRAPH_H;
 pub(super) const LOOK_BAR: (f32, f32, f32, f32) = (12.0, 8.0, WIDTH - 24.0, 30.0);
 pub(super) const GRAPH: (f32, f32, f32, f32) = (12.0, 50.0, WIDTH - 24.0, HEIGHT - 96.0);
 pub(super) const LABEL_H: f32 = 36.0;
-// The duration-scaled graph and its stage drag zones can be enabled together.
-pub(super) const RESIZE_STAGES: bool = false;
-
-// After normalization this permits a 1/14 share, half the previous 1/7 minimum.
-const MIN_STAGE_WEIGHT: f32 = 1.0 / 12.0;
 
 // Lookahead belongs to this editor; shared envelope geometry stays attack/hold/release.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,30 +18,13 @@ pub(super) enum EnvelopeHit {
 }
 
 pub(super) fn layout(viewport: Viewport, values: EnvelopeValues) -> EnvelopeLayout {
-    layout_with_stage_resize(viewport, values, RESIZE_STAGES)
-}
-
-pub(super) fn layout_with_stage_resize(
-    viewport: Viewport,
-    values: EnvelopeValues,
-    resize: bool,
-) -> EnvelopeLayout {
     let values = values.clamped();
-    let [attack, hold, _] = if resize {
-        // Keep every drag zone usable, including a zero hold.
-        let total = values.attack_ms + values.hold_ms + values.release_ms;
-        let weights = [values.attack_ms, values.hold_ms, values.release_ms]
-            .map(|ms| (ms / total).max(MIN_STAGE_WEIGHT));
-        let sum = weights.iter().sum::<f32>();
-        weights.map(|weight| weight / sum)
-    } else {
-        [1.0 / 3.0; 3]
-    };
+    let third = 1.0 / 3.0;
     let rest_y = viewport.y + viewport.height - 24.0;
     let hold_y = viewport.y + 24.0;
     let start = (viewport.x, rest_y);
-    let attack_end = (viewport.x + viewport.width * attack, hold_y);
-    let hold_end = (viewport.x + viewport.width * (attack + hold), hold_y);
+    let attack_end = (viewport.x + viewport.width * third, hold_y);
+    let hold_end = (viewport.x + viewport.width * (2.0 * third), hold_y);
     let release_end = (viewport.x + viewport.width, rest_y);
     EnvelopeLayout {
         viewport,
@@ -74,12 +52,6 @@ pub(super) fn lookahead_marker_x(ms: f32, laid: &EnvelopeLayout, values: Envelop
         return laid.start.0 + time / values.attack_ms * (laid.attack_end.0 - laid.start.0);
     }
     let time = time - values.attack_ms;
-    if RESIZE_STAGES && values.hold_ms == 0.0 {
-        // Keep the draggable marker continuous across the legacy zero-hold zone.
-        return laid.attack_end.0
-            + (time / values.release_ms).clamp(0.0, 1.0)
-                * (laid.release_end.0 - laid.attack_end.0);
-    }
     if values.hold_ms > 0.0 && time <= values.hold_ms {
         return laid.attack_end.0 + time / values.hold_ms * (laid.hold_end.0 - laid.attack_end.0);
     }
@@ -94,9 +66,6 @@ pub(super) fn lookahead_graph_ms(x: f32, laid: &EnvelopeLayout, values: Envelope
     let x = x.clamp(laid.start.0, laid.release_end.0);
     let ms = if x <= laid.attack_end.0 {
         (x - laid.start.0) / (laid.attack_end.0 - laid.start.0) * values.attack_ms
-    } else if RESIZE_STAGES && values.hold_ms == 0.0 {
-        values.attack_ms
-            + (x - laid.attack_end.0) / (laid.release_end.0 - laid.attack_end.0) * values.release_ms
     } else if x <= laid.hold_end.0 {
         values.attack_ms
             + (x - laid.attack_end.0) / (laid.hold_end.0 - laid.attack_end.0) * values.hold_ms

@@ -198,10 +198,6 @@ fn cached_db_neighborhoods_preserve_successive_legacy_gain_arrays() {
                     process_frame!(legacy, frame, link, amplify, narrow);
                     assert_eq!(optimized.smoothed_gain_db_l, legacy.smoothed_gain_db_l);
                     assert_eq!(optimized.smoothed_gain_db_r, legacy.smoothed_gain_db_r);
-                    assert_eq!(
-                        optimized.smoothed_gain_db_link,
-                        legacy.smoothed_gain_db_link
-                    );
                 }
                 optimized.reset();
                 legacy.reset();

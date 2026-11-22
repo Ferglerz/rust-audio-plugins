@@ -304,9 +304,10 @@ impl StripView {
     pub(super) fn pse_knob_rect(&self, control: GlobalControl) -> (f32, f32, f32, f32) {
         let slots = stacked_knob_slots(self.pse_bounds().0, PSE_W, 4);
         match control {
+            GlobalControl::PseHysteresis => slots[0],
             GlobalControl::PseTime => slots[1],
             GlobalControl::PseVoice => (slots[2].0, slots[2].1 + 30.0, slots[2].2, slots[2].3),
-            _ => slots[0],
+            other => unreachable!("unexpected PSE knob control: {other:?}"),
         }
     }
     pub(super) fn pse_vad_meter_rect(&self) -> (f32, f32, f32, f32) {
@@ -317,8 +318,9 @@ impl StripView {
         let wx = self.wall_bounds().0;
         let slots = stacked_knob_slots(wx, WALL_W, 3);
         match control {
+            GlobalControl::WallEven => slots[0],
             GlobalControl::WallOdd => slots[1],
-            _ => slots[0],
+            other => unreachable!("unexpected Wall knob control: {other:?}"),
         }
     }
     pub(super) fn wall_lookahead_switch_rect(&self) -> (f32, f32, f32, f32) {
@@ -336,18 +338,14 @@ impl StripView {
                     GlobalControl::CompRatio => slots[2],
                     GlobalControl::Dry => slots[3],
                     GlobalControl::Wet => slots[4],
-                    _ => (0.0, -1000.0, 0.0, 0.0),
+                    other => unreachable!("unexpected Dyn Controls control: {other:?}"),
                 }
             }
-            DynPage::Main => {
-                if control == GlobalControl::CompDepth {
-                    meter_value_rect(self.dyn_main_gr_meter_rect())
-                } else if control == GlobalControl::Compression {
-                    meter_value_rect(self.dyn_main_thresh_slider_rect())
-                } else {
-                    (dx + 6.0, 226.0, 56.0, 86.0)
-                }
-            }
+            DynPage::Main => match control {
+                GlobalControl::CompDepth => meter_value_rect(self.dyn_main_gr_meter_rect()),
+                GlobalControl::Compression => meter_value_rect(self.dyn_main_thresh_slider_rect()),
+                other => unreachable!("unexpected Dyn Main control: {other:?}"),
+            },
         }
     }
     pub(super) fn knob_value_rect(r: (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
@@ -482,10 +480,10 @@ impl StripView {
                 GlobalControl::WallEven | GlobalControl::WallOdd | GlobalControl::WallThreshold,
             ) => WALL_COLOR,
             ValueTarget::Global(_) => GOLD,
-            ValueTarget::Band(_) => self
-                .selected
-                .map(|id| BAND_COLORS[(band_display_num(id) as usize - 1) % BAND_COLORS.len()])
-                .unwrap_or(TEAL),
+            ValueTarget::Band(_) => {
+                let id = self.selected.expect("band value edit requires selected band");
+                BAND_COLORS[(band_display_num(id) as usize - 1) % BAND_COLORS.len()]
+            }
             ValueTarget::Lift(_) => LIFT_COLOR,
         }
     }

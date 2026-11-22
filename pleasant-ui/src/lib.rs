@@ -4,13 +4,13 @@ pub mod editor;
 pub mod envelope;
 pub mod graph;
 pub mod handles;
-pub mod math;
 pub mod page_slide;
 pub mod param;
 pub mod pointer;
 pub mod preferences;
+#[cfg(target_os = "macos")]
+pub mod preview;
 pub mod readout;
-pub mod spectrum;
 pub mod theme;
 pub mod tempo;
 pub mod xy_pad;

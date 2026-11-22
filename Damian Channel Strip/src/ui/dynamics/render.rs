@@ -328,7 +328,7 @@ impl StripView {
 
                 let p0 = self.param(GlobalControl::Compression);
                 let thresh_norm = p0.unmodulated_normalized_value();
-                let thresh_y = sy + sh * thresh_norm;
+                let thresh_y = sy + sh * (1.0 - thresh_norm);
 
                 if !comp_bypassed && sig_h > 0.5 {
                     let below_thresh_top = sig_top_y.max(thresh_y);

@@ -113,9 +113,8 @@ pub(in crate::ui) fn draw_eq_preview_influence(
             let x_center = freq_x_at(freq, gx, gw);
             let x_right = freq_x_at(f_right, gx, gw);
             let center_idx = points
-                .iter()
-                .position(|(x, _)| *x >= x_center)
-                .unwrap_or(points.len() / 2);
+                .partition_point(|(x, _)| *x < x_center)
+                .min(points.len() - 1);
             let left_pts = &points[..=center_idx];
             let right_pts = &points[center_idx..];
             if fill_a > 0.0 {

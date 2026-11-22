@@ -59,11 +59,7 @@ impl AppearanceStore {
 
     pub fn toggle(&self) -> bool {
         let mut mode = self.appearance.lock().unwrap_or_else(|e| e.into_inner());
-        *mode = match *mode {
-            Appearance::Dark => Appearance::Light,
-            Appearance::Light => Appearance::Auto,
-            _ => Appearance::Dark,
-        };
+        *mode = mode.next();
         mode.write(self.app_name);
         mode.resolved() == Appearance::Light
     }
@@ -92,7 +88,6 @@ pub enum Appearance {
     #[default]
     Dark,
     Light,
-    Analog,
     Auto,
 }
 
@@ -100,8 +95,7 @@ impl Appearance {
     pub fn next(self) -> Self {
         match self {
             Self::Dark => Self::Light,
-            Self::Light => Self::Analog,
-            Self::Analog => Self::Auto,
+            Self::Light => Self::Auto,
             Self::Auto => Self::Dark,
         }
     }
@@ -110,7 +104,6 @@ impl Appearance {
         match self {
             Self::Dark => "DARK",
             Self::Light => "LIGHT",
-            Self::Analog => "ANALOG",
             Self::Auto => "AUTO",
         }
     }
@@ -132,7 +125,6 @@ impl Appearance {
     fn parse(value: &str) -> Self {
         match value.trim() {
             "light" => Self::Light,
-            "analog" => Self::Analog,
             "auto" => Self::Auto,
             _ => Self::Dark,
         }
@@ -142,7 +134,6 @@ impl Appearance {
         match self {
             Self::Dark => "dark",
             Self::Light => "light",
-            Self::Analog => "analog",
             Self::Auto => "auto",
         }
     }
@@ -164,12 +155,7 @@ mod appearance_tests {
     #[test]
     fn appearance_cycle_and_persistence_compatibility() {
         let mut mode = Appearance::Dark;
-        for expected in [
-            Appearance::Light,
-            Appearance::Analog,
-            Appearance::Auto,
-            Appearance::Dark,
-        ] {
+        for expected in [Appearance::Light, Appearance::Auto, Appearance::Dark] {
             mode = mode.next();
             assert_eq!(mode, expected);
             assert_eq!(Appearance::parse(&format!("{}\n", mode.as_str())), mode);

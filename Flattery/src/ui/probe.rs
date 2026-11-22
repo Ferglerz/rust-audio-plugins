@@ -1,5 +1,5 @@
 use super::*;
-use pleasant_ui::spectrum::smooth_bins_f32;
+use pleasant_dsp::spectrum::smooth_bins_f32;
 
 const INPUT_FLOOR_DB: f32 = -120.0;
 

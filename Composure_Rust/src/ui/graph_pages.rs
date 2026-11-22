@@ -100,8 +100,8 @@ pub(super) fn build(cx: &mut Context, params: Arc<ComposureParams>, display: Arc
                 .position_type(PositionType::SelfDirected)
                 .left(Pixels(AXIS_W))
                 .top(Pixels(12.0))
-                .width(EditorData::appearance.map(|mode| Pixels(appearance::graph_size(*mode))))
-                .height(EditorData::appearance.map(|mode| Pixels(appearance::graph_size(*mode))));
+                .width(Pixels(appearance::graph_size()))
+                .height(Pixels(appearance::graph_size()));
             })
             .position_type(PositionType::SelfDirected)
             .left(Pixels(0.0))
@@ -109,7 +109,7 @@ pub(super) fn build(cx: &mut Context, params: Arc<ComposureParams>, display: Arc
             .width(Pixels(PAGE_W))
             .height(
                 EditorData::appearance.map(|mode| {
-                    Pixels(appearance::graph_size(*mode) + 40.0 + header_height(*mode))
+                    Pixels(appearance::graph_size() + 40.0 + header_height(*mode))
                 }),
             );
         })
@@ -126,22 +126,19 @@ pub(super) fn build(cx: &mut Context, params: Arc<ComposureParams>, display: Arc
         .width(Pixels(PAGE_W))
         .height(
             EditorData::appearance
-                .map(|mode| Pixels(appearance::graph_size(*mode) + 40.0 + header_height(*mode))),
+                .map(|mode| Pixels(appearance::graph_size() + 40.0 + header_height(*mode))),
         );
     })
     .position_type(PositionType::SelfDirected)
-    .left(EditorData::appearance.map(|mode| Pixels(appearance::graph_x(*mode) - AXIS_W)))
+    .left(Pixels(appearance::graph_x() - AXIS_W))
     .top(
         EditorData::appearance
-            .map(|mode| Pixels(appearance::graph_y(*mode) - 12.0 - header_height(*mode))),
+            .map(|mode| Pixels(appearance::graph_y() - 12.0 - header_height(*mode))),
     )
-    .width(
-        EditorData::appearance
-            .map(|mode| Pixels(appearance::graph_size(*mode) + AXIS_W + { 12.0 })),
-    )
+    .width(Pixels(appearance::graph_size() + AXIS_W + 12.0))
     .height(
         EditorData::appearance
-            .map(|mode| Pixels(appearance::graph_size(*mode) + 40.0 + header_height(*mode))),
+            .map(|mode| Pixels(appearance::graph_size() + 40.0 + header_height(*mode))),
     )
     .overflow(Overflow::Hidden);
 
@@ -178,8 +175,69 @@ impl View for CurveTitle {
 use pleasant_eq::{BandCoefficients, BandSettings, EqShape};
 use std::sync::atomic::Ordering;
 
+fn eq_toggle_freqs() -> &'static [f64; 33] {
+    static FREQS: std::sync::OnceLock<[f64; 33]> = std::sync::OnceLock::new();
+    FREQS.get_or_init(|| std::array::from_fn(|i| 20.0 * 1000.0_f64.powf(i as f64 / 32.0)))
+}
+
+fn default_eq_toggle_ys() -> &'static [f32; 33] {
+    static YS: std::sync::OnceLock<[f32; 33]> = std::sync::OnceLock::new();
+    YS.get_or_init(|| {
+        let rate = 48000.0;
+        let default_hp = BandSettings {
+            shape: EqShape::LowCut,
+            order: 2,
+            frequency_hz: 100.0,
+            gain_db: 0.0,
+            q: std::f64::consts::FRAC_1_SQRT_2,
+            enabled: true,
+            ..BandSettings::default()
+        };
+        let default_cut = BandSettings {
+            shape: EqShape::Bell,
+            order: 2,
+            frequency_hz: 1800.0,
+            gain_db: -4.5,
+            q: 1.2,
+            enabled: true,
+            ..BandSettings::default()
+        };
+        let coeffs = [
+            BandCoefficients::prepare(&default_hp, rate),
+            BandCoefficients::prepare(&default_cut, rate),
+        ];
+        let freqs = eq_toggle_freqs();
+        std::array::from_fn(|i| {
+            let db: f64 = coeffs.iter().map(|c| c.response_db(freqs[i], rate)).sum();
+            (0.5 - (db.clamp(-18.0, 18.0) as f32 / 36.0)).clamp(0.0, 1.0)
+        })
+    })
+}
+
+fn eq_toggle_key(params: &ComposureParams, rate: f64) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    rate.to_bits().hash(&mut h);
+    params.hp_freq.value().to_bits().hash(&mut h);
+    params.lp_freq.value().to_bits().hash(&mut h);
+    for band in params.detector_eq.iter() {
+        let on = band.active.value() && band.enabled.value();
+        on.hash(&mut h);
+        if on {
+            let s = band.settings();
+            (s.shape as u8).hash(&mut h);
+            s.order.hash(&mut h);
+            s.frequency_hz.to_bits().hash(&mut h);
+            s.gain_db.to_bits().hash(&mut h);
+            s.q.to_bits().hash(&mut h);
+        }
+    }
+    h.finish()
+}
+
 struct EqToggle {
     hovered: bool,
+    cache: std::cell::Cell<Option<(u64, [f32; 33])>>,
 }
 
 impl View for EqToggle {
@@ -239,38 +297,6 @@ impl View for EqToggle {
         let display = EditorData::display.get(cx);
         let rate = (display.sample_rate.load(Ordering::Relaxed) as f64).max(44100.0);
 
-        let mut active_coeffs = Vec::new();
-        if params.hp_freq.value() > 0.0 {
-            let settings = BandSettings {
-                shape: EqShape::LowCut,
-                order: 2,
-                frequency_hz: params.hp_freq.value() as f64,
-                gain_db: 0.0,
-                q: std::f64::consts::FRAC_1_SQRT_2,
-                enabled: true,
-                ..BandSettings::default()
-            };
-            active_coeffs.push(BandCoefficients::prepare(&settings, rate));
-        }
-        if params.lp_freq.value() > 0.0 {
-            let settings = BandSettings {
-                shape: EqShape::HighCut,
-                order: 2,
-                frequency_hz: params.lp_freq.value() as f64,
-                gain_db: 0.0,
-                q: std::f64::consts::FRAC_1_SQRT_2,
-                enabled: true,
-                ..BandSettings::default()
-            };
-            active_coeffs.push(BandCoefficients::prepare(&settings, rate));
-        }
-        for band in params.detector_eq.iter() {
-            if band.active.value() && band.enabled.value() {
-                let settings = band.settings();
-                active_coeffs.push(BandCoefficients::prepare(&settings, rate));
-            }
-        }
-
         let has_sc_eq = params.hp_freq.value() > 0.0
             || params.lp_freq.value() > 0.0
             || params.detector_eq.iter().any(|band| {
@@ -279,32 +305,58 @@ impl View for EqToggle {
                     && (!band.settings().shape.has_gain() || band.gain.value().abs() > 0.01)
             });
 
-        let (coeffs, curve_color) = if has_sc_eq && !active_coeffs.is_empty() {
-            (active_coeffs, pleasant_ui::GOLD)
+        let (ys, curve_color) = if has_sc_eq {
+            let key = eq_toggle_key(&params, rate);
+            let ys = match self.cache.get() {
+                Some((cached_key, cached_ys)) if cached_key == key => cached_ys,
+                _ => {
+                    let mut active_coeffs = Vec::new();
+                    if params.hp_freq.value() > 0.0 {
+                        let settings = BandSettings {
+                            shape: EqShape::LowCut,
+                            order: 2,
+                            frequency_hz: params.hp_freq.value() as f64,
+                            gain_db: 0.0,
+                            q: std::f64::consts::FRAC_1_SQRT_2,
+                            enabled: true,
+                            ..BandSettings::default()
+                        };
+                        active_coeffs.push(BandCoefficients::prepare(&settings, rate));
+                    }
+                    if params.lp_freq.value() > 0.0 {
+                        let settings = BandSettings {
+                            shape: EqShape::HighCut,
+                            order: 2,
+                            frequency_hz: params.lp_freq.value() as f64,
+                            gain_db: 0.0,
+                            q: std::f64::consts::FRAC_1_SQRT_2,
+                            enabled: true,
+                            ..BandSettings::default()
+                        };
+                        active_coeffs.push(BandCoefficients::prepare(&settings, rate));
+                    }
+                    for band in params.detector_eq.iter() {
+                        if band.active.value() && band.enabled.value() {
+                            let settings = band.settings();
+                            active_coeffs.push(BandCoefficients::prepare(&settings, rate));
+                        }
+                    }
+                    let freqs = eq_toggle_freqs();
+                    let computed: [f32; 33] = std::array::from_fn(|i| {
+                        let db: f64 = active_coeffs
+                            .iter()
+                            .map(|c| c.response_db(freqs[i], rate))
+                            .sum();
+                        (0.5 - (db.clamp(-18.0, 18.0) as f32 / 36.0)).clamp(0.0, 1.0)
+                    });
+                    self.cache.set(Some((key, computed)));
+                    computed
+                }
+            };
+            (ys, pleasant_ui::GOLD)
         } else {
-            let default_hp = BandSettings {
-                shape: EqShape::LowCut,
-                order: 2,
-                frequency_hz: 100.0,
-                gain_db: 0.0,
-                q: std::f64::consts::FRAC_1_SQRT_2,
-                enabled: true,
-                ..BandSettings::default()
-            };
-            let default_cut = BandSettings {
-                shape: EqShape::Bell,
-                order: 2,
-                frequency_hz: 1800.0,
-                gain_db: -4.5,
-                q: 1.2,
-                enabled: true,
-                ..BandSettings::default()
-            };
             (
-                vec![
-                    BandCoefficients::prepare(&default_hp, rate),
-                    BandCoefficients::prepare(&default_cut, rate),
-                ],
+                *default_eq_toggle_ys(),
                 if self.hovered {
                     pleasant_ui::TEXT
                 } else {
@@ -324,16 +376,7 @@ impl View for EqToggle {
             pleasant_ui::MUTED
         };
 
-        let text_w = {
-            let mut p = nih_plug_vizia::vizia::vg::Paint::color(d.color(label_color));
-            if let Some(font) = d.font {
-                p.set_font(&[font]);
-            }
-            p.set_font_size(label_size * d.s);
-            d.c.measure_text(0.0, 0.0, label, &p)
-                .map(|m| m.width() / d.s)
-                .unwrap_or(label.len() as f32 * label_size * 0.55)
-        };
+        let text_w = d.text_width(label, label_size);
 
         let total_w = diag_w + gap + text_w;
         let diag_x = (width - total_w) * 0.5;
@@ -347,16 +390,10 @@ impl View for EqToggle {
         d.line(diag_x, cy, diag_x + diag_w, cy, guide, 0.8);
 
         // Mini EQ curve
-        let points: Vec<(f32, f32)> = (0..=32)
-            .map(|i| {
-                let t = i as f32 / 32.0;
-                let freq = 20.0 * 1000.0_f64.powf(t as f64);
-                let db: f64 = coeffs.iter().map(|c| c.response_db(freq, rate)).sum();
-                let y = (diag_y + diag_h * (0.5 - (db.clamp(-18.0, 18.0) as f32 / 36.0)))
-                    .clamp(diag_y, diag_y + diag_h);
-                (diag_x + diag_w * t, y)
-            })
-            .collect();
+        let points: [(f32, f32); 33] = std::array::from_fn(|i| {
+            let t = i as f32 / 32.0;
+            (diag_x + diag_w * t, diag_y + diag_h * ys[i])
+        });
         d.poly(&points, curve_color, 1.4);
 
         // Text label
@@ -364,7 +401,10 @@ impl View for EqToggle {
     }
 }
 pub(super) fn build_toggle(cx: &mut Context, rect: (f32, f32, f32)) {
-    EqToggle { hovered: false }
+    EqToggle {
+        hovered: false,
+        cache: std::cell::Cell::new(None),
+    }
         .build(cx, |_| {})
         .position_type(PositionType::SelfDirected)
         .left(Pixels(rect.0))

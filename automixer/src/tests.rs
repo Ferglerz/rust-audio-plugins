@@ -469,7 +469,7 @@ fn strip_bypass_follows_the_instance_and_rejects_a_stale_slot_owner() {
     );
 
     slot.mic.store(5, Ordering::Release);
-    assert_eq!(remote.params.mic_index(), 5);
+    assert_eq!(remote.params.mic_index(), Some(5));
     assert!(
         remote.params.bypassed(),
         "bypass follows the track when renumbered"
@@ -701,14 +701,14 @@ fn host_input_assigns_a_unique_mic_and_renames_keep_cue_identity() {
     // The second instance initially holds provisional Mic 2.
     a(hardware(1));
     a(HostTrackUpdate::Prepare);
-    assert_eq!(first.params.mic_index(), 1);
-    assert_eq!(second.params.mic_index(), 0);
+    assert_eq!(first.params.mic_index(), Some(1));
+    assert_eq!(second.params.mic_index(), Some(0));
 
     b(hardware(1));
     b(HostTrackUpdate::Prepare);
     assert_eq!(
         second.params.mic_index(),
-        0,
+        Some(0),
         "a duplicate hardware input must fall back"
     );
     a(HostTrackUpdate::Name(Some(" Lead vocal ".into())));
@@ -717,21 +717,21 @@ fn host_input_assigns_a_unique_mic_and_renames_keep_cue_identity() {
         slot.labels.lock().unwrap().name.as_deref(),
         Some("Lead vocal")
     );
-    assert_eq!(first.params.mic_index(), 1);
+    assert_eq!(first.params.mic_index(), Some(1));
     network.params.midi(0, 21, 1.0);
     assert_eq!(
-        network.params.mics[first.params.mic_index()].effective_weight(),
+        network.params.mics[first.params.mic_index().unwrap()].effective_weight(),
         12.0
     );
 
     a(hardware(7));
     assert_eq!(
         first.params.mic_index(),
-        1,
+        Some(1),
         "metadata must not reassign a running mic"
     );
     a(HostTrackUpdate::Prepare);
-    assert_eq!(first.params.mic_index(), 7);
+    assert_eq!(first.params.mic_index(), Some(7));
     assert_eq!(network.conflict_mask(), 0);
 }
 
@@ -752,7 +752,7 @@ fn automatic_assignment_restores_a_saved_fallback_when_hardware_is_unchanged() {
         label: "Input 3".into(),
     })));
     handler(HostTrackUpdate::Prepare);
-    assert_eq!(first.params.mic_index(), 9);
+    assert_eq!(first.params.mic_index(), Some(9));
 }
 
 #[test]

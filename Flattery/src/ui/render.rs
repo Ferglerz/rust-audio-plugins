@@ -171,7 +171,7 @@ impl FlatteryView {
                     Polarity::Boost => &boost_nodes,
                     Polarity::Cut => &cut_nodes,
                 };
-                let weight = weight_at(nodes, freq, layout.min_freq, layout.max_freq);
+                let weight = weight_at(nodes, freq);
                 let preview = StrengthNode::new(0, freq, weight);
                 let stroke = match polarity {
                     Polarity::Boost => COLOR_BOOST_HOVER,

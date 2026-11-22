@@ -653,7 +653,7 @@ impl Runtime {
         self.order
             .iter()
             .position(|id| *id == MidiFxId::Delay)
-            .unwrap_or(READY - 1)
+            .expect("MidiFxState::order always contains Delay")
     }
     fn process_pending(&mut self, ctx: Context) {
         for (stage, id) in self.order.into_iter().enumerate() {

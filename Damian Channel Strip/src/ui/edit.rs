@@ -195,13 +195,14 @@ impl StripView {
         let target = self.edit.as_ref().unwrap().target;
         if self.commit_edit(cx) {
             let fields = self.visible_value_fields();
-            let index = fields.iter().position(|(t, _)| *t == target).unwrap_or(0);
-            let next = if cx.modifiers().shift() {
-                (index + fields.len() - 1) % fields.len()
-            } else {
-                (index + 1) % fields.len()
-            };
-            self.start_edit(cx, fields[next].0, fields[next].1);
+            if let Some(index) = fields.iter().position(|(t, _)| *t == target) {
+                let next = if cx.modifiers().shift() {
+                    (index + fields.len() - 1) % fields.len()
+                } else {
+                    (index + 1) % fields.len()
+                };
+                self.start_edit(cx, fields[next].0, fields[next].1);
+            }
         }
     }
 
@@ -219,7 +220,7 @@ impl StripView {
     }
     pub(super) fn param(&self, control: GlobalControl) -> &FloatParam {
         match control {
-            GlobalControl::Compression => &self.params.compression,
+            GlobalControl::Compression => &self.params.threshold,
             GlobalControl::Gate => &self.params.gate,
             GlobalControl::PseVoice => &self.params.pse_voice_det,
             GlobalControl::Dry => &self.params.dry,

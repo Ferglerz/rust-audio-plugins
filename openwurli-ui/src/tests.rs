@@ -71,26 +71,22 @@ fn restore_cpu_mode(plugin: &OpenWurliUi, state: &mut PluginState) {
 }
 
 #[test]
-fn cpu_mode_restore_initializes_selected_audio_and_old_presets_use_fast() {
+fn cpu_mode_restore_initializes_selected_audio() {
     with_circuit_stack(|| {
         let mut plugin = OpenWurliUi::default();
-        // Restore Heavy first, then load an old state into that instance.
-        // An absent cpu_mode must actively select Fast, not retain Heavy.
         for (saved_id, expected) in [
-            (Some("heavy"), CircuitMode::Heavy),
-            (None, CircuitMode::Fast),
+            ("heavy", CircuitMode::Heavy),
+            ("fast", CircuitMode::Fast),
         ] {
             let mut state = PluginState {
                 version: "0.1.0".into(),
                 params: Default::default(),
                 fields: Default::default(),
             };
-            if let Some(id) = saved_id {
-                state.params.insert(
-                    "cpu_mode".into(),
-                    nih_plug::wrapper::state::ParamValue::String(id.into()),
-                );
-            }
+            state.params.insert(
+                "cpu_mode".into(),
+                nih_plug::wrapper::state::ParamValue::String(saved_id.into()),
+            );
             restore_cpu_mode(&plugin, &mut state);
             plugin.reset();
             assert!(plugin.initialize(
@@ -272,29 +268,6 @@ fn extended_notes_render_finite_distinct_audio_in_both_modes() {
             }
         }
     });
-}
-
-#[test]
-fn old_states_disable_extended_notes_and_saved_values_survive() {
-    let mut state = PluginState {
-        version: "0.1.1".into(),
-        params: Default::default(),
-        fields: Default::default(),
-    };
-    OpenWurliUi::filter_state(&mut state);
-    assert!(matches!(
-        state.params["extended_notes"],
-        nih_plug::wrapper::state::ParamValue::Bool(false)
-    ));
-    state.params.insert(
-        "extended_notes".into(),
-        nih_plug::wrapper::state::ParamValue::Bool(true),
-    );
-    OpenWurliUi::filter_state(&mut state);
-    assert!(matches!(
-        state.params["extended_notes"],
-        nih_plug::wrapper::state::ParamValue::Bool(true)
-    ));
 }
 
 #[test]
@@ -495,72 +468,6 @@ fn extra_sag_reduces_rendered_chords_in_both_modes() {
 }
 
 #[test]
-fn legacy_mlp_states_use_the_same_corrected_audio_in_both_modes() {
-    with_circuit_stack(|| {
-        for saved_mode in ["fast", "heavy"] {
-            let render = |saved_mlp| {
-                let mut plugin = OpenWurliUi::default();
-                let mut state = PluginState {
-                    version: "0.1.1".into(),
-                    params: Default::default(),
-                    fields: Default::default(),
-                };
-                state.params.insert(
-                    "cpu_mode".into(),
-                    nih_plug::wrapper::state::ParamValue::String(saved_mode.into()),
-                );
-                state.params.insert(
-                    "mlp".into(),
-                    nih_plug::wrapper::state::ParamValue::Bool(saved_mlp),
-                );
-                restore_cpu_mode(&plugin, &mut state);
-                let nih_plug::wrapper::state::ParamValue::Bool(mlp) = state.params["mlp"] else {
-                    panic!("MLP state must remain a bool");
-                };
-                // Parameter setters are private to NIH-plug. Restore this
-                // bool as a plain value, as the wrapper does when loading.
-                Arc::get_mut(&mut plugin.params).unwrap().mlp_enabled =
-                    BoolParam::new("MLP Corrections (always enabled)", mlp).hide();
-                assert_eq!(plugin.params.mlp_enabled.value(), saved_mlp);
-                assert!(plugin.initialize(
-                    &OpenWurliUi::AUDIO_IO_LAYOUTS[0],
-                    &BufferConfig {
-                        sample_rate: 48_000.0,
-                        min_buffer_size: None,
-                        max_buffer_size: 256,
-                        process_mode: ProcessMode::Realtime,
-                    },
-                    &mut TestInitContext,
-                ));
-                // Repeated sync must ignore old state and automation alike.
-                plugin.sync_params();
-                let mut reference =
-                    WurliEngine::new_with_circuit_mode(48_000.0, plugin.engine.circuit_mode());
-                reference.set_mlp_enabled(true);
-                reference.warm_up();
-                plugin.handle_event(&note_on(0, 72));
-                reference.note_on_extended(72, 0.8);
-                let mut actual = vec![0.0; 2048];
-                let mut expected = vec![0.0; 2048];
-                for (actual, expected) in actual.chunks_mut(256).zip(expected.chunks_mut(256)) {
-                    plugin.render_block(actual, || None);
-                    reference.render(expected);
-                }
-                assert!(actual.iter().any(|s| s.abs() > 1e-6));
-                assert!(actual.iter().all(|s| s.is_finite()));
-                assert_eq!(actual, expected, "{saved_mode}: must use corrected engine");
-                actual
-            };
-            assert_eq!(
-                render(false),
-                render(true),
-                "{saved_mode}: legacy MLP value changed audio"
-            );
-        }
-    });
-}
-
-#[test]
 fn restored_editor_scale_keeps_the_new_artwork_dimensions() {
     let params = OpenWurliUiParams::default();
     let mut fields = params.serialize_fields();
@@ -586,13 +493,10 @@ fn host_parameter_ids_and_control_defaults_are_stable() {
             "trem_depth",
             "speaker",
             "cpu_mode",
-            "mlp",
             "reed_decay",
             "hammer_hardness",
             "pickup_drive",
             "trem_response",
-            "noise_enable",
-            "noise_gain",
             "extended_notes",
             "rail_sag",
         ]
@@ -600,15 +504,11 @@ fn host_parameter_ids_and_control_defaults_are_stable() {
     assert_eq!(params.volume.default_plain_value(), 0.5);
     assert_eq!(params.tremolo_depth.default_plain_value(), 0.5);
     assert_eq!(params.speaker_character.default_plain_value(), 0.0);
-    assert!(params.mlp_enabled.default_plain_value());
-    assert!(params.mlp_enabled.flags().contains(ParamFlags::HIDDEN));
     assert_eq!(params.cpu_mode.default_plain_value(), CpuMode::Fast);
     assert_eq!(params.reed_decay.default_plain_value(), 1.0);
     assert_eq!(params.hammer_hardness.default_plain_value(), 1.0);
     assert_eq!(params.pickup_drive.default_plain_value(), 1.0);
     assert_eq!(params.tremolo_response.default_plain_value(), 1.0);
-    assert!(!params.noise_enabled.default_plain_value());
-    assert_eq!(params.noise_gain.default_plain_value(), 1.0);
     assert!(!params.extended_notes.default_plain_value());
     assert!(!params.rail_sag.default_plain_value());
     assert!(params.serialize_fields().contains_key("editor-state"));

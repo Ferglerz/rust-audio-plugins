@@ -22,7 +22,7 @@ fn degree_quality(scale: u8, column: usize) -> u8 {
         _ => scale,
     };
     let root = degree_root(scale, column) % 12;
-    scale_quality(parent, root).unwrap_or(0)
+    scale_quality(parent, root).expect("degree_root must belong to parent scale")
 }
 
 /// Diatonic triad for an actual pitch class relative to the selected tonic.
@@ -50,7 +50,10 @@ pub fn scale_quality(scale: u8, relative: u8) -> Option<u8> {
 
 fn shade(quality: u8, brighter: bool) -> u8 {
     let qualities = [5, 1, 0, 6]; // Diminished, minor, major, augmented.
-    let index = qualities.iter().position(|&q| q == quality).unwrap_or(2);
+    let index = qualities
+        .iter()
+        .position(|&q| q == quality)
+        .expect("degree_quality only produces 0, 1, 5, or 6");
     qualities[if brighter {
         (index + 1).min(3)
     } else {

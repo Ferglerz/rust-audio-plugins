@@ -58,9 +58,9 @@ fn chain_sidechain_detection_differs_from_main() {
 fn graph_range_sync_updates_lut() {
     let params = ComposureParams::default();
     let thr_before = params.graph_store.load().lut.threshold();
-    params.graph_store.sync_range_if_needed(40.0);
+    params.graph_store.select_range(GraphRangeMode::Range36);
     let after = params.graph_store.load();
-    assert!((after.graph.range_db - 40.0).abs() < 0.01);
+    assert!((after.graph.range_db - 36.0).abs() < 0.01);
     assert!(after.lut.threshold().is_finite());
     let _ = thr_before;
 }
@@ -96,9 +96,7 @@ fn debug_overlay_shows_runtime_fields() {
 #[test]
 fn graph_range_mode_param_matches_store_after_sync() {
     let params = ComposureParams::default();
-    params
-        .graph_store
-        .sync_range_if_needed(GraphRangeMode::Range40.range_db());
+    params.graph_store.select_range(GraphRangeMode::Range36);
     let graph = params.graph_store.load();
-    assert!((graph.graph.range_db - 40.0).abs() < 0.01);
+    assert!((graph.graph.range_db - 36.0).abs() < 0.01);
 }

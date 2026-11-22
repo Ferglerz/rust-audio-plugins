@@ -174,20 +174,24 @@ enum DragAxis {
 
 impl AxisLock {
     pub fn delta(&mut self, dx: f32, dy: f32, up_sign: f32) -> f32 {
-        if self.axis.is_none() {
-            if dx.hypot(dy) < 4.0 {
-                return 0.0;
+        let axis = match self.axis {
+            Some(axis) => axis,
+            None => {
+                if dx.hypot(dy) < 4.0 {
+                    return 0.0;
+                }
+                let axis = if dx.abs() >= dy.abs() {
+                    DragAxis::Horizontal
+                } else {
+                    DragAxis::Vertical
+                };
+                self.axis = Some(axis);
+                axis
             }
-            self.axis = Some(if dx.abs() >= dy.abs() {
-                DragAxis::Horizontal
-            } else {
-                DragAxis::Vertical
-            });
-        }
-        match self.axis {
-            Some(DragAxis::Horizontal) => dx,
-            Some(DragAxis::Vertical) => -dy * up_sign,
-            None => 0.0,
+        };
+        match axis {
+            DragAxis::Horizontal => dx,
+            DragAxis::Vertical => -dy * up_sign,
         }
     }
 }

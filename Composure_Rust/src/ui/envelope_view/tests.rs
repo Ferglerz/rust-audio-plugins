@@ -14,11 +14,11 @@ fn test_values() -> EnvelopeValues {
 fn attack_snap_is_narrow_and_modifiers_bypass_it() {
     let values = EnvelopeValues {
         attack_ms: 1000.0,
-        hold_ms: 100.0,
+        hold_ms: 500.0,
         release_ms: 1000.0,
         ..test_values()
     };
-    let laid = layout_with_stage_resize(Viewport::from_tuple(GRAPH), values, true);
+    let laid = layout(Viewport::from_tuple(GRAPH), values);
     let x = laid.attack_end.0 + 0.5;
     assert_eq!(lookahead_drag_ms(x, &laid, values, false), 1000.0);
     assert!(lookahead_drag_ms(x, &laid, values, true) > 1000.0);
@@ -74,45 +74,6 @@ fn lookahead_line_has_a_small_hover_buffer_and_no_numeric_entry() {
     let release = EnvelopeView::label_rect(EnvelopeHit::ReleaseLength).unwrap();
     assert_eq!(attack.0, 10.0);
     assert!((release.0 + release.2 - (WIDTH - 10.0)).abs() < 0.001);
-}
-
-#[test]
-fn autoscale_keeps_extreme_stages_usable_and_tracks_duration_shares() {
-    for values in [
-        test_values(),
-        EnvelopeValues {
-            attack_ms: 0.1,
-            hold_ms: 0.0,
-            release_ms: 5000.0,
-            ..test_values()
-        },
-        EnvelopeValues {
-            attack_ms: 5000.0,
-            hold_ms: 1000.0,
-            release_ms: 40.0,
-            ..test_values()
-        },
-    ] {
-        let laid = layout_with_stage_resize(Viewport::from_tuple(GRAPH), values, true);
-        for width in [
-            laid.attack_end.0 - laid.start.0,
-            laid.hold_end.0 - laid.attack_end.0,
-            laid.release_end.0 - laid.hold_end.0,
-        ] {
-            assert!(width >= GRAPH.2 / 14.0 - 0.001);
-        }
-        assert!((laid.release_end.0 - GRAPH.0 - GRAPH.2).abs() < 0.001);
-    }
-    let long_attack = layout_with_stage_resize(
-        Viewport::from_tuple(GRAPH),
-        EnvelopeValues {
-            attack_ms: 500.0,
-            ..test_values()
-        },
-        true,
-    );
-    let default = layout_with_stage_resize(Viewport::from_tuple(GRAPH), test_values(), true);
-    assert!(long_attack.attack_end.0 > default.attack_end.0);
 }
 
 #[test]
@@ -239,7 +200,7 @@ fn lookahead_has_a_graph_zone_and_a_monotonic_marker() {
     let laid = envelope_layout();
     let rect = EnvelopeView::zone_rect(&laid, EnvelopeHit::Lookahead);
     assert_eq!(
-        EnvelopeView::graph_hit(&laid, (rect.0 + rect.2 * 0.5, rect.1 + 12.0), RESIZE_STAGES),
+        EnvelopeView::graph_hit(&laid, (rect.0 + rect.2 * 0.5, rect.1 + 12.0)),
         Some(EnvelopeHit::Lookahead)
     );
     let values = test_values();
@@ -268,7 +229,7 @@ fn rate_controls_snap_in_milliseconds() {
 }
 
 #[test]
-fn stage_zones_are_available_only_with_graph_resizing() {
+fn stage_zones_do_not_intercept_graph_clicks() {
     let laid = envelope_layout();
     for hit in [
         EnvelopeHit::AttackLength,
@@ -279,16 +240,12 @@ fn stage_zones_are_available_only_with_graph_resizing() {
         assert!(rect.2 > 0.0);
         for y in [rect.1 + 2.0, rect.1 + rect.3 - 2.0] {
             let point = (rect.0 + rect.2 * 0.5, y);
-            assert_eq!(EnvelopeView::graph_hit(&laid, point, true), Some(hit));
-            assert_eq!(EnvelopeView::graph_hit(&laid, point, RESIZE_STAGES), None);
+            assert_eq!(EnvelopeView::graph_hit(&laid, point), None);
         }
     }
+    assert_eq!(EnvelopeView::graph_hit(&laid, (GRAPH.0 - 1.0, GRAPH.1)), None);
     assert_eq!(
-        EnvelopeView::graph_hit(&laid, (GRAPH.0 - 1.0, GRAPH.1), true),
-        None
-    );
-    assert_eq!(
-        EnvelopeView::graph_hit(&laid, (GRAPH.0, GRAPH.1 + GRAPH.3 + 1.0), true),
+        EnvelopeView::graph_hit(&laid, (GRAPH.0, GRAPH.1 + GRAPH.3 + 1.0)),
         None
     );
 }
@@ -297,11 +254,11 @@ fn stage_zones_are_available_only_with_graph_resizing() {
 fn curve_handles_take_priority_over_time_zones() {
     let laid = envelope_layout();
     assert_eq!(
-        EnvelopeView::graph_hit(&laid, laid.attack_curve, RESIZE_STAGES),
+        EnvelopeView::graph_hit(&laid, laid.attack_curve),
         Some(EnvelopeHit::AttackCurve)
     );
     assert_eq!(
-        EnvelopeView::graph_hit(&laid, laid.release_curve, RESIZE_STAGES),
+        EnvelopeView::graph_hit(&laid, laid.release_curve),
         Some(EnvelopeHit::ReleaseCurve)
     );
 }

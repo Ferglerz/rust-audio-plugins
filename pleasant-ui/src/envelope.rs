@@ -321,18 +321,16 @@ pub fn drag_length(hit: EnvelopeHit, values: EnvelopeValues, viewport: Viewport,
 
 pub fn drag_curve(hit: EnvelopeHit, layout: &EnvelopeLayout, y: f32) -> f32 {
     let (rest, hold) = (layout.rest_y, layout.hold_y);
+    // Attack travels rest → hold (down). Release travels hold → rest (up).
+    // Mid-norm is progress along that segment at t=0.5.
     let mid_norm = match hit {
         EnvelopeHit::AttackCurve => ((y - rest) / (hold - rest).copysign(1.0)).clamp(0.02, 0.98),
         EnvelopeHit::ReleaseCurve => ((y - hold) / (rest - hold)).clamp(0.02, 0.98),
-        _ => 0.5,
+        EnvelopeHit::AttackLength | EnvelopeHit::HoldLength | EnvelopeHit::ReleaseLength => {
+            unreachable!("length drags use drag_length")
+        }
     };
-    // Attack travels rest → hold (down). Release travels hold → rest (up).
-    // Mid-norm is progress along that segment at t=0.5.
-    match hit {
-        EnvelopeHit::AttackCurve => curve_from_mid_norm(mid_norm),
-        EnvelopeHit::ReleaseCurve => curve_from_mid_norm(mid_norm),
-        _ => 0.0,
-    }
+    curve_from_mid_norm(mid_norm)
 }
 
 #[cfg(test)]

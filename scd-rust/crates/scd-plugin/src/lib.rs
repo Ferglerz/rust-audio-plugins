@@ -88,7 +88,6 @@ impl Plugin for ScdPlugin {
         // Attempt to load .scdpack from standard location or next to plugin
         if self.voice_pool.pack().is_none() {
             let possible_paths = [
-                "/Volumes/Storage/SoundChefDrums.scdpack",
                 "SoundChefDrums.scdpack",
                 "/Library/Application Support/SoundChef/SoundChefDrums.scdpack",
             ];
@@ -99,6 +98,9 @@ impl Plugin for ScdPlugin {
                 }
             }
         }
+
+        // Warm the static kit definition outside the audio thread.
+        let _ = scd_core::kit::stonehouse();
 
         true
     }

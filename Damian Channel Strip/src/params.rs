@@ -38,18 +38,14 @@ pub struct StripParams {
     pub comp_on: BoolParam,
     #[id = "comp_pre"]
     pub comp_pre: BoolParam,
-    #[id = "compression"]
-    // Keep the original positive depth and parameter ID for saved automation.
-    // The editor and host display this depth as a negative threshold.
-    pub compression: FloatParam,
+    #[id = "threshold"]
+    pub threshold: FloatParam,
     #[id = "comp_ratio"]
     pub comp_ratio: FloatParam,
     #[id = "comp_attack"]
     pub comp_attack: FloatParam,
     #[id = "comp_release"]
     pub comp_release: FloatParam,
-    #[id = "soft_knee"]
-    pub soft_knee: BoolParam,
     #[id = "comp_knee"]
     pub comp_knee: FloatParam,
     #[id = "comp_depth"]
@@ -138,8 +134,8 @@ impl Default for StripParams {
             lift_on: BoolParam::new("Lift enabled", true),
             comp_on: BoolParam::new("Dynamics enabled", true),
             comp_pre: BoolParam::new("Dynamics routing", false),
-            compression: param("Threshold", 0.0, 0.0, 48.0, " dB")
-                .with_value_to_string(Arc::new(|depth| format!("{:.1}", -depth)))
+            threshold: param("Threshold", 0.0, -48.0, 0.0, " dB")
+                .with_value_to_string(Arc::new(|v| format!("{v:.1}")))
                 .with_string_to_value(Arc::new(|text| {
                     text.trim()
                         .trim_end_matches("dB")
@@ -147,7 +143,6 @@ impl Default for StripParams {
                         .parse::<f32>()
                         .ok()
                         .filter(|v| v.is_finite())
-                        .map(|v| -v)
                 })),
             comp_ratio: param("Ratio", 4.0, 1.0, 20.0, ":1"),
             comp_attack: FloatParam::new(
@@ -213,7 +208,6 @@ impl Default for StripParams {
                     None
                 }
             })),
-            soft_knee: BoolParam::new("Soft knee", true),
             comp_knee: FloatParam::new(
                 "Dynamics knee",
                 6.0,
@@ -439,8 +433,8 @@ mod tests {
             .normalized_value_to_string(params.comp_knee.unmodulated_normalized_value(), true);
         assert_eq!(knee, "6.0");
         let thresh = params
-            .compression
-            .normalized_value_to_string(params.compression.unmodulated_normalized_value(), true);
+            .threshold
+            .normalized_value_to_string(params.threshold.unmodulated_normalized_value(), true);
         assert!(!thresh.contains("dB"), "{thresh}");
         assert_eq!(
             params.pse_depth.string_to_normalized_value("12 dB"),

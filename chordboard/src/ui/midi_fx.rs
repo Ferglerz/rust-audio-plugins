@@ -152,7 +152,7 @@ impl ChordboardView {
             .order
             .iter()
             .position(|id| *id == effect)
-            .unwrap_or(0);
+            .expect("MidiFxState::order always contains every effect");
         self.fx_ui.rect(index, &state.midi_fx.order).1 - VIEWPORT.1
     }
     pub(super) fn fx_delay_expanded(&self) -> bool {
@@ -509,9 +509,13 @@ impl ChordboardView {
             });
         } else if effect == MidiFxId::Harmonizer && hit(control_rect(1, 0), x, y) {
             self.params.arpeggiator.edit(|s| s.midi_fx.harmonizer.original = !s.midi_fx.harmonizer.original);
-        } else if effect == MidiFxId::Harmonizer && (0..3).any(|i| hit(control_rect(0, i + 1), x, y)) {
-            let i = (0..3).find(|&i| hit(control_rect(0, i + 1), x, y)).unwrap_or(0);
-            self.params.arpeggiator.edit(|s| s.midi_fx.harmonizer.voices[i].enabled = !s.midi_fx.harmonizer.voices[i].enabled);
+        } else if let Some(i) = (effect == MidiFxId::Harmonizer)
+            .then(|| (0..3).find(|&i| hit(control_rect(0, i + 1), x, y)))
+            .flatten()
+        {
+            self.params.arpeggiator.edit(|s| {
+                s.midi_fx.harmonizer.voices[i].enabled = !s.midi_fx.harmonizer.voices[i].enabled
+            });
         } else if effect == MidiFxId::RhythmGate && hit(control_rect(2, 1), x, y) {
             self.params.arpeggiator.edit(|s| s.midi_fx.rhythm_gate.fill_euclidean());
         } else {

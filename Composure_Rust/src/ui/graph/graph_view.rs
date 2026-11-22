@@ -305,8 +305,7 @@ where
             |color, alpha| pleasant_ui::theme::transform_color(vg_color(color, alpha), light);
         let detector = self.detector_db.get(cx);
         let plugin_params = self.params.get(cx);
-        self.graph
-            .sync_range_if_needed(plugin_params.graph_range_mode.value().range_db());
+        self.graph.select_range(plugin_params.graph_range_mode.value());
         let store_generation = self.graph.generation();
         let graph_points_version = self.display.graph_points_version.load(Ordering::Relaxed);
 

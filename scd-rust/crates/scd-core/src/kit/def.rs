@@ -18,7 +18,7 @@ pub struct ArticulationDef {
 #[derive(Debug, Clone)]
 pub struct KitDef {
     pub order: Vec<KitPieceId>,
-    pub pieces: HashMap<KitPieceId, Vec<ArticulationDef>>,
+    pub pieces: [Vec<ArticulationDef>; KitPieceId::COUNT],
 }
 
 #[derive(Deserialize)]
@@ -44,10 +44,7 @@ pub fn stonehouse() -> &'static KitDef {
 
 impl KitDef {
     pub fn arts(&self, kit_piece: KitPieceId) -> &[ArticulationDef] {
-        self.pieces
-            .get(&kit_piece)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
+        &self.pieces[kit_piece as usize]
     }
 }
 
@@ -59,14 +56,12 @@ fn load_kit(json: &str) -> KitDef {
         .map(|name| KitPieceId::from_name(name).expect("unknown kit piece in order"))
         .collect();
 
-    let pieces = file
-        .kit_pieces
-        .into_iter()
-        .map(|(name, piece)| {
-            let id = KitPieceId::from_name(&name).expect("unknown kit piece in kit_pieces");
-            (id, piece.articulations)
-        })
-        .collect();
+    let mut pieces: [Vec<ArticulationDef>; KitPieceId::COUNT] =
+        std::array::from_fn(|_| Vec::new());
+    for (name, piece) in file.kit_pieces {
+        let id = KitPieceId::from_name(&name).expect("unknown kit piece in kit_pieces");
+        pieces[id as usize] = piece.articulations;
+    }
 
     KitDef { order, pieces }
 }

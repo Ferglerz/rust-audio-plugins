@@ -675,7 +675,7 @@ impl ChordboardView {
         match c.id {
             "velocity" => format!("{:.0}%", self.params.velocity.value() * 100.0),
             "humanize" => format!("{:.0}%", self.params.humanize.value() * 100.0),
-            "contour" => format!("{:+.0}%", self.params.contour.value() * 100.0),
+            "contour" => String::new(),
             "y" => format!("{:.0}%", self.params.y.value() * 100.0),
             "length_ms" => format!("{:.0} ms", self.params.length_ms.value()),
             "strum_ms" => format!("{:.0} ms", self.params.strum_ms.value()),
@@ -733,7 +733,7 @@ impl ChordboardView {
         match c.id {
             "velocity" => percent().map(|v| self.params.velocity.preview_normalized(v)),
             "humanize" => percent().map(|v| self.params.humanize.preview_normalized(v)),
-            "contour" => percent().map(|v| self.params.contour.preview_normalized(v)),
+            "contour" => None,
             "y" => percent().map(|v| self.params.y.preview_normalized(v)),
             _ => {
                 let text = match c.id {

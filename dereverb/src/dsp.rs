@@ -584,7 +584,7 @@ impl Engine {
                 (index, level, weight)
             })
             .max_by(|a, b| a.1.absolute_db.total_cmp(&b.1.absolute_db))
-            .unwrap_or_default()
+            .expect("engine always has at least one channel")
     }
     pub fn reset(&mut self) {
         for channel in &mut self.channels {

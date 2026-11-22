@@ -1,10 +1,10 @@
 use crate::strength::{weight_at, Polarity, StrengthNode, STRENGTH_REST_PX};
 use nih_plug_vizia::vizia::vg::Color;
+use pleasant_dsp::axis::{flattery_freq_to_pos, flattery_pos_to_freq};
 use pleasant_ui::{
     draw::{Draw, READABLE_AXIS_SIZE, TRACE_REST_PX},
     graph::{AxisMapping, FlatteryFrequencyAxis},
     handles::{tag_contains, TagPointer},
-    math::{flattery_freq_to_pos, flattery_pos_to_freq},
     theme::{rgb, LINE, MUTED},
 };
 
@@ -468,7 +468,7 @@ impl GraphLayout {
         for i in 0..=STRENGTH_STEPS {
             let norm = i as f64 / STRENGTH_STEPS as f64;
             let freq = flattery_pos_to_freq(norm, self.min_freq, self.max_freq);
-            let w = weight_at(nodes, freq, self.min_freq, self.max_freq);
+            let w = weight_at(nodes, freq);
             let x = self.gx + norm as f32 * self.gw;
             let y = self.strength_y(polarity, strength_pct, w);
             points.push((x, y));
@@ -488,7 +488,7 @@ impl GraphLayout {
             return f32::MAX;
         }
         let freq = self.x_to_freq(x);
-        let w = weight_at(nodes, freq, self.min_freq, self.max_freq);
+        let w = weight_at(nodes, freq);
         let cy = self.strength_y(polarity, strength_pct, w);
         (y - cy).abs()
     }

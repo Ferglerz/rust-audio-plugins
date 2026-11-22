@@ -1173,10 +1173,6 @@ fn tracker_rows_recall_independent_adjustments_but_share_delay_sources() {
         view.params.arpeggiator.snapshot().midi_fx.delay.sources,
         sources
     );
-    assert!(!changes
-        .borrow()
-        .iter()
-        .any(|(ptr, _)| *ptr == view.params.arp_page.as_ptr()));
 }
 
 #[test]

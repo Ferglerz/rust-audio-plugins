@@ -13,27 +13,31 @@ impl DereverbView {
         let latency = self.shared.latency.load(Ordering::Relaxed);
         let active_quality = self.shared.quality.load(Ordering::Relaxed);
         let active_engine = self.shared.engine.load(Ordering::Relaxed);
-        let active_slot = EngineKind::MODES.iter().position(|&(kind, quality)| {
-            kind as u32 == active_engine
-                && (!kind.has_quality() || quality.index() as u32 == active_quality)
-        });
-        let switching = active_slot != Some(engine.index(self.params.quality.value()));
-        let mode = match active_slot.map(|index| EngineKind::MODES[index]) {
-            Some((EngineKind::Dtln, _)) => "DTLN denoise",
-            Some((EngineKind::NaraWpe, Quality::Live)) => "NARA-WPE · Short",
-            Some((EngineKind::NaraWpe, Quality::HighQuality)) => "NARA-WPE · 20 MS",
-            Some((EngineKind::DpdfNet, Quality::HighQuality)) => "DPDFNet high quality",
-            _ => "DPDFNet live",
+        let active_slot = EngineKind::MODES
+            .iter()
+            .position(|&(kind, quality)| {
+                kind as u32 == active_engine
+                    && (!kind.has_quality() || quality.index() as u32 == active_quality)
+            })
+            .expect("active engine/quality must match a known mode");
+        let switching = active_slot != engine.index(self.params.quality.value());
+        let mode = match EngineKind::MODES[active_slot] {
+            (EngineKind::Dtln, _) => "DTLN denoise",
+            (EngineKind::NaraWpe, Quality::Live) => "NARA-WPE · Short",
+            (EngineKind::NaraWpe, Quality::HighQuality) => "NARA-WPE · 20 MS",
+            (EngineKind::DpdfNet, Quality::HighQuality) => "DPDFNet high quality",
+            (EngineKind::DpdfNet, Quality::Live) => "DPDFNet live",
         };
-        let state = if switching {
-            format!("{mode} · Switching mode")
+        let state: std::borrow::Cow<'static, str> = if switching {
+            format!("{mode} · Switching mode").into()
         } else {
             match status {
                 telemetry::ACTIVE => format!(
                     "{mode}   {:.1} kHz   {:.1} ms",
                     rate / 1000.0,
                     1000.0 * latency as f32 / rate.max(1.0)
-                ),
+                )
+                .into(),
                 telemetry::RECOVERING => "Recovering · Aligned passthrough".into(),
                 telemetry::FAILED => "Bypassed · Engine unavailable".into(),
                 _ => "Waiting for audio".into(),
@@ -57,13 +61,14 @@ impl DereverbView {
                 if d.light { TEXT } else { status_color },
             );
         });
-        let tooltip = if let Some(index) = active_slot.filter(|_| status == telemetry::FAILED) {
-            self.shared.errors.lock().unwrap_or_else(|e| e.into_inner())[index]
+        let tooltip: std::borrow::Cow<'static, str> = if status == telemetry::FAILED {
+            self.shared.errors.lock().unwrap_or_else(|e| e.into_inner())[active_slot]
                 .chars()
                 .take(105)
                 .collect::<String>()
+                .into()
         } else if let Some(sample) = history_hover {
-            sample.tooltip()
+                sample.tooltip().into()
         } else if self.hover.is_some_and(|p| point_in_rect(p.0, p.1, THEME)) {
             "Cycle Dark, Light, and Auto appearance.".into()
         } else if self.hover.is_some_and(|p| point_in_rect(p.0, p.1, DPDFNET)) {

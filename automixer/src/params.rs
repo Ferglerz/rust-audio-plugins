@@ -304,9 +304,9 @@ impl AutomixerParams {
         }
     }
 
-    pub fn mic_index(&self) -> usize {
+    pub fn mic_index(&self) -> Option<usize> {
         self.slot
             .as_ref()
-            .map_or(0, |slot| slot.mic.load(Ordering::Acquire))
+            .map(|slot| slot.mic.load(Ordering::Acquire))
     }
 }

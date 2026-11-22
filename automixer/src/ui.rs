@@ -304,7 +304,7 @@ impl AutomixerView {
             .unwrap_or(0)
             / PER_PAGE;
         Self {
-            selected: params.mic_index(),
+            selected: params.mic_index().unwrap_or(0),
             params,
             network,
             local_slot,
@@ -1408,11 +1408,9 @@ impl AutomixerView {
             );
             return;
         };
-        for i in 1..crate::spectral::BANDS {
-            let a = pulls::cut_point(bounds, i - 1, cut[i - 1]);
-            let b = pulls::cut_point(bounds, i, cut[i]);
-            d.line(a.0, a.1, b.0, b.1, GOLD, 1.5);
-        }
+        let points: [(f32, f32); crate::spectral::BANDS] =
+            std::array::from_fn(|i| pulls::cut_point(bounds, i, cut[i]));
+        d.poly(&points, GOLD, 1.5);
     }
 
     fn paint_status(

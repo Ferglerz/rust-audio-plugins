@@ -17,6 +17,9 @@ impl DetectorEqView {
     }
 
     pub(super) fn draw_view(&self, cx: &mut DrawContext, canvas: &mut Canvas) {
+        if super::super::graph_pages::GraphPages::progress.get(cx) <= 0.0 {
+            return;
+        }
         let mut d = super::super::appearance::painter(cx, canvas, WIDTH);
         d.text(
             16.0,

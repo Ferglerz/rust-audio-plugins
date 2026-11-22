@@ -44,21 +44,26 @@ pub fn flattery_freq_to_pos(freq: f64, min_hz: f64, max_hz: f64) -> f64 {
     let log_max = max_hz.max(min_hz + 1.0).ln();
     let log_range = log_max - log_min;
     let range = max_hz - min_hz;
+    let linear_weight = 1.0 - FLATTERY_FREQ_MAP_LOG_AMOUNT;
+    let linear_deriv = range * linear_weight;
     let mut pos = ((freq.max(1.0).ln() - log_min) / (log_range + 1.0e-9)).clamp(0.0, 1.0);
     let mut best = pos;
-    let mut best_error = (freq - flattery_pos_to_freq(pos, min_hz, max_hz)).abs();
+    let mut best_error = f64::INFINITY;
 
     for _ in 0..8 {
-        let test_frequency = (min_hz + range * pos) * (1.0 - FLATTERY_FREQ_MAP_LOG_AMOUNT)
-            + (log_min + log_range * pos).exp() * FLATTERY_FREQ_MAP_LOG_AMOUNT;
-        let error = (freq - test_frequency).abs();
+        let exp_term = (log_min + log_range * pos).exp() * FLATTERY_FREQ_MAP_LOG_AMOUNT;
+        let test_frequency = (min_hz + range * pos) * linear_weight + exp_term;
+        let diff = freq - test_frequency;
+        let error = diff.abs();
         if error < best_error {
             best = pos;
             best_error = error;
+            if error < 1.0e-7 {
+                break;
+            }
         }
-        let derivative = range * (1.0 - FLATTERY_FREQ_MAP_LOG_AMOUNT)
-            + log_range * (log_min + log_range * pos).exp() * FLATTERY_FREQ_MAP_LOG_AMOUNT;
-        pos = (pos + (freq - test_frequency) / (derivative + 1.0e-9)).clamp(0.0, 1.0);
+        let derivative = linear_deriv + log_range * exp_term;
+        pos = (pos + diff / (derivative + 1.0e-9)).clamp(0.0, 1.0);
     }
     best
 }

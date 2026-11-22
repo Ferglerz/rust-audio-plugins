@@ -16,7 +16,7 @@ pub struct Automixer {
     spectral: spectral::Spectral,
     spectral_mode: bool,
     sample_rate: f32,
-    current_mic: usize,
+    current_mic: Option<usize>,
 }
 
 impl Default for Automixer {
@@ -127,12 +127,12 @@ impl Plugin for Automixer {
         );
         self.spectral_mode = !self.params.shared.spectral_bypass.value();
         self.vad.set_sample_rate(config.sample_rate as f64);
-        let mic = self.params.mic_index();
-        self.vad.start_worker_enabled(
+        let vad_enabled = self.params.mic_index().is_some_and(|mic| {
             self.params.shared.assist.value() > 0.0
                 && !self.params.bypassed()
-                && self.params.shared.mics[mic].is_voice(),
-        );
+                && self.params.shared.mics[mic].is_voice()
+        });
+        self.vad.start_worker_enabled(vad_enabled);
         context.set_latency_samples(if self.spectral_mode {
             spectral::FFT_SIZE as u32
         } else {
@@ -174,11 +174,13 @@ impl Plugin for Automixer {
             });
         }
         let settings = dsp::Settings::from_params(&self.params.shared);
-        let mic = self.params.mic_index();
+        let Some(mic) = self.params.mic_index() else {
+            return ProcessStatus::Normal;
+        };
         let mut spectral_settings = spectral::Settings::from_params(&self.params.shared, mic);
-        if mic != self.current_mic {
+        if Some(mic) != self.current_mic {
             self.reset();
-            self.current_mic = mic;
+            self.current_mic = Some(mic);
         }
         let bypass = self.params.bypassed();
         let voice = self.params.shared.mics[mic].is_voice();

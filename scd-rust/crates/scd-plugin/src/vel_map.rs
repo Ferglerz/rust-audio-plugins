@@ -14,48 +14,7 @@ const MAP_SLOTS: usize = MAX_ARTS + 1;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct VelMapBank {
-    #[serde(deserialize_with = "deserialize_curves")]
     pub curves: [[VelCurve; MAP_SLOTS]; KitPieceId::COUNT],
-}
-
-fn deserialize_curves<'de, D>(
-    deserializer: D,
-) -> Result<[[VelCurve; MAP_SLOTS]; KitPieceId::COUNT], D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Wire {
-        Nested(Vec<Vec<VelCurve>>),
-        Flat(Vec<VelCurve>),
-    }
-    match Wire::deserialize(deserializer)? {
-        Wire::Nested(rows) => Ok(pad_bank(rows)),
-        Wire::Flat(flat) => {
-            let mut rows = vec![Vec::new(); KitPieceId::COUNT];
-            for (i, curve) in flat.into_iter().take(KitPieceId::COUNT).enumerate() {
-                rows[i] = vec![curve];
-            }
-            Ok(pad_bank(rows))
-        }
-    }
-}
-
-fn pad_arts(mut arts: Vec<VelCurve>) -> [VelCurve; MAP_SLOTS] {
-    arts.truncate(MAP_SLOTS);
-    while arts.len() < MAP_SLOTS {
-        arts.push(VelCurve::identity());
-    }
-    std::array::from_fn(|i| arts[i].clone())
-}
-
-fn pad_bank(mut rows: Vec<Vec<VelCurve>>) -> [[VelCurve; MAP_SLOTS]; KitPieceId::COUNT] {
-    rows.truncate(KitPieceId::COUNT);
-    while rows.len() < KitPieceId::COUNT {
-        rows.push(Vec::new());
-    }
-    std::array::from_fn(|i| pad_arts(std::mem::take(&mut rows[i])))
 }
 
 pub struct VelMapState {
@@ -249,19 +208,6 @@ mod tests {
         assert_eq!(restored.lookup(KitPieceId::Kick, 0, 100), art.lookup(100));
         state.reset_piece(KitPieceId::Kick);
         assert_eq!(state.lookup(KitPieceId::Kick, 0, 100), 100);
-    }
-
-    #[test]
-    fn legacy_bank_defaults_all_to_identity() {
-        let mut art = VelCurve::identity();
-        art.move_node(1, 1.0, 0.5);
-        let old_rows = vec![vec![art.clone(); MAX_ARTS]; KitPieceId::COUNT];
-        let bank: VelMapBank =
-            serde_json::from_value(serde_json::json!({"curves": old_rows})).unwrap();
-        let state = VelMapState::identity();
-        state.load_bank(bank);
-        assert_eq!(state.curve(KitPieceId::Kick, ALL_ART), VelCurve::identity());
-        assert_eq!(state.lookup(KitPieceId::Kick, 0, 100), art.lookup(100));
     }
 
     #[test]

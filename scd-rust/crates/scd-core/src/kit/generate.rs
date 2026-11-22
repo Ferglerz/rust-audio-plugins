@@ -79,12 +79,7 @@ pub fn count_kit_piece_strikes(articulations: &[ArticulationDef]) -> usize {
 pub fn count_kit_strikes(kit: &KitDef) -> usize {
     kit.order
         .iter()
-        .map(|id| {
-            kit.pieces
-                .get(id)
-                .map(|arts| count_kit_piece_strikes(arts))
-                .unwrap_or(0)
-        })
+        .map(|id| count_kit_piece_strikes(kit.arts(*id)))
         .sum()
 }
 

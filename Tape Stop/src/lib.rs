@@ -3,6 +3,7 @@
 //! Cross-platform CLAP/VST3 plugin built with nih-plug.
 
 use nih_plug::prelude::*;
+#[cfg(test)]
 use nih_plug::wrapper::state::ParamValue;
 use std::sync::Arc;
 
@@ -93,29 +94,6 @@ impl Plugin for TapeStop {
 
     fn params(&self) -> Arc<dyn Params> {
         self.params.clone()
-    }
-
-    fn filter_state(state: &mut PluginState) {
-        // NIH-plug leaves absent parameters unchanged when loading into an
-        // existing instance. Explicit defaults also apply when recalling old presets.
-        for (id, value) in [
-            ("affect_midi", ParamValue::Bool(true)),
-            ("time_sync", ParamValue::Bool(false)),
-            ("tempo_sync", ParamValue::Bool(true)),
-            ("tempo", ParamValue::F32(120.0)),
-            (
-                "drop_division",
-                ParamValue::I32(pleasant_dsp::tempo::QUARTER_NOTE),
-            ),
-            (
-                "return_division",
-                ParamValue::I32(pleasant_dsp::tempo::QUARTER_NOTE),
-            ),
-            ("xy_x_axis", ParamValue::I32(0)),
-            ("xy_mode", ParamValue::I32(0)),
-        ] {
-            state.params.entry(id.to_owned()).or_insert(value);
-        }
     }
 
     fn initialize(
@@ -310,27 +288,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn state_roundtrip_preserves_new_controls_and_legacy_state_gets_defaults() {
-        let mut state: PluginState = serde_json::from_value(serde_json::json!({
-            "params": { "drop_time": { "f32": 0.1374 }, "return_sec": { "f32": 0.9231 } }, "fields": {}
-        })).unwrap();
-        TapeStop::filter_state(&mut state);
-        assert!(matches!(state.params["time_sync"], ParamValue::Bool(false)));
-        assert!(matches!(state.params["tempo_sync"], ParamValue::Bool(true)));
-        assert!(matches!(state.params["affect_midi"], ParamValue::Bool(true)));
-        state.params.insert("affect_midi".into(), ParamValue::Bool(false));
-        assert!(
-            matches!(state.params["drop_time"], ParamValue::F32(v) if (v - 0.1374).abs() < 1e-6)
-        );
-        state.params.insert("xy_x_axis".into(), ParamValue::I32(1));
-        state.params.insert("xy_mode".into(), ParamValue::I32(1));
-        state
-            .params
-            .insert("time_sync".into(), ParamValue::Bool(true));
+    fn state_roundtrip_preserves_controls() {
+        let state: PluginState = serde_json::from_value(serde_json::json!({
+            "params": {
+                "drop_time": { "f32": 0.1374 },
+                "return_sec": { "f32": 0.9231 },
+                "affect_midi": { "bool": false },
+                "xy_x_axis": { "i32": 1 },
+                "xy_mode": { "i32": 1 },
+                "time_sync": { "bool": true }
+            },
+            "fields": {}
+        }))
+        .unwrap();
         let json = serde_json::to_vec(&state).unwrap();
-        let mut restored: PluginState = serde_json::from_slice(&json).unwrap();
-        TapeStop::filter_state(&mut restored);
-        assert!(matches!(restored.params["affect_midi"], ParamValue::Bool(false)));
+        let restored: PluginState = serde_json::from_slice(&json).unwrap();
+        assert!(matches!(
+            restored.params["drop_time"],
+            ParamValue::F32(v) if (v - 0.1374).abs() < 1e-6
+        ));
+        assert!(matches!(
+            restored.params["affect_midi"],
+            ParamValue::Bool(false)
+        ));
         assert!(matches!(restored.params["xy_x_axis"], ParamValue::I32(1)));
         assert!(matches!(restored.params["xy_mode"], ParamValue::I32(1)));
         assert!(matches!(

@@ -20,7 +20,7 @@ pub(super) enum GlobalControl {
 
 impl GlobalControl {
     pub(super) fn inverted(self) -> bool {
-        matches!(self, Self::Compression | Self::WallThreshold)
+        matches!(self, Self::WallThreshold)
     }
 }
 

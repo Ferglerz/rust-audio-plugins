@@ -52,20 +52,19 @@ impl FastFinish {
     }
 
     fn process(&mut self, output: &mut [f32], sag_enabled: bool) {
-        for sample in output {
-            if sag_enabled {
-                let magnitude = sample.abs();
-                let coefficient = if magnitude > self.sag_envelope {
-                    self.sag_attack
-                } else {
-                    self.sag_release
-                };
-                self.sag_envelope += coefficient * (magnitude - self.sag_envelope);
-                *sample /= 1.0 + 12.0 * self.sag_envelope;
-            }
-        }
         if !sag_enabled {
             self.sag_envelope = 0.0;
+            return;
+        }
+        for sample in output {
+            let magnitude = sample.abs();
+            let coefficient = if magnitude > self.sag_envelope {
+                self.sag_attack
+            } else {
+                self.sag_release
+            };
+            self.sag_envelope += coefficient * (magnitude - self.sag_envelope);
+            *sample /= 1.0 + 12.0 * self.sag_envelope;
         }
     }
 }
@@ -159,12 +158,22 @@ impl OpenWurliUi {
     }
 
     fn finish_output(&mut self, output: &mut [f32]) {
-        for sample in output.iter_mut() {
-            *sample *= util::db_to_gain(OUTPUT_ALIGNMENT_DB);
-        }
-        self.finish.process(output, self.params.rail_sag.value());
-        for sample in output {
-            *sample *= self.params.volume.smoothed.next() / OUTPUT_VOLUME_REFERENCE;
+        let alignment = util::db_to_gain(OUTPUT_ALIGNMENT_DB);
+        let inv_ref = 1.0 / OUTPUT_VOLUME_REFERENCE;
+        if self.params.rail_sag.value() {
+            for sample in output.iter_mut() {
+                *sample *= alignment;
+            }
+            self.finish.process(output, true);
+            for sample in output {
+                *sample *= self.params.volume.smoothed.next() * inv_ref;
+            }
+        } else {
+            self.finish.sag_envelope = 0.0;
+            let scale = alignment * inv_ref;
+            for sample in output {
+                *sample *= self.params.volume.smoothed.next() * scale;
+            }
         }
     }
 }
@@ -198,16 +207,6 @@ impl Plugin for OpenWurliUi {
         {
             *drive = drive.clamp(0.5, params::PICKUP_DRIVE_MAX);
         }
-        // Missing parameters retain their current value in NIH-plug. Explicitly
-        // restore Fast selection even when loading into a Heavy instance.
-        state
-            .params
-            .entry("extended_notes".into())
-            .or_insert(nih_plug::wrapper::state::ParamValue::Bool(false));
-        state
-            .params
-            .entry("cpu_mode".into())
-            .or_insert_with(|| nih_plug::wrapper::state::ParamValue::String("fast".into()));
     }
 
     fn initialize(

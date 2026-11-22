@@ -77,24 +77,17 @@ pub fn next_time_ms(ms: f32, direction: f32) -> f32 {
 }
 
 pub fn find_step_index(value: f64, steps: &[f64]) -> usize {
+    debug_assert!(!steps.is_empty());
     steps
         .iter()
         .enumerate()
-        .min_by(|(_, a), (_, b)| {
-            (value - **a)
-                .abs()
-                .partial_cmp(&(value - **b).abs())
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .map(|(i, _)| i)
-        .unwrap_or(0)
+        .min_by(|(_, a), (_, b)| (value - **a).abs().total_cmp(&(value - **b).abs()))
+        .expect("step table must be non-empty")
+        .0
 }
 
 pub fn snap_to_nearest_step(value: f64, steps: &[f64]) -> f64 {
-    steps
-        .get(find_step_index(value, steps))
-        .copied()
-        .unwrap_or(value)
+    steps[find_step_index(value, steps)]
 }
 
 /// JSFX `calculate_slider_normalized_pos_and_display_value`: step index → 0–1 UI position.

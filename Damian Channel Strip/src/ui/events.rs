@@ -331,7 +331,7 @@ impl StripView {
                         let cur_idx = SCALES
                             .iter()
                             .position(|&s| (s - self.graph_db).abs() < 0.1)
-                            .unwrap_or(2);
+                            .expect("graph_db must be a valid scale");
                         let next_idx = if *dy > 0.0 {
                             cur_idx.saturating_sub(1)
                         } else {
@@ -355,7 +355,7 @@ impl StripView {
                         {
                             let p = self.param(GlobalControl::Compression);
                             let cur = p.unmodulated_normalized_value();
-                            let norm = (cur - *dy * 0.02).clamp(0.0, 1.0);
+                            let norm = (cur + *dy * 0.02).clamp(0.0, 1.0);
                             cx.emit(RawParamEvent::SetParameterNormalized(p.as_ptr(), norm));
                             cx.needs_redraw();
                             return;
@@ -370,9 +370,7 @@ impl StripView {
                         {
                             let p = self.param(i);
                             let cur = p.unmodulated_normalized_value();
-                            let norm =
-                                (cur + *dy * if i == GlobalControl::Compression { -0.03 } else { 0.03 })
-                                    .clamp(0.0, 1.0);
+                            let norm = (cur + *dy * 0.03).clamp(0.0, 1.0);
                             cx.emit(RawParamEvent::SetParameterNormalized(p.as_ptr(), norm));
                             cx.needs_redraw();
                             return;

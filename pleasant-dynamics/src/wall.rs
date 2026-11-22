@@ -32,6 +32,7 @@ impl Default for WallSettings {
 }
 
 impl WallSettings {
+    #[cfg(test)]
     fn ceiling(self) -> f64 {
         10.0_f64.powf(self.threshold / 20.0).max(1.0e-6)
     }
@@ -69,6 +70,7 @@ fn colour_sample(input: f64, even: f64, odd: f64, ceiling: f64) -> f64 {
     input + odd * (odd_path - input) + even * even_path
 }
 
+#[cfg(test)]
 fn colour(input: [f64; 2], settings: WallSettings) -> [f64; 2] {
     let ceiling = settings.ceiling();
     let even = settings.even_amount();
@@ -124,6 +126,7 @@ fn safety_sample(input: f64, ceiling: f64) -> f64 {
     }
 }
 
+#[cfg(test)]
 fn safety(input: [f64; 2], ceiling: f64) -> [f64; 2] {
     [
         safety_sample(sanitize(input[0]), ceiling),
@@ -221,11 +224,7 @@ impl PeakWindow {
     }
 
     fn push(&mut self, value: f64) -> f64 {
-        let value = if value.is_finite() {
-            value.max(0.0)
-        } else {
-            0.0
-        };
+        let value = value.max(0.0);
         let index = self.sample_index;
         self.sample_index += 1;
         let window = self.window as u64;
@@ -253,10 +252,8 @@ impl PeakWindow {
     }
 }
 
-/// Stateless colour plus safety clip, without anti-aliasing. Stateful
-/// limiting lives in [`Wall`], which runs both waveshapers through ADAA;
-/// this remains for one-shot use where no sample history exists.
-pub fn tick_wall(input: [f64; 2], settings: WallSettings) -> [f64; 2] {
+#[cfg(test)]
+fn tick_wall(input: [f64; 2], settings: WallSettings) -> [f64; 2] {
     if !settings.on {
         return input;
     }

@@ -151,9 +151,9 @@ impl StripView {
                 }
                 let r = self.dyn_main_thresh_slider_rect();
                 let gr = self.dyn_main_gr_meter_rect();
-                let comp_ptr = self.params.compression.as_ptr();
-                let thresh_norm = self.params.compression.unmodulated_normalized_value();
-                let thresh_y = r.1 + r.3 * thresh_norm;
+                let comp_ptr = self.params.threshold.as_ptr();
+                let thresh_norm = self.params.threshold.unmodulated_normalized_value();
+                let thresh_y = r.1 + r.3 * (1.0 - thresh_norm);
                 let handle = self.dyn_main_thresh_handle_rect(thresh_y);
                 let handle_hit = (
                     handle.0 - 4.0,
@@ -197,7 +197,7 @@ impl StripView {
                 if inside(x, y, combined) {
                     self.drag = Some(Target::Global(GlobalControl::Compression));
                     self.last_drag = (x, y);
-                    let norm = ((y - r.1) / r.3).clamp(0.0, 1.0);
+                    let norm = 1.0 - ((y - r.1) / r.3).clamp(0.0, 1.0);
                     cx.emit(RawParamEvent::BeginSetParameter(comp_ptr));
                     cx.emit(RawParamEvent::SetParameterNormalized(comp_ptr, norm));
                     cx.capture();

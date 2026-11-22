@@ -15,8 +15,8 @@ impl ScdEditorView {
             .iter()
             .enumerate()
             .max_by_key(|(_, art)| art.layers)
-            .map(|(i, _)| i)
-            .unwrap_or(0)
+            .expect("every kit piece has at least one articulation")
+            .0
     }
 
     pub(super) fn set_cc_number(&self, cx: &mut EventContext, value: i32) {
@@ -111,11 +111,7 @@ impl ScdEditorView {
     }
 
     pub(super) fn note_rect(&self, target: NoteTarget) -> (f32, f32, f32, f32) {
-        KitPieceId::ALL
-            .iter()
-            .position(|p| *p == target.kit_piece)
-            .map(|i| Self::mapping_note_rect(i, target.note2))
-            .unwrap_or(Self::mapping_note_rect(0, target.note2))
+        Self::mapping_note_rect(target.kit_piece as usize, target.note2)
     }
 
     pub(super) fn apply_note_value(&self, target: NoteTarget, raw: &str) {
@@ -138,11 +134,7 @@ impl ScdEditorView {
             }
         } else if let Ok(n) = raw.trim().parse::<u8>() {
             if n <= 127 {
-                let def = stonehouse()
-                    .arts(target.kit_piece)
-                    .get(target.art)
-                    .map(|a| a.note1)
-                    .unwrap_or(0);
+                let def = stonehouse().arts(target.kit_piece)[target.art].note1;
                 if n == def {
                     self.params
                         .note_maps

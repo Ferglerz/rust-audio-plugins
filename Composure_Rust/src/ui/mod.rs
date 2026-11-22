@@ -25,8 +25,6 @@ mod image_knob;
 #[path = "controls/image_switch.rs"]
 mod image_switch;
 mod layout;
-#[path = "controls/param_button.rs"]
-mod param_button;
 #[path = "controls/param_widget_ext.rs"]
 mod param_widget_ext;
 #[path = "controls/step_points.rs"]
@@ -69,7 +67,7 @@ impl Model for EditorData {
             self.appearance = appearance::encode(self.appearance_choice.resolved());
             self.params
                 .editor_width
-                .store(appearance::editor_width(self.appearance), Ordering::Relaxed);
+                .store(appearance::editor_width(), Ordering::Relaxed);
             cx.emit(nih_plug_vizia::widgets::GuiContextEvent::Resize);
             cx.needs_redraw();
         });
@@ -101,14 +99,13 @@ fn place_gr_meter<L, R, P, X>(
     gr_meter_view::GrMeterView::new(cx, gr_db, range_db, params, display)
         .position_type(PositionType::SelfDirected)
         .left(x)
-        .top(EditorData::appearance.map(|mode| Pixels(appearance::graph_y(*mode))))
+        .top(Pixels(appearance::graph_y()))
         .width(Pixels(appearance::PLEASANT_METERS_W))
         .height(Pixels(appearance::PLEASANT_METER_HEIGHT));
 }
 
 pub fn preferred_editor_width() -> u32 {
-    let mode = appearance::encode(appearance::read_choice());
-    appearance::editor_width(mode)
+    appearance::editor_width()
 }
 
 pub fn default_editor_state(width: Arc<std::sync::atomic::AtomicU32>) -> Arc<ViziaState> {
@@ -169,7 +166,7 @@ fn build_editor_contents(cx: &mut Context, params: Arc<ComposureParams>, display
 
             place_gr_meter(
                 cx,
-                EditorData::appearance.map(|mode| Pixels(appearance::meter_x(*mode).0)),
+                EditorData::appearance.map(|_| Pixels(appearance::meter_x().0)),
                 gr_lens.clone(),
                 range_lens.clone(),
                 EditorData::params,
@@ -177,9 +174,9 @@ fn build_editor_contents(cx: &mut Context, params: Arc<ComposureParams>, display
             );
         })
         .position_type(PositionType::SelfDirected)
-        .top(EditorData::appearance.map(|mode| Pixels(appearance::content_offset(*mode))))
-        .width(EditorData::appearance.map(|mode| Pixels(appearance::editor_width(*mode) as f32)))
-        .height(EditorData::appearance.map(|mode| Pixels(appearance::editor_height(*mode) as f32)));
+        .top(Pixels(appearance::content_offset()))
+        .width(Pixels(appearance::editor_width() as f32))
+        .height(Pixels(appearance::editor_height() as f32));
 
         appearance::build_selector(cx);
         tooltip::build(cx);

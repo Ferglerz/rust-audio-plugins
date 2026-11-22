@@ -130,12 +130,6 @@ fn gr_blend_knee_param(name: &str, default: f32) -> FloatParam {
 /// Graph display range mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
 pub enum GraphRangeMode {
-    #[name = "20 dB"]
-    Range20,
-    #[name = "40 dB"]
-    Range40,
-    #[name = "60 dB"]
-    Range60,
     #[name = "6 dB"]
     Range6,
     #[name = "12 dB"]
@@ -154,6 +148,8 @@ pub enum GraphRangeMode {
     Range48,
     #[name = "54 dB"]
     Range54,
+    #[name = "60 dB"]
+    Range60,
     #[name = "66 dB"]
     Range66,
     #[name = "72 dB"]
@@ -161,8 +157,7 @@ pub enum GraphRangeMode {
 }
 
 impl GraphRangeMode {
-    /// Damian ranges; legacy 20/40 dB variants retain their saved indices.
-    pub const PLEASANT: [Self; 12] = [
+    pub const ALL: [Self; 12] = [
         Self::Range6,
         Self::Range12,
         Self::Range18,
@@ -177,27 +172,8 @@ impl GraphRangeMode {
         Self::Range72,
     ];
 
-    pub const ALL: [Self; 14] = [
-        Self::Range20,
-        Self::Range40,
-        Self::Range60,
-        Self::Range6,
-        Self::Range12,
-        Self::Range18,
-        Self::Range24,
-        Self::Range30,
-        Self::Range36,
-        Self::Range42,
-        Self::Range48,
-        Self::Range54,
-        Self::Range66,
-        Self::Range72,
-    ];
     pub fn range_db(self) -> f64 {
         match self {
-            Self::Range20 => 20.0,
-            Self::Range40 => 40.0,
-            Self::Range60 => 60.0,
             Self::Range6 => 6.0,
             Self::Range12 => 12.0,
             Self::Range18 => 18.0,
@@ -207,6 +183,7 @@ impl GraphRangeMode {
             Self::Range42 => 42.0,
             Self::Range48 => 48.0,
             Self::Range54 => 54.0,
+            Self::Range60 => 60.0,
             Self::Range66 => 66.0,
             Self::Range72 => 72.0,
         }

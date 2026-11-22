@@ -2,7 +2,7 @@ use atomic_float::AtomicF32;
 use nih_plug::prelude::*;
 use nih_plug_vizia::ViziaState;
 use scd_core::{KitPieceId, MicChannel};
-use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 
 use crate::note_map::NoteMapState;
@@ -12,27 +12,9 @@ use crate::vel_map::VelMapState;
 pub const EDITOR_WIDTH: u32 = 1181;
 pub const EDITOR_HEIGHT: u32 = 611 + pleasant_ui::draw::TOOLTIP_HEIGHT as u32;
 pub const EDITOR_ZOOM_MIN: f64 = 0.5;
-pub const EDITOR_ZOOM_MAX: f64 = 2.0;
 pub const FADER_MIN_DB: f32 = -72.0;
 pub const FADER_MAX_DB: f32 = 12.0;
 pub const VU_PEAK_COUNT: usize = MicChannel::COUNT * 2 + 2;
-
-/// Compatibility base size for sessions saved with the old percentage menu.
-/// New resizing is continuous and persisted by ViziaState on top of this base.
-/// Keep the old percentage stable so restoring and saving never compounds it.
-pub fn editor_logical_size(zoom: f64) -> (u32, u32) {
-    let z = zoom.clamp(EDITOR_ZOOM_MIN, EDITOR_ZOOM_MAX);
-    (
-        (EDITOR_WIDTH as f64 * z).round() as u32,
-        (EDITOR_HEIGHT as f64 * z).round() as u32,
-    )
-}
-
-fn editor_state_for_zoom(zoom_pct: Arc<AtomicU32>) -> Arc<ViziaState> {
-    ViziaState::new_screen_sized("SoundChef Drums", move || {
-        editor_logical_size(zoom_pct.load(Ordering::Relaxed) as f64 / 100.0)
-    })
-}
 
 fn db_param(name: impl Into<String>, def_db: f32, min_db: f32, max_db: f32) -> FloatParam {
     FloatParam::new(
@@ -301,10 +283,6 @@ pub struct ScdParams {
     #[persist = "editor-state"]
     pub editor_state: Arc<ViziaState>,
 
-    /// Legacy size basis only; the editor no longer writes or snaps this value.
-    #[persist = "editor-zoom"]
-    pub editor_zoom_pct: Arc<AtomicU32>,
-
     #[persist = "vel-maps"]
     pub vel_maps: Arc<VelMapState>,
 
@@ -376,10 +354,10 @@ pub struct ScdParams {
 
 impl Default for ScdParams {
     fn default() -> Self {
-        let editor_zoom_pct = Arc::new(AtomicU32::new(100));
         Self {
-            editor_state: editor_state_for_zoom(editor_zoom_pct.clone()),
-            editor_zoom_pct,
+            editor_state: ViziaState::new_screen_sized("SoundChef Drums", || {
+                (EDITOR_WIDTH, EDITOR_HEIGHT)
+            }),
             vel_maps: Arc::new(VelMapState::identity()),
             note_maps: Arc::new(NoteMapState::identity()),
             user_presets: Arc::new(UserPresetState::empty()),
@@ -449,53 +427,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn editor_logical_size_is_identity_at_100_percent() {
-        assert_eq!(editor_logical_size(1.0), (EDITOR_WIDTH, EDITOR_HEIGHT));
-    }
-
-    #[test]
-    fn editor_state_size_tracks_persisted_zoom() {
+    fn editor_state_round_trip_keeps_continuous_scale() {
         let params = ScdParams::default();
         assert_eq!(
             params.editor_state.inner_logical_size(),
             (EDITOR_WIDTH, EDITOR_HEIGHT)
-        );
-        params.editor_zoom_pct.store(150, Ordering::Relaxed);
-        assert_eq!(
-            params.editor_state.inner_logical_size(),
-            editor_logical_size(1.5)
-        );
-        // Restore a non-preset scale through the actual persistence path.
-        let restored: ViziaState = serde_json::from_str(r#"{"scale_factor":1.137}"#).unwrap();
-        nih_plug::params::persist::PersistentField::set(&params.editor_state, restored);
-        assert_eq!(
-            serde_json::to_value(&*params.editor_state).unwrap()["scale_factor"],
-            1.137
-        );
-        let (w, h) = editor_logical_size(1.5);
-        let scale = params.editor_state.user_scale_factor();
-        // Opening on a smaller monitor may reduce the restored scale.
-        assert!(scale > 0.0 && scale <= 1.137);
-        assert_eq!(
-            params.editor_state.scaled_logical_size(),
-            (
-                (w as f64 * scale).round() as u32,
-                (h as f64 * scale).round() as u32,
-            )
-        );
-        assert_eq!(params.editor_zoom_pct.load(Ordering::Relaxed), 150);
-    }
-
-    #[test]
-    fn editor_state_round_trip_keeps_legacy_basis_and_continuous_scale() {
-        let params = ScdParams::default();
-        let mut fields = params.serialize_fields();
-        fields.insert("editor-zoom".into(), "125".into());
-        fields.insert("editor-state".into(), r#"{"scale_factor":1.0}"#.into());
-        params.deserialize_fields(&fields);
-        assert_eq!(
-            params.editor_state.inner_logical_size(),
-            editor_logical_size(1.25)
         );
         let scale: ViziaState = serde_json::from_str(r#"{"scale_factor":1.137}"#).unwrap();
         nih_plug::params::persist::PersistentField::set(&params.editor_state, scale);
@@ -505,9 +441,8 @@ mod tests {
             reopened.deserialize_fields(&saved);
             assert_eq!(
                 reopened.editor_state.inner_logical_size(),
-                editor_logical_size(1.25)
+                (EDITOR_WIDTH, EDITOR_HEIGHT)
             );
-            assert_eq!(reopened.serialize_fields()["editor-zoom"], "125");
             let state: serde_json::Value =
                 serde_json::from_str(&reopened.serialize_fields()["editor-state"]).unwrap();
             assert_eq!(state["scale_factor"], 1.137);

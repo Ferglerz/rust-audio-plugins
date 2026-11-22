@@ -6,7 +6,6 @@ enum Format {
     Names(&'static [&'static str]),
     OnOff,
     Ms,
-    SignedOct,
     SignedSt,
     St,
     OneBased,
@@ -42,18 +41,7 @@ pub struct Target {
     format: Format,
 }
 fn noop_set(_: &mut Config, _: f32) {}
-// Indices are saved in host state. Append destinations; never reorder this list.
 pub const TARGETS: &[Target] = &[
-    Target {
-        name: "Strings",
-        id: "strings",
-        min: 3.0,
-        max: 12.0,
-        discrete: true,
-        get: Some(|c| c.strings as f32),
-        set: |c, v| c.strings = v as u8,
-        format: Format::Plain,
-    },
     Target {
         name: "Voicing",
         id: "spread",
@@ -133,72 +121,6 @@ pub const TARGETS: &[Target] = &[
         get: Some(|c| c.strum_sync as u8 as f32),
         set: |c, v| c.strum_sync = v >= 0.5,
         format: Format::OnOff,
-    },
-    Target {
-        name: "Sweep beats",
-        id: "strum_beats",
-        min: 0.0625,
-        max: 2.0,
-        discrete: false,
-        get: Some(|c| c.strum_beats),
-        set: |c, v| {
-            c.strum_beats = v;
-            c.rate = v;
-        },
-        format: Format::Plain,
-    },
-    Target {
-        name: "Direction",
-        id: "direction",
-        min: 0.0,
-        max: 4.0,
-        discrete: true,
-        get: Some(|c| c.direction as f32),
-        set: |c, v| {
-            c.direction = v as u8;
-            c.arp_pattern = v as u8;
-        },
-        format: Format::Names(&crate::arpeggiator::STRUM_DIRECTION_NAMES),
-    },
-    Target {
-        name: "Velocity contour",
-        id: "contour",
-        min: -1.0,
-        max: 1.0,
-        discrete: false,
-        get: Some(|c| c.contour),
-        set: |c, v| c.contour = v,
-        format: Format::Percent,
-    },
-    Target {
-        name: "Arp pattern",
-        id: "arp_pattern",
-        min: 0.0,
-        max: 6.0,
-        discrete: true,
-        get: Some(|c| c.arp_pattern as f32),
-        set: |c, v| c.arp_pattern = v as u8,
-        format: Format::Names(&crate::arpeggiator::PATTERN_NAMES),
-    },
-    Target {
-        name: "Rate (synced)",
-        id: "rate",
-        min: 0.0625,
-        max: 2.0,
-        discrete: false,
-        get: Some(|c| c.rate),
-        set: |c, v| c.rate = v,
-        format: Format::Plain,
-    },
-    Target {
-        name: "Gate",
-        id: "gate",
-        min: 0.05,
-        max: 1.0,
-        discrete: false,
-        get: Some(|c| c.gate),
-        set: |c, v| c.gate = v,
-        format: Format::Percent,
     },
     Target {
         name: "Swing",
@@ -321,46 +243,6 @@ pub const TARGETS: &[Target] = &[
         format: Format::OnOff,
     },
     Target {
-        name: "X minimum",
-        id: "x_min",
-        min: 0.0,
-        max: 0.99,
-        discrete: false,
-        get: Some(|c| c.x_min),
-        set: |c, v| c.x_min = v,
-        format: Format::Plain,
-    },
-    Target {
-        name: "X maximum",
-        id: "x_max",
-        min: 0.01,
-        max: 1.0,
-        discrete: false,
-        get: Some(|c| c.x_max),
-        set: |c, v| c.x_max = v,
-        format: Format::Plain,
-    },
-    Target {
-        name: "Y minimum",
-        id: "y_min",
-        min: 0.0,
-        max: 0.99,
-        discrete: false,
-        get: Some(|c| c.y_min),
-        set: |c, v| c.y_min = v,
-        format: Format::Plain,
-    },
-    Target {
-        name: "Y maximum",
-        id: "y_max",
-        min: 0.01,
-        max: 1.0,
-        discrete: false,
-        get: Some(|c| c.y_max),
-        set: |c, v| c.y_max = v,
-        format: Format::Plain,
-    },
-    Target {
         name: "MPE members",
         id: "members",
         min: 1.0,
@@ -439,16 +321,6 @@ pub const TARGETS: &[Target] = &[
         get: Some(|c| c.routed_x.unwrap_or(0.0)),
         set: |c, v| c.routed_x = Some(v),
         format: Format::Plain,
-    },
-    Target {
-        name: "Arp page",
-        id: "arp_page",
-        min: 0.0,
-        max: 7.0,
-        discrete: true,
-        get: Some(|c| c.arp_page as f32),
-        set: |c, v| c.arp_page = v as u8,
-        format: Format::OneBased,
     },
     Target {
         name: "Pitch wheel",
@@ -571,76 +443,6 @@ pub const TARGETS: &[Target] = &[
         format: Format::Plain,
     },
     Target {
-        name: "Arp loop length",
-        id: "arp_octaves",
-        min: 1.0,
-        max: 4.0,
-        discrete: true,
-        get: Some(|c| c.arp_octaves as f32),
-        set: |c, v| c.arp_octaves = v as u8,
-        format: Format::Plain,
-    },
-    Target {
-        name: "Arp sync",
-        id: "arp_sync",
-        min: 0.0,
-        max: 1.0,
-        discrete: true,
-        get: Some(|c| c.arp_sync as u8 as f32),
-        set: |c, v| c.arp_sync = v >= 0.5,
-        format: Format::OnOff,
-    },
-    Target {
-        name: "Arp rate (free)",
-        id: "arp_free_ms",
-        min: 1.0,
-        max: 1500.0,
-        discrete: false,
-        get: Some(|c| c.arp_free_ms),
-        set: |c, v| c.arp_free_ms = v,
-        format: Format::Ms,
-    },
-    Target {
-        name: "Arp loop 1 octave",
-        id: "arp_loop_1_octave",
-        min: -4.0,
-        max: 4.0,
-        discrete: true,
-        get: Some(|c| c.arp_loop_octaves[0] as f32),
-        set: |c, v| c.arp_loop_octaves[0] = v as i8,
-        format: Format::SignedOct,
-    },
-    Target {
-        name: "Arp loop 2 octave",
-        id: "arp_loop_2_octave",
-        min: -4.0,
-        max: 4.0,
-        discrete: true,
-        get: Some(|c| c.arp_loop_octaves[1] as f32),
-        set: |c, v| c.arp_loop_octaves[1] = v as i8,
-        format: Format::SignedOct,
-    },
-    Target {
-        name: "Arp loop 3 octave",
-        id: "arp_loop_3_octave",
-        min: -4.0,
-        max: 4.0,
-        discrete: true,
-        get: Some(|c| c.arp_loop_octaves[2] as f32),
-        set: |c, v| c.arp_loop_octaves[2] = v as i8,
-        format: Format::SignedOct,
-    },
-    Target {
-        name: "Arp loop 4 octave",
-        id: "arp_loop_4_octave",
-        min: -4.0,
-        max: 4.0,
-        discrete: true,
-        get: Some(|c| c.arp_loop_octaves[3] as f32),
-        set: |c, v| c.arp_loop_octaves[3] = v as i8,
-        format: Format::SignedOct,
-    },
-    Target {
         name: "Base inversion",
         id: "base_inversion",
         min: -12.0,
@@ -745,37 +547,10 @@ impl Target {
         self.id.strip_prefix("source_").and_then(|n| n.parse().ok())
     }
 
-    // Keep saved destination indices stable; touch bounds are no longer routable.
-    pub fn available(&self) -> bool {
-        !matches!(
-            self.id,
-            "x_min"
-                | "x_max"
-                | "y_min"
-                | "y_max"
-                | "direction"
-                | "strum_beats"
-                | "contour"
-                | "strings"
-                | "arp_pattern"
-                | "rate"
-                | "gate"
-                | "arp_page"
-                | "arp_octaves"
-                | "arp_sync"
-                | "arp_free_ms"
-                | "arp_loop_1_octave"
-                | "arp_loop_2_octave"
-                | "arp_loop_3_octave"
-                | "arp_loop_4_octave"
-        )
-    }
-
     // Controller setup belongs to the input, so it cannot be changed by that
     // same input. The Strumfield destination is separate from the X controller.
     pub fn accepts_source(&self, source: u8) -> bool {
-        self.available()
-            && !(source > 0 && self.source_index() == Some(source as usize - 1))
+        !(source > 0 && self.source_index() == Some(source as usize - 1))
             && !(source == 8 && self.id == "x_reverse")
             && !(source == 9 && matches!(self.id, "y_reverse" | "y_target" | "y_cc"))
     }
@@ -795,7 +570,6 @@ impl Target {
             Format::Names(names) => names[v as usize].into(),
             Format::OnOff => if v >= 0.5 { "On" } else { "Off" }.into(),
             Format::Ms => format!("{v:.0} ms"),
-            Format::SignedOct => format!("{v:+.0} oct"),
             Format::SignedSt => format!("{v:+.0} st"),
             Format::St => format!("{v:.0} st"),
             Format::OneBased => format!("{:.0}", v + 1.0),
@@ -812,10 +586,7 @@ impl Target {
 }
 
 pub fn available_targets() -> impl Iterator<Item = (usize, &'static Target)> {
-    TARGETS
-        .iter()
-        .enumerate()
-        .filter(|(_, target)| target.available())
+    TARGETS.iter().enumerate()
 }
 
 pub const TARGET_COUNT: usize = TARGETS.len();

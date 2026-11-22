@@ -47,18 +47,10 @@ pub struct ChordboardParams {
     pub quick_midi: [crate::midi_learn::Binding; crate::midi_learn::COUNT],
     #[persist = "arpeggiator-tracker-v2"]
     pub arpeggiator: Arc<crate::arpeggiator::Store>,
-    // These unregistered fields remain temporarily for editor compatibility. The persisted
-    // tracker rows own all variation data and no row setting is a host parameter.
-    pub arp_pages: [ArpPageParams; 8],
-    pub arp_page: IntParam,
     #[id = "arp_enabled"]
     pub arp_enabled: BoolParam,
     #[persist = "editor-state"]
     pub editor_state: Arc<ViziaState>,
-    #[persist = "global-controls-version"]
-    pub global_controls_version: AtomicU32,
-    #[persist = "schema-version"]
-    pub schema_version: AtomicU32,
     #[persist = "selected-quality-v1"]
     pub selected_quality: AtomicU32,
     #[persist = "control-zone-v1"]
@@ -121,9 +113,6 @@ pub struct ChordboardParams {
     pub velocity: FloatParam,
     #[id = "length_ms"]
     pub length_ms: FloatParam,
-    // Kept for preset compatibility; the string count now follows chord tones × octaves.
-    #[id = "strings"]
-    pub strings: IntParam,
     #[id = "strings_played"]
     pub strings_played: IntParam,
     #[id = "gliss_ms"]
@@ -134,8 +123,6 @@ pub struct ChordboardParams {
     pub strum_ms: FloatParam,
     #[id = "strum_sync"]
     pub strum_sync: BoolParam,
-    #[id = "strum_beats"]
-    pub strum_beats: FloatParam,
     #[id = "strum_hold"]
     pub strum_hold: BoolParam,
     #[id = "tempo_sync"]
@@ -148,16 +135,8 @@ pub struct ChordboardParams {
     pub meter_num: IntParam,
     #[id = "meter_den"]
     pub meter_den: IntParam,
-    #[id = "direction"]
-    pub direction: IntParam,
-    #[id = "contour"]
-    pub contour: FloatParam,
-    #[id = "contour_curve"]
-    pub contour_curve: FloatParam,
     #[id = "octaves"]
     pub octaves: IntParam,
-    #[id = "mpe"]
-    pub mpe: BoolParam,
     #[id = "output_mode"]
     pub output_mode: IntParam,
     pub detected_mpe: AtomicBool,
@@ -191,9 +170,6 @@ pub struct ChordboardParams {
     pub x: FloatParam,
     #[id = "y"]
     pub y: FloatParam,
-    // Retained for preset compatibility; computer-key playing is always enabled.
-    #[id = "keyboard"]
-    pub keyboard: BoolParam,
     #[id = "fifths"]
     pub fifths: BoolParam,
     #[id = "scale_layout"]
@@ -208,9 +184,6 @@ pub struct ChordboardParams {
     pub key: IntParam,
     #[id = "scale"]
     pub scale: IntParam,
-    // Retain the old parameter ID for saved projects; highlighting is always enabled.
-    #[id = "highlight"]
-    pub highlight: BoolParam,
     #[id = "filter"]
     pub filter: IntParam,
     #[id = "bass_channel"]
@@ -289,15 +262,11 @@ impl Default for ChordboardParams {
             arpeggiator: crate::arpeggiator::Store::new(),
             swing: ArpPageParams::default().swing,
             humanize: ArpPageParams::default().humanize,
-            arp_pages: std::array::from_fn(|_| ArpPageParams::default()),
-            arp_page: IntParam::new("Arp page", 0, IntRange::Linear { min: 0, max: 7 }),
             arp_enabled: BoolParam::new("Tracker playback", false),
             editor_state: ViziaState::new_screen_sized(
                 "Chordboard",
                 crate::ui::initial_editor_size,
             ),
-            schema_version: AtomicU32::new(2),
-            global_controls_version: AtomicU32::new(1),
             selected_quality: AtomicU32::new(0),
             control_base: AtomicI32::new(12),
             map_x: AtomicU32::new(Mapping::cc(1, 16).encode()),
@@ -416,7 +385,6 @@ impl Default for ChordboardParams {
                 },
             )
             .with_value_to_string(Arc::new(|v| format!("{v:.2}"))),
-            strings: IntParam::new("Strings", 8, IntRange::Linear { min: 3, max: 12 }),
             strings_played: IntParam::new(
                 "Strings played",
                 12,
@@ -460,15 +428,6 @@ impl Default for ChordboardParams {
             )
             .with_value_to_string(Arc::new(|v| format!("{v:.2}"))),
             strum_sync: BoolParam::new("Rate tempo sync", true),
-            strum_beats: FloatParam::new(
-                "Sweep beats (legacy)",
-                0.25,
-                FloatRange::Linear {
-                    min: 0.0625,
-                    max: 2.0,
-                },
-            )
-            .hide(),
             meter_num: IntParam::new("Meter numerator", 4, IntRange::Linear { min: 1, max: 32 }),
             meter_den: IntParam::new(
                 "Meter denominator power",
@@ -486,40 +445,11 @@ impl Default for ChordboardParams {
                 },
             )
             .with_value_to_string(Arc::new(|v| format!("{v:.1}"))),
-            direction: IntParam::new(
-                "Strum direction (legacy)",
-                0,
-                IntRange::Linear { min: 0, max: 4 },
-            )
-            .with_value_to_string(Arc::new(|v| {
-                crate::arpeggiator::STRUM_DIRECTION_NAMES[v as usize].to_string()
-            }))
-            .hide(),
-            contour: FloatParam::new(
-                "Velocity contour",
-                0.0,
-                FloatRange::Linear {
-                    min: -1.0,
-                    max: 1.0,
-                },
-            )
-            .with_value_to_string(Arc::new(|v| format!("{v:.2}")))
-            .hide(),
-            contour_curve: FloatParam::new(
-                "Contour curve",
-                0.0,
-                FloatRange::Linear {
-                    min: -1.0,
-                    max: 1.0,
-                },
-            )
-            .hide(),
             octaves: IntParam::new(
                 "Manual strum octaves",
                 1,
                 IntRange::Linear { min: 1, max: 4 },
             ),
-            mpe: BoolParam::new("MPE output (legacy)", false).hide(),
             output_mode: IntParam::new("Output protocol", 2, IntRange::Linear { min: 0, max: 2 })
                 .with_value_to_string(Arc::new(|v| ["AUTO", "MPE", "MIDI"][v as usize].into())),
             detected_mpe: AtomicBool::new(false),
@@ -611,9 +541,6 @@ impl Default for ChordboardParams {
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
             .with_value_to_string(Arc::new(|v| format!("{v:.2}"))),
-            keyboard: BoolParam::new("Keyboard play", true)
-                .hide()
-                .hide_in_generic_ui(),
             fifths: BoolParam::new("Fifths layout", false),
             scale_layout: IntParam::new("Scale layout", 1, IntRange::Linear { min: 0, max: 2 })
                 .with_value_to_string(Arc::new(|v| {
@@ -646,9 +573,6 @@ impl Default for ChordboardParams {
                 },
             )
             .with_value_to_string(Arc::new(|v| harmony::SCALE_NAMES[v as usize].to_string())),
-            highlight: BoolParam::new("Key highlighting", true)
-                .hide()
-                .hide_in_generic_ui(),
             filter: IntParam::new("Note filter", 0, IntRange::Linear { min: 0, max: 5 })
                 .with_value_to_string(Arc::new(|v| {
                     [
@@ -676,20 +600,6 @@ impl ChordboardParams {
         }
     }
     /// Suspend outgoing modulation without changing the saved route settings.
-    pub fn required_arp_loops(&self) -> [u8; 8] {
-        let routes = std::array::from_fn::<_, ROUTE_COUNT, _>(|i| {
-            self.effective_route(self.routes[i].route())
-        });
-        std::array::from_fn(|p| {
-            crate::engine::routing::maximum_for_routes(
-                "arp_octaves",
-                self.arp_pages[p].arp_octaves.value() as f32,
-                &routes,
-            )
-            .round()
-            .clamp(1.0, 4.0) as u8
-        })
-    }
     pub fn effective_route(&self, mut route: Route) -> Route {
         if let Some(source) = route.source.checked_sub(1) {
             if self
@@ -715,7 +625,7 @@ impl ChordboardParams {
     }
     pub fn config(&self) -> Config {
         let quick = |i| crate::midi_learn::value(self, i);
-        let arp_page = 0usize;
+        let defaults = crate::arpeggiator::Settings::default();
         Config {
             always_bass: quick(crate::midi_learn::ALWAYS_BASS) != 0,
             always_chord: quick(crate::midi_learn::ALWAYS_CHORD) != 0,
@@ -730,8 +640,8 @@ impl ChordboardParams {
             mode: crate::engine::MANUAL,
             arp_enabled: quick(6) != 0,
             tracker_enabled: true,
-            arp_page: arp_page as u8,
-            arp_settings: std::array::from_fn(|i| self.arp_pages[i].settings()),
+            arp_page: 0,
+            arp_settings: [defaults; 8],
             arp_loop_octaves: [0; 4],
             quality: quick(4) as u8,
             key: self.key.value() as u8,
@@ -749,28 +659,27 @@ impl ChordboardParams {
             latch: quick(5) != 0,
             velocity: crate::midi_learn::float_value(self, crate::midi_learn::VELOCITY),
             length_ms: self.length_ms.value(),
-            strings: self.strings.value() as u8,
+            strings: 8,
             strings_played: self.strings_played.value() as u8,
             routed_x: None,
-            legacy_direct_x: self.schema_version.load(Ordering::Relaxed) < 2,
             gliss_ms: crate::midi_learn::float_value(self, crate::midi_learn::GLISS_TIME),
             gliss_direction: quick(crate::midi_learn::GLISS_DIRECTION) as u8,
             strum_ms: self.strum_ms.value(),
             strum_sync: self.strum_sync.value(),
-            strum_beats: self.strum_beats.value(),
+            strum_beats: 0.25,
             strum_hold: self.strum_hold.value(),
             strum_chord_latch: self.strum_chord_latch.value(),
-            direction: self.direction.value() as u8,
-            contour: self.contour.value(),
-            contour_curve: self.contour_curve.value(),
-            arp_pattern: self.arp_pages[arp_page].arp_pattern.value() as u8,
-            rate: self.arp_pages[arp_page].rate.value(),
+            direction: 0,
+            contour: 0.0,
+            contour_curve: 0.0,
+            arp_pattern: defaults.pattern,
+            rate: defaults.rate,
             gate: 0.65,
             swing: crate::midi_learn::float_value(self, crate::midi_learn::SWING),
-            arp_mode: self.arp_pages[arp_page].settings().mode,
-            arp_octaves: self.arp_pages[arp_page].arp_octaves.value() as u8,
-            arp_sync: self.arp_pages[arp_page].arp_sync.value(),
-            arp_free_ms: self.arp_pages[arp_page].arp_free_ms.value(),
+            arp_mode: defaults.mode,
+            arp_octaves: defaults.octaves,
+            arp_sync: defaults.sync,
+            arp_free_ms: defaults.free_ms,
             host_sync: self.tempo_sync.value(),
             daw_alignment: quick(crate::midi_learn::DAW_ALIGNMENT) != 0,
             octaves: quick(crate::midi_learn::OCTAVES) as u8,

@@ -5,14 +5,12 @@ use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
 use std::sync::Arc;
 
-pub const LIFT_MIN_FREQ: f64 = 20.0; // No longer a processing floor — kept for compat.
 pub const LIFT_FFT_SIZE: usize = 2048;
 pub const LIFT_HOP_SIZE: usize = 512;
 pub const LIFT_LATENCY: usize = 2047;
 pub const LIFT_ID_BASE: u64 = 100_000;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
 pub struct LiftBand {
     pub id: u64,
     pub shape: Shape,

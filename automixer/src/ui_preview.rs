@@ -1,31 +1,8 @@
 //! Offscreen render of the actual editor artwork; no DAW or UI automation.
 use super::*;
 use crate::Automixer;
-use nih_plug_vizia::vizia::vg::{renderer::OpenGl, ImageFlags, PixelFormat, RenderTarget};
-use std::ffi::c_void;
-
-#[link(name = "OpenGL", kind = "framework")]
-extern "C" {
-    fn CGLChoosePixelFormat(
-        attributes: *const u32,
-        format: *mut *mut c_void,
-        count: *mut i32,
-    ) -> i32;
-    fn CGLCreateContext(format: *mut c_void, share: *mut c_void, context: *mut *mut c_void) -> i32;
-    fn CGLSetCurrentContext(context: *mut c_void) -> i32;
-    fn CGLDestroyContext(context: *mut c_void) -> i32;
-    fn CGLDestroyPixelFormat(format: *mut c_void) -> i32;
-}
-struct Context(*mut c_void);
-impl Drop for Context {
-    fn drop(&mut self) {
-        // SAFETY: owns the context created below, after the canvas has been dropped.
-        unsafe {
-            CGLSetCurrentContext(std::ptr::null_mut());
-            CGLDestroyContext(self.0);
-        }
-    }
-}
+use nih_plug_vizia::vizia::vg::{ImageFlags, PixelFormat, RenderTarget};
+use pleasant_ui::preview::OffscreenGl;
 
 #[test]
 #[ignore = "Manual offscreen UI check; writes /tmp/automixer-{dark,light}.png"]
@@ -40,29 +17,8 @@ fn render_spectral_pull_preview() {
 }
 
 fn render_previews(pulls_only: bool) {
-    let mut format = std::ptr::null_mut();
-    let mut context = std::ptr::null_mut();
-    let mut count = 0;
-    // SAFETY: terminated attribute list and valid output pointers.
-    unsafe {
-        assert_eq!(
-            CGLChoosePixelFormat([99, 0x3200, 0].as_ptr(), &mut format, &mut count),
-            0
-        );
-        assert_eq!(
-            CGLCreateContext(format, std::ptr::null_mut(), &mut context),
-            0
-        );
-        CGLDestroyPixelFormat(format);
-        assert_eq!(CGLSetCurrentContext(context), 0);
-    }
-    let _context = Context(context);
-    // SAFETY: the current OpenGL context outlives renderer and canvas.
-    let renderer = unsafe {
-        OpenGl::new_from_function_cstr(|s| libc::dlsym(libc::RTLD_DEFAULT, s.as_ptr()).cast())
-    }
-    .unwrap();
-    let mut canvas = Canvas::new(renderer).unwrap();
+    let mut gl = OffscreenGl::new();
+    let canvas = gl.canvas_mut();
     for (mode_name, spectral, setup, _track) in [
         ("gain", false, false, false),
         ("gain-midi", false, false, false),
@@ -230,7 +186,7 @@ fn render_previews(pulls_only: bool) {
                 nih_plug_vizia::vizia::vg::Color::black(),
             );
             let mut draw = Draw::new_fitted(
-                &mut canvas,
+                canvas,
                 light,
                 (0.0, 0.0, width as f32, height as f32),
                 SIZE,

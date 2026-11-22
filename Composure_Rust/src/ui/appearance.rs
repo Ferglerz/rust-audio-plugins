@@ -68,42 +68,35 @@ pub const PLEASANT_METER_INSET: f32 = 7.0;
 pub const PLEASANT_METERS_W: f32 =
     3.0 * PLEASANT_METER_W + 2.0 * (PLEASANT_METER_INSET + PLEASANT_METER_GAP);
 
-pub fn meter_x(_mode: u8) -> (f32, f32) {
+pub fn meter_x() -> (f32, f32) {
     let x = PLEASANT_GRAPH_X + PLEASANT_GRAPH_SIZE + 12.0;
     (x, x + PLEASANT_METER_W + PLEASANT_METER_GAP)
 }
-pub fn graph_x(_mode: u8) -> f32 {
+pub fn graph_x() -> f32 {
     PLEASANT_GRAPH_X
 }
-pub fn graph_y(_mode: u8) -> f32 {
+pub fn graph_y() -> f32 {
     PLEASANT_GRAPH_Y
 }
-pub fn graph_size(_mode: u8) -> f32 {
+pub fn graph_size() -> f32 {
     PLEASANT_GRAPH_SIZE
 }
-pub fn editor_width(_mode: u8) -> u32 {
+pub fn editor_width() -> u32 {
     PLEASANT_EDITOR_WIDTH
 }
-pub fn editor_height(_mode: u8) -> u32 {
+pub fn editor_height() -> u32 {
     PLEASANT_EDITOR_HEIGHT
 }
-pub fn content_offset(_mode: u8) -> f32 {
+pub fn content_offset() -> f32 {
     HEADER_H
 }
 
 pub fn read_choice() -> Appearance {
-    match Appearance::read("Composure") {
-        Appearance::Analog => Appearance::Dark,
-        choice => choice,
-    }
+    Appearance::read("Composure")
 }
 
 pub fn next_choice(choice: Appearance) -> Appearance {
-    match choice {
-        Appearance::Dark => Appearance::Light,
-        Appearance::Light => Appearance::Auto,
-        _ => Appearance::Dark,
-    }
+    choice.next()
 }
 
 pub struct SetAppearance(pub u8);
@@ -113,14 +106,13 @@ pub fn encode(mode: Appearance) -> u8 {
     match mode {
         Appearance::Dark => 0,
         Appearance::Light => 1,
-        Appearance::Analog => 0,
-        Appearance::Auto => 3,
+        Appearance::Auto => 2,
     }
 }
 pub fn decode(mode: u8) -> Appearance {
     match mode {
         1 => Appearance::Light,
-        3 => Appearance::Auto,
+        2 => Appearance::Auto,
         _ => Appearance::Dark,
     }
 }
@@ -155,8 +147,6 @@ pub(super) fn painter<'a>(cx: &DrawContext, canvas: &'a mut Canvas, width: f32) 
 pub enum Control {
     Knob,
     Switch,
-    #[allow(dead_code)]
-    Button,
 }
 
 pub(super) fn harmonic_control_inactive(
@@ -302,20 +292,6 @@ pub fn draw_control(
                     TEAL,
                 );
             }
-        }
-        Control::Button => {
-            let label = match param.name() {
-                "L" => "L",
-                "SC" => "SC",
-                _ => param.name(),
-            };
-            button(
-                &mut d,
-                (0.0, 0.0, w, h),
-                &label.to_uppercase(),
-                norm > 0.0,
-                if inactive { MUTED } else { TEAL },
-            );
         }
     }
 }
@@ -496,18 +472,8 @@ pub fn button_tinted(
 }
 
 fn harmonic_button(d: &mut Draw, w: f32, h: f32, label: &str, transformer: bool, color: Color) {
-    use nih_plug_vizia::vizia::vg::Paint;
-
     d.button_tinted((0.0, 0.0, w, h), "", true, color);
-    let mut paint = Paint::color(color);
-    if let Some(font) = d.font {
-        paint.set_font(&[font]);
-    }
-    paint.set_font_size(13.0 * d.s);
-    let text_w =
-        d.c.measure_text(0.0, 0.0, label, &paint)
-            .map(|metrics| metrics.width() / d.s)
-            .unwrap_or(label.len() as f32 * 13.0 * 0.6);
+    let text_w = d.text_width(label, 13.0);
     let icon_w = 22.0;
     let gap = 8.0;
     let x = (w - icon_w - gap - text_w) * 0.5;

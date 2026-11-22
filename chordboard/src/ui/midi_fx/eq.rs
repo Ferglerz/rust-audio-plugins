@@ -247,7 +247,7 @@ impl ChordboardView {
             | WindowEvent::MouseDoubleClick(MouseButton::Left)
             | WindowEvent::MouseTripleClick(MouseButton::Left) => {
                 let (index, offset) = if let Some(i) = hit {
-                    let band = eq.bands[i].unwrap_or_default();
+                    let band = eq.bands[i].expect("band_at only returns occupied band indices");
                     let (bx, by) = position(band.note, band.gain_db);
                     (i, (bx - x, by - local_y))
                 } else {

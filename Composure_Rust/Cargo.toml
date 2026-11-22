@@ -15,7 +15,7 @@ debug-alloc = ["nih_plug/assert_process_allocs"]
 
 [dependencies]
 pleasant-ui = { path = "../pleasant-ui" }
-pleasant-eq = { path = "../pleasant-eq" }
+pleasant-eq = { path = "../pleasant-eq", default-features = false }
 nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" }
 nih_plug_vizia = { git = "https://github.com/robbert-vdh/nih-plug.git" }
 atomic_float = "1"

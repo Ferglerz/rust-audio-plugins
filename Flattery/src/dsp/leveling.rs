@@ -9,7 +9,6 @@ pub struct LevelingProcessor {
     magnitude_db_r: Vec<f64>,
     pub smoothed_gain_db_l: Vec<f64>,
     pub smoothed_gain_db_r: Vec<f64>,
-    pub smoothed_gain_db_link: Vec<f64>,
 }
 
 impl Default for LevelingProcessor {
@@ -28,14 +27,12 @@ impl LevelingProcessor {
             magnitude_db_r: vec![0.0; MAX_DISPLAY_BINS + MAX_NEIGHBOR_RADIUS],
             smoothed_gain_db_l: vec![0.0; MAX_DISPLAY_BINS],
             smoothed_gain_db_r: vec![0.0; MAX_DISPLAY_BINS],
-            smoothed_gain_db_link: vec![0.0; MAX_DISPLAY_BINS],
         }
     }
 
     pub fn reset(&mut self) {
         self.smoothed_gain_db_l.fill(0.0);
         self.smoothed_gain_db_r.fill(0.0);
-        self.smoothed_gain_db_link.fill(0.0);
     }
 
     fn median(median_buf: &mut [f64]) -> f64 {
@@ -119,8 +116,6 @@ impl LevelingProcessor {
                     (0.0 - self.smoothed_gain_db_l[k]) * (1.0 - rel_coeff);
                 self.smoothed_gain_db_r[k] +=
                     (0.0 - self.smoothed_gain_db_r[k]) * (1.0 - rel_coeff);
-                self.smoothed_gain_db_link[k] +=
-                    (0.0 - self.smoothed_gain_db_link[k]) * (1.0 - rel_coeff);
                 continue;
             }
 
@@ -132,8 +127,9 @@ impl LevelingProcessor {
             let active_r = mr >= min_operate_lin && mr <= max_operate_lin;
             let active_avg = m_avg >= min_operate_lin && m_avg <= max_operate_lin;
 
-            let r_b = boost_radii.get(k).copied().unwrap_or(1).clamp(1, 12);
-            let r_c = cut_radii.get(k).copied().unwrap_or(1).clamp(1, 12);
+            debug_assert!(k < boost_radii.len() && k < cut_radii.len());
+            let r_b = boost_radii[k];
+            let r_c = cut_radii[k];
 
             let (target_l, target_r) = if r_b == r_c {
                 (
@@ -233,8 +229,9 @@ impl LevelingProcessor {
             let eff_delta_l = delta_l * (1.0 - link_factor) + delta_link * link_factor;
             let eff_delta_r = delta_r * (1.0 - link_factor) + delta_link * link_factor;
 
-            let boost_w = boost_weights.get(k).copied().unwrap_or(1.0).clamp(0.0, 8.0);
-            let cut_w = cut_weights.get(k).copied().unwrap_or(1.0).clamp(0.0, 8.0);
+            debug_assert!(k < boost_weights.len() && k < cut_weights.len());
+            let boost_w = boost_weights[k];
+            let cut_w = cut_weights[k];
             let scale_l = if eff_delta_l > 0.0 {
                 boost_factor * boost_w
             } else {
@@ -245,15 +242,9 @@ impl LevelingProcessor {
             } else {
                 cut_factor * cut_w
             };
-            let scale_link = if delta_link > 0.0 {
-                boost_factor * boost_w
-            } else {
-                cut_factor * cut_w
-            };
 
             let target_gain_l = (eff_delta_l * scale_l).clamp(-max_cut_db, max_boost_db);
             let target_gain_r = (eff_delta_r * scale_r).clamp(-max_cut_db, max_boost_db);
-            let target_gain_link = (delta_link * scale_link).clamp(-max_cut_db, max_boost_db);
 
             // Smooth gains
             let c_l = if target_gain_l > self.smoothed_gain_db_l[k] {
@@ -266,18 +257,11 @@ impl LevelingProcessor {
             } else {
                 rel_coeff
             };
-            let c_link = if target_gain_link > self.smoothed_gain_db_link[k] {
-                att_coeff
-            } else {
-                rel_coeff
-            };
 
             self.smoothed_gain_db_l[k] +=
                 (target_gain_l - self.smoothed_gain_db_l[k]) * (1.0 - c_l);
             self.smoothed_gain_db_r[k] +=
                 (target_gain_r - self.smoothed_gain_db_r[k]) * (1.0 - c_r);
-            self.smoothed_gain_db_link[k] +=
-                (target_gain_link - self.smoothed_gain_db_link[k]) * (1.0 - c_link);
         }
     }
 }

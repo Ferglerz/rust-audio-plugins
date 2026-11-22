@@ -41,7 +41,7 @@ fn sample_wav_name_follows_hise_convention() {
 #[test]
 fn stonehouse_tom2_strike_count_matches_hise_samplemap() {
     let kit = load_stonehouse();
-    let arts = kit.pieces.get(&KitPieceId::Tom2).unwrap();
+    let arts = kit.arts(KitPieceId::Tom2);
     let strikes = generate_kit_piece_strikes(KitPieceId::Tom2, arts);
 
     // Tom 2.xml has 85 <sample> entries in the HISE export.
@@ -52,14 +52,14 @@ fn stonehouse_tom2_strike_count_matches_hise_samplemap() {
 #[test]
 fn stonehouse_hihat_uses_six_rr_groups() {
     let kit = load_stonehouse();
-    let arts = kit.pieces.get(&KitPieceId::Hihat).unwrap();
+    let arts = kit.arts(KitPieceId::Hihat);
     assert_eq!(calculate_max_rr_groups(arts), 6);
 }
 
 #[test]
 fn crashes_omit_close_mic_in_generated_paths() {
     let kit = load_stonehouse();
-    let arts = kit.pieces.get(&KitPieceId::LCrash).unwrap();
+    let arts = kit.arts(KitPieceId::LCrash);
     let strikes = generate_kit_piece_strikes(KitPieceId::LCrash, arts);
     assert!(!strikes.is_empty());
 
@@ -79,7 +79,7 @@ fn stonehouse_total_strike_count() {
     let generated = kit
         .order
         .iter()
-        .map(|id| generate_kit_piece_strikes(*id, kit.pieces.get(id).unwrap()).len())
+        .map(|id| generate_kit_piece_strikes(*id, kit.arts(*id)).len())
         .sum::<usize>();
     assert_eq!(generated, 2142);
 }

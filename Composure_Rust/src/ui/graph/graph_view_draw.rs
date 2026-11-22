@@ -60,13 +60,21 @@ pub fn draw_histograms(
     let w = width.ceil() as usize;
     let display_min = graph_display::display_min_db(min_db);
     display.read_histograms(|gr_hist, input_hist| {
+        const BUCKETS: usize = 32;
+        let mut gr_cut: [Option<Path>; BUCKETS] = std::array::from_fn(|_| None);
+        let mut gr_boost: [Option<Path>; BUCKETS] = std::array::from_fn(|_| None);
+        let mut input_lvl: [Option<Path>; BUCKETS] = std::array::from_fn(|_| None);
+
         for i in 0..w {
             let age = (w - 1 - i) * (HISTOGRAM_LEN - 1) / w.max(1);
             let fade = histogram_edge_fade(i as f32, width, extension_scale);
+            if fade <= 0.001 {
+                continue;
+            }
+            let bucket = ((fade * (BUCKETS - 1) as f32).round() as usize).min(BUCKETS - 1);
 
             let gr = gr_hist.sample_at_age(age);
             let x = bounds.x - left_extension + i as f32;
-            let bar_opacity = opacity * 0.6 * fade;
             let col_bounds = BoundingBox {
                 x,
                 y: bounds.y,
@@ -76,9 +84,12 @@ pub fn draw_histograms(
             if gr.is_finite() {
                 if let Some((bx, by, _, bh)) = draw_helpers::gr_bar_rect(gr, col_bounds, px_per_db)
                 {
-                    let mut p = Path::new();
-                    p.rect(bx, by, 1.0, bh);
-                    canvas.fill_path(&p, &Paint::color(gr_vg_color(gr, bar_opacity)));
+                    let slot = if gr < 0.0 {
+                        &mut gr_cut[bucket]
+                    } else {
+                        &mut gr_boost[bucket]
+                    };
+                    slot.get_or_insert_with(Path::new).rect(bx, by, 1.0, bh);
                 }
             }
 
@@ -86,10 +97,24 @@ pub fn draw_histograms(
             if lvl > display_min as f32 {
                 let bar_h = ((lvl - display_min as f32) * px_per_db).min(bounds.h);
                 let bar_top = bounds.y + bounds.h - bar_h;
-                let mut p = Path::new();
-                p.rect(x, bar_top, 1.0, bar_h);
+                input_lvl[bucket]
+                    .get_or_insert_with(Path::new)
+                    .rect(x, bar_top, 1.0, bar_h);
+            }
+        }
+
+        for bucket in 0..BUCKETS {
+            let fade = bucket as f32 / (BUCKETS - 1) as f32;
+            let bar_opacity = opacity * 0.6 * fade;
+            if let Some(p) = &gr_cut[bucket] {
+                canvas.fill_path(p, &Paint::color(gr_vg_color(-1.0, bar_opacity)));
+            }
+            if let Some(p) = &gr_boost[bucket] {
+                canvas.fill_path(p, &Paint::color(gr_vg_color(1.0, bar_opacity)));
+            }
+            if let Some(p) = &input_lvl[bucket] {
                 let paint = Paint::color(VgColor::rgbaf(1.0, 1.0, 1.0, opacity * 0.25 * fade));
-                canvas.fill_path(&p, &paint);
+                canvas.fill_path(p, &paint);
             }
         }
     });

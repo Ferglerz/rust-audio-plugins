@@ -44,13 +44,10 @@ impl MidiEqBand {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
 pub struct MidiEqSettings {
     pub enabled: bool,
     pub sources: u8,
     pub bands: [Option<MidiEqBand>; MAX_BANDS],
-    #[serde(rename = "gains", skip_serializing)]
-    legacy_gains: Option<[f32; 11]>,
 }
 
 impl Default for MidiEqSettings {
@@ -59,7 +56,6 @@ impl Default for MidiEqSettings {
             enabled: false,
             sources: source::ALL,
             bands: [None; MAX_BANDS],
-            legacy_gains: None,
         }
     }
 }
@@ -67,21 +63,6 @@ impl Default for MidiEqSettings {
 impl MidiEqSettings {
     pub(super) fn sanitize(&mut self) {
         self.sources &= source::ALL;
-        if let Some(gains) = self
-            .legacy_gains
-            .take()
-            .filter(|_| self.bands.iter().all(Option::is_none))
-        {
-            for (i, gain) in gains.into_iter().map(|gain| finite(gain, 1.0)).enumerate() {
-                if gain != 1.0 {
-                    self.bands[i] = Some(MidiEqBand {
-                        note: i as f32 * 12.0,
-                        gain_db: 20.0 * gain.clamp(0.01, 2.0).log10(),
-                        q: 1.4,
-                    });
-                }
-            }
-        }
         for band in self.bands.iter_mut().flatten() {
             band.note = finite(band.note, 60.0).clamp(0.0, 127.0);
             band.gain_db = finite(band.gain_db, 0.0).clamp(-MIDI_EQ_GAIN_DB, MIDI_EQ_GAIN_DB);

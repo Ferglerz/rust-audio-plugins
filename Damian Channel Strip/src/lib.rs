@@ -108,7 +108,7 @@ impl Plugin for Damian {
                 x[1] = x[0];
             }
             let settings = dsp::CompSettings {
-                threshold: -(self.params.compression.smoothed.next() as f64),
+                threshold: self.params.threshold.smoothed.next() as f64,
                 ratio: self.params.comp_ratio.smoothed.next() as f64,
                 attack: self.params.comp_attack.smoothed.next() as f64,
                 release: self.params.comp_release.smoothed.next() as f64,

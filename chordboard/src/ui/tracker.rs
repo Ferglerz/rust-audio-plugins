@@ -642,9 +642,17 @@ impl ChordboardView {
                                     s.rows.rotate_left(drag.view_origin);
                                     let from = (drag.from + s.rows.len() - drag.view_origin) % s.rows.len();
                                     s.move_row(from, drag.target as isize - from as isize);
-                                    let start = s.rows.iter().position(|r| r.id == first_id).unwrap_or(0);
+                                    let start = s
+                                        .rows
+                                        .iter()
+                                        .position(|r| r.id == first_id)
+                                        .expect("move_row preserves row IDs");
                                     s.rows.rotate_left(start);
-                                    self.arp_ui.edit_page = s.rows.iter().position(|r| r.id == drag.id).unwrap_or(0);
+                                    self.arp_ui.edit_page = s
+                                        .rows
+                                        .iter()
+                                        .position(|r| r.id == drag.id)
+                                        .expect("move_row preserves dragged row ID");
                                     }
                                 }
                             });

@@ -48,12 +48,8 @@ fn strum_range_grips_clamp_without_playing_notes() {
     }
 }
 #[test]
-fn computer_keys_ignore_legacy_disable_but_require_focus() {
+fn computer_keys_require_focus() {
     let mut view = view(0, false);
-    view.params = Arc::new(ChordboardParams {
-        keyboard: BoolParam::new("Keyboard play", false),
-        ..ChordboardParams::default()
-    });
     let (mut cx, target, _) = context();
     view.focused = true;
     assert!(view.window_event(
@@ -281,7 +277,7 @@ fn spread_keyboard_cycles_all_voicings_without_drag_or_text_entry() {
 #[test]
 fn defaults_use_auto_strum_zero_sweep_and_unassigned_y_controller() {
     let params = ChordboardParams::default();
-    assert_eq!(params.arp_pages[0].arp_mode.value(), 2);
+    assert_eq!(crate::params::ArpPageParams::default().arp_mode.value(), 2);
     assert_eq!(params.strum_ms.value(), 125.0);
     assert_eq!(
         params.config().mappings,
@@ -490,11 +486,6 @@ fn displayed_units_round_trip_through_value_entry() {
             "humanize",
             "30",
             view.arp_params().humanize.preview_normalized(0.3),
-        ),
-        (
-            "contour",
-            "-25%",
-            view.params.contour.preview_normalized(-0.25),
         ),
         (
             "length_ms",

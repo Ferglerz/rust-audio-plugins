@@ -251,7 +251,8 @@ impl EnvelopeEngine {
                 current_gr_abs_before_strength,
                 is_negative_gr,
             );
-            if (self.global_smoothed_gain_db - target_gr_db).abs() > EPS {
+            let releasing_active = (self.global_smoothed_gain_db - target_gr_db).abs() > EPS;
+            if releasing_active && (input != fixed || gr != fixed) {
                 let speed = |coefficient: f64| {
                     let ratio = (1.0 - coefficient.clamp(EPS, 1.0 - EPS))
                         / (1.0 - self.release.release_coeff.clamp(EPS, 1.0 - EPS));
@@ -261,30 +262,41 @@ impl EnvelopeEngine {
                         ratio
                     }
                 };
-                self.input_dependence_activity = (speed(input) / speed(fixed)).log2();
-                self.gr_dependence_activity = (speed(gr) / speed(fixed)).log2();
+                let fixed_speed = speed(fixed);
+                if input != fixed {
+                    self.input_dependence_activity = (speed(input) / fixed_speed).log2();
+                } else {
+                    self.input_dependence_activity = 0.0;
+                }
+                if gr != fixed {
+                    self.gr_dependence_activity = (speed(gr) / fixed_speed).log2();
+                } else {
+                    self.gr_dependence_activity = 0.0;
+                }
+            } else if releasing_active {
+                self.input_dependence_activity = 0.0;
+                self.gr_dependence_activity = 0.0;
             }
             let rel_coef_use = self.release.apply_input_rate(
                 &self.params,
                 base_rel_coef,
                 (self.prev_detector_db - self.current_detector_level_db) * self.detector_rate_scale,
             );
-            if (self.global_smoothed_gain_db - target_gr_db).abs() > EPS {
-                let speed = (1.0 - rel_coef_use.clamp(EPS, 1.0 - EPS))
-                    / (1.0 - base_rel_coef.clamp(EPS, 1.0 - EPS));
-                self.input_rate_activity = speed.log2();
-            }
 
             if self.release_cache.use_linear_release {
                 let c_ref = self.release.release_coeff.clamp(EPS, 1.0 - EPS);
                 let c_use = rel_coef_use.clamp(EPS, 1.0 - EPS);
                 let mut linear_speed_ratio = (1.0 - c_use) / (1.0 - c_ref);
                 linear_speed_ratio = linear_speed_ratio.clamp(MIN_SPEED_RATIO, MAX_SPEED_RATIO);
-                if (self.global_smoothed_gain_db - target_gr_db).abs() > EPS {
-                    let base_speed_ratio = ((1.0 - base_rel_coef.clamp(EPS, 1.0 - EPS))
-                        / (1.0 - c_ref))
-                        .clamp(MIN_SPEED_RATIO, MAX_SPEED_RATIO);
-                    self.input_rate_activity = (linear_speed_ratio / base_speed_ratio).log2();
+                if releasing_active {
+                    if rel_coef_use == base_rel_coef {
+                        self.input_rate_activity = 0.0;
+                    } else {
+                        let base_speed_ratio = ((1.0 - base_rel_coef.clamp(EPS, 1.0 - EPS))
+                            / (1.0 - c_ref))
+                            .clamp(MIN_SPEED_RATIO, MAX_SPEED_RATIO);
+                        self.input_rate_activity = (linear_speed_ratio / base_speed_ratio).log2();
+                    }
                 }
                 let linear_db_per_sample =
                     self.release.linear_release_db_per_sample * linear_speed_ratio;
@@ -296,6 +308,15 @@ impl EnvelopeEngine {
                     target_gr_db_before_strength,
                 );
             } else {
+                if releasing_active {
+                    if rel_coef_use == base_rel_coef {
+                        self.input_rate_activity = 0.0;
+                    } else {
+                        let speed = (1.0 - rel_coef_use.clamp(EPS, 1.0 - EPS))
+                            / (1.0 - base_rel_coef.clamp(EPS, 1.0 - EPS));
+                        self.input_rate_activity = speed.log2();
+                    }
+                }
                 smooth_envelope_pair(
                     rel_coef_use,
                     &mut self.global_smoothed_gain_db,

@@ -42,8 +42,8 @@ use nih_plug_vizia::{
     widgets::RawParamEvent,
     ViziaTheming,
 };
+use pleasant_dsp::spectrum::smooth_bins;
 use pleasant_ui::{
-    spectrum::smooth_bins,
     start_frame_timer,
     theme::{rgb, BG, EQ_COLORS as BAND_COLORS, GOLD, LINE, MUTED, PANEL, TEAL, TEXT},
     ButtonAnim, Draw, ValueEdit, FONT_JETBRAINS_MONO, FRAME_INTERVAL,

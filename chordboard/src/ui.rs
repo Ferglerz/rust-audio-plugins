@@ -598,9 +598,7 @@ impl ChordboardView {
                 }
             }
             Menu::RouteSource => self.params.routes[self.route_slot].source.value() as usize,
-            Menu::RouteTarget => crate::engine::routing::available_targets()
-                .position(|(i, _)| i == self.params.routes[self.route_slot].target.value() as usize)
-                .unwrap_or(0),
+            Menu::RouteTarget => self.params.routes[self.route_slot].target.value() as usize,
             Menu::KeyboardParam(id) => self.control(id).map_or(0, |c| {
                 let (min, _) = keyboard_menu_range(id).expect("keyboard dropdown");
                 // The view owns this parameter pointer.
@@ -615,7 +613,7 @@ impl ChordboardView {
             Menu::Key => harmony::KEY_CHOICES
                 .iter()
                 .position(|(name, _, _)| *name == self.key_name())
-                .unwrap_or(0),
+                .expect("key_name must be in KEY_CHOICES"),
             Menu::Scale => self.params.scale.value() as usize,
         }
     }

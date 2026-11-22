@@ -1,4 +1,4 @@
-use nih_plug::{prelude::*, wrapper::state::ParamValue};
+use nih_plug::prelude::*;
 use std::sync::{atomic::Ordering, Arc};
 
 mod dsp;
@@ -204,16 +204,6 @@ impl Plugin for Dereverb {
 
     fn params(&self) -> Arc<dyn Params> {
         self.params.clone()
-    }
-    fn filter_state(state: &mut PluginState) {
-        if let Some(value @ ParamValue::Bool(_)) = state.params.get_mut("transient_guard") {
-            let percent = if matches!(value, ParamValue::Bool(true)) {
-                100.0
-            } else {
-                0.0
-            };
-            *value = ParamValue::F32(percent);
-        }
     }
     fn editor(&mut self, _: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
         ui::create(self.params.clone(), self.shared.clone())

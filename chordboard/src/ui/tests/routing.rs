@@ -518,10 +518,6 @@ fn route_destination_menu_skips_touch_bounds_without_shifting_saved_ids() {
             .borrow()
             .contains(&(p.as_ptr(), p.preview_normalized(saved_index as i32))));
     }
-    assert!(view
-        .route_targets()
-        .iter()
-        .all(|(i, _)| crate::engine::routing::TARGETS[*i].available()));
 }
 #[test]
 fn leading_animation_restarts_when_a_new_transition_arrives() {

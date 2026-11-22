@@ -480,7 +480,7 @@ impl StripView {
                 let p = self.param(control);
                 if control == GlobalControl::Compression && self.dyn_page.get() == DynPage::Main {
                     let r = self.dyn_main_thresh_slider_rect();
-                    let norm = ((y - r.1) / r.3).clamp(0.0, 1.0);
+                    let norm = 1.0 - ((y - r.1) / r.3).clamp(0.0, 1.0);
                     cx.emit(RawParamEvent::SetParameterNormalized(p.as_ptr(), norm));
                 } else if control == GlobalControl::WallThreshold && self.wall_page.get() == WallPage::Main {
                     let r = self.wall_main_thresh_slider_rect();
@@ -669,8 +669,8 @@ impl StripView {
         {
             let r = self.dyn_main_thresh_slider_rect();
             let gr = self.dyn_main_gr_meter_rect();
-            let thresh_norm = self.params.compression.unmodulated_normalized_value();
-            let thresh_y = r.1 + r.3 * thresh_norm;
+            let thresh_norm = self.params.threshold.unmodulated_normalized_value();
+            let thresh_y = r.1 + r.3 * (1.0 - thresh_norm);
             let handle = self.dyn_main_thresh_handle_rect(thresh_y);
             let handle_hit = (
                 handle.0 - 4.0,

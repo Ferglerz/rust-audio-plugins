@@ -1,6 +1,5 @@
 //! Core math utilities ported from `MathUtils/00_core_math.jsfx-inc`.
 
-use super::constants::EPS;
 
 const LOG10_20: f64 = 20.0 / std::f64::consts::LN_10;
 const LOG_10_20: f64 = std::f64::consts::LN_10 / 20.0;
@@ -88,11 +87,6 @@ pub fn sign_jsfx(x: f64) -> f64 {
     } else {
         0.0
     }
-}
-
-#[allow(dead_code)]
-pub fn is_near_zero(x: f64) -> bool {
-    x.abs() < EPS
 }
 
 #[cfg(test)]

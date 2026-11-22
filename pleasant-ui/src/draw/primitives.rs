@@ -329,24 +329,7 @@ impl Draw<'_> {
         let top_oy = self.oy + top_y * s;
         let bot_oy = self.oy + bot_y * s;
         let rs = r * s;
-        let steps = 16;
-        for i in 0..=steps {
-            let theta = std::f32::consts::PI + std::f32::consts::PI * (i as f32 / steps as f32);
-            let px = ox + rs * theta.cos();
-            let py = top_oy + rs * theta.sin();
-            if i == 0 {
-                p.move_to(px, py);
-            } else {
-                p.line_to(px, py);
-            }
-        }
-        for i in 0..=steps {
-            let theta = std::f32::consts::PI * (i as f32 / steps as f32);
-            let px = ox + rs * theta.cos();
-            let py = bot_oy + rs * theta.sin();
-            p.line_to(px, py);
-        }
-        p.close();
+        p.rounded_rect(ox - rs, top_oy - rs, rs * 2.0, (bot_oy - top_oy) + rs * 2.0, rs);
         Some(p)
     }
 

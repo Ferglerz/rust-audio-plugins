@@ -154,7 +154,7 @@ mod tests {
 
     #[test]
     fn damian_axis_labels_end_at_the_selected_negative_floor() {
-        for mode in crate::params::GraphRangeMode::PLEASANT {
+        for mode in crate::params::GraphRangeMode::ALL {
             let labels = axis_label_db_values(mode.range_db());
             assert_eq!(labels.last(), Some(&-(mode.range_db() as i32)));
             assert!(labels

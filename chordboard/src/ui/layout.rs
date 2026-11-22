@@ -4,9 +4,7 @@ pub(super) fn editor_scale(width: f32, height: f32) -> f32 {
     (width / EDITOR_W).min(height / H).max(f32::EPSILON)
 }
 use super::{arpeggiator, KEY_COLUMNS};
-const WIDTH_REDUCTION: f32 = 128.0;
-const OLD_MOD_COLUMN: f32 = 122.0;
-pub(super) const MAIN_W: f32 = 2081.0 - WIDTH_REDUCTION - OLD_MOD_COLUMN;
+pub(super) const MAIN_W: f32 = 1831.0;
 pub(super) const W: f32 = MAIN_W + 190.0;
 // Programming replaces the two performance modules above the arpeggiator.
 pub(super) const CONTENT_X: f32 = 0.0;

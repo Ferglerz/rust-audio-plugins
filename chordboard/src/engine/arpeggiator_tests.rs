@@ -1306,10 +1306,7 @@ fn tracker_variation_fields_are_not_modulation_destinations() {
         "arp_loop_4_octave",
     ] {
         assert!(
-            routing::TARGETS
-                .iter()
-                .find(|target| target.id == id)
-                .is_some_and(|target| !target.available()),
+            routing::TARGETS.iter().all(|target| target.id != id),
             "{id}"
         );
     }

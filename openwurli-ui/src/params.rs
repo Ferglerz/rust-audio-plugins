@@ -31,9 +31,6 @@ pub struct OpenWurliUiParams {
     #[id = "cpu_mode"]
     pub cpu_mode: EnumParam<CpuMode>,
 
-    #[id = "mlp"]
-    pub mlp_enabled: BoolParam,
-
     #[id = "reed_decay"]
     pub reed_decay: FloatParam,
 
@@ -45,12 +42,6 @@ pub struct OpenWurliUiParams {
 
     #[id = "trem_response"]
     pub tremolo_response: FloatParam,
-
-    #[id = "noise_enable"]
-    pub noise_enabled: BoolParam,
-
-    #[id = "noise_gain"]
-    pub noise_gain: FloatParam,
 
     #[id = "extended_notes"]
     pub extended_notes: BoolParam,
@@ -66,9 +57,6 @@ impl Default for OpenWurliUiParams {
             volume: percent_param("Volume", 0.5, 5.0),
             tremolo_depth: percent_param("Tremolo Depth", 0.5, 50.0),
             speaker_character: percent_param("Speaker Character", 0.0, 50.0),
-            // Retain the saved ID, but learned voicing is now always active.
-            mlp_enabled: BoolParam::new("MLP Corrections (always enabled)", true).hide(),
-            // Old presets omit this parameter and retain Fast selection.
             cpu_mode: EnumParam::new("CPU Mode", CpuMode::Fast),
             reed_decay: FloatParam::new(
                 "Reed Decay",
@@ -87,22 +75,6 @@ impl Default for OpenWurliUiParams {
             hammer_hardness: multiplier_param("Hammer Hardness", 2.0),
             pickup_drive: multiplier_param("Pickup Drive", PICKUP_DRIVE_MAX),
             tremolo_response: multiplier_param("Tremolo Response", 2.0),
-            // Retain inert, hidden IDs so older saved sessions still load.
-            noise_enabled: BoolParam::new("Hiss (removed)", false).hide(),
-            noise_gain: FloatParam::new(
-                "Noise Level (removed)",
-                1.0,
-                FloatRange::Linear {
-                    min: 0.0,
-                    max: 30.0,
-                },
-            )
-            .hide()
-            .with_unit("×")
-            .with_value_to_string(Arc::new(|value| format!("{value:.1}")))
-            .with_string_to_value(Arc::new(|text| {
-                text.trim().trim_end_matches('×').parse().ok()
-            })),
             extended_notes: BoolParam::new("Extended Notes", false),
             rail_sag: BoolParam::new("Extra Sag", false),
         }
