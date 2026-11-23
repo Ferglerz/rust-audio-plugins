@@ -1,0 +1,15 @@
+     Removed 40 files, 36.0MiB total
+Building openwurli-ui from /Users/ferg/GitHub/audio-plugins...
+    Finished `release` profile [optimized] target(s) in 0.12s
+     Running `target/release/openwurli-ui-xtask bundle openwurli-ui --release`
+   Compiling openwurli-ui v0.2.1 (/Users/ferg/GitHub/audio-plugins/openwurli-ui)
+    Finished `release` profile [optimized] target(s) in 2.65s
+
+/Users/ferg/GitHub/audio-plugins/target/bundled/OpenWurli UI.clap: replacing existing signature
+Created a CLAP bundle at '/Users/ferg/GitHub/audio-plugins/target/bundled/OpenWurli UI.clap'
+/Users/ferg/GitHub/audio-plugins/target/bundled/OpenWurli UI.vst3: replacing existing signature
+Created a VST3 bundle at '/Users/ferg/GitHub/audio-plugins/target/bundled/OpenWurli UI.vst3'
+/Users/ferg/Library/Audio/Plug-Ins/VST3/OpenWurli UI.vst3: replacing existing signature
+Installed /Users/ferg/Library/Audio/Plug-Ins/VST3/OpenWurli UI.vst3
+/Users/ferg/Library/Audio/Plug-Ins/CLAP/OpenWurli UI.clap: replacing existing signature
+Installed /Users/ferg/Library/Audio/Plug-Ins/CLAP/OpenWurli UI.clap

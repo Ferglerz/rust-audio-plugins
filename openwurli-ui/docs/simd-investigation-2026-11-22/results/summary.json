@@ -1,0 +1,290 @@
+[
+  {
+    "kind": "reed",
+    "mode": "none",
+    "voices": 1,
+    "release": "false",
+    "median_ns": {
+      "reuse": 167625,
+      "simd": 137291
+    },
+    "simd_reduction_pct": 18.096346010439966,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "reed",
+    "mode": "none",
+    "voices": 1,
+    "release": "true",
+    "median_ns": {
+      "reuse": 241459,
+      "simd": 217625
+    },
+    "simd_reduction_pct": 9.870826931280263,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "reed",
+    "mode": "none",
+    "voices": 6,
+    "release": "false",
+    "median_ns": {
+      "reuse": 2433292,
+      "simd": 1826666
+    },
+    "simd_reduction_pct": 24.930259089332473,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "reed",
+    "mode": "none",
+    "voices": 6,
+    "release": "true",
+    "median_ns": {
+      "reuse": 2037167,
+      "simd": 1826416
+    },
+    "simd_reduction_pct": 10.3452981517961,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "reed",
+    "mode": "none",
+    "voices": 32,
+    "release": "false",
+    "median_ns": {
+      "reuse": 5557625,
+      "simd": 4522875
+    },
+    "simd_reduction_pct": 18.618564584692198,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "reed",
+    "mode": "none",
+    "voices": 32,
+    "release": "true",
+    "median_ns": {
+      "reuse": 6556500,
+      "simd": 5887958
+    },
+    "simd_reduction_pct": 10.19662929916877,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "reed",
+    "mode": "none",
+    "voices": 64,
+    "release": "false",
+    "median_ns": {
+      "reuse": 10558292,
+      "simd": 8517125
+    },
+    "simd_reduction_pct": 19.332359817288626,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "reed",
+    "mode": "none",
+    "voices": 64,
+    "release": "true",
+    "median_ns": {
+      "reuse": 12908959,
+      "simd": 11510250
+    },
+    "simd_reduction_pct": 10.835180435540925,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "engine",
+    "mode": "fast",
+    "voices": 1,
+    "release": "false",
+    "median_ns": {
+      "reuse": 25851750,
+      "simd": 25737125
+    },
+    "simd_reduction_pct": 0.4433935807053646,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "engine",
+    "mode": "heavy",
+    "voices": 1,
+    "release": "false",
+    "median_ns": {
+      "reuse": 705129750,
+      "simd": 700216500
+    },
+    "simd_reduction_pct": 0.6967866552219593,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "engine",
+    "mode": "fast",
+    "voices": 1,
+    "release": "true",
+    "median_ns": {
+      "reuse": 27097583,
+      "simd": 27109250
+    },
+    "simd_reduction_pct": -0.04305550055885288,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "engine",
+    "mode": "heavy",
+    "voices": 1,
+    "release": "true",
+    "median_ns": {
+      "reuse": 516541083,
+      "simd": 508534209
+    },
+    "simd_reduction_pct": 1.5500943223135666,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "engine",
+    "mode": "fast",
+    "voices": 6,
+    "release": "false",
+    "median_ns": {
+      "reuse": 28996209,
+      "simd": 28825917
+    },
+    "simd_reduction_pct": 0.5872905661564287,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "engine",
+    "mode": "heavy",
+    "voices": 6,
+    "release": "false",
+    "median_ns": {
+      "reuse": 951830042,
+      "simd": 946553167
+    },
+    "simd_reduction_pct": 0.5543925666510963,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "engine",
+    "mode": "fast",
+    "voices": 6,
+    "release": "true",
+    "median_ns": {
+      "reuse": 28033042,
+      "simd": 28007709
+    },
+    "simd_reduction_pct": 0.09036835888163175,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "engine",
+    "mode": "heavy",
+    "voices": 6,
+    "release": "true",
+    "median_ns": {
+      "reuse": 547233166,
+      "simd": 540550417
+    },
+    "simd_reduction_pct": 1.2211885929443111,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "engine",
+    "mode": "fast",
+    "voices": 32,
+    "release": "false",
+    "median_ns": {
+      "reuse": 37764000,
+      "simd": 36691416
+    },
+    "simd_reduction_pct": 2.8402287893231626,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "engine",
+    "mode": "heavy",
+    "voices": 32,
+    "release": "false",
+    "median_ns": {
+      "reuse": 927739917,
+      "simd": 921198042
+    },
+    "simd_reduction_pct": 0.7051410508619904,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "engine",
+    "mode": "fast",
+    "voices": 32,
+    "release": "true",
+    "median_ns": {
+      "reuse": 31565583,
+      "simd": 31342083
+    },
+    "simd_reduction_pct": 0.7080496501521871,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "engine",
+    "mode": "heavy",
+    "voices": 32,
+    "release": "true",
+    "median_ns": {
+      "reuse": 553475375,
+      "simd": 547663000
+    },
+    "simd_reduction_pct": 1.0501596389902668,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "engine",
+    "mode": "fast",
+    "voices": 64,
+    "release": "false",
+    "median_ns": {
+      "reuse": 47982833,
+      "simd": 46104500
+    },
+    "simd_reduction_pct": 3.9145937881575277,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "engine",
+    "mode": "heavy",
+    "voices": 64,
+    "release": "false",
+    "median_ns": {
+      "reuse": 973919833,
+      "simd": 968262250
+    },
+    "simd_reduction_pct": 0.5809084904424555,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "engine",
+    "mode": "fast",
+    "voices": 64,
+    "release": "true",
+    "median_ns": {
+      "reuse": 38370583,
+      "simd": 37572375
+    },
+    "simd_reduction_pct": 2.080260286897384,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "engine",
+    "mode": "heavy",
+    "voices": 64,
+    "release": "true",
+    "median_ns": {
+      "reuse": 1253974166,
+      "simd": 1247276750
+    },
+    "simd_reduction_pct": 0.5340952135691746,
+    "reuse_reduction_pct": null
+  }
+]

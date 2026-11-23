@@ -1,13 +1,14 @@
-//! Hammer model: Gaussian dwell filter + attack noise burst.
+//! Hammer model: Gaussian dwell filter + onset ramp.
 //!
 //! The dwell filter is a one-shot spectral shaping applied at note-on.
 //! It models the finite contact duration of the felt hammer on the reed,
 //! which acts as a low-pass filter on the initial mode excitation.
 //!
-//! The attack noise is an exponentially decaying bandpass-filtered noise burst
-//! that models the mechanical impact transient.
+//! The model once added a separate attack-noise burst. Its values were hand-set, no source documents
+//! an impact transient in a 200A's electrical output either way, and a physics review found no path
+//! for a broadband burst (the impact reaches the pickup as the reed's own modal motion). It was
+//! removed; the hammer now acts through the reed's modes alone.
 
-use crate::filters::Biquad;
 use crate::tables::NUM_MODES;
 
 /// Hammer dwell time (contact duration) in seconds — for spectral filtering only.
@@ -20,11 +21,19 @@ use crate::tables::NUM_MODES;
 ///   - C6 (1047 Hz) ff: 0.72 ms  pp: 0.95 ms
 ///
 /// The velocity mapping: ff = 0.75 cycles (hard, brief contact), pp = 1.0 cycle
-/// (soft, lingering contact from neoprene foam compression).
+/// (soft, lingering contact as the felt compresses).
+///
+/// Production hammers are "three ply maple covered with mothproofed felt" (200/200A service
+/// manual, specifications). The patent's preferred neoprene foam pad was not used.
+///
+/// `contact_scale` multiplies the contact time: 1.0 is the patent's design point (the shipping
+/// voicing). A harder felt rebounds sooner (< 1.0); a softer one lingers (> 1.0). Felt hardness
+/// is a serviced variable: the manual (§5D) softens hammer felt with methanol "to remove a
+/// 'clicking' sound". How far it moves the contact time on a 200A has not been measured.
 ///
 /// For the time-domain onset ramp, see `onset_ramp_time`.
-pub fn dwell_time(velocity: f64, fundamental_hz: f64) -> f64 {
-    let cycles = 0.75 + 0.25 * (1.0 - velocity);
+pub fn dwell_time(velocity: f64, fundamental_hz: f64, contact_scale: f64) -> f64 {
+    let cycles = (0.75 + 0.25 * (1.0 - velocity)) * contact_scale;
     (cycles / fundamental_hz).clamp(0.0003, 0.020)
 }
 
@@ -50,9 +59,11 @@ pub fn dwell_time(velocity: f64, fundamental_hz: f64) -> f64 {
 /// primarily speeds up the bass (C2 ff 38 → ~15 ms); treble already sits at the
 /// 2 ms floor and is unchanged. The raised cosine reaches 90% at 79.5% of T, so
 /// 1.0 period ⇒ 90% by ~cycle 0.8.
-pub fn onset_ramp_time(velocity: f64, fundamental_hz: f64) -> f64 {
+///
+/// The ramp stands for the contact, so `contact_scale` (see `dwell_time`) scales it too.
+pub fn onset_ramp_time(velocity: f64, fundamental_hz: f64, contact_scale: f64) -> f64 {
     let period_s = 1.0 / fundamental_hz;
-    let periods = 1.0 + 1.0 * (1.0 - velocity);
+    let periods = (1.0 + 1.0 * (1.0 - velocity)) * contact_scale;
     (periods * period_s).max(0.002)
 }
 
@@ -64,14 +75,16 @@ pub fn onset_ramp_time(velocity: f64, fundamental_hz: f64) -> f64 {
 /// - `velocity`: 0.0 (pp) to 1.0 (ff)
 /// - `fundamental_hz`: fundamental frequency of this note
 /// - `mode_ratios`: f_n/f_1 for each mode
+/// - `contact_scale`: contact-time multiplier, 1.0 = shipping (see `dwell_time`)
 ///
 /// Returns per-mode multipliers (normalized so mode 0 = 1.0).
 pub fn dwell_attenuation(
     velocity: f64,
     fundamental_hz: f64,
     mode_ratios: &[f64; NUM_MODES],
+    contact_scale: f64,
 ) -> [f64; NUM_MODES] {
-    let t_dwell = dwell_time(velocity, fundamental_hz);
+    let t_dwell = dwell_time(velocity, fundamental_hz, contact_scale);
     let sigma_sq = 8.0 * 8.0;
 
     let mut atten = [0.0f64; NUM_MODES];
@@ -89,114 +102,6 @@ pub fn dwell_attenuation(
     atten
 }
 
-/// Attack noise generator — exponentially decaying bandpass noise.
-///
-/// Models the mechanical impact transient of felt hammer on steel reed.
-/// Duration: ~15 ms. Center frequency tracks the note (5× fundamental,
-/// clamped 200–2000 Hz) so the noise sits within the harmonic neighborhood
-/// rather than in a spectrally disconnected band.
-/// Number of samples for the attack-noise envelope to fade IN from 0 to full
-/// amplitude. Without this, sample 0 of every burst contributes the bandpass
-/// biquad's first output (≈ b0 × noise[0]) at full amplitude — a step
-/// discontinuity. Multiple voices firing simultaneously sum these steps,
-/// producing audible cusps at chord-attack moments. 16 samples ≈ 0.36 ms at
-/// 44.1 kHz — inaudible delay but eliminates the step. See diagnostic in
-/// `memory/chord-attack-cusps-oversampler.md` (the cause turned out to be
-/// here, not the halfband filter).
-const NOISE_FADE_IN_SAMPLES: u32 = 16;
-
-pub struct AttackNoise {
-    amplitude: f64,
-    decay_per_sample: f64,
-    remaining: u32,
-    /// Counts down from `NOISE_FADE_IN_SAMPLES` to 0 during the burst's
-    /// initial fade-in. Once 0, the noise plays at full envelope.
-    fade_in_remaining: u32,
-    bpf: Biquad,
-    rng_state: u32,
-}
-
-impl AttackNoise {
-    /// Create a new attack noise burst.
-    ///
-    /// - `velocity`: 0.0 to 1.0
-    /// - `fundamental_hz`: fundamental frequency of the note (for tracking)
-    /// - `sample_rate`: audio sample rate
-    /// - `seed`: RNG seed (derive from note + counter to decorrelate simultaneous notes)
-    pub fn new(velocity: f64, fundamental_hz: f64, sample_rate: f64, seed: u32) -> Self {
-        let noise_amp = 0.025 * velocity * velocity;
-        let tau = 0.003;
-        let decay_per_sample = (-1.0 / (tau * sample_rate)).exp();
-        let duration_samples = (0.015 * sample_rate) as u32;
-
-        // Center frequency tracks the note: 5× fundamental, clamped to
-        // 200–2000 Hz. Higher multiplier adds more "thwack" to the attack.
-        // Keeps the noise in the harmonic neighborhood so it blends with
-        // the reed tone instead of sounding like a disconnected "poof".
-        let center = (fundamental_hz * 5.0).clamp(200.0, 2000.0);
-
-        Self {
-            amplitude: noise_amp,
-            decay_per_sample,
-            remaining: duration_samples,
-            fade_in_remaining: NOISE_FADE_IN_SAMPLES,
-            bpf: Biquad::bandpass(center, 0.7, sample_rate),
-            rng_state: seed,
-        }
-    }
-
-    /// Render attack noise into the output buffer (additive).
-    /// Returns the number of samples actually rendered.
-    pub fn render(&mut self, output: &mut [f64]) -> usize {
-        let count = (self.remaining as usize).min(output.len());
-        let mut amp = self.amplitude;
-        let mut fade_in = self.fade_in_remaining;
-
-        for sample in &mut output[..count] {
-            // Raised-cosine fade-in for the first NOISE_FADE_IN_SAMPLES samples
-            // of the burst. Forces the contribution to exactly 0 at the first
-            // sample, eliminating the step discontinuity that chord-stab
-            // attacks produced when multiple voices' bandpass biquads
-            // simultaneously emitted nonzero `b0 * noise[0]` first samples.
-            let env = if fade_in > 0 {
-                let pos = NOISE_FADE_IN_SAMPLES - fade_in;
-                let t = pos as f64 / NOISE_FADE_IN_SAMPLES as f64;
-                fade_in -= 1;
-                0.5 * (1.0 - (std::f64::consts::PI * t).cos())
-            } else {
-                1.0
-            };
-            let noise = self.next_noise();
-            let filtered = self.bpf.process(noise);
-            *sample += amp * env * filtered;
-            amp *= self.decay_per_sample;
-        }
-
-        self.amplitude = amp;
-        self.fade_in_remaining = fade_in;
-        self.remaining -= count as u32;
-        count
-    }
-
-    /// Check if the noise burst is complete.
-    pub fn is_done(&self) -> bool {
-        self.remaining == 0
-    }
-
-    /// Disable this noise burst (for A/B testing).
-    pub fn disable(&mut self) {
-        self.remaining = 0;
-    }
-
-    fn next_noise(&mut self) -> f64 {
-        self.rng_state = self
-            .rng_state
-            .wrapping_mul(1664525)
-            .wrapping_add(1013904223);
-        (self.rng_state as i32 as f64) / (i32::MAX as f64)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,8 +109,8 @@ mod tests {
     #[test]
     fn test_dwell_ff_brighter_than_pp() {
         let ratios = [1.0, 6.267, 17.547, 34.386, 56.842, 85.1, 119.3];
-        let ff = dwell_attenuation(1.0, 262.0, &ratios);
-        let pp = dwell_attenuation(0.1, 262.0, &ratios);
+        let ff = dwell_attenuation(1.0, 262.0, &ratios, 1.0);
+        let pp = dwell_attenuation(0.1, 262.0, &ratios, 1.0);
 
         for i in 1..NUM_MODES {
             assert!(ff[i] >= pp[i], "mode {i}: ff={} < pp={}", ff[i], pp[i]);
@@ -215,35 +120,16 @@ mod tests {
     #[test]
     fn test_dwell_fundamental_unity() {
         let ratios = [1.0, 6.267, 17.547, 34.386, 56.842, 85.1, 119.3];
-        let atten = dwell_attenuation(0.5, 440.0, &ratios);
+        let atten = dwell_attenuation(0.5, 440.0, &ratios, 1.0);
         assert!((atten[0] - 1.0).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_attack_noise_decays() {
-        let mut noise = AttackNoise::new(1.0, 440.0, 44100.0, 0x12345678);
-        let mut buf = vec![0.0f64; 700];
-        noise.render(&mut buf);
-
-        let start_energy: f64 = buf[..100].iter().map(|x| x * x).sum();
-        let end_energy: f64 = buf[600..].iter().map(|x| x * x).sum();
-        assert!(start_energy > end_energy * 5.0);
-    }
-
-    #[test]
-    fn test_attack_noise_is_done() {
-        let mut noise = AttackNoise::new(1.0, 440.0, 44100.0, 0x12345678);
-        let mut buf = vec![0.0f64; 1000];
-        noise.render(&mut buf);
-        assert!(noise.is_done());
     }
 
     #[test]
     fn test_onset_ramp_register_dependent() {
         // Bass reeds should have longer onset than treble reeds
-        let bass = onset_ramp_time(1.0, 65.0); // C2 ff
-        let mid = onset_ramp_time(1.0, 262.0); // C4 ff
-        let treble = onset_ramp_time(1.0, 1047.0); // C6 ff
+        let bass = onset_ramp_time(1.0, 65.0, 1.0); // C2 ff
+        let mid = onset_ramp_time(1.0, 262.0, 1.0); // C4 ff
+        let treble = onset_ramp_time(1.0, 1047.0, 1.0); // C6 ff
 
         assert!(
             bass > mid,
@@ -272,10 +158,28 @@ mod tests {
     }
 
     #[test]
+    fn test_contact_scale_moves_brightness_and_onset() {
+        let ratios = [1.0, 6.267, 17.547, 34.386, 56.842, 85.1, 119.3];
+        let hard = dwell_attenuation(0.8, 262.0, &ratios, 0.7);
+        let ship = dwell_attenuation(0.8, 262.0, &ratios, 1.0);
+        let soft = dwell_attenuation(0.8, 262.0, &ratios, 1.4);
+        for i in 1..NUM_MODES {
+            assert!(hard[i] > ship[i] && ship[i] > soft[i], "mode {i}");
+        }
+        let (h, s) = (
+            onset_ramp_time(0.8, 65.0, 0.7),
+            onset_ramp_time(0.8, 65.0, 1.4),
+        );
+        assert!(h < onset_ramp_time(0.8, 65.0, 1.0) && s > onset_ramp_time(0.8, 65.0, 1.0));
+        // The treble ramp sits on the 2 ms floor either way.
+        assert_eq!(onset_ramp_time(1.0, 1047.0, 0.7), 0.002);
+    }
+
+    #[test]
     fn test_onset_ramp_velocity_dependent() {
         // pp should have longer onset than ff (softer hit = longer contact)
-        let ff = onset_ramp_time(1.0, 262.0);
-        let pp = onset_ramp_time(0.0, 262.0);
+        let ff = onset_ramp_time(1.0, 262.0, 1.0);
+        let pp = onset_ramp_time(0.0, 262.0, 1.0);
 
         assert!(pp > ff, "pp onset ({pp:.4}) should exceed ff ({ff:.4})");
         // ff = 1.0 period, pp = 2.0 periods (softer hit = longer contact/ramp)

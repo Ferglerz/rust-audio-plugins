@@ -1,23 +1,35 @@
 //! Single voice: reed + hammer + pickup + decay.
 //!
 //! Signal flow: modal_oscillator -> pickup_hpf -> output
-//! Attack noise mixed in during first ~15 ms.
-use crate::hammer::{AttackNoise, dwell_attenuation, onset_ramp_time};
+use crate::hammer::{dwell_attenuation, onset_ramp_time};
 use crate::mlp_correction::MlpCorrections;
 use crate::pickup::Pickup;
 use crate::reed::ModalReed;
 use crate::tables::{self, NUM_MODES};
 use crate::variation;
 
+/// A prescribed modal state for the reed at the end of hammer contact (see
+/// [`Voice::note_on_modal`]). Amplitudes are signed and relative to mode 1, as seen at the pickup's
+/// finger region; `swing_mm` is mode 1's swing there.
+#[derive(Clone, Debug)]
+pub struct ModalSpec {
+    pub ratios: [f64; NUM_MODES],
+    pub amplitudes: [f64; NUM_MODES],
+    pub phases: [f64; NUM_MODES],
+    pub decay_db_s: [f64; NUM_MODES],
+    pub swing_mm: f64,
+}
+
 pub struct Voice {
     reed: ModalReed,
     pickup: Pickup,
-    noise: AttackNoise,
     post_pickup_gain: f64,
     sample_rate: f64,
     midi_note: u8,
     /// Mode-1 air-drag coefficient, dB/s per mm of finger-region swing (0 = off).
     air_drag_db_per_mm: f64,
+    /// Damper-rate multiplier used at note-off (1.0 = shipping).
+    damper_scale: f64,
 }
 
 /// Optional note-on voicing controls. Unity values reproduce the original
@@ -48,19 +60,11 @@ impl Voice {
     /// - `midi_note`: MIDI note number (33-96)
     /// - `velocity`: 0.0 (pp) to 1.0 (ff)
     /// - `sample_rate`: audio sample rate
-    /// - `noise_seed`: RNG seed for attack noise (decorrelates simultaneous notes)
-    pub fn note_on(
-        midi_note: u8,
-        velocity: f64,
-        sample_rate: f64,
-        noise_seed: u32,
-        mlp_enabled: bool,
-    ) -> Self {
+    pub fn note_on(midi_note: u8, velocity: f64, sample_rate: f64, mlp_enabled: bool) -> Self {
         Self::note_on_with_config(
             midi_note,
             velocity,
             sample_rate,
-            noise_seed,
             mlp_enabled,
             &tables::CalibrationConfig::default(),
         )
@@ -73,7 +77,6 @@ impl Voice {
         midi_note: u8,
         velocity: f64,
         sample_rate: f64,
-        noise_seed: u32,
         mlp_enabled: bool,
         cfg: &tables::CalibrationConfig,
     ) -> Self {
@@ -81,7 +84,6 @@ impl Voice {
             midi_note,
             velocity,
             sample_rate,
-            noise_seed,
             mlp_enabled,
             cfg,
             VoiceCharacter::default(),
@@ -93,7 +95,6 @@ impl Voice {
         midi_note: u8,
         velocity: f64,
         sample_rate: f64,
-        noise_seed: u32,
         mlp_enabled: bool,
         character: VoiceCharacter,
     ) -> Self {
@@ -101,35 +102,30 @@ impl Voice {
             midi_note,
             velocity,
             sample_rate,
-            noise_seed,
             mlp_enabled,
             &tables::CalibrationConfig::default(),
             character,
         )
     }
 
-    fn note_on_with_config_and_character(
+    pub(crate) fn note_on_with_config_and_character(
         midi_note: u8,
         velocity: f64,
         sample_rate: f64,
-        noise_seed: u32,
         mlp_enabled: bool,
         cfg: &tables::CalibrationConfig,
         character: VoiceCharacter,
     ) -> Self {
-        let (reed, swing_mm, detuned_fundamental, air_drag_db_per_mm) =
-            Self::build_reed_with_character(
-                midi_note,
-                velocity,
-                sample_rate,
-                noise_seed,
-                mlp_enabled,
-                cfg,
-                None,
-                character,
-            );
+        let (reed, swing_mm, _, air_drag_db_per_mm) = Self::build_reed_with_character(
+            midi_note,
+            velocity,
+            sample_rate,
+            mlp_enabled,
+            cfg,
+            None,
+            character,
+        );
         let pickup = Pickup::new_for_note(sample_rate, midi_note, swing_mm);
-        let noise = AttackNoise::new(velocity, detuned_fundamental, sample_rate, noise_seed);
 
         // Post-pickup gain: technician voicing (gap adjustment) affects volume
         // without changing the reed's swing.
@@ -140,11 +136,47 @@ impl Voice {
         Self {
             reed,
             pickup,
-            noise,
             post_pickup_gain,
             sample_rate,
             midi_note,
             air_drag_db_per_mm,
+            damper_scale: cfg.damper_scale,
+        }
+    }
+
+    /// A voice whose reed starts from a prescribed modal state instead of the shipping excitation
+    /// (no dwell filter, no onset ramp, no velocity curve). The pickup, its output scale and the
+    /// mode-1 air drag are the shipping ones. For the hammer-contact prototype's chain-identical
+    /// renders (docs/research/hammer-contact-revision.md); the shipping engine never calls it.
+    pub fn note_on_modal(
+        midi_note: u8,
+        velocity: f64,
+        sample_rate: f64,
+        cfg: &tables::CalibrationConfig,
+        spec: &ModalSpec,
+    ) -> Self {
+        let params = tables::note_params(midi_note);
+        let fundamental = params.fundamental_hz * variation::freq_detune(midi_note);
+        let mut reed = ModalReed::new(
+            fundamental,
+            &spec.ratios,
+            &spec.amplitudes,
+            &spec.decay_db_s,
+            0.0, // no onset ramp: the prescribed state already includes the contact
+            velocity,
+            sample_rate,
+        );
+        reed.set_phases(&spec.phases);
+        let air_drag_db_per_mm = tables::air_drag_db_per_mm_with_config(midi_note, cfg);
+        reed.set_air_drag(air_drag_db_per_mm, spec.swing_mm, sample_rate);
+        Self {
+            reed,
+            pickup: Pickup::new_for_note(sample_rate, midi_note, spec.swing_mm),
+            post_pickup_gain: tables::output_scale_with_config(midi_note, velocity, cfg),
+            sample_rate,
+            midi_note,
+            air_drag_db_per_mm,
+            damper_scale: cfg.damper_scale,
         }
     }
 
@@ -153,12 +185,10 @@ impl Voice {
     /// zeroes every other mode's amplitude, for measuring one mode on its own (the modes are
     /// independent, so the per-mode renders superpose to the full reed).
     /// Returns (reed, swing_mm, detuned fundamental Hz, air-drag coefficient dB/s/mm).
-    #[allow(clippy::too_many_arguments)]
     pub fn build_reed(
         midi_note: u8,
         velocity: f64,
         sample_rate: f64,
-        noise_seed: u32,
         mlp_enabled: bool,
         cfg: &tables::CalibrationConfig,
         keep_mode: Option<usize>,
@@ -167,7 +197,6 @@ impl Voice {
             midi_note,
             velocity,
             sample_rate,
-            noise_seed,
             mlp_enabled,
             cfg,
             keep_mode,
@@ -179,7 +208,6 @@ impl Voice {
         midi_note: u8,
         velocity: f64,
         sample_rate: f64,
-        noise_seed: u32,
         mlp_enabled: bool,
         cfg: &tables::CalibrationConfig,
         keep_mode: Option<usize>,
@@ -189,8 +217,13 @@ impl Voice {
 
         let detuned_fundamental = params.fundamental_hz * variation::freq_detune(midi_note);
 
-        let dwell = dwell_attenuation(velocity, detuned_fundamental, &params.mode_ratios);
-        let onset_time = onset_ramp_time(velocity, detuned_fundamental);
+        let dwell = dwell_attenuation(
+            velocity,
+            detuned_fundamental,
+            &params.mode_ratios,
+            cfg.hammer_contact_scale,
+        );
+        let onset_time = onset_ramp_time(velocity, detuned_fundamental, cfg.hammer_contact_scale);
         let amp_offsets = variation::mode_amplitude_offsets(midi_note);
 
         let mut amplitudes = [0.0f64; NUM_MODES];
@@ -246,9 +279,9 @@ impl Voice {
         }
 
         // Pickup drive: the note's ff swing at the pickup (mm, provisional; the velocity curve
-        // scales the reed's amplitude from there). The MLP's ds_correction is NOT applied: its
-        // training target assumed the old 1/(1-y) law (H2/H1 proportional to the gap fraction),
-        // which the overlap law does not obey. It stays pinned out until the MLP is retrained.
+        // scales the reed's amplitude from there). The MLP has no displacement-scale correction:
+        // its old target assumed the 1/(1-y) law, and the head was retired at the true-pitch
+        // retrain (2026-09-27).
         let swing_mm = tables::pickup_swing_mm_with_config(midi_note, cfg) * character.pickup_drive;
 
         if let Some(k) = keep_mode {
@@ -283,15 +316,16 @@ impl Voice {
             .set_air_drag(self.air_drag_db_per_mm, swing_mm, self.sample_rate);
     }
 
-    /// Disable attack noise (for A/B testing of transient artifacts).
-    pub fn disable_attack_noise(&mut self) {
-        self.noise.disable();
+    /// Damper-rate multiplier for this voice's next note-off (1.0 = shipping).
+    pub fn set_damper_scale(&mut self, damper_scale: f64) {
+        self.damper_scale = damper_scale;
     }
 
     /// Start the damper (called on note_off).
     /// Activates progressive damping — higher modes die first.
     pub fn note_off(&mut self) {
-        self.reed.start_damper(self.midi_note, self.sample_rate);
+        self.reed
+            .start_damper(self.midi_note, self.sample_rate, self.damper_scale);
     }
 
     /// Render samples into the output buffer.
@@ -300,10 +334,6 @@ impl Voice {
         output.fill(0.0);
 
         self.reed.render(output);
-
-        if !self.noise.is_done() {
-            self.noise.render(output);
-        }
 
         self.pickup.process(output);
 
@@ -342,8 +372,7 @@ impl Voice {
         sample_rate: f64,
         swing_mm: Option<f64>,
     ) -> Vec<f64> {
-        let noise_seed = (midi_note as u32).wrapping_mul(2654435761);
-        let mut voice = Voice::note_on(midi_note, velocity, sample_rate, noise_seed, false);
+        let mut voice = Voice::note_on(midi_note, velocity, sample_rate, false);
         if let Some(swing) = swing_mm {
             voice.set_swing_mm(swing);
         }

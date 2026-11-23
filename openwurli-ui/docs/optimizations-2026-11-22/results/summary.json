@@ -1,0 +1,306 @@
+[
+  {
+    "kind": "reed",
+    "mode": "none",
+    "voices": 1,
+    "release": "false",
+    "median_ns": {
+      "reuse": 188875,
+      "simd": 195375
+    },
+    "simd_reduction_pct": -3.4414295168762488,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "engine",
+    "mode": "fast",
+    "voices": 1,
+    "release": "false",
+    "median_ns": {
+      "baseline": 29036917,
+      "reuse": 29174375,
+      "simd": 29012792
+    },
+    "simd_reduction_pct": 0.553852481844086,
+    "reuse_reduction_pct": -0.47339047737058326
+  },
+  {
+    "kind": "engine",
+    "mode": "heavy",
+    "voices": 1,
+    "release": "false",
+    "median_ns": {
+      "baseline": 872425917,
+      "reuse": 789401250,
+      "simd": 830690875
+    },
+    "simd_reduction_pct": -5.230499064955874,
+    "reuse_reduction_pct": 9.516529183990297
+  },
+  {
+    "kind": "reed",
+    "mode": "none",
+    "voices": 1,
+    "release": "true",
+    "median_ns": {
+      "reuse": 261084,
+      "simd": 318500
+    },
+    "simd_reduction_pct": -21.991389744296864,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "engine",
+    "mode": "fast",
+    "voices": 1,
+    "release": "true",
+    "median_ns": {
+      "baseline": 32050000,
+      "reuse": 32705333,
+      "simd": 32555666
+    },
+    "simd_reduction_pct": 0.4576226146359663,
+    "reuse_reduction_pct": -2.0447207488299535
+  },
+  {
+    "kind": "engine",
+    "mode": "heavy",
+    "voices": 1,
+    "release": "true",
+    "median_ns": {
+      "baseline": 633212333,
+      "reuse": 592035708,
+      "simd": 586379917
+    },
+    "simd_reduction_pct": 0.9553124792263334,
+    "reuse_reduction_pct": 6.50281475171457
+  },
+  {
+    "kind": "reed",
+    "mode": "none",
+    "voices": 6,
+    "release": "false",
+    "median_ns": {
+      "reuse": 1144875,
+      "simd": 1149416
+    },
+    "simd_reduction_pct": -0.39663718746587584,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "engine",
+    "mode": "fast",
+    "voices": 6,
+    "release": "false",
+    "median_ns": {
+      "baseline": 35189958,
+      "reuse": 34037375,
+      "simd": 34174792
+    },
+    "simd_reduction_pct": -0.403723847682147,
+    "reuse_reduction_pct": 3.275317918822185
+  },
+  {
+    "kind": "engine",
+    "mode": "heavy",
+    "voices": 6,
+    "release": "false",
+    "median_ns": {
+      "baseline": 1367879083,
+      "reuse": 1221754333,
+      "simd": 1197098917
+    },
+    "simd_reduction_pct": 2.0180338496904704,
+    "reuse_reduction_pct": 10.682578000938703
+  },
+  {
+    "kind": "reed",
+    "mode": "none",
+    "voices": 6,
+    "release": "true",
+    "median_ns": {
+      "reuse": 1683250,
+      "simd": 2192583
+    },
+    "simd_reduction_pct": -30.258903906133973,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "engine",
+    "mode": "fast",
+    "voices": 6,
+    "release": "true",
+    "median_ns": {
+      "baseline": 34583584,
+      "reuse": 36798625,
+      "simd": 36787167
+    },
+    "simd_reduction_pct": 0.031137032973382883,
+    "reuse_reduction_pct": -6.404891407437696
+  },
+  {
+    "kind": "engine",
+    "mode": "heavy",
+    "voices": 6,
+    "release": "true",
+    "median_ns": {
+      "baseline": 782547500,
+      "reuse": 752332584,
+      "simd": 696003583
+    },
+    "simd_reduction_pct": 7.4872472890261,
+    "reuse_reduction_pct": 3.86109673853664
+  },
+  {
+    "kind": "reed",
+    "mode": "none",
+    "voices": 32,
+    "release": "false",
+    "median_ns": {
+      "reuse": 6957292,
+      "simd": 6945125
+    },
+    "simd_reduction_pct": 0.1748812612723416,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "engine",
+    "mode": "fast",
+    "voices": 32,
+    "release": "false",
+    "median_ns": {
+      "baseline": 47551375,
+      "reuse": 47985542,
+      "simd": 48133375
+    },
+    "simd_reduction_pct": -0.3080782123915604,
+    "reuse_reduction_pct": -0.9130482557023756
+  },
+  {
+    "kind": "engine",
+    "mode": "heavy",
+    "voices": 32,
+    "release": "false",
+    "median_ns": {
+      "baseline": 1218903375,
+      "reuse": 1114547916,
+      "simd": 1117949000
+    },
+    "simd_reduction_pct": -0.3051536817013867,
+    "reuse_reduction_pct": 8.56142177799778
+  },
+  {
+    "kind": "reed",
+    "mode": "none",
+    "voices": 32,
+    "release": "true",
+    "median_ns": {
+      "reuse": 7981083,
+      "simd": 10420291
+    },
+    "simd_reduction_pct": -30.562368540710573,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "engine",
+    "mode": "fast",
+    "voices": 32,
+    "release": "true",
+    "median_ns": {
+      "baseline": 38157375,
+      "reuse": 38046584,
+      "simd": 40952334
+    },
+    "simd_reduction_pct": -7.637347941670658,
+    "reuse_reduction_pct": 0.29035278239134543
+  },
+  {
+    "kind": "engine",
+    "mode": "heavy",
+    "voices": 32,
+    "release": "true",
+    "median_ns": {
+      "baseline": 721861708,
+      "reuse": 701077958,
+      "simd": 667514541
+    },
+    "simd_reduction_pct": 4.787401546006098,
+    "reuse_reduction_pct": 2.879187214069545
+  },
+  {
+    "kind": "reed",
+    "mode": "none",
+    "voices": 64,
+    "release": "false",
+    "median_ns": {
+      "reuse": 13399667,
+      "simd": 13459333
+    },
+    "simd_reduction_pct": -0.44527972224981394,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "engine",
+    "mode": "fast",
+    "voices": 64,
+    "release": "false",
+    "median_ns": {
+      "baseline": 59974542,
+      "reuse": 61607000,
+      "simd": 62665375
+    },
+    "simd_reduction_pct": -1.717946012628424,
+    "reuse_reduction_pct": -2.721918243243948
+  },
+  {
+    "kind": "engine",
+    "mode": "heavy",
+    "voices": 64,
+    "release": "false",
+    "median_ns": {
+      "baseline": 1297396875,
+      "reuse": 1186054250,
+      "simd": 1181853500
+    },
+    "simd_reduction_pct": 0.35417857151137655,
+    "reuse_reduction_pct": 8.58200194138744
+  },
+  {
+    "kind": "reed",
+    "mode": "none",
+    "voices": 64,
+    "release": "true",
+    "median_ns": {
+      "reuse": 16373209,
+      "simd": 21061209
+    },
+    "simd_reduction_pct": -28.632139246497125,
+    "reuse_reduction_pct": null
+  },
+  {
+    "kind": "engine",
+    "mode": "fast",
+    "voices": 64,
+    "release": "true",
+    "median_ns": {
+      "baseline": 46546750,
+      "reuse": 46432084,
+      "simd": 48549958
+    },
+    "simd_reduction_pct": -4.56122968764443,
+    "reuse_reduction_pct": 0.24634587806882102
+  },
+  {
+    "kind": "engine",
+    "mode": "heavy",
+    "voices": 64,
+    "release": "true",
+    "median_ns": {
+      "baseline": 1682927792,
+      "reuse": 1486223375,
+      "simd": 2129373042
+    },
+    "simd_reduction_pct": -43.27409175622743,
+    "reuse_reduction_pct": 11.688226787569745
+  }
+]

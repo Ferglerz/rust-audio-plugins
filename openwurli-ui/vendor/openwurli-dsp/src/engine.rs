@@ -1,16 +1,16 @@
 //! WurliEngine — synth engine extracted from `openwurli-plugin`.
 //!
 //! Owns voice management (slots, allocation, stealing, sustain pedal)
-//! and the shared signal chain (preamp → volume network → power amp
-//! → speaker → output scaling). Framework-agnostic so any host
-//! (nih-plug, custom DAW integration, oomox/Vurli) can wrap it without
+//! and the shared signal chain (preamp → fixed circuit drive → power amp
+//! → speaker, output at the amp-rail reference). Framework-agnostic so any host
+//! (nih-plug, custom DAW integrations, other library hosts) can wrap it without
 //! copying voice or signal-chain code.
 //!
 //! Smoothing model: the three audio-rate user params (volume, tremolo
 //! depth, speaker character) ramp internally over `SMOOTH_SAMPLES_AT_44K1`
 //! base-rate samples after each setter call to avoid zipper noise on knob
 //! moves. Hosts can call setters at block rate without their own smoothers.
-//! Block-rate params (MLP, DI limiter, noise) take effect immediately.
+//! Block-rate params (MLP, noise) take effect immediately.
 
 #[cfg(not(feature = "runtime-models"))]
 use crate::dk_preamp::DkPreamp;
@@ -351,8 +351,8 @@ impl RuntimeCircuits {
 /// engine.set_tremolo_depth(params.tremolo_depth.value() as f64);
 /// engine.set_speaker_character(params.speaker.value() as f64);
 /// engine.set_mlp_enabled(params.mlp.value());
-/// engine.set_noise_enabled(params.noise_enable.value());
-/// engine.set_noise_gain(params.noise_gain.value() as f64);
+/// // Circuit noise exists only in the opt-in melange preamp (no-op otherwise):
+/// // engine.set_noise_enabled(on); engine.set_noise_gain(gain);
 /// for event in midi_events {
 ///     match event {
 ///         NoteOn(n, v) => engine.note_on(n, v),
@@ -421,6 +421,9 @@ pub struct WurliEngine {
     mlp_enabled: bool,
     voice_character: VoiceCharacter,
     tremolo_response: f64,
+    /// Per-voice calibration handed to each note-on. Only the hammer-contact and damper
+    /// multipliers are host-settable; the rest stays at the shipping defaults.
+    voicing: tables::CalibrationConfig,
 
     // Smoothed audio-rate params (target set by host, ramped per sample)
     volume: LinearSmoother,
@@ -433,6 +436,14 @@ pub struct WurliEngine {
     // output and was force-freed without a release ramp.
     nan_guard_fires: u64,
 }
+
+/// Safety clamp for [`WurliEngine::set_hammer_contact_scale`]: keeps the dwell filter and onset ramp
+/// inside the model's valid domain. Not a sourced range; the credible span is unmeasured.
+pub const HAMMER_CONTACT_SCALE_RANGE: (f64, f64) = (0.5, 2.0);
+
+/// Safety clamp for [`WurliEngine::set_damper_scale`]: wide enough to hear the trend, no wider. The
+/// shipping damper rates are unsourced, so no range around them is sourced either.
+pub const DAMPER_SCALE_RANGE: (f64, f64) = (0.25, 4.0);
 
 impl WurliEngine {
     pub fn new(sample_rate: f64) -> Self {
@@ -487,6 +498,7 @@ impl WurliEngine {
             mlp_enabled: false,
             voice_character: VoiceCharacter::default(),
             tremolo_response: 1.0,
+            voicing: tables::CalibrationConfig::default(),
             volume: LinearSmoother::new(0.8, ramp),
             tremolo_depth: LinearSmoother::new(0.5, ramp),
             speaker_character: LinearSmoother::new(0.0, ramp),
@@ -668,15 +680,12 @@ impl WurliEngine {
         }
 
         self.age_counter += 1;
-        let noise_seed = (note as u32)
-            .wrapping_mul(2654435761)
-            .wrapping_add(self.age_counter as u32);
-        slot.voice = Some(Voice::note_on_with_character(
+        slot.voice = Some(Voice::note_on_with_config_and_character(
             note,
             velocity as f64,
             self.sample_rate,
-            noise_seed,
             self.mlp_enabled,
+            &self.voicing,
             self.voice_character,
         ));
         slot.state = VoiceState::Held;
@@ -707,6 +716,97 @@ impl WurliEngine {
                 }
             }
         }
+    }
+
+    /// Lift every key at once, as MIDI All Notes Off asks: each Held voice gets
+    /// the note-off its key would give it, so with the pedal down it goes on
+    /// sustaining until the pedal is released, and with the pedal up it damps.
+    /// Pedal-Sustained voices are left to the pedal.
+    ///
+    /// `note_off` alone cannot do this: it releases only the oldest Held voice
+    /// of a note, and a key can hold several (re-strikes without a note-off,
+    /// and out-of-range notes clamped onto the keyboard's end keys).
+    pub fn release_all_keys(&mut self) {
+        let sustain = self.sustain_held;
+        for slot in &mut self.voices {
+            if slot.state == VoiceState::Held {
+                if sustain {
+                    slot.state = VoiceState::Sustained;
+                } else {
+                    slot.state = VoiceState::Releasing;
+                    if let Some(ref mut voice) = slot.voice {
+                        voice.note_off();
+                    }
+                }
+            }
+        }
+    }
+
+    /// Release every sounding note, pedal or not: all Held voices and all
+    /// pedal-Sustained voices go through the normal damper release (no hard
+    /// cut, unlike [`reset`](Self::reset)). The pedal state is left as it is,
+    /// so a note played afterwards with the pedal still down sustains.
+    ///
+    /// This is stronger than MIDI All Notes Off, which leaves pedal-held notes
+    /// sounding (see [`release_all_keys`](Self::release_all_keys)); use it for a
+    /// host "release everything" request.
+    pub fn all_notes_off(&mut self) {
+        for slot in &mut self.voices {
+            if matches!(slot.state, VoiceState::Held | VoiceState::Sustained) {
+                slot.state = VoiceState::Releasing;
+                if let Some(ref mut voice) = slot.voice {
+                    voice.note_off();
+                }
+            }
+        }
+    }
+
+    /// Stop every voice on `note` now (a CLAP note choke): each one fades out
+    /// over 5 ms instead of ringing through its damper release, whatever its
+    /// state. Out-of-range notes clamp onto the keyboard like note_on/note_off.
+    pub fn choke(&mut self, note: u8) {
+        self.choke_extended(note.clamp(tables::MIDI_LO, tables::MIDI_HI));
+    }
+
+    /// Choke the exact MIDI pitch without folding it onto an end reed.
+    pub fn choke_extended(&mut self, note: u8) {
+        let fade = self.quick_fade_samples();
+        for slot in &mut self.voices {
+            if slot.state != VoiceState::Free && slot.midi_note == note {
+                Self::fade_out_slot(slot, fade);
+            }
+        }
+    }
+
+    /// Silence every voice now (MIDI All Sound Off, a wildcard CLAP choke):
+    /// held, sustained and releasing voices all fade out over 5 ms, so there
+    /// is no click and no release tail. Unlike [`reset`](Self::reset) the
+    /// signal chain keeps its state (no tremolo re-settle), and the pedal
+    /// state is left as it is.
+    pub fn all_sound_off(&mut self) {
+        let fade = self.quick_fade_samples();
+        for slot in &mut self.voices {
+            if slot.state != VoiceState::Free {
+                Self::fade_out_slot(slot, fade);
+            }
+        }
+    }
+
+    /// Length of the stop fade: 5 ms, the same as the voice-steal crossfade.
+    fn quick_fade_samples(&self) -> u32 {
+        ((self.sample_rate * 0.005) as u32).max(1)
+    }
+
+    /// Hand a slot's voice to the steal fade and free the slot. The render
+    /// loop keeps fading `steal_voice` after the slot is free; a fade already
+    /// in progress on this slot is replaced (it is part-way to silence).
+    fn fade_out_slot(slot: &mut VoiceSlot, fade: u32) {
+        if let Some(voice) = slot.voice.take() {
+            slot.steal_voice = Some(voice);
+            slot.steal_fade = fade;
+            slot.steal_fade_len = fade;
+        }
+        slot.state = VoiceState::Free;
     }
 
     pub fn set_sustain(&mut self, held: bool) {
@@ -755,6 +855,33 @@ impl WurliEngine {
 
     pub fn set_speaker_character(&mut self, c: f64) {
         self.speaker_character.set_target(c);
+    }
+
+    /// Hammer contact-time multiplier (experimental; 1.0 = shipping, clamped to
+    /// [`HAMMER_CONTACT_SCALE_RANGE`]).
+    /// Below 1.0 models a harder hammer pad: shorter contact, so the upper modes are excited
+    /// more strongly and the onset ramp is shorter. Above 1.0 models a softer pad. Latched at
+    /// note-on; the range is not sourced (see `hammer::dwell_time`).
+    pub fn set_hammer_contact_scale(&mut self, scale: f64) {
+        let (lo, hi) = HAMMER_CONTACT_SCALE_RANGE;
+        self.voicing.hammer_contact_scale = scale.clamp(lo, hi);
+    }
+
+    /// Damper-rate multiplier (experimental; 1.0 = shipping, clamped to [`DAMPER_SCALE_RANGE`]). Below 1.0
+    /// is a weaker damper (the release rings longer), above it a firmer one. Every voice uses
+    /// the value current at its note-off; a voice already damping keeps its rate. The shipping
+    /// rates are themselves unsourced, so is any range around them.
+    pub fn set_damper_scale(&mut self, scale: f64) {
+        let (lo, hi) = DAMPER_SCALE_RANGE;
+        let scale = scale.clamp(lo, hi);
+        self.voicing.damper_scale = scale;
+        for voice in self
+            .voices
+            .iter_mut()
+            .filter_map(|slot| slot.voice.as_mut())
+        {
+            voice.set_damper_scale(scale);
+        }
     }
 
     pub fn set_mlp_enabled(&mut self, on: bool) {
@@ -807,8 +934,9 @@ impl WurliEngine {
         }
     }
 
-    /// Enable / disable rail sag modeling on the power amp. On by default
-    /// (correct physics; +0.66 % CPU). Toggle off for bit-compat A/B against
+    /// Enable / disable rail sag modeling on the power amp. Only the opt-in
+    /// melange amp models it (on by default there; +0.66 % CPU); on the shipping
+    /// behavioral amp this is a no-op. Toggle off for bit-compat A/B against
     /// the pre-rail-sag adapter. See `power_amp.rs` `RailDynamics` and
     /// `docs/research/output-stage.md` §4.3.1.
     pub fn set_rail_sag(&mut self, on: bool) {
@@ -876,7 +1004,7 @@ impl WurliEngine {
             // was applied in render_voices_to_preamp_out. POST_SPEAKER_GAIN is
             // the rail-to-full-scale mapping (0 dB: ±22 V = ±1.0). No
             // nonlinear ceiling — output peak management belongs in the host
-            // / Vurli per project scope rules.
+            // host, per the project's scope rules.
             let post_gain = shaped * tables::POST_SPEAKER_GAIN;
             let sample = post_gain as f32;
             // NaN guard: non-finite samples crash PipeWire/JACK audio engines.
@@ -1551,137 +1679,55 @@ mod tests {
         assert!(e.volume.current < 1.0);
     }
 
-    #[test]
-    fn test_engine_peak_below_unity_at_vol_1() {
-        // PSG sizing invariant (2026-04-26; rebuilt 2026-08-19): worst
-        // documented case — chord-ff at vol=1.0, MLP on, tremolo bright —
-        // must peak ≤ 1.0 IN PRODUCTION CONDITIONS. That means (a) a WARMED
-        // engine (the plugin always warm_up()s; a cold engine is a state no
-        // host produces — the pre-2026-08-19 version of this test measured
-        // exactly that and passed as false assurance), and (b) swept across
-        // tremolo onset phases: the ~40 ms attack ends well inside the
-        // 178 ms tremolo period, so onset phase is frozen into the envelope
-        // and worst-phase peak exceeds lucky-phase peak by ~1.2 dB. Phase
-        // grid covers the measured-broad worst plateau (onset ≈ 160-168 ms
-        // at 2 ms density — see tests/peak_window_probe.rs); breadth of the
-        // plateau is what licenses a coarse grid here.
-        let mut peak = 0.0f32;
-        for delay_ms in [0usize, 44, 89, 133, 162] {
-            let mut e = engine();
-            e.ensure_buffer_capacity(1024);
-            e.set_volume(1.0);
-            e.set_tremolo_depth(1.0);
-            e.set_speaker_character(0.0);
-            e.set_mlp_enabled(true);
-            e.set_noise_enabled(false);
-            e.warm_up();
-
-            // Settle the volume smoother, then place the chord at this
-            // tremolo phase.
-            let mut buf = vec![0.0f32; 1024];
-            for _ in 0..6 {
-                e.render(&mut buf);
-            }
-            let delay = 44_100 * delay_ms / 1000;
-            let mut pos = 0;
-            while pos < delay {
-                let len = 1024.min(delay - pos);
-                e.render(&mut buf[..len]);
-                pos += len;
-            }
-
-            // Canonical worst-case chord (2026-04-25/26 crackle diagnosis):
-            // C minor 7 voicing across the register.
-            for &n in &[48u8, 55, 60, 63, 67, 70] {
-                e.note_on(n, 0.95);
-            }
-
-            // 1.0 s capture: the true peak arrives at t ≈ 39 ms (attack
-            // transient; verified over 8 s — nothing later).
-            let total = 44_100;
-            let mut pos2 = 0;
-            while pos2 < total {
-                let len = 1024.min(total - pos2);
-                e.render(&mut buf[..len]);
-                for &s in &buf[..len] {
-                    peak = peak.max(s.abs());
-                }
-                pos2 += len;
-            }
-        }
-        // Slack of 0.02 leaves room for harmless f32 rounding / minor
-        // stochastic per-voice variation. Crackle threshold is well above 1.0.
-        //
-        // POST_SPEAKER_GAIN_DB is calibrated against the SHIPPING preamp (the
-        // legacy hand solver, the default feature set). The `melange-preamp`
-        // study path is a different solver of the same circuit and lands ~0.5 dB
-        // hotter at the same PSG — it is a diagnostic path ("not normally needed
-        // at runtime", see dk_preamp/mod.rs), not a level-calibrated one, so
-        // trimming PSG to suit it would make the shipping instrument quieter for
-        // no shipping benefit. The bound below is therefore path-specific: the
-        // default build keeps the hard invariant, the study build gets a looser
-        // bound that still catches a real level regression.
-        //
-        // Measured 2026-09-13 at PSG 14.8 after the drawn-topology revision:
-        // legacy 0.980, melange-preamp 1.0356.
-        #[cfg(not(feature = "melange-preamp"))]
-        let (limit, which) = (1.02f32, "shipping (legacy preamp)");
-        #[cfg(feature = "melange-preamp")]
-        let (limit, which) = (1.10f32, "study path (melange-preamp, NOT level-calibrated)");
-        assert!(
-            peak <= limit,
-            "engine peak {peak:.4} exceeds {limit} at vol=1.0 chord-ff on the {which} \
-             (PSG drift suspected — see tables.rs::POST_SPEAKER_GAIN_DB)"
-        );
-    }
-
     /// Structural invariant (2026-09-23): with the mapping FULL_SCALE_VOLTS = the
     /// amp's rail, the output cannot exceed full scale at ANY setting — the rail
     /// tanh bounds the amp and nothing downstream has gain > 1. Sweep the
     /// settings that raise the drive or add downstream stages: trim at its
     /// hottest (0 Ω) and at default, full volume, tremolo off and full, speaker
-    /// bypass and authentic; worst-phase ff chord.
+    /// bypass and authentic, MLP corrections off and on; worst-phase ff chord.
     fn worst_peak_across_settings(sr: f64) -> (f32, String) {
         let mut worst = (0.0f32, String::new());
         for &trim in &[0.0f64, tables::R11_REED_BAR_VOLUME_DEFAULT] {
             for &trem in &[0.0f64, 1.0] {
                 for &spk in &[0.0f64, 1.0] {
-                    let mut e = WurliEngine::new(sr);
-                    e.ensure_buffer_capacity(1024);
-                    e.set_volume(1.0);
-                    e.set_reed_bar_trim(trim);
-                    e.set_tremolo_depth(trem);
-                    e.set_speaker_character(spk);
-                    e.set_mlp_enabled(false);
-                    e.set_noise_enabled(false);
-                    e.warm_up();
-                    let mut buf = vec![0.0f32; 1024];
-                    for _ in 0..6 {
-                        e.render(&mut buf);
-                    }
-                    // Worst-phase onset from the peak-invariant probe (≈162 ms).
-                    let delay = (sr * 0.162) as usize;
-                    let mut pos = 0;
-                    while pos < delay {
-                        let len = 1024.min(delay - pos);
-                        e.render(&mut buf[..len]);
-                        pos += len;
-                    }
-                    for &n in &[48u8, 55, 60, 63, 67, 70] {
-                        e.note_on(n, 1.0);
-                    }
-                    let mut peak = 0.0f32;
-                    let mut pos2 = 0;
-                    while pos2 < sr as usize {
-                        let len = 1024.min(sr as usize - pos2);
-                        e.render(&mut buf[..len]);
-                        for &s in &buf[..len] {
-                            peak = peak.max(s.abs());
+                    for &mlp in &[false, true] {
+                        let mut e = WurliEngine::new(sr);
+                        e.ensure_buffer_capacity(1024);
+                        e.set_volume(1.0);
+                        e.set_reed_bar_trim(trim);
+                        e.set_tremolo_depth(trem);
+                        e.set_speaker_character(spk);
+                        e.set_mlp_enabled(mlp);
+                        e.set_noise_enabled(false);
+                        e.warm_up();
+                        let mut buf = vec![0.0f32; 1024];
+                        for _ in 0..6 {
+                            e.render(&mut buf);
                         }
-                        pos2 += len;
-                    }
-                    if peak > worst.0 {
-                        worst = (peak, format!("trim={trim} trem={trem} spk={spk}"));
+                        // Worst-phase onset from the peak-invariant probe (≈162 ms).
+                        let delay = (sr * 0.162) as usize;
+                        let mut pos = 0;
+                        while pos < delay {
+                            let len = 1024.min(delay - pos);
+                            e.render(&mut buf[..len]);
+                            pos += len;
+                        }
+                        for &n in &[48u8, 55, 60, 63, 67, 70] {
+                            e.note_on(n, 1.0);
+                        }
+                        let mut peak = 0.0f32;
+                        let mut pos2 = 0;
+                        while pos2 < sr as usize {
+                            let len = 1024.min(sr as usize - pos2);
+                            e.render(&mut buf[..len]);
+                            for &s in &buf[..len] {
+                                peak = peak.max(s.abs());
+                            }
+                            pos2 += len;
+                        }
+                        if peak > worst.0 {
+                            worst = (peak, format!("trim={trim} trem={trem} spk={spk} mlp={mlp}"));
+                        }
                     }
                 }
             }
@@ -1968,6 +2014,175 @@ mod tests {
     }
 
     #[test]
+    fn test_all_notes_off_releases_held_and_sustained_keeps_pedal() {
+        let mut e = engine();
+        e.set_sustain(true);
+        e.note_on(60, 0.8);
+        e.note_off(60); // → Sustained
+        e.note_on(64, 0.8); // → Held
+        e.note_on(64, 0.8); // re-strike without note-off: a second Held voice on 64
+        assert_eq!(e.held_voice_count(), 2);
+        assert_eq!(e.sustained_voice_count(), 1);
+
+        e.all_notes_off();
+        assert_eq!(e.held_voice_count(), 0);
+        assert_eq!(e.sustained_voice_count(), 0);
+        assert_eq!(e.count_voices_in_state(VoiceState::Releasing), 3);
+        assert!(e.is_sustain_held(), "all_notes_off must not lift the pedal");
+
+        // With the pedal still down, a new note sustains after its key-off.
+        e.note_on(67, 0.8);
+        e.note_off(67);
+        assert_eq!(e.sustained_voice_count(), 1);
+    }
+
+    #[test]
+    fn test_release_all_keys_respects_the_pedal() {
+        let mut e = engine();
+        e.set_sustain(true);
+        e.note_on(60, 0.8);
+        e.note_off(60); // → Sustained
+        e.note_on(64, 0.8);
+        e.note_on(64, 0.8); // two Held on 64
+        e.release_all_keys();
+        assert_eq!(e.held_voice_count(), 0);
+        assert_eq!(
+            e.sustained_voice_count(),
+            3,
+            "pedal down: all keep sounding"
+        );
+        e.set_sustain(false);
+        assert_eq!(e.sustained_voice_count(), 0);
+        assert_eq!(e.count_voices_in_state(VoiceState::Releasing), 3);
+
+        // Pedal up: lifted keys damp at once.
+        e.note_on(67, 0.8);
+        e.note_on(67, 0.8);
+        e.release_all_keys();
+        assert_eq!(e.held_voice_count(), 0);
+        assert_eq!(e.sustained_voice_count(), 0);
+    }
+
+    #[test]
+    fn test_all_notes_off_releases_clamped_stack() {
+        // Out-of-range notes clamp onto the end keys, so several Held voices
+        // share one note; note_off would release only the oldest of them.
+        let mut e = engine();
+        for n in [21u8, 24, 28, 30] {
+            e.note_on(n, 0.8); // all clamp onto MIDI_LO
+        }
+        assert_eq!(e.held_voice_count(), 4);
+        e.all_notes_off();
+        assert_eq!(e.held_voice_count(), 0);
+        assert_eq!(e.count_voices_in_state(VoiceState::Releasing), 4);
+    }
+
+    #[test]
+    fn test_choke_stops_every_voice_on_the_note_only() {
+        let mut e = engine();
+        e.set_sustain(true);
+        e.note_on(60, 0.8);
+        e.note_off(60); // → Sustained
+        e.note_on(60, 0.8); // re-strike: the sustained 60 damps, a new Held 60
+        e.note_on(64, 0.8); // Held, different note
+        e.choke(60);
+        assert_eq!(e.count_voices_in_state(VoiceState::Releasing), 0);
+        assert_eq!(e.held_voice_count(), 1, "64 must keep sounding");
+        assert!(
+            e.voices
+                .iter()
+                .all(|s| s.state == VoiceState::Free || s.midi_note == 64)
+        );
+        assert!(e.is_sustain_held());
+    }
+
+    #[test]
+    fn test_all_sound_off_frees_every_voice_and_fades_out() {
+        let mut e = engine();
+        e.ensure_buffer_capacity(1024);
+        e.set_sustain(true);
+        for n in [48u8, 60, 64, 67] {
+            e.note_on(n, 1.0);
+        }
+        e.note_off(48); // → Sustained
+        let mut buf = vec![0.0f32; 1024];
+        e.render(&mut buf); // let the notes speak
+        e.all_sound_off();
+        assert_eq!(e.active_voice_count(), 0, "every slot is free at once");
+        assert!(e.is_sustain_held(), "the pedal state is left alone");
+
+        // The 5 ms fade means the next block starts from where the notes were,
+        // not from a step to zero, and the voices are gone within the fade.
+        let fade = (44_100.0f64 * 0.005) as usize;
+        let mut out = vec![0.0f32; 4096];
+        e.render(&mut out);
+        assert!(
+            e.voices.iter().all(|s| s.steal_voice.is_none()),
+            "fades complete"
+        );
+        let tail_start = fade + 2048; // well after the fade, past the chain's short tail
+        let tail_peak = out[tail_start..].iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        let head_peak = out[..fade].iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        assert!(head_peak > 0.0, "the fade starts from sounding audio");
+        assert!(
+            tail_peak < head_peak * 0.01,
+            "sound must stop: tail peak {tail_peak} vs head {head_peak}"
+        );
+    }
+
+    fn render_samples(e: &mut WurliEngine, n: usize) -> Vec<f32> {
+        let mut out = vec![0.0f32; n];
+        for chunk in out.chunks_mut(512) {
+            e.render(chunk);
+        }
+        out
+    }
+
+    #[test]
+    fn test_hammer_contact_latches_at_note_on() {
+        let strike = |before: Option<f64>, after: Option<f64>| {
+            let mut e = engine();
+            e.ensure_buffer_capacity(512);
+            if let Some(s) = before {
+                e.set_hammer_contact_scale(s);
+            }
+            e.note_on(36, 1.0);
+            if let Some(s) = after {
+                e.set_hammer_contact_scale(s);
+            }
+            render_samples(&mut e, 8192)
+        };
+        let ship = strike(None, None);
+        assert_eq!(strike(Some(1.0), None), ship, "1.0 is the shipping voicing");
+        assert_eq!(
+            strike(None, Some(0.5)),
+            ship,
+            "a sounding note keeps its strike"
+        );
+        assert_ne!(
+            strike(Some(0.5), None),
+            ship,
+            "the next strike uses the new pad"
+        );
+    }
+
+    #[test]
+    fn test_damper_scale_reaches_held_voices_at_note_off() {
+        let release_tail = |scale: f64| {
+            let mut e = engine();
+            e.ensure_buffer_capacity(512);
+            e.note_on(48, 1.0);
+            render_samples(&mut e, 4096);
+            e.set_damper_scale(scale); // after note-on: must still apply at note-off
+            e.note_off(48);
+            let out = render_samples(&mut e, 8192);
+            out[2048..].iter().map(|v| (*v as f64).powi(2)).sum::<f64>()
+        };
+        let (weak, ship, firm) = (release_tail(0.25), release_tail(1.0), release_tail(4.0));
+        assert!(weak > ship && ship > firm, "{weak} > {ship} > {firm}");
+    }
+
+    #[test]
     fn test_reset_clears_sustain_state() {
         let mut e = engine();
         e.set_sustain(true);
@@ -2018,9 +2233,9 @@ mod tests {
         // converge and produced +20 dBFS spikes. Engine wraps the same
         // power-amp adapter so the guard still applies.
         //
-        // Threshold: +14 dBFS. Normal chord-ff content at default gain
-        // (vol=0.5, PSG=+14.5 dB, no DI limiter) peaks around +5 dBFS
-        // — set the guard well above that and well below the +20 dBFS
+        // Threshold: +14 dBFS. Normal chord-ff content stays below full scale
+        // at the engine's rail reference (the worst case is ~0.52, see
+        // test_output_never_exceeds_full_scale_across_settings) — the guard sits well above that and well below the +20 dBFS
         // catastrophic value the divergence guard exists to prevent.
         let mut e = engine();
         let chords: [[u8; 3]; 4] = [[60, 64, 67], [62, 65, 69], [64, 67, 71], [65, 69, 72]];

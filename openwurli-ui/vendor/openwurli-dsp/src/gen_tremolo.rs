@@ -3811,3 +3811,8 @@ pub fn process_sample(
     let (output, tap) = process_sample_inner(input, injections_inner[0], state);
     (output, [tap])
 }
+
+// Compiled by the wrapper's integration test, not by a vendor-crate test run.
+#[cfg(test)]
+#[path = "../../../tests/support/bjt_reuse_cases.rs"]
+mod reuse_tests;

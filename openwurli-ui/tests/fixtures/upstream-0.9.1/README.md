@@ -1,8 +1,8 @@
-# Upstream v0.9.0 audio references
+# Upstream v0.9.1 audio references
 
 These six files contain 4096 mono little-endian f32 samples each, generated from
 **unmodified** hal0zer0/openwurli at
-`531680b5b49eb4a734a8d8ef7a9c13cb83cf79f9`, using Rust 1.98.1 release on macOS
+`c05403b9b60f95b4908ae19727682e81803a7351`, using Rust 1.98.1 release on macOS
 arm64. They precede plugin-level gain/sag/volume. The generator uses learned
 voicing, speaker character 0.65, tremolo depth 0.7, neutral character, and a fixed
 sequence of chord, sustain, release and restrike events. Three rates exercise

@@ -293,13 +293,6 @@ mod behavioral {
             (f_val, f_deriv)
         }
 
-        /// Behavioral model has no solver, no divergence to detect — returns
-        /// the same clamped result as `process`. Exists only for API parity
-        /// with the melange adapter's diagnostic probe.
-        pub fn diag_raw_process(&mut self, input: f64) -> f64 {
-            self.process(input)
-        }
-
         pub fn diag_snapshot(&self) -> (u64, u64, f64) {
             (0, 0, 0.0)
         }
@@ -370,7 +363,7 @@ mod melange_adapter {
         /// Behavioral rail dynamics; only consulted when `rail_sag_on` is true.
         rails: super::RailDynamics,
         /// When true, push per-sample rail offsets into the solver via runtime V.
-        /// Default false to preserve historical ideal-rail behavior; flip for A/B.
+        /// On by default (`new_at_sample_rate`); turn off for ideal-rail A/B.
         rail_sag_on: bool,
     }
 
@@ -444,8 +437,8 @@ mod melange_adapter {
             // the BE fallback also produces non-physical output (observed
             // internal node voltages up to 1e272 V on stress tests). The
             // visible symptom at the output is a clamp-saturated rail slam
-            // that the speaker's HPF/LPF ring on and POST_SPEAKER_GAIN
-            // amplifies to +20 dBFS spikes — enough to trip DAW peak-protect
+            // that the speaker's HPF/LPF ring on, giving output spikes (+20 dBFS
+            // under the post-speaker gain of the time) — enough to trip DAW peak-protect
             // muting. Three signals we use to detect it:
             //
             //   1. Non-finite raw output (NaN/Inf propagation)
@@ -485,15 +478,6 @@ mod melange_adapter {
             }
 
             clamped
-        }
-
-        /// Raw, pre-clamp output of the melange solver. Audio-unsafe for normal
-        /// use (not bounded), but needed for diagnostic probing of solver
-        /// divergence: if |raw| exceeds the circuit rails (±22 V physically,
-        /// ±1.0 after the HEADROOM normalization), the NR converged to a
-        /// non-physical branch. Not called by the normal plugin path.
-        pub fn diag_raw_process(&mut self, input: f64) -> f64 {
-            gen_power_amp::process_sample(input, &mut self.state)[0] / HEADROOM
         }
 
         /// Snapshot of melange NR diagnostics:

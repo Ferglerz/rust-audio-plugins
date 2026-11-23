@@ -107,6 +107,11 @@ impl OpenWurliUi {
 
     fn handle_event(&mut self, event: &NoteEvent<()>) {
         match event {
+            // CLAP's wildcard key (-1) arrives as 255 through NIH-plug.
+            NoteEvent::NoteOn { note, .. } if *note > 127 => {}
+            NoteEvent::NoteOff { note, .. } if *note > 127 => {
+                self.engine.release_all_keys();
+            }
             NoteEvent::NoteOn { note, velocity, .. } if *velocity == 0.0 => {
                 self.engine.note_off_extended(*note)
             }
@@ -120,6 +125,19 @@ impl OpenWurliUi {
             // Always release the exact pitch, even if Extended Notes was
             // disabled while it was held. Ignored pitches cannot release an end key.
             NoteEvent::NoteOff { note, .. } => self.engine.note_off_extended(*note),
+            NoteEvent::Choke { note, .. } if *note > 127 => self.engine.all_sound_off(),
+            NoteEvent::Choke { note, .. } => self.engine.choke_extended(*note),
+            NoteEvent::MidiCC { cc, .. } if *cc == control_change::ALL_SOUND_OFF => {
+                self.engine.all_sound_off();
+            }
+            NoteEvent::MidiCC { cc, .. }
+                if *cc == control_change::ALL_NOTES_OFF || (124..=127).contains(cc) =>
+            {
+                self.engine.release_all_keys();
+            }
+            NoteEvent::MidiCC { cc, .. } if *cc == control_change::RESET_ALL_CONTROLLERS => {
+                self.engine.set_sustain(false);
+            }
             NoteEvent::MidiCC { cc, value, .. } if *cc == control_change::DAMPER_PEDAL => {
                 self.engine.set_sustain(*value >= 0.5)
             }
@@ -285,7 +303,13 @@ impl Vst3Plugin for OpenWurliUi {
 }
 
 nih_export_clap!(OpenWurliUi);
-nih_export_vst3!(OpenWurliUi);
+// Upstream's Rust 1.99 compatibility allowance for the framework's VST3
+// export macro; keep it scoped to the export rather than the whole crate.
+#[allow(unknown_lints, semicolon_in_expressions_from_non_local_macros)]
+mod vst3_export {
+    use super::*;
+    nih_export_vst3!(OpenWurliUi);
+}
 
 #[cfg(test)]
 mod tests;

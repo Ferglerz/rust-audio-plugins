@@ -1,0 +1,11 @@
+{
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+  "inputs": {
+    "/Users/ferg/GitHub/audio-plugins/openwurli-ui/docs/simd-investigation-2026-11-22/stage-probe.rs": "a001df1a588d9b97c9b76128f2cc936bdddcf2f731b7b8f6b638f862ae8e7f93",
+    "/Users/ferg/GitHub/audio-plugins/openwurli-ui/docs/simd-investigation-2026-11-22/run-stages.py": "a66bac07c6c2b3c200f7fd5baaffac7d4a2f155b056cf359930d7c71dfa5cb52",
+    "/Users/ferg/GitHub/audio-plugins/openwurli-ui/tests/support/scalar_reed_v091.rs": "376ee905d57ff17fd93ac21d5e2a15ba674fe6db1358b1791accb6080551c7d5",
+    "/Users/ferg/GitHub/audio-plugins/openwurli-ui/tests/support/simd_reed_v091.rs": "a9af97edb3921c5fbc6377e276cdf490f76ebda1271b753507baa3cbf0f5400b",
+    "/Users/ferg/GitHub/audio-plugins/openwurli-ui/tests/support/revised_simd_reed_v091.rs": "6e7dd82098e903229948396b121287d7df2a4ff85258e3b52c2badb77ff11766"
+  }
+}

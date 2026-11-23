@@ -1,6 +1,6 @@
 [package]
 name = "openwurli-dsp"
-version = "0.9.0"
+version = "0.9.1"
 edition = "2024"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/hal0zer0/openwurli"
@@ -13,7 +13,6 @@ default = ["legacy-power-amp"]
 # hand-written 9-node solver on the drawn topology (dk_preamp_legacy.rs),
 # 1.6-7× faster depending on workload.
 melange-preamp = []
-legacy-tremolo = []
 legacy-power-amp = []
 # Compile both upstream circuits for the wrapper's saved Fast/Heavy selection.
 runtime-models = []
@@ -35,6 +34,7 @@ erasing_op = "allow"
 unnecessary_cast = "allow"
 
 [dependencies]
+wide = "=0.7.33"
 melange-primitives = { git = "https://github.com/hal0zer0/melange", rev = "7ecb36c" }
 
 [dev-dependencies]

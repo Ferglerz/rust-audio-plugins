@@ -166,60 +166,6 @@ pub fn reed_length_mm(midi: u8) -> f64 {
     inches * 25.4
 }
 
-/// Reed blank width and thickness for a given MIDI note.
-///
-/// Returns (width_mm, thickness_mm) based on 200A series blank dimensions
-/// from docs/research/reed-and-hammer-physics.md Section 1.2.
-///
-/// Five blanks with distinct widths; thickness uses 200A values (thicker than
-/// 200-series) per Vintage Vibe case study: bass 0.026", mid/treble 0.034".
-/// The 200A's thicker reeds produce a "smoother, rounder, mellower tone"
-/// and reduce displacement for the same hammer force (less bark at extreme bass).
-/// The thickness transition is smoothed over 10 semitones (reeds 16-26, MIDI 48-58)
-/// to model the gradual grinding taper at blank boundaries.
-pub(crate) fn reed_blank_dims(midi: u8) -> (f64, f64) {
-    let reed = (midi as i32 - 32).clamp(1, 64) as u8;
-
-    // Width in inches — steps between blanks
-    let width_inch = if reed <= 14 {
-        0.151 // Blank 1: reeds 1-14
-    } else if reed <= 20 {
-        0.127 // Blank 2: reeds 15-20
-    } else if reed <= 42 {
-        0.121 // Blank 3: reeds 21-42
-    } else if reed <= 50 {
-        0.111 // Blank 4: reeds 43-50
-    } else {
-        0.098 // Blank 5: reeds 51-64
-    };
-
-    // Thickness in inches — 200A values (thicker than 200-series 0.020/0.031)
-    // Smooth transition from bass (0.026") to mid/treble (0.034")
-    let thickness_inch = if reed <= 16 {
-        0.026
-    } else if reed <= 26 {
-        // 10-semitone crossfade: reeds 16-26 (MIDI 48-58)
-        let t = (reed as f64 - 16.0) / 10.0;
-        0.026 + t * (0.034 - 0.026)
-    } else {
-        0.034
-    };
-
-    (width_inch * 25.4, thickness_inch * 25.4)
-}
-
-/// Beam tip compliance: L³ / (w × t³).
-///
-/// Higher compliance = more physical tip deflection for a given hammer force.
-/// Bass reeds (long, thin) have ~25× the compliance of treble reeds (short, thick).
-/// This determines how far the reed swings into the pickup's finger band,
-/// which controls how strongly the pickup nonlinearity acts.
-pub fn reed_compliance(midi: u8) -> f64 {
-    let l = reed_length_mm(midi);
-    let (w, t) = reed_blank_dims(midi);
-    (l * l * l) / (w * t * t * t)
-}
-
 /// Which point of the provisional swing band to use (see [`PROVISIONAL_FF_SWING_MM`]).
 ///
 /// `Central` is the shipping pick (the conditioned prior's median). `Low` / `High` are the band
@@ -399,6 +345,11 @@ pub struct CalibrationConfig {
     /// Multiplier on the air-drag coefficient: 1.0 = C_d 4.47 (shipping), 0.447 / 2.236 = the
     /// C_d 2 / 10 band corners, 0 = off.
     pub air_drag_scale: f64,
+    /// Multiplier on the hammer contact time (dwell filter and onset ramp): 1.0 = shipping.
+    /// Below 1.0 is a harder pad, above it a softer one. Latched at note-on.
+    pub hammer_contact_scale: f64,
+    /// Multiplier on the damper rates, applied when the damper starts: 1.0 = shipping.
+    pub damper_scale: f64,
     pub target_db: f64,
     pub voicing_slope: f64,
     pub zero_trim: bool,
@@ -410,6 +361,8 @@ impl Default for CalibrationConfig {
             swing_pick: SwingPick::Central,
             swing_scale: 1.0,
             air_drag_scale: 1.0,
+            hammer_contact_scale: 1.0,
+            damper_scale: 1.0,
             // Level anchor: C4 v100 at the preamp input held where v0.8.0 put it (~9.5 mV peak
             // at onset, ~19 mV p-p; fundamental ~5.7 mV peak at 100-400 ms). That sits inside
             // the physical estimate for the plate swing at TR-1 (147 V x dC/C_node), at the low
@@ -462,8 +415,8 @@ const PLATE_ACTIVE_LENGTH_MM: f64 = 6.0;
 ///
 /// **Normalized to mode 1**: the returned coefficients are kappa_n / kappa_1, so
 /// mode 1 always returns 1.0. The absolute value of kappa_1 (0.83–0.94 depending
-/// on register) is already absorbed into the pickup's displacement_scale, which
-/// was calibrated against real-world bark levels assuming tip-displacement sensing.
+/// on register) is absorbed into the per-note swing at the pickup, which is
+/// referenced to the reed tip.
 /// What matters for mode suppression is the *differential* attenuation: how much
 /// less the pickup senses mode n relative to mode 1.
 #[allow(clippy::needless_range_loop)]
@@ -504,8 +457,8 @@ pub fn spatial_coupling_coefficients(mu: f64, reed_len_mm: f64) -> [f64; NUM_MOD
     }
 
     // Normalize to mode 1: the reed model outputs tip displacement, and
-    // displacement_scale is calibrated for tip-referenced y. Applying raw kappa_1 < 1
-    // would double-count the spatial averaging (once here, once in the calibrated scale).
+    // the swing table is tip-referenced. Applying raw kappa_1 < 1 would
+    // double-count the spatial averaging (once here, once in the swing).
     // Only the differential suppression (kappa_n / kappa_1) is meaningful.
     let k1 = kappa_raw[0];
     if k1 > 1e-30 {
@@ -520,9 +473,14 @@ pub fn spatial_coupling_coefficients(mu: f64, reed_len_mm: f64) -> [f64; NUM_MOD
 /// Frequency power law calibrated against 10 clean OBM 200A decay rates
 /// (excluding anomalous D6/F#6/D7): `decay = 0.005 * f^1.22`, floored at 3.0 dB/s.
 ///
-/// Physical basis: corresponds to Q ∝ f^(-0.22) — a slight Q decrease with
-/// frequency, consistent with thermoelastic (Zener) damping becoming more
-/// significant for shorter, stiffer reeds. A constant-Q model (Q~1636) gives
+/// ⚠ UNVERIFIED: calibrated against OBM reference data at the octave-mislabelled pitch
+/// (docs/reference/calibration-and-evaluation.md, Appendix D notice). Pending
+/// re-examination against correctly pitched evidence: keep, adjust, or label unsourced.
+///
+/// Physical basis claimed: Q ∝ f^(-0.22), a slight Q decrease with frequency. It was once
+/// attributed to thermoelastic (Zener) damping, but above f_Zener (~40-75 Hz for these reeds)
+/// thermoelastic loss gives a flat decay rate of a few dB/s, not a rising one
+/// (reed-and-hammer-physics.md §5.5). A constant-Q model (Q~1636) gives
 /// exponent 1.0 (decay ∝ f); the slight upward correction captures the trend
 /// in OBM data where treble reeds have modestly lower Q than bass.
 ///
@@ -544,18 +502,18 @@ pub fn fundamental_decay_rate(midi: u8) -> f64 {
 ///
 /// Super-linear damping model: decay_n = decay_1 * mode_ratio_n^p
 ///
-/// Real steel reed damping is NOT constant-Q (p=1.0). Thermoelastic (Zener),
-/// air radiation, and clamping losses all scale faster than linearly with
-/// frequency, giving p ≈ 1.3–2.0 for steel cantilevers in air.
+/// UNSOURCED: chosen by ear. At p=2.0, mode 2 at C4 (1642 Hz) decays at ~326 dB/s, reaching
+/// -10 dB within 9 ms, which confines the inharmonic partials to the first few cycles of the
+/// attack. The previous value (1.5) let mode 2 ring for ~77 ms in mid-register as an audible
+/// metallic "plink".
 ///
-/// At p=2.0, mode 2 at C4 (1642 Hz) decays at ~326 dB/s, reaching -10 dB
-/// within 9ms (~2.5 cycles). This confines the inharmonic partials (which
-/// sit at non-integer ratios like 6.267× and sound "metallic") to the
-/// first 2-3 cycles of the attack, matching real Wurlitzer behavior.
-///
-/// Previous value (1.5) allowed mode 2 to ring for ~77ms in mid-register,
-/// creating an audible metallic "plink" at 1642 Hz — peak ear sensitivity.
-/// The p=2.0 value better matches Zener thermoelastic theory (loss ∝ ω²).
+/// The stated basis does not hold. It claimed thermoelastic (Zener) loss scales as ω², but above
+/// f_Zener (~40-75 Hz for these reeds) the thermoelastic decay rate is flat
+/// (reed-and-hammer-physics.md §5.5). The behaviour it claimed to match isn't seen either: a real
+/// 200A's C4 mode 2 (ratio 5.63) is still present 0.3-2.8 s after the strike, at −74…−83 dB re
+/// H1 (Keyboard Waves sample set, Sensor Array, 2026-10-29). The real partial is weak and lingers;
+/// this model's is louder and short. The hammer-contact revision
+/// (docs/research/hammer-contact-revision.md) revisits both.
 ///
 /// Note: the constant is preserved for documentation; `mode_decay_rates()`
 /// inlines `ratio * ratio` instead of `powf(2.0)` for performance.
@@ -675,7 +633,7 @@ pub fn pickup_rms_proxy_numeric(source: impl Fn(f64) -> f64, f0: f64, fc: f64) -
 ///
 /// Corrects the residual imbalance that the multi-harmonic proxy and voicing
 /// slope cannot model analytically: preamp Cin coupling cap HPF (~329 Hz),
-/// speaker coloration, displacement_scale clamp effects, and mode interaction
+/// speaker coloration, pickup-law level effects, and mode interaction
 /// artifacts. Reference: MIDI 60 (C4) = 0.0 dB.
 ///
 /// Positive = boost (note too quiet), negative = cut (note too loud).
@@ -732,141 +690,19 @@ pub fn register_trim_db(midi: u8) -> f64 {
     0.0
 }
 
-/// Post-speaker output gain in dB.
-///
-/// Models the "mic on speaker" / "DI output" stage that maps physical SPL to
-/// DAW-friendly digital levels. With target_db at -35 dBFS, internal levels are
-/// circuit-realistic (power amp uses ~5-10% headroom at ff single notes), but
-/// the raw speaker output is too quiet for a DAW. This gain compensates without
-/// distorting any nonlinear circuit model — it's applied AFTER all analog stages.
-///
-/// Lowered from +19.5 dB → +14.5 dB on 2026-04-25 after the DI-limiter
-/// removal (5fbc4a1, 220a5aa).
-///
-/// 2026-04-26 (later): sizing lands after the user-volume / circuit-
-/// drive DECOUPLING (see `volume_pot_gain` — the decoupling was itself superseded 2026-09-23). With drive pinned at
-/// 0.25, the amp output peak (chord-ff + tremolo bright) is constant
-/// regardless of user volume; PSG is sized so that user_vol=1.0 puts the
-/// worst documented case at engine peak ≤ 1.0, and user_vol=0.5 lands
-/// near −6 dBFS (chord-ff). Mid-session iterations: was 19.5 dB pre-Apr-25
-/// (DI-limiter era), 14.5 dB Apr 25, 10.5 dB Apr 26 (vol²-pre-amp era).
-/// Regression-guarded by `engine::tests::test_engine_peak_below_unity_at_vol_1`.
-///
-/// 2026-07-19: lowered +22.0 → +17.5 dB after the tremolo LDR-divider
-/// correction (schematic #203720-S-3). Modeling the vibrato pot as its real
-/// 3-terminal divider raised the accurate preamp gain (no-vibrato baseline
-/// ~14 dB, was assumed 6 dB; bright-tremolo peak ~16 dB, was 12.1), which
-/// pushed the worst-case engine peak from ≤1.0 to 1.63 (+4.2 dB). PSG drops
-/// 4.5 dB to restore the vol=1.0 ≤ 1.0 invariant. This is a post-chain level
-/// trim only — the circuit correction (hotter, accurate preamp) is preserved;
-/// PSG just re-centers the DAW output level as it always has.
-///
-/// 2026-07-24: lowered +17.5 → +16.8 dB (−0.7 dB) alongside the MLP retrain
-/// against the 0.6.0 signal chain (h16_s123). The refreshed per-note
-/// `ds_correction` saturates at its 1.2 inference clamp across the chord-ff
-/// voicing, nudging the worst-case engine peak to 1.0796; this post-chain trim
-/// restores the vol=1.0 ≤ 1.0 invariant (predicted peak 0.996). Output-level
-/// re-center only — the retrained corrections are preserved.
-///
-/// 2026-08-19: lowered +16.8 → +15.5 dB (−1.3 dB). The vol=1.0 invariant
-/// turned out to be tremolo-PHASE-FRAGILE: prior sizing measured a cold
-/// (un-warmed) engine at one lucky onset phase. On a warmed engine (the
-/// production state — the plugin always warm_up()s) with chord onset swept
-/// across the tremolo cycle at 2 ms density, peak = 0.997..1.1484 (broad
-/// plateau at onset 160–168 ms; see tests/peak_window_probe.rs). The
-/// exposure is structural, not a measurement artifact: the ~40 ms attack
-/// transient ends well inside a 178 ms tremolo period, freezing onset phase
-/// into the envelope — no longer window averages it out. −1.3 dB puts the
-/// worst phase at ~0.989 with honest margin. The invariant test now warms
-/// the engine and sweeps phases including the plateau.
-///
-/// 2026-09-13 (b): lowered +14.8 → +8.9 dB (−5.9 dB) for the pickup-network
-/// refit. FORCED re-level, flagged as such: correcting the pickup's corner
-/// from the superseded 2312 Hz to the drawn network's 880 Hz passes ~+8 dB
-/// more bass below 440 Hz, and the chord-ff invariant is bass-dominated, so
-/// the warmed worst-phase peak went to 1.9386 — nearly 2x full scale, i.e.
-/// real clipping at vol=1.0. −5.9 dB restores it to ~0.98.
-///
-/// This is OUTPUT LEVEL ONLY — no voicing, no DS, no output_scale. The
-/// relative balance (more bass, same treble) is the intended physics change
-/// and is left exactly as the circuit produces it. Whether 8.9 dB is the
-/// right shipping level is a Phase-3 voicing/listening decision, not this
-/// one; this value only restores the vol=1.0 ≤ 1.0 invariant so the suite
-/// is honest. Cumulative drop from the pre-revision 15.5 dB is −6.6 dB.
-///
-/// 2026-09-13 (a): lowered +15.5 → +14.8 dB (−0.7 dB) for the drawn-topology
-/// preamp revision. This is a pure re-level, forced by physics upstream: the
-/// drawn topology's gain-vs-shunt curve sits ~1.9 dB above the pre-revision
-/// one (C-7 spanning R-7+R-8 makes stage 2 a high-gain CE stage), which pushed
-/// the warmed worst-phase chord peak to 1.0620 — over the invariant. −0.7 dB
-/// restores it. Nothing about the voicing changed; only the output trim.
-/// ## 2026-09-14 (Task D): 8.9 → 4.5 dB, chosen from a DS/PSG tradeoff curve
-///
-/// PSG is a pure output scalar, so for any `DS_AT_C4` the largest PSG that keeps
-/// the warmed worst-phase vol=1.0 chord-ff peak inside the 1.02 bound is exact
-/// arithmetic, not a search. **THE CURVE — slide along it by ear:**
-///
-/// | `DS_AT_C4` | chord peak @PSG 8.9 | max PSG | C4 ff H2/H1 | typ-play RMS vs pre-revision | gate-(a) slope |
-/// |---|---|---|---|---|---|
-/// | 0.73 | 0.9449 | 9.56 | 59.6% | +1.78 dB | +0.55 dB/order |
-/// | 0.78 | 1.1581 | 7.80 | 64.9% | +0.82 dB | +1.44 dB/order |
-/// | 0.82 | 1.3832 | 6.25 | 69.4% | -0.06 dB | +2.18 dB/order |
-/// | **0.85** | **1.6132** | **4.92** | **73.0%** | **-0.88 dB** | **+2.77 dB/order** |
-///
-/// Shipped at **DS 0.85 / PSG 4.5** — 0.4 dB under the curve's 4.92 ceiling, to
-/// leave +0.42 dB of invariant margin (measured peak 0.9721), matching the
-/// +0.35 dB margin the 0.980 reference shipped with. Selection rule was
-/// "maximise H2 recovery subject to typical-play loudness within ~2 dB of
-/// pre-revision"; every row satisfies the loudness constraint, so H2 decides.
-///
-/// **Raising DS costs almost exactly what it gains**: 0.73 → 0.85 buys +1.76 dB
-/// of H2 for -4.64 dB of PSG, netting -2.66 dB of typical-play level. The
-/// exchange rate is ~1.5 dB of level per 1 dB of H2.
-///
-/// ⚠ **There was no spare headroom to reclaim.** The perception that the build
-/// leaves ~10 dB unused at max volume is worst-case sizing, not a level deficit:
-/// measured before this change, typical play (C4 v64-v110) already sat **+2.06 dB
-/// RMS above the pre-revision build**. The gap between a warmed worst-phase
-/// chord-ff and a single mf note is ~20 dB and is structural — it was equally
-/// true pre-revision. PSG cannot recover it; only a different sizing metric
-/// could.
-///
-/// ⚠ **Gate (a) and the H2 target are mutually exclusive**, crossing at
-/// DS ≈ 0.745. The gate compares the harmonic ladder against a corner-only
-/// (purely linear) prediction, which implicitly assumes the pre-revision
-/// nonlinearity strength — and that nonlinearity died above the corner, which is
-/// the defect the restructure fixed. The residual at DS 0.85 is entirely
-/// POSITIVE (no shortfall remains anywhere), and the ladder matches a memoryless
-/// y/(1-y) at the attack window's effective y. Read as a shortfall detector the
-/// gate passes; read as a two-sided bound it fails. Slide to 0.73 if the
-/// harmonic tail is too bright by ear — that is the honest disagreement, and the
-/// curve above is how to settle it.
-///
-/// ## 2026-09-23: the mapping is a stated reference, not a gain — see `FULL_SCALE_VOLTS`
-///
-/// Every entry above sized PSG so that a pinned-drive vol = 1.0 chord could not
-/// exceed full scale. With the drawn volume network restored (`volume_pot_gain`)
-/// the power amp's rail is the physical ceiling, and the output mapping is a
-/// convention stated in circuit units: `FULL_SCALE_VOLTS` volts at the amp
-/// output = 0 dBFS. It is set to the rail (independent review verdict, the
-/// maintainer's decision): the rail is the circuit's only hard limit, so an
-/// "over" can only ever mean the amp clipped and amp clipping can never become a
-/// digital over; the resulting levels sit where analog-referenced alignment puts
-/// nominal (a velocity-100 chord at full volume ≈ −18 dBFS, cf. EBU R68's
-/// 0 dBu = −18 dBFS); and "output never exceeds full scale" then holds at EVERY
-/// setting by construction — `test_output_never_exceeds_full_scale_across_settings`
-/// sweeps trim, volume, tremolo and speaker character to prove it, provided no
-/// downstream stage has gain > 1. A hotter mapping (e.g. +7 dB so the worst ff
-/// chord just reaches full scale) would let deliberate amp clipping exceed full
-/// scale by that margin and could only be guaranteed at default settings.
-/// The engine keeps this reference; the OpenWurli plugin applies its own output
-/// alignment after the chain (`OUTPUT_ALIGNMENT_DB` in the plugin crate) and,
-/// like the real amp, accepts overs when everything is driven flat out.
-pub const POST_SPEAKER_GAIN_DB: f64 = 0.0;
-
 /// Volts at the power-amp output that map to digital full scale (0 dBFS).
 /// Set to the amp's clip ceiling, `power_amp::HEADROOM_V` (22 V). If rail sag
 /// is ever modeled on the shipping path this becomes the IDLE rail (24.5 V).
+///
+/// A stated reference in circuit units, not a gain (2026-09-23, replacing the
+/// retired post-speaker gain that was re-sized for every chain change; history
+/// in CHANGELOG). The rail is the circuit's only hard limit, so an engine "over"
+/// can only mean the amp clipped, and the engine output never exceeds full scale
+/// at any setting provided no downstream stage has gain > 1
+/// (`test_output_never_exceeds_full_scale_across_settings`). Library hosts own
+/// their level staging; the OpenWurli plugin applies its own fixed output
+/// alignment after the chain (`OUTPUT_ALIGNMENT_DB`). Structural facts about
+/// worst-case level: docs/research/output-stage.md, gain staging.
 pub const FULL_SCALE_VOLTS: f64 = crate::power_amp::HEADROOM_V;
 
 /// Post-speaker output multiplier: the amp's normalized output (±1.0 = ±HEADROOM_V)
@@ -887,7 +723,7 @@ pub const POST_SPEAKER_GAIN: f64 = crate::power_amp::HEADROOM_V / FULL_SCALE_VOL
 // a desired result: the real instrument's amp is driven by the pot, and it
 // clips when the pot says so. The user volume is now the pot position; the
 // output level falls where the circuit puts it (the rail is full scale, see
-// `POST_SPEAKER_GAIN_DB`).
+// `FULL_SCALE_VOLTS`).
 //
 // Two values are ASSUMPTIONS pending a bench measurement (bench list items
 // 11–12): the R-11 setting (engine setting `set_reed_bar_trim`, default
@@ -1087,7 +923,7 @@ pub fn velocity_exponent(midi: u8) -> f64 {
     // bass growls when played moderately; the old symmetric 1.3 edge kept the
     // bass too clean until ff. The intentional cost is reduced bass dynamic
     // range — acceptable here (openwurli models circuit authenticity; loudness/
-    // dynamics balancing is Vurli's job, per the scope split).
+    // dynamics balancing is a downstream host's job, per the scope split).
     let center = 62.0;
     let sigma = 15.0;
     let max_exp = 1.7;
@@ -1098,12 +934,13 @@ pub fn velocity_exponent(midi: u8) -> f64 {
     min_exp + t * (max_exp - min_exp)
 }
 
-/// Sigmoid velocity shaping — models neoprene foam pad compression curve.
+/// Sigmoid velocity shaping, voiced by ear.
 ///
-/// k=1.5 gives a mild S: pp slightly compressed, mf and ff nearly linear.
-/// Neoprene foam pads (Miessner US 2,932,231) have a more linear compression
-/// curve than piano felt. Used by both voice.rs (reed amplitude scaling) and
-/// output_scale (velocity-aware pickup RMS proxy).
+/// k=1.5 gives a mild S: pp slightly compressed, mf and ff nearly linear. It was once justified
+/// as the compression curve of the patent's neoprene foam pad, but production hammers are felt
+/// (service manual), so it has no physical source. It is inherited from the retired pickup law
+/// and belongs to the excitation revision (docs/research/pickup-overlap-law.md §7). Used by both
+/// voice.rs (reed amplitude scaling) and output_scale (velocity-aware pickup RMS proxy).
 pub fn velocity_scurve(velocity: f64) -> f64 {
     let k = 1.5;
     let s = 1.0 / (1.0 + (-k * (velocity - 0.5)).exp());
@@ -1497,7 +1334,7 @@ mod tests {
     #[test]
     fn test_coupling_mode1_is_unity() {
         // After normalization, mode 1 coupling is always exactly 1.0.
-        // The absolute kappa_1 (0.83–0.94) is absorbed into displacement_scale.
+        // The absolute kappa_1 (0.83–0.94) is absorbed into the tip-referenced swing.
         for midi in (MIDI_LO..=MIDI_HI).step_by(4) {
             let mu = tip_mass_ratio(midi);
             let len = reed_length_mm(midi);
@@ -1581,66 +1418,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    // ─── Reed compliance and displacement scale tests ────────────────────
-
-    #[test]
-    fn test_blank_dims_known_values() {
-        // Reed 1 (MIDI 33): blank 1, w=0.151", t=0.026" (200A)
-        let (w, t) = reed_blank_dims(33);
-        assert!((w - 0.151 * 25.4).abs() < 0.01, "MIDI 33 width = {w}");
-        assert!((t - 0.026 * 25.4).abs() < 0.01, "MIDI 33 thickness = {t}");
-
-        // Reed 42 (MIDI 74): blank 3, w=0.121", t=0.034" (200A)
-        let (w, t) = reed_blank_dims(74);
-        assert!((w - 0.121 * 25.4).abs() < 0.01, "MIDI 74 width = {w}");
-        assert!((t - 0.034 * 25.4).abs() < 0.01, "MIDI 74 thickness = {t}");
-
-        // Reed 64 (MIDI 96): blank 5, w=0.098", t=0.034" (200A)
-        let (w, t) = reed_blank_dims(96);
-        assert!((w - 0.098 * 25.4).abs() < 0.01, "MIDI 96 width = {w}");
-        assert!((t - 0.034 * 25.4).abs() < 0.01, "MIDI 96 thickness = {t}");
-    }
-
-    #[test]
-    fn test_blank_dims_smooth_transition() {
-        // The thickness transition from bass (0.026") to mid (0.034") should be
-        // smooth over MIDI 48-58 (reeds 16-26), not a sharp step.
-        let (_, t48) = reed_blank_dims(48); // reed 16: pure bass
-        let (_, t53) = reed_blank_dims(53); // reed 21: mid-transition
-        let (_, t58) = reed_blank_dims(58); // reed 26: pure mid
-
-        assert!(
-            (t48 - 0.026 * 25.4).abs() < 0.01,
-            "MIDI 48 should be pure bass (200A: 0.026\")"
-        );
-        assert!(
-            (t58 - 0.034 * 25.4).abs() < 0.01,
-            "MIDI 58 should be pure mid (200A: 0.034\")"
-        );
-        // Mid-transition should be between
-        assert!(
-            t53 > t48 + 0.02 && t53 < t58 - 0.02,
-            "MIDI 53 thickness ({t53:.3}) should be between {t48:.3} and {t58:.3}"
-        );
-    }
-
-    #[test]
-    fn test_compliance_bass_greater_than_treble() {
-        // Bass reeds (long, thin) have much higher compliance than treble (short, thick)
-        let c_bass = reed_compliance(33); // A1
-        let c_mid = reed_compliance(60); // C4
-        let c_treb = reed_compliance(96); // C7
-
-        assert!(
-            c_bass > c_mid * 5.0,
-            "Bass compliance ({c_bass:.0}) should be >5x mid ({c_mid:.0})"
-        );
-        assert!(
-            c_mid > c_treb * 2.0,
-            "Mid compliance ({c_mid:.0}) should be >2x treble ({c_treb:.0})"
-        );
     }
 
     #[test]

@@ -10,38 +10,38 @@ fn circuit_test(test: impl FnOnce() + Send + 'static) {
 }
 
 #[test]
-fn neutral_controls_match_upstream_v090_in_both_circuits() {
+fn neutral_controls_match_upstream_v091_in_both_circuits() {
     circuit_test(|| {
         let cases: [(CircuitMode, u32, &[u8]); 6] = [
             (
                 CircuitMode::Fast,
                 44100,
-                include_bytes!("fixtures/upstream-0.9.0/fast-44100.f32le"),
+                include_bytes!("fixtures/upstream-0.9.1/fast-44100.f32le"),
             ),
             (
                 CircuitMode::Fast,
                 48000,
-                include_bytes!("fixtures/upstream-0.9.0/fast-48000.f32le"),
+                include_bytes!("fixtures/upstream-0.9.1/fast-48000.f32le"),
             ),
             (
                 CircuitMode::Fast,
                 96000,
-                include_bytes!("fixtures/upstream-0.9.0/fast-96000.f32le"),
+                include_bytes!("fixtures/upstream-0.9.1/fast-96000.f32le"),
             ),
             (
                 CircuitMode::Heavy,
                 44100,
-                include_bytes!("fixtures/upstream-0.9.0/heavy-44100.f32le"),
+                include_bytes!("fixtures/upstream-0.9.1/heavy-44100.f32le"),
             ),
             (
                 CircuitMode::Heavy,
                 48000,
-                include_bytes!("fixtures/upstream-0.9.0/heavy-48000.f32le"),
+                include_bytes!("fixtures/upstream-0.9.1/heavy-48000.f32le"),
             ),
             (
                 CircuitMode::Heavy,
                 96000,
-                include_bytes!("fixtures/upstream-0.9.0/heavy-96000.f32le"),
+                include_bytes!("fixtures/upstream-0.9.1/heavy-96000.f32le"),
             ),
         ];
         for (mode, rate, bytes) in cases {
@@ -109,7 +109,7 @@ fn live_circuit_switch_preserves_held_notes_at_large_host_block_sizes() {
 }
 
 #[test]
-fn character_controls_reach_the_v090_audio_path() {
+fn character_controls_reach_the_v091_audio_path() {
     circuit_test(|| {
         for mode in [CircuitMode::Fast, CircuitMode::Heavy] {
             let render = |control| {

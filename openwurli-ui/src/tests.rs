@@ -74,10 +74,7 @@ fn restore_cpu_mode(plugin: &OpenWurliUi, state: &mut PluginState) {
 fn cpu_mode_restore_initializes_selected_audio() {
     with_circuit_stack(|| {
         let mut plugin = OpenWurliUi::default();
-        for (saved_id, expected) in [
-            ("heavy", CircuitMode::Heavy),
-            ("fast", CircuitMode::Fast),
-        ] {
+        for (saved_id, expected) in [("heavy", CircuitMode::Heavy), ("fast", CircuitMode::Fast)] {
             let mut state = PluginState {
                 version: "0.1.0".into(),
                 params: Default::default(),
@@ -473,9 +470,9 @@ fn restored_editor_scale_keeps_the_new_artwork_dimensions() {
     let mut fields = params.serialize_fields();
     fields.insert("editor-state".into(), r#"{"scale_factor":0.91}"#.into());
     params.deserialize_fields(&fields);
-    assert_eq!(params.editor_state.inner_logical_size(), (720, 550));
+    assert_eq!(params.editor_state.inner_logical_size(), (720, 556));
     assert_eq!(params.editor_state.user_scale_factor(), 0.91);
-    assert_eq!(params.editor_state.scaled_logical_size(), (655, 501));
+    assert_eq!(params.editor_state.scaled_logical_size(), (655, 506));
 }
 
 #[test]
@@ -512,4 +509,184 @@ fn host_parameter_ids_and_control_defaults_are_stable() {
     assert!(!params.extended_notes.default_plain_value());
     assert!(!params.rail_sag.default_plain_value());
     assert!(params.serialize_fields().contains_key("editor-state"));
+}
+
+#[test]
+fn test_clap_wildcard_note_on_is_ignored() {
+    with_circuit_stack(|| {
+        // CLAP key -1 arrives as 255; it must not play the clamped top key.
+        let mut plugin = OpenWurliUi::default();
+        plugin.handle_event(&note_on(0, 255));
+        assert_eq!(plugin.engine.active_voice_count(), 0);
+    });
+}
+
+#[test]
+fn test_clap_wildcard_note_off_releases_every_key() {
+    with_circuit_stack(|| {
+        let mut plugin = OpenWurliUi::default();
+        for n in [48u8, 60, 64, 67, 96] {
+            plugin.handle_event(&note_on(0, n));
+        }
+        assert_eq!(plugin.engine.held_voice_count(), 5);
+        plugin.handle_event(&note_off(0, 255));
+        assert_eq!(plugin.engine.held_voice_count(), 0);
+    });
+}
+
+#[test]
+fn test_all_notes_off_cc_releases_every_key() {
+    with_circuit_stack(|| {
+        let mut plugin = OpenWurliUi::default();
+        for n in [48u8, 60, 64] {
+            plugin.handle_event(&note_on(0, n));
+        }
+        plugin.handle_event(&cc(control_change::ALL_NOTES_OFF, 0.0));
+        assert_eq!(plugin.engine.held_voice_count(), 0);
+    });
+}
+
+fn cc(cc: u8, value: f32) -> NoteEvent<()> {
+    NoteEvent::MidiCC {
+        timing: 0,
+        channel: 0,
+        cc,
+        value,
+    }
+}
+
+fn choke(note: u8) -> NoteEvent<()> {
+    NoteEvent::Choke {
+        timing: 0,
+        voice_id: None,
+        channel: 0,
+        note,
+    }
+}
+
+#[test]
+fn test_choke_stops_only_its_note() {
+    with_circuit_stack(|| {
+        let mut plugin = OpenWurliUi::default();
+        plugin.handle_event(&note_on(0, 60));
+        plugin.handle_event(&note_on(0, 64));
+        plugin.handle_event(&choke(60));
+        assert_eq!(plugin.engine.active_voice_count(), 1);
+    });
+}
+
+#[test]
+fn test_wildcard_choke_and_all_sound_off_stop_everything() {
+    with_circuit_stack(|| {
+        let mut plugin = OpenWurliUi::default();
+        for n in [48u8, 60, 64] {
+            plugin.handle_event(&note_on(0, n));
+        }
+        plugin.handle_event(&choke(255));
+        assert_eq!(plugin.engine.active_voice_count(), 0);
+
+        for n in [48u8, 60, 64] {
+            plugin.handle_event(&note_on(0, n));
+        }
+        plugin.handle_event(&cc(control_change::ALL_SOUND_OFF, 0.0));
+        assert_eq!(plugin.engine.active_voice_count(), 0);
+    });
+}
+
+#[test]
+fn test_all_notes_off_cc_keeps_pedal_held_notes_until_pedal_up() {
+    with_circuit_stack(|| {
+        let mut plugin = OpenWurliUi::default();
+        plugin.handle_event(&cc(control_change::DAMPER_PEDAL, 1.0));
+        for n in [48u8, 60] {
+            plugin.handle_event(&note_on(0, n));
+        }
+        plugin.handle_event(&cc(control_change::ALL_NOTES_OFF, 0.0));
+        assert_eq!(plugin.engine.held_voice_count(), 0);
+        assert_eq!(plugin.engine.sustained_voice_count(), 2);
+        plugin.handle_event(&cc(control_change::DAMPER_PEDAL, 0.0));
+        assert_eq!(plugin.engine.sustained_voice_count(), 0);
+    });
+}
+
+#[test]
+fn test_mode_messages_cause_all_notes_off() {
+    with_circuit_stack(|| {
+        for mode_cc in 124u8..=127 {
+            let mut plugin = OpenWurliUi::default();
+            for n in [48u8, 60, 64] {
+                plugin.handle_event(&note_on(0, n));
+            }
+            plugin.handle_event(&cc(mode_cc, 0.0));
+            assert_eq!(plugin.engine.held_voice_count(), 0, "CC {mode_cc}");
+        }
+    });
+}
+
+#[test]
+fn test_reset_all_controllers_lifts_the_pedal() {
+    with_circuit_stack(|| {
+        let mut plugin = OpenWurliUi::default();
+        plugin.handle_event(&cc(control_change::DAMPER_PEDAL, 1.0));
+        plugin.handle_event(&note_on(0, 60));
+        plugin.handle_event(&note_off(0, 60)); // → Sustained
+        plugin.handle_event(&cc(control_change::RESET_ALL_CONTROLLERS, 0.0));
+        assert!(!plugin.engine.is_sustain_held());
+        assert_eq!(plugin.engine.sustained_voice_count(), 0);
+    });
+}
+
+#[test]
+fn extended_choke_keeps_pitch_identity_after_range_is_disabled() {
+    with_circuit_stack(|| {
+        for mode in [CircuitMode::Fast, CircuitMode::Heavy] {
+            let mut plugin = OpenWurliUi::default();
+            plugin.engine.set_circuit_mode(mode);
+            set_extended(&mut plugin, true);
+            for note in [0, 33, 96, 127] {
+                plugin.handle_event(&note_on(0, note));
+            }
+            set_extended(&mut plugin, false);
+            plugin.handle_event(&choke(0));
+            plugin.handle_event(&choke(127));
+            assert_eq!(plugin.engine.held_voice_count(), 2);
+            plugin.handle_event(&note_off(0, 33));
+            plugin.handle_event(&note_off(0, 96));
+            assert_eq!(plugin.engine.held_voice_count(), 0);
+        }
+    });
+}
+
+#[test]
+fn all_sound_off_is_sample_accurate_and_fades_without_resetting_the_chain() {
+    with_circuit_stack(|| {
+        for mode in [CircuitMode::Fast, CircuitMode::Heavy] {
+            let mut plugin = OpenWurliUi::default();
+            let mut reference = OpenWurliUi::default();
+            for instrument in [&mut plugin, &mut reference] {
+                instrument.engine = WurliEngine::new_with_circuit_mode(44100.0, mode);
+                instrument.sync_params();
+                instrument.engine.warm_up();
+                instrument.handle_event(&note_on(0, 60));
+                instrument.render_block(&mut [0.0; 2048], || None);
+            }
+            let mut event = cc(control_change::ALL_SOUND_OFF, 0.0);
+            if let NoteEvent::MidiCC { timing, .. } = &mut event {
+                *timing = 128;
+            }
+            let mut events = [event].into_iter();
+            let mut actual = [0.0; 2048];
+            let mut unchoked = [0.0; 2048];
+            plugin.render_block(&mut actual, || events.next());
+            reference.render_block(&mut unchoked, || None);
+            assert_eq!(&actual[..128], &unchoked[..128]);
+            assert!(actual[128..]
+                .iter()
+                .zip(&unchoked[128..])
+                .any(|(a, b)| (a - b).abs() > 1e-6));
+            assert!(actual.iter().all(|s| s.is_finite()));
+            assert_eq!(plugin.engine.active_voice_count(), 0);
+            assert_eq!(plugin.engine.nan_guard_fires(), 0);
+        }
+    });
 }

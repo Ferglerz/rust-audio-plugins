@@ -1,0 +1,64 @@
+    Checking openwurli-dsp v0.9.1 (/Users/ferg/GitHub/audio-plugins/openwurli-ui/vendor/openwurli-dsp)
+warning: the loop variable `i` is used to index `t`
+  --> pleasant-ui/src/draw/icons.rs:72:22
+   |
+72 |             for i in 0..33 {
+   |                      ^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#needless_range_loop
+   = note: `#[warn(clippy::needless_range_loop)]` on by default
+help: consider using an iterator and enumerate()
+   |
+72 -             for i in 0..33 {
+72 +             for (i, <item>) in t.iter_mut().enumerate() {
+   |
+
+warning: explicit call to `.into_iter()` in function argument accepting `IntoIterator`
+   --> pleasant-ui/src/draw/primitives.rs:234:20
+    |
+234 |             .chain(end.into_iter())
+    |                    ^^^^^^^^^^^^^^^
+    |
+note: this parameter accepts any `IntoIterator`, so you don't need to call `.into_iter()`
+   --> /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/core/src/iter/traits/iterator.rs:513:11
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#useless_conversion
+    = note: `#[warn(clippy::useless_conversion)]` on by default
+help: consider removing the `.into_iter()`
+    |
+234 -             .chain(end.into_iter())
+234 +             .chain(end)
+    |
+
+warning: explicit call to `.into_iter()` in function argument accepting `IntoIterator`
+   --> pleasant-ui/src/draw/primitives.rs:265:20
+    |
+265 |             .chain(end.into_iter())
+    |                    ^^^^^^^^^^^^^^^
+    |
+note: this parameter accepts any `IntoIterator`, so you don't need to call `.into_iter()`
+   --> /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/core/src/iter/traits/iterator.rs:513:11
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#useless_conversion
+help: consider removing the `.into_iter()`
+    |
+265 -             .chain(end.into_iter())
+265 +             .chain(end)
+    |
+
+warning: `pleasant-ui` (lib) generated 3 warnings (run `cargo clippy --fix --lib -p pleasant-ui -- ` to apply 2 suggestions)
+    Checking openwurli-ui v0.2.1 (/Users/ferg/GitHub/audio-plugins/openwurli-ui)
+warning: using `chunks_exact` with a constant chunk size
+  --> openwurli-ui/tests/upstream_audio.rs:75:72
+   |
+75 |             for (index, (actual, expected)) in actual.iter().zip(bytes.chunks_exact(4)).enumerate()
+   |                                                                        ^^^^^^^^^^^^^^^
+   |
+help: consider using `as_chunks::<4>()` instead
+  --> openwurli-ui/tests/upstream_audio.rs:75:72
+   |
+75 |             for (index, (actual, expected)) in actual.iter().zip(bytes.chunks_exact(4)).enumerate()
+   |                                                                        ^^^^^^^^^^^^^^^
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#chunks_exact_to_as_chunks
+   = note: `#[warn(clippy::chunks_exact_to_as_chunks)]` on by default
+
+warning: `openwurli-ui` (test "upstream_audio") generated 1 warning
+    Finished `dev` profile [optimized + debuginfo] target(s) in 4.39s
