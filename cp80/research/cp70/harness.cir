@@ -1,0 +1,18 @@
+Original CP-70 working harness equivalent, one active key and 72 at rest.
+* The photos establish the separate wired sensors. Capacitances, common summing
+* and the TR input components are estimates; see README.md.
+Vkey open 0 AC 1
+Csensor open harness 1n
+Cother harness 0 72n
+Cleads harness 0 2.92n
+Ccouple harness gate 100n
+Rgate gate 0 470k
+* SPICE DC reference; immaterial for the swept band.
+Rleak harness 0 1T
+.control
+ac dec 30 20 20k
+set wr_singlescale
+wrdata wired-ac.txt v(gate)
+quit
+.endc
+.end

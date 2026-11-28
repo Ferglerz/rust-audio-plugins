@@ -1,8 +1,8 @@
 #!/usr/bin/env zsh
 set -euo pipefail
 
-if [[ $# -ne 7 ]]; then
-  echo "usage: install-plugin.sh WORKSPACE CRATE XTASK_PACKAGE BUNDLE_NAME INSTALL_NAME BINARY_NAME FORMATS" >&2
+if [[ $# -lt 7 || $# -gt 8 ]]; then
+  echo "usage: install-plugin.sh WORKSPACE CRATE XTASK_PACKAGE BUNDLE_NAME INSTALL_NAME BINARY_NAME FORMATS [PREVIOUS_NAME]" >&2
   exit 2
 fi
 
@@ -13,6 +13,7 @@ BUNDLE_NAME="$4"
 INSTALL_NAME="$5"
 BINARY_NAME="$6"
 FORMATS="$7"
+PREVIOUS_NAME="${8:-}"
 
 cd "$WORKSPACE"
 export CARGO_TARGET_DIR="$WORKSPACE/target"
@@ -60,5 +61,10 @@ for format in ${(s:,:)FORMATS}; do
   xattr -cr "$installed_bundle" 2>/dev/null || true
   codesign --force --deep -s - "$installed_bundle"
   codesign --verify --deep "$installed_bundle"
+  # A renamed instrument keeps its host ID. Retire the old filename only once
+  # the replacement for this format has been installed and verified.
+  if [[ -n "$PREVIOUS_NAME" && "$PREVIOUS_NAME" != "$INSTALL_NAME" ]]; then
+    rm -rf "$destination_dir/$PREVIOUS_NAME.$format"
+  fi
   echo "Installed $installed_bundle"
 done

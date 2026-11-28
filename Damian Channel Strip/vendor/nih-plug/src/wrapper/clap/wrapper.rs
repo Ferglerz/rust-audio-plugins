@@ -807,6 +807,10 @@ impl<P: ClapPlugin> Wrapper<P> {
         result
     }
 
+    pub(super) fn request_process(&self) {
+        unsafe_clap_call! { &*self.host_callback=>request_process(&*self.host_callback) };
+    }
+
     /// Request a resize based on the editor's current reported size. As of CLAP 0.24 this can
     /// safely be called from any thread. If this returns `false`, then the plugin should reset its
     /// size back to the previous value.

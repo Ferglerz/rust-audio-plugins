@@ -25,6 +25,68 @@ mod input_rate_tests {
     use super::*;
 
     #[test]
+    fn attack_tracks_small_same_direction_changes() {
+        let params = EnvelopeParams {
+            attack_curve: 0.5,
+            ..EnvelopeParams::default()
+        };
+        for sign in [-1.0, 1.0] {
+            let mut engine = EnvelopeEngine::new();
+            engine.sync_coefficients(&params, 48_000.0);
+            engine.global_smoothed_gain_db = sign * 6.0;
+            engine.global_smoothed_gain_db_before_strength = sign * 12.0;
+            for _ in 0..32 {
+                let target = sign * 6.05;
+                let previous = engine.global_smoothed_gain_db;
+                let previous_before_strength = engine.global_smoothed_gain_db_before_strength;
+                let coefficient = engine.attack_coeff_for_sample(target);
+                let actual = engine.process_envelope_following(target, -20.0, 0.5, 0.0);
+                assert_eq!(
+                    actual,
+                    apply_envelope_smoothing(coefficient, previous, target)
+                );
+                assert_eq!(
+                    engine.global_smoothed_gain_db_before_strength,
+                    apply_envelope_smoothing(coefficient, previous_before_strength, target * 2.0)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn disabling_activity_metering_preserves_envelope_samples() {
+        for dependence in [25.0, 100.0] {
+            let params = EnvelopeParams {
+                input_dependence: dependence,
+                gr_dependence: 25.0,
+                input_rate_amount: 1.0,
+                ..EnvelopeParams::default()
+            };
+            let mut metered = EnvelopeEngine::new();
+            let mut unmetered = EnvelopeEngine::new();
+            unmetered.set_activity_metering(false);
+            for engine in [&mut metered, &mut unmetered] {
+                engine.sync_coefficients(&params, 48_000.0);
+                engine.global_smoothed_gain_db = -3.0;
+                engine.global_smoothed_gain_db_before_strength = -3.0;
+            }
+            let expected = metered.process_envelope_following(0.0, -60.0, 1.0, 0.0);
+            let actual = unmetered.process_envelope_following(0.0, -60.0, 1.0, 0.0);
+            assert_eq!(actual, expected);
+            assert_eq!(
+                unmetered.global_smoothed_gain_db_before_strength,
+                metered.global_smoothed_gain_db_before_strength
+            );
+            assert_ne!(metered.input_rate_activity, 0.0);
+            assert_ne!(metered.input_dependence_activity, 0.0);
+            assert_ne!(metered.gr_dependence_activity, 0.0);
+            assert_eq!(unmetered.input_rate_activity, 0.0);
+            assert_eq!(unmetered.input_dependence_activity, 0.0);
+            assert_eq!(unmetered.gr_dependence_activity, 0.0);
+        }
+    }
+
+    #[test]
     fn input_rate_activity_only_reports_applied_release_modulation() {
         let mut engine = EnvelopeEngine::new();
         let params = EnvelopeParams {
@@ -127,6 +189,7 @@ pub struct EnvelopeEngine {
     pub prev_detector_db: f64,
     /// Signed live rate modulation: positive speeds release up, negative slows it.
     detector_rate_scale: f64,
+    activity_metering: bool,
     pub input_rate_activity: f64,
     pub input_dependence_activity: f64,
     pub gr_dependence_activity: f64,
@@ -150,6 +213,7 @@ impl Default for EnvelopeEngine {
             global_smoothed_gain_db_before_strength: 0.0,
             prev_detector_db: -20.0,
             detector_rate_scale: 1.0,
+            activity_metering: true,
             input_rate_activity: 0.0,
             input_dependence_activity: 0.0,
             gr_dependence_activity: 0.0,
@@ -201,9 +265,34 @@ impl EnvelopeEngine {
         self.release = self.release.lerp(self.target_release, om);
     }
 
+    pub(crate) fn set_activity_metering(&mut self, enabled: bool) {
+        self.activity_metering = enabled;
+    }
+
+    pub(crate) fn activity_metering(&self) -> bool {
+        self.activity_metering
+    }
+
+    pub(crate) fn has_pending_hold(&self) -> bool {
+        self.hold.is_pending()
+    }
+
     pub fn determine_attack_or_release(&self, target_gr_abs: f64, current_gr_abs: f64) -> bool {
-        let hysteresis_threshold = (current_gr_abs * 0.1).max(0.2);
-        target_gr_abs > current_gr_abs + hysteresis_threshold
+        target_gr_abs > current_gr_abs
+    }
+
+    fn is_attacking(&self, target_gr_db: f64) -> bool {
+        let current_gr_db = self.global_smoothed_gain_db;
+        let current_gr_abs = current_gr_db.abs();
+        let target_gr_abs = target_gr_db.abs();
+        if current_gr_db != 0.0
+            && current_gr_db.is_sign_negative() != target_gr_db.is_sign_negative()
+        {
+            let hysteresis_threshold = (current_gr_abs * 0.1).max(0.2);
+            target_gr_abs > current_gr_abs + hysteresis_threshold
+        } else {
+            self.determine_attack_or_release(target_gr_abs, current_gr_abs)
+        }
     }
 
     fn attack_coeff_for_sample(&self, target_gr_db: f64) -> f64 {
@@ -224,11 +313,9 @@ impl EnvelopeEngine {
         target_gr_db: f64,
         target_gr_db_before_strength: f64,
     ) -> f64 {
-        let target_gr_abs = target_gr_db.abs();
-        let current_gr_abs = self.global_smoothed_gain_db.abs();
         let current_gr_abs_before_strength = self.global_smoothed_gain_db_before_strength.abs();
         let is_negative_gr = self.global_smoothed_gain_db < 0.0;
-        let is_attack = self.determine_attack_or_release(target_gr_abs, current_gr_abs);
+        let is_attack = self.is_attacking(target_gr_db);
         self.input_rate_activity = 0.0;
         self.input_dependence_activity = 0.0;
         self.gr_dependence_activity = 0.0;
@@ -243,7 +330,7 @@ impl EnvelopeEngine {
                 target_gr_db_before_strength,
             );
         } else {
-            let (fixed, input, gr, base_rel_coef) = self.release.release_response(
+            let (fixed, input_effect, gr_effect, base_rel_coef) = self.release.release_response(
                 &self.params,
                 self.global_smoothed_gain_db,
                 target_gr_db,
@@ -251,31 +338,29 @@ impl EnvelopeEngine {
                 current_gr_abs_before_strength,
                 is_negative_gr,
             );
-            let releasing_active = (self.global_smoothed_gain_db - target_gr_db).abs() > EPS;
-            if releasing_active && (input != fixed || gr != fixed) {
-                let speed = |coefficient: f64| {
-                    let ratio = (1.0 - coefficient.clamp(EPS, 1.0 - EPS))
-                        / (1.0 - self.release.release_coeff.clamp(EPS, 1.0 - EPS));
-                    if self.release_cache.use_linear_release {
-                        ratio.clamp(MIN_SPEED_RATIO, MAX_SPEED_RATIO)
-                    } else {
-                        ratio
+            let measure_activity =
+                self.activity_metering && (self.global_smoothed_gain_db - target_gr_db).abs() > EPS;
+            if measure_activity {
+                let input = fixed + input_effect;
+                let gr = fixed + gr_effect;
+                if input != fixed || gr != fixed {
+                    let speed = |coefficient: f64| {
+                        let ratio = (1.0 - coefficient.clamp(EPS, 1.0 - EPS))
+                            / (1.0 - self.release.release_coeff.clamp(EPS, 1.0 - EPS));
+                        if self.release_cache.use_linear_release {
+                            ratio.clamp(MIN_SPEED_RATIO, MAX_SPEED_RATIO)
+                        } else {
+                            ratio
+                        }
+                    };
+                    let fixed_speed = speed(fixed);
+                    if input != fixed {
+                        self.input_dependence_activity = (speed(input) / fixed_speed).log2();
                     }
-                };
-                let fixed_speed = speed(fixed);
-                if input != fixed {
-                    self.input_dependence_activity = (speed(input) / fixed_speed).log2();
-                } else {
-                    self.input_dependence_activity = 0.0;
+                    if gr != fixed {
+                        self.gr_dependence_activity = (speed(gr) / fixed_speed).log2();
+                    }
                 }
-                if gr != fixed {
-                    self.gr_dependence_activity = (speed(gr) / fixed_speed).log2();
-                } else {
-                    self.gr_dependence_activity = 0.0;
-                }
-            } else if releasing_active {
-                self.input_dependence_activity = 0.0;
-                self.gr_dependence_activity = 0.0;
             }
             let rel_coef_use = self.release.apply_input_rate(
                 &self.params,
@@ -288,15 +373,11 @@ impl EnvelopeEngine {
                 let c_use = rel_coef_use.clamp(EPS, 1.0 - EPS);
                 let mut linear_speed_ratio = (1.0 - c_use) / (1.0 - c_ref);
                 linear_speed_ratio = linear_speed_ratio.clamp(MIN_SPEED_RATIO, MAX_SPEED_RATIO);
-                if releasing_active {
-                    if rel_coef_use == base_rel_coef {
-                        self.input_rate_activity = 0.0;
-                    } else {
-                        let base_speed_ratio = ((1.0 - base_rel_coef.clamp(EPS, 1.0 - EPS))
-                            / (1.0 - c_ref))
-                            .clamp(MIN_SPEED_RATIO, MAX_SPEED_RATIO);
-                        self.input_rate_activity = (linear_speed_ratio / base_speed_ratio).log2();
-                    }
+                if measure_activity && rel_coef_use != base_rel_coef {
+                    let base_speed_ratio = ((1.0 - base_rel_coef.clamp(EPS, 1.0 - EPS))
+                        / (1.0 - c_ref))
+                        .clamp(MIN_SPEED_RATIO, MAX_SPEED_RATIO);
+                    self.input_rate_activity = (linear_speed_ratio / base_speed_ratio).log2();
                 }
                 let linear_db_per_sample =
                     self.release.linear_release_db_per_sample * linear_speed_ratio;
@@ -308,14 +389,10 @@ impl EnvelopeEngine {
                     target_gr_db_before_strength,
                 );
             } else {
-                if releasing_active {
-                    if rel_coef_use == base_rel_coef {
-                        self.input_rate_activity = 0.0;
-                    } else {
-                        let speed = (1.0 - rel_coef_use.clamp(EPS, 1.0 - EPS))
-                            / (1.0 - base_rel_coef.clamp(EPS, 1.0 - EPS));
-                        self.input_rate_activity = speed.log2();
-                    }
+                if measure_activity && rel_coef_use != base_rel_coef {
+                    let speed = (1.0 - rel_coef_use.clamp(EPS, 1.0 - EPS))
+                        / (1.0 - base_rel_coef.clamp(EPS, 1.0 - EPS));
+                    self.input_rate_activity = speed.log2();
                 }
                 smooth_envelope_pair(
                     rel_coef_use,
@@ -350,7 +427,7 @@ impl EnvelopeEngine {
     pub fn reset(&mut self) {
         self.global_smoothed_gain_db = 0.0;
         self.global_smoothed_gain_db_before_strength = 0.0;
-        self.hold.counter_samples = 0;
+        self.hold.reset();
         self.prev_detector_db = -20.0;
         self.input_rate_activity = 0.0;
         self.input_dependence_activity = 0.0;

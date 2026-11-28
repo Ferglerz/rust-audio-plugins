@@ -1,0 +1,21 @@
+Early Stage 73 / David Morrin grounded tone-pot trace
+.subckt pickup hi lo params: amplitude=0
+Vemf source lo dc 0 ac {amplitude}
+Rcoil source coil 180
+Lcoil coil hi 75m
+.ends
+@HARP@
+Rt1 harp tone @TLEFT@
+Rt2 tone 0 @TRIGHT@
+Ct tone 0 1u
+Rv1 harp jack @UPPER@
+Rv2 jack 0 @LOWER@
+Rinput jack 0 1meg
+Ccable jack 0 @CABLE_PF@p
+.control
+set wr_singlescale
+ac dec 64 40 10k
+wrdata sweep.txt vdb(jack)
+quit
+.endc
+.end

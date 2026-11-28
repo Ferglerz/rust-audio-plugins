@@ -1,21 +1,10 @@
 //! Hold logic ported from `Envelope/02_envelope_hold.jsfx-inc`.
 
+#[derive(Default)]
 pub struct HoldState {
-    pub counter_samples: i64,
-    pub target_gr_db: f64,
-    pub baseline_gr_db: f64,
-    pub hold_samples: i64,
-}
-
-impl Default for HoldState {
-    fn default() -> Self {
-        Self {
-            counter_samples: 0,
-            target_gr_db: 0.0,
-            baseline_gr_db: 0.0,
-            hold_samples: 0,
-        }
-    }
+    counter_samples: i64,
+    target_gr_db: f64,
+    hold_samples: i64,
 }
 
 impl HoldState {
@@ -23,46 +12,58 @@ impl HoldState {
         self.hold_samples = (hold_ms * 0.001 * srate).floor() as i64;
     }
 
+    pub fn reset(&mut self) {
+        self.counter_samples = 0;
+        self.target_gr_db = 0.0;
+    }
+
+    pub fn is_pending(&self) -> bool {
+        self.counter_samples > 0
+    }
+
     pub fn process_hold(&mut self, target_gr_db: f64, hold_ms: f64) -> f64 {
-        if hold_ms <= 0.0 {
-            self.counter_samples = 0;
-            self.target_gr_db = 0.0;
-            self.baseline_gr_db = 0.0;
+        if hold_ms <= 0.0 || self.hold_samples == 0 {
+            self.reset();
             return target_gr_db;
         }
 
-        let target_gr_abs = target_gr_db.abs();
-        let hold_target_abs = self.target_gr_db.abs();
-        let hold_baseline_abs = self.baseline_gr_db.abs();
-
-        if self.counter_samples > 0 {
-            if target_gr_abs > hold_target_abs {
-                self.target_gr_db = target_gr_db;
-                self.counter_samples = self.hold_samples;
-            }
-            self.counter_samples -= 1;
-            self.counter_samples = self.counter_samples.max(0);
-            let result = self.target_gr_db;
-            if self.counter_samples <= 0 {
-                self.baseline_gr_db = result;
-            }
-            result
-        } else if target_gr_abs > hold_baseline_abs {
+        if target_gr_db != 0.0
+            && (target_gr_db == self.target_gr_db || target_gr_db.abs() > self.target_gr_db.abs())
+        {
             self.target_gr_db = target_gr_db;
             self.counter_samples = self.hold_samples;
-            self.baseline_gr_db = self.target_gr_db;
-            self.target_gr_db
+        } else if self.is_pending() {
+            self.counter_samples -= 1;
         } else {
-            self.baseline_gr_db = target_gr_db;
             self.target_gr_db = target_gr_db;
-            target_gr_db
         }
+
+        self.target_gr_db
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hold_times_the_drop_after_a_sustained_target() {
+        let mut h = HoldState::default();
+        h.update_hold_samples(4.0, 1000.0);
+        for _ in 0..12 {
+            assert_eq!(h.process_hold(-6.0, 4.0), -6.0);
+            assert!(h.is_pending());
+        }
+        for _ in 0..4 {
+            assert_eq!(h.process_hold(-3.0, 4.0), -6.0);
+        }
+        assert_eq!(h.process_hold(-3.0, 4.0), -3.0);
+
+        assert_eq!(h.process_hold(-6.0, 4.0), -6.0);
+        h.reset();
+        assert!(!h.is_pending());
+        assert_eq!(h.process_hold(0.0, 4.0), 0.0);
+    }
 
     #[test]
     fn hold_extends_largest_gr() {

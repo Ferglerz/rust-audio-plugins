@@ -289,6 +289,8 @@ pub fn pickup_band_sign(midi: u8) -> f64 {
 /// barely" (technician, bass, first-hand); assumed equal in the treble. Middle of the 0.07-0.10 mm
 /// evidence band.
 pub const PICKUP_REST_OFFSET_MM: f64 = 0.085;
+/// Global vertical voicing travel either side of the stock setup (model range, mm).
+pub const MAX_HEIGHT_TRIM_MM: f64 = 0.12;
 
 pub struct Pickup {
     /// Network state: normalized plate-node voltage perturbation `w = v / SENSITIVITY`.
@@ -303,6 +305,12 @@ pub struct Pickup {
     law: &'static PickupLawTable,
     /// +1 if the finger band is above the reed (bass), -1 if below (treble).
     band_sign: f64,
+    /// Signed distance from the resting reed to the near finger face.
+    rest_offset_mm: f64,
+    target_offset_mm: f64,
+    offset_step_mm: f64,
+    ramp_length: u32,
+    ramp_remaining: u32,
     /// Law value at rest, so the source is zero with the reed at rest.
     c_rest: f64,
     /// Reed swing at the pickup per unit of model displacement (mm).
@@ -313,16 +321,28 @@ impl Pickup {
     /// Pickup for one note: its section's law, the side of the band it sits on, and the swing
     /// (mm) that a unit of model displacement stands for.
     pub fn new_for_note(sample_rate: f64, midi: u8, amplitude_mm: f64) -> Self {
+        Self::with_height_trim(sample_rate, midi, amplitude_mm, 0.0)
+    }
+
+    pub(crate) fn with_height_trim(sample_rate: f64, midi: u8, amplitude_mm: f64, height_mm: f64) -> Self {
         let dt = 1.0 / sample_rate;
         let law = pickup_law_for(midi);
+        let band_sign = pickup_band_sign(midi);
+        // Raising the comb increases separation in the bass and decreases it in the treble.
+        let rest_offset_mm = PICKUP_REST_OFFSET_MM + band_sign * height_mm;
         Self {
             w: 0.0,
             s_prev: 0.0,
             m_prev: 1.0,
             beta: dt / (2.0 * TAU),
             law,
-            band_sign: pickup_band_sign(midi),
-            c_rest: law.eval(-PICKUP_REST_OFFSET_MM),
+            band_sign,
+            rest_offset_mm,
+            target_offset_mm: rest_offset_mm,
+            offset_step_mm: 0.0,
+            ramp_length: (0.010 * sample_rate).round().max(1.0) as u32,
+            ramp_remaining: 0,
+            c_rest: law.eval(-rest_offset_mm),
             amplitude_mm,
         }
     }
@@ -330,6 +350,13 @@ impl Pickup {
     /// Change the swing scale (mm per unit of model displacement).
     pub fn set_amplitude_mm(&mut self, amplitude_mm: f64) {
         self.amplitude_mm = amplitude_mm;
+    }
+
+    pub(crate) fn set_height_trim(&mut self, height_mm: f64) {
+        self.target_offset_mm = PICKUP_REST_OFFSET_MM + self.band_sign * height_mm;
+        self.ramp_remaining = self.ramp_length;
+        self.offset_step_mm =
+            (self.target_offset_mm - self.rest_offset_mm) / f64::from(self.ramp_length);
     }
 
     /// Process a buffer of reed displacement samples in-place.
@@ -345,10 +372,19 @@ impl Pickup {
         let beta = self.beta;
         let scale = self.band_sign * self.amplitude_mm;
         for sample in buffer.iter_mut() {
+            if self.ramp_remaining > 0 {
+                self.ramp_remaining -= 1;
+                self.rest_offset_mm = if self.ramp_remaining == 0 {
+                    self.target_offset_mm
+                } else {
+                    self.rest_offset_mm + self.offset_step_mm
+                };
+                // Re-reference the moving comb at each step so a resting reed stays silent.
+                self.c_rest = self.law.eval(-self.rest_offset_mm);
+            }
             // ── Source: the moving reed's capacitance to the fingers. THE nonlinearity. ──
-            // u = penetration past the near finger face; at rest the reed sits just outside the
-            // band (u = -PICKUP_REST_OFFSET_MM).
-            let u = scale * *sample - PICKUP_REST_OFFSET_MM;
+            // u = penetration past the near finger face at this voicing.
+            let u = scale * *sample - self.rest_offset_mm;
             let s = self.law.eval(u) - self.c_rest;
 
             // ── Network: one moving reed against a fixed node. ~LTI. ──

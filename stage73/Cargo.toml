@@ -1,0 +1,19 @@
+[package]
+name = "stage73"
+version = "0.1.0"
+edition = "2021"
+authors = ["Fergler"]
+license = "GPL-3.0-or-later"
+description = "Physically modeled 73-key tine electric piano"
+
+[lib]
+crate-type = ["lib"]
+
+[dependencies]
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+nih_plug_vizia = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+pleasant-ui = { path = "../pleasant-ui" }
+pleasant-dsp = { path = "../pleasant-dsp" }
+
+[dev-dependencies]
+hound = "3.5"

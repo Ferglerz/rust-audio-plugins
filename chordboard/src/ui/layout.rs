@@ -388,29 +388,11 @@ pub(super) const PIANO_KEYS: Rect = (KEYBOARD_X, KEYBOARD_MODULE_Y - 78.0, W - K
 pub(super) const PIANO_SPLITS: Rect = (PIANO_KEYS.0, PIANO_KEYS.1 - 28.0, PIANO_KEYS.2, 24.0);
 pub(super) const PIANO_LEADING: Rect = (PIANO_KEYS.0, PIANO_SPLITS.1 - 34.0, PIANO_KEYS.2, 28.0);
 
-pub(super) fn piano_black(note: u8) -> bool {
-    matches!(note % 12, 1 | 3 | 6 | 8 | 10)
-}
+pub(super) use pleasant_ui::piano::is_black as piano_black;
+pub(super) const PIANO: pleasant_ui::piano::Piano = pleasant_ui::piano::Piano::new(PIANO_KEYS, 0, 127);
 
 pub(super) fn piano_key_rect(note: u8) -> Rect {
-    // MIDI 0..127 has 75 natural keys. Accidentals share the boundary between them.
-    let before = (0..note).filter(|&n| !piano_black(n)).count() as f32;
-    let width = PIANO_KEYS.2 / 75.0;
-    if piano_black(note) {
-        (
-            PIANO_KEYS.0 + (before - 0.31) * width,
-            PIANO_KEYS.1,
-            width * 0.62,
-            PIANO_KEYS.3 * 0.62,
-        )
-    } else {
-        (
-            PIANO_KEYS.0 + before * width,
-            PIANO_KEYS.1,
-            width,
-            PIANO_KEYS.3,
-        )
-    }
+    PIANO.key_rect(note)
 }
 
 pub(super) fn piano_note_x(note: u8) -> f32 {
@@ -419,13 +401,7 @@ pub(super) fn piano_note_x(note: u8) -> f32 {
 }
 
 pub(super) fn piano_note_at(x: f32, y: f32) -> Option<u8> {
-    if !super::hit(PIANO_KEYS, x, y) {
-        return None;
-    }
-    (0..128u8)
-        .filter(|&n| piano_black(n))
-        .chain((0..128u8).filter(|&n| !piano_black(n)))
-        .find(|&n| super::hit(piano_key_rect(n), x, y))
+    PIANO.note_at(x, y)
 }
 
 pub(super) fn piano_nearest_note(x: f32) -> u8 {

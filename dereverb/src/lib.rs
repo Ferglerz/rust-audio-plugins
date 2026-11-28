@@ -102,7 +102,7 @@ impl Dereverb {
         let active = self.active_engine.index(self.active_quality);
         let latency = self.latency as usize;
         let channels = samples.len();
-        let guard_amount = self.params.transient_guard.value() * 0.01;
+        let guard_amount = self.params.transient_guard.smoothed.next() * 0.01;
         // Keep the old path audible while the new path fills, then crossfade
         // the latency-aligned outputs over one 10 ms meter window.
         let blend = self.transition.as_ref().map(|target| {
@@ -274,10 +274,12 @@ impl Plugin for Dereverb {
             }
         }
         self.publish_engine_state();
-        self.params
-            .strength
-            .smoothed
-            .reset(self.params.strength.value());
+        for param in self.params.weights().into_iter().chain([
+            &self.params.strength,
+            &self.params.transient_guard,
+        ]) {
+            param.smoothed.reset(param.value());
+        }
         self.shared.clear();
         self.meter_energy = [0.0; 2];
         self.meter_count = 0;
@@ -289,18 +291,26 @@ impl Plugin for Dereverb {
         _: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
         self.apply_selection();
-        let weighting = self.params.weighting();
-        if let Some(engine) = &mut self.engines[self.active_engine.index(self.active_quality)] {
-            engine.set_weighting(weighting);
-        }
-        let target_engine = self
-            .transition
-            .as_ref()
-            .and_then(|target| self.engines[target.engine.index(target.quality)].as_mut());
-        if let Some(engine) = target_engine {
-            engine.set_weighting(weighting);
-        }
-        for mut frame in buffer.iter_samples() {
+        // Both paths of a mode transition follow one host-rate ramp.
+        let ramp_samples = self
+            .params
+            .weights()
+            .iter()
+            .map(|p| p.smoothed.steps_left())
+            .max()
+            .unwrap_or(0) as usize;
+        for (index, mut frame) in buffer.iter_samples().enumerate() {
+            if index == 0 || index < ramp_samples {
+                let weighting = self.params.next_weighting();
+                let active = self.active_engine.index(self.active_quality);
+                if let Some(engine) = &mut self.engines[active] {
+                    engine.set_weighting(weighting);
+                }
+                let target = self.transition.as_ref().map(|t| t.engine.index(t.quality));
+                if let Some(engine) = target.and_then(|i| self.engines[i].as_mut()) {
+                    engine.set_weighting(weighting);
+                }
+            }
             let strength = self.params.strength.smoothed.next() * 0.01;
             self.process_frame(frame.iter_mut(), strength);
         }

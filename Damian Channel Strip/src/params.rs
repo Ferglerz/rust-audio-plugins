@@ -95,6 +95,7 @@ impl Default for StripParams {
             // dB is implied on an audio plugin; keep it parseable but omit it from readouts.
             let display_unit = if unit.trim() == "dB" { "" } else { unit };
             FloatParam::new(name, v, FloatRange::Linear { min, max })
+                .with_smoother(SmoothingStyle::Linear(20.0))
                 .with_unit(display_unit)
                 .with_value_to_string(Arc::new(move |v| format!("{:.1}", v)))
                 .with_string_to_value(Arc::new(move |text| {
@@ -289,17 +290,13 @@ impl Default for StripParams {
                 })),
             pse_listen: BoolParam::new("Listen sidechain", false),
             pse_voice_det: param("PSE voice detection", 0.0, 0.0, 100.0, " %")
-                .with_step_size(5.0)
-                .with_smoother(SmoothingStyle::Linear(20.0)),
+                .with_step_size(5.0),
             wall_on: BoolParam::new("WALL enabled", true),
             wall_even: param("WALL even", 0.0, 0.0, 100.0, " %")
-                .with_step_size(1.0)
-                .with_smoother(SmoothingStyle::Linear(20.0)),
+                .with_step_size(1.0),
             wall_odd: param("WALL odd", 0.0, 0.0, 100.0, " %")
-                .with_step_size(1.0)
-                .with_smoother(SmoothingStyle::Linear(20.0)),
+                .with_step_size(1.0),
             wall_threshold: param("WALL threshold", 0.0, 0.0, 48.0, " dB")
-                .with_smoother(SmoothingStyle::Linear(20.0))
                 .with_value_to_string(Arc::new(|depth| format!("{:.1}", -depth)))
                 .with_string_to_value(Arc::new(|text| {
                     text.trim()
@@ -315,7 +312,6 @@ impl Default for StripParams {
             wet: param("Wet level", 100.0, 0.0, 100.0, " %"),
             output_gain: param("Output gain", 0.0, -12.0, 12.0, " dB")
                 .with_step_size(0.1)
-                .with_smoother(SmoothingStyle::Linear(20.0))
                 .with_value_to_string(Arc::new(|v| {
                     if v.abs() < 0.05 {
                         "0.0 dB".to_string()
@@ -440,6 +436,19 @@ mod tests {
             params.pse_depth.string_to_normalized_value("12 dB"),
             Some(params.pse_depth.preview_normalized(12.0))
         );
+    }
+
+    #[test]
+    fn dry_and_wet_levels_ramp_in_complementary_steps() {
+        let params = StripParams::default();
+        for (param, start, target) in [(&params.dry, 0.0, 100.0), (&params.wet, 100.0, 0.0)] {
+            param.smoothed.reset(start);
+            param.smoothed.set_target(1_000.0, target);
+        }
+        for sample in 1..=20 {
+            assert_eq!(params.dry.smoothed.next(), 5.0 * sample as f32);
+            assert_eq!(params.wet.smoothed.next(), 100.0 - 5.0 * sample as f32);
+        }
     }
 
     #[test]

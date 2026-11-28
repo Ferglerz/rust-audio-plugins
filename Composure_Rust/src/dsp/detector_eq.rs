@@ -5,6 +5,7 @@ use pleasant_eq::{BandProcessor, BandSettings};
 pub struct DetectorEq {
     bands: [BandProcessor; EQ_BANDS],
     sample_rate: f64,
+    any_enabled: bool,
 }
 
 impl DetectorEq {
@@ -20,10 +21,12 @@ impl DetectorEq {
                 )
             }),
             sample_rate,
+            any_enabled: false,
         }
     }
 
     pub fn update(&mut self, settings: &[BandSettings; EQ_BANDS]) {
+        self.any_enabled = settings.iter().any(|band| band.enabled);
         for (processor, settings) in self.bands.iter_mut().zip(settings) {
             if processor.settings() != settings {
                 let mut next = BandProcessor::new(settings.clone(), self.sample_rate);
@@ -38,6 +41,9 @@ impl DetectorEq {
     }
 
     pub fn process(&mut self, mut input: [f64; 2]) -> [f64; 2] {
+        if !self.any_enabled {
+            return input;
+        }
         for band in &mut self.bands {
             input = band.process(input, self.sample_rate);
         }

@@ -216,6 +216,7 @@ impl Default for FlatteryParams {
                     max: 12.0,
                 },
             )
+            .with_smoother(SmoothingStyle::Linear(20.0))
             .with_unit(" dB")
             .with_value_to_string(formatters::v2s_f32_rounded(2)),
 

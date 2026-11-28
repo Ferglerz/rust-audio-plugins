@@ -1,0 +1,56 @@
+CP-80 TR board oscillator, inverting stage and both optocoupler LED drivers
+.param speed=1 vr7=17.8k modtrim=2k biastrim=0.45
+.global v16 ref
+V16 v16 0 16
+V8 ref 0 8
+* RC4558 behavioral macromodel, estimated gain, dominant pole and output swing.
+.subckt amp plus minus out
+Eol open 0 plus minus 100k
+Rpole open dom 1k
+Cdom dom 0 5.3u
+Bout out 0 V=8+6.8*tanh(v(dom)/6.8)
+.ends amp
+Xosc plus minus osc amp
+R160 osc minus 39k
+C126 osc minus 100n
+Rvr7 minus ref {vr7}
+C127 plus ref 2.2u
+R161 r1 ref 5.6k
+Rvr6a plus r1 {1+100k*(1-speed)}
+Rvr6b plus r2 {1+100k*(1-speed)}
+R158 r2 clamp 5.6k
+C124 osc clamp 2.2u
+D101 clamp common zener
+D102 ref common zener
+.model zener D(bv=5 ibv=1m)
+* Small power-on disturbance. The oscillator runs independently of key events.
+Ikick ref plus pulse(0 1u .001 .0001 .0001 .003 100)
+R157 osc inv 39k
+R156 inverted inv 39k
+R159 pin3 ref 39k
+Xinv pin3 inv inverted amp
+.subckt driver signal collector
+C123 signal ac 10u
+Rvr8 ac base {modtrim}
+R155 base 0 100k
+R162 v16 tap 10k
+Rvr9a tap base {100k*(1-biastrim)}
+Rvr9b base ref {100k*biastrim}
+Qdriver collector base emitter transistor
+R151 emitter 0 2.2k
+.ends driver
+.model transistor NPN(is=1e-14 bf=200)
+.model led D(is=1e-18 n=1.7)
+Vmeasure1 v16 led1 0
+Dled1 led1 col1 led
+Vmeasure2 v16 led2 0
+Dled2 led2 col2 led
+Xtr102 osc col1 driver
+Xtr101 inverted col2 driver
+.control
+set wr_singlescale
+tran 1m 20
+wrdata oscillator.txt v(osc) i(Vmeasure1) i(Vmeasure2)
+quit
+.endc
+.end

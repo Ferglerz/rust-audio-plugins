@@ -16,14 +16,10 @@ impl TapeStopView {
     }
 
     pub(super) fn knob_ptr(&self, id: KnobId) -> ParamPtr {
-        if let Some(p) = self.division_param(id) {
+        if let Some(p) = self.division_param(id).or_else(|| self.midi_param(id)) {
             return p.as_ptr();
         }
-        match id {
-            KnobId::OverrideCc => self.params.override_cc.as_ptr(),
-            KnobId::OverrideNote => self.params.override_note.as_ptr(),
-            _ => self.param(id).as_ptr(),
-        }
+        self.param(id).as_ptr()
     }
 
     pub(super) fn end_drag(&mut self, cx: &mut EventContext) {

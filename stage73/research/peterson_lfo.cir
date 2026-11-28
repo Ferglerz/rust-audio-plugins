@@ -1,0 +1,37 @@
+Figure 11-8 astable timing core, nominal 5 uF timing capacitors
+.param SPEED=0.01
+* AC-bypassed supply, symmetrical driver load and selected-NPN approximation.
+* Component spread and lamp temperature are outside the timing check.
+Vcc vcc 0 25
+Rc1 vcc c1 2.2k
+Rc2 vcc c2 2.2k
+Rbias vcc bias {470+SPEED}
+Rb1 bias b1 22k
+Rb2 bias b2 22k
+C1 c1 b2 5u
+C2 c2 b1 5u
+Q1 c1 b1 0 N
+Q2 c2 b2 0 N
+Rdrive1 c1 load1 10k
+Rdrive2 c2 load2 10k
+Ddrive1 load1 0 D
+Ddrive2 load2 0 D
+.options method=gear reltol=0.002
+.model D D(RS=2 CJO=15p TT=3n)
+.model N NPN(IS=1e-14 BF=150 VAF=80 RB=30 RC=2 RE=0.5 CJE=20p CJC=7p TF=1n TR=100n)
+.ic v(c1)=0.15 v(c2)=19 v(b1)=.68 v(b2)=0
+.tran .00025 7 uic
+.control
+run
+meas tran fast_period trig v(c1) val=8 rise=1 td=2 targ v(c1) val=8 rise=2 td=2
+let fast_hz=1/fast_period
+print fast_hz
+alterparam SPEED=50000
+reset
+run
+meas tran slow_period trig v(c1) val=8 rise=1 td=2 targ v(c1) val=8 rise=2 td=2
+let slow_hz=1/slow_period
+print slow_hz
+quit
+.endc
+.end

@@ -1,0 +1,49 @@
+Early Hohner Pianet N, sheet 30 002 167 D, dry path, full swell
+* Small-signal rails/bias supplies are AC ground. Inject 1 uA at the electrode.
+Idrive electrode 0 DC 0 AC 1u
+Rfeed bias 0 20meg
+Cfeed bias 0 100n
+Cbank electrode 0 180p
+Rcore electrode bias 2meg
+Rcu electrode mag 1600
+Lmag mag bias 220
+* Ideal transformer with separate primary and secondary grounds.
+Esecondary source 0 electrode bias 0.1
+Vmeasure source secondary 0
+Fprimary electrode bias Vmeasure 0.1
+Cinput secondary b1 25u
+Rbase1a b1 0 100k
+Rbase1b b1 0 3.9k
+Rpi1 b1 e1 5k
+G1 c1 e1 b1 e1 14m
+Re1 e1 0 1k
+Ce1 e1 0 100u
+Rc1 c1 0 24k
+Clink c1 ldr 330n
+Rorp60 ldr low 3meg
+Rtrim ldr low 101k
+Rswell low 0 250k
+RloadLow low 0 10meg
+Cshape low tone 10n
+Rshape tone 0 100k
+Rin2 low leg 51k
+Cin2 leg b2 25u
+Rbase2a b2 0 100k
+Rbase2b b2 0 10k
+Rpi2 b2 e2 1350
+G2 c2 e2 b2 e2 40m
+Re2 e2 0 1k
+Ce2 e2 0 100u
+Rc2 c2 0 6.8k
+Cout c2 high 25u
+RloadHigh high 0 10meg
+Rtop high mid 200k
+Rbottom mid 0 200k
+RloadMid mid 0 10meg
+.control
+set wr_singlescale
+ac dec 30 20 20000
+wrdata response.txt v(low) v(mid) v(high)
+quit
+.endc
+.end

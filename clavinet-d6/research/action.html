@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clavinet D6 · String action</title>
+<style>
+:root{color-scheme:light;--ink:#252821;--paper:#f4f1e9;--muted:#595c51;--accent:#8f3823;--line:#cbc8bb}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 "Helvetica Neue",Arial,sans-serif}
+main{max-width:960px;margin:auto;padding:clamp(20px,5vw,68px) clamp(16px,4vw,44px)}
+header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;border-bottom:2px solid var(--ink);padding-bottom:12px}
+h1{font:500 clamp(2rem,5vw,3.6rem)/1.1 Georgia,serif;letter-spacing:-.04em;margin:0}.sub,output{font-variant-numeric:tabular-nums}
+fieldset{border:0;margin:0;padding:0} legend,label,.sub{color:var(--muted);font-size:.9rem}button,select{font:inherit;color:inherit;border:1px solid var(--line);border-radius:4px;background:#fffdf8;padding:.48em .9em;cursor:pointer}
+button[aria-pressed=true],button#play{background:var(--ink);color:white;border-color:var(--ink)}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
+.row{display:flex;align-items:end;flex-wrap:wrap;gap:10px 22px;margin-top:20px}.row label{display:grid;gap:3px}.row select{color:var(--ink)}.keys{display:flex;gap:5px;margin-top:3px}
+figure{margin:24px 0 0;border:1px solid var(--line);border-radius:6px;padding:12px;background:#fdfbf5}canvas{display:block;width:100%;height:auto}figcaption{font-size:.85rem;color:var(--muted);margin:.5rem}
+.transport{display:flex;align-items:center;gap:14px;margin:15px 0}.transport input{flex:1;min-width:40px;accent-color:var(--accent)}output{min-width:6ch;text-align:right}
+#state{color:var(--accent);font-weight:600} small{color:var(--muted)}
+.comparisons{border-top:1px solid var(--line);margin-top:28px;padding-top:18px}
+.comparisons h2{font:500 1.55rem Georgia,serif;margin:0}.comparisons .row{margin-top:10px;align-items:center}
+.comparisons audio{width:min(100%,340px)}.comparisons p{font-size:.9rem;color:var(--muted);margin:7px 0}
+</style>
+<main><header><h1>Clavinet D6</h1><span class="sub">Three-key string action</span></header>
+<div class="row"><fieldset><legend>String</legend><div class="keys"><button data-key="46" aria-pressed="true">B♭2</button><button data-key="64" aria-pressed="false">E4</button><button data-key="78" aria-pressed="false">F♯5</button></div></fieldset>
+<label>Listen to<select id="mode"><optgroup label="Output jack"><option value="CA">CA · Centre</option><option value="CB">CB · Bridge</option><option value="DA">DA · Both in phase</option><option value="DB">DB · Both opposed</option></optgroup><optgroup label="Raw pickup"><option value="centre">Centre pickup</option><option value="bridge">Bridge pickup</option></optgroup></select></label>
+<label>Playback speed<select id="speed"><option value="1">Normal</option><option value=".1">1/10 speed</option><option value=".025">1/40 speed</option></select></label></div>
+<figure><canvas id="action" width="900" height="270" role="img" aria-label="Side view of the tangent, anvil, two pickups, exposed string and yarn-damped afterlength"></canvas>
+<figcaption><span id="state"></span> · <span id="lengths"></span>. String displacement is magnified vertically. The drawing follows the simulated grid.</figcaption></figure>
+<div class="transport"><button id="play">Play</button><input type="range" id="time" min="0" step=".00025" value="0" aria-label="Time in the restrike sequence"><output id="clock"></output></div>
+<small>Key down at 50 ms, up at 120 ms, down again at 138 ms and up at 328 ms. The jack has a 1 MΩ load and all four tone tabs on. Raw pickups share one playback gain.</small>
+<section class="comparisons" aria-labelledby="comparisons-title"><h2 id="comparisons-title">Compare with the hardware</h2>
+<div class="row"><label>Recording<select id="comparison"><option value="attacks">Attack · B♭2, E4, F♯5</option><option value="switches">Pickup positions · CA, CB, DA, DB</option><option value="releases">Key release · three short B♭2 strikes</option></select></label>
+<audio id="reference" controls preload="metadata" aria-label="Hardware and model comparison"></audio></div>
+<p>Each pair plays the recorded instrument first, then the modeled output jack. The pickup comparison uses the DA-subtracts wiring.</p></section>
+</main><script>
+"use strict";
+const captures=/*CAPTURES*/{};
+const comparisons=/*COMPARISONS*/{};
+const byId=id=>document.getElementById(id);
+const graph=byId("action"), g=graph.getContext("2d"), mode=byId("mode"), speed=byId("speed"), time=byId("time"), play=byId("play");
+const rate=44100;
+let midi=46, grid, audio, ctx, source, startClock=0, offset=0, playing=false, raf;
+function samples(s){const b=Uint8Array.from(atob(s),c=>c.charCodeAt(0));return new Int16Array(b.buffer)}
+function choose(n){
+  stop();midi=n;const c=captures[n];grid=samples(c.motion);
+  audio=Object.fromEntries(["CA","CB","DA","DB","centre","bridge"].map(m=>[m,samples(c[m])]));
+  time.max=audio.CA.length/rate;
+  document.querySelectorAll("[data-key]").forEach(b=>b.setAttribute("aria-pressed",+b.dataset.key===n));
+  byId("lengths").textContent=Math.round(c.geometry[0]*1000)+" mm speaking length";
+  draw();
+}
+function draw(){
+  const t=Number(time.value), c=captures[midi], [speaking,tail,centre,bridge,drop]=c.geometry;
+  const row=Math.max(0,Math.min(grid.length/c.width-1,Math.round((t*rate-1)/11)))*c.width;
+  const y0=140, sx=x=>54+796*x/(speaking+tail), sy=q=>y0+q/4e6*20500;
+  const tip=sy(grid[row]), anvil=y0+drop*20500, foot=sx(speaking);
+  g.clearRect(0,0,900,270);g.lineCap="round";
+  function line(x,y,u,v,col,w=1){g.strokeStyle=col;g.lineWidth=w;g.beginPath();g.moveTo(x,y);g.lineTo(u,v);g.stroke()}
+  function label(s,x,y,align="center"){g.font="15px sans-serif";g.fillStyle="#454a41";g.textAlign=align;g.fillText(s,x,y)}
+  const yAt=f=>sy(grid[row+1+Math.round((c.width-2)*f)]);
+  for(let i=2;i<30;i++){const x=foot+(850-foot)*i/30;const y=yAt((x-54)/796);line(x-2,y-5,x+2,y+5,"#c6bda3",3)}
+  label("Yarn",(foot+850)/2,112);
+  line(54,y0,850,y0,"#c5c6b9");
+  const active=mode.value;
+  function pickup(x,upper,enabled,name){
+    const edge=upper?y0-31:y0+35;
+    g.fillStyle=enabled?"#24574d":"#b2b8aa";g.fillRect(x-9,upper?edge-14:edge,18,14);
+    label(name,x,upper?edge-23:edge+35);
+  }
+  pickup(sx(bridge),true,active!=="CA" && active!=="centre","Bridge");pickup(sx(centre),false,active!=="CB" && active!=="bridge","Centre");
+  const heel=tip-32,face=Math.min(tip,yAt(speaking/(speaking+tail)));
+  g.fillStyle="#785444";g.fillRect(foot-17,heel,34,face-heel);
+  line(foot,heel,foot,43,"#876d58",7);label("Rubber tangent",foot,28);
+  g.fillStyle="#51554d";g.fillRect(foot-16,anvil,32,12);label("Anvil",foot,anvil+35);
+  g.beginPath();g.moveTo(54,sy(grid[row+1]));for(let i=1;i<c.width-1;i++)g.lineTo(54+796*i/(c.width-2),sy(grid[row+1+i]));
+  g.strokeStyle="#a2452d";g.lineWidth=2.8;g.stroke();
+  for(const x of [54,850]){g.fillStyle="#252821";g.beginPath();g.arc(x,y0,4,0,2*Math.PI);g.fill()}
+  label("Tailpiece",54,246);label("Tuning pin",850,246);
+  byId("state").textContent=t<.05?"At rest":t<.12?"First strike":t<.138?"Key up":t<.328?"Restrike":"Key up";
+  byId("clock").textContent=Math.round(t*1000)+" ms";
+}
+function stop(){
+  cancelAnimationFrame(raf);
+  if(source){source.onended=null;source.stop();source.disconnect();source=null}
+  playing=false;play.textContent="Play";
+}
+function sync(){
+  const t=offset+(ctx.currentTime-startClock)*Number(speed.value);
+  time.value=Math.min(t,Number(time.max));draw();
+  if(t>=Number(time.max)){stop();return}
+  raf=requestAnimationFrame(sync);
+}
+function start(){
+  reference.pause();
+  stop();ctx??=new AudioContext();ctx.resume();
+  const samples=audio[mode.value], buffer=ctx.createBuffer(1,samples.length,rate);
+  const channel=buffer.getChannelData(0);for(let i=0;i<samples.length;i++)channel[i]=samples[i]/32767;
+  source=ctx.createBufferSource();source.buffer=buffer;source.playbackRate.value=Number(speed.value);source.connect(ctx.destination);
+  offset=Number(time.value);if(offset>=buffer.duration-.0003)offset=0;
+  startClock=ctx.currentTime;source.start(0,offset);playing=true;play.textContent="Pause";sync();
+}
+play.onclick=()=>playing?stop():start();time.oninput=()=>playing?start():draw();
+mode.onchange=speed.onchange=()=>playing?start():draw();
+document.querySelectorAll("[data-key]").forEach(b=>b.onclick=()=>choose(+b.dataset.key));
+const reference=byId("reference"),comparison=byId("comparison");
+reference.onplay=stop;
+comparison.onchange=()=>{reference.src="data:audio/wav;base64,"+comparisons[comparison.value]};
+comparison.onchange();
+choose(midi);
+</script></html>

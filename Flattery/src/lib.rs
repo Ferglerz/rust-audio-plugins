@@ -104,7 +104,7 @@ impl Plugin for Flattery {
         self.engine
             .set_display_enabled(self.params.editor_state.is_open());
         // NIH-plug splits processing at sample-accurate automation changes.
-        let settings = self.params.process_settings();
+        let mut settings = self.params.process_settings();
         for mut frame in buffer.iter_samples() {
             let mut x = [0.0; 2];
             for (i, s) in frame.iter_mut().enumerate() {
@@ -114,6 +114,7 @@ impl Plugin for Flattery {
                 x[1] = x[0];
             }
 
+            settings.output_gain_db = self.params.output_gain_db.smoothed.next() as f64;
             let out = self.engine.tick(x[0], x[1], &settings);
 
             for (i, s) in frame.iter_mut().enumerate() {

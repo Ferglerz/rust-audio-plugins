@@ -1,0 +1,13 @@
+[package]
+name = "hohner-duo"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+clavinet-d6 = { path = "../clavinet-d6" }
+pianet-n = { path = "../pianet-n" }
+pleasant-dsp = { path = "../pleasant-dsp" }
+
+[dev-dependencies]
+hound = "3.5"

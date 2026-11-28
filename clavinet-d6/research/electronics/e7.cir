@@ -1,0 +1,72 @@
+Hohner Clavinet E7 small-signal preamp, drawing 801 111
+* Left bank is fixed at the red primary lead, right bank changes polarity.
+* Source signs refer to positive voltages at the jack in each solo position.
+.param DUAL=0 B_THROW=0
+Vbridge red bridge DC 0 AC 0.37
+Rbridge bridge lefttop 200
+Vcentre righttop centre DC 0 AC 1
+Rcentre centre rightbottom 200
+* Both poles of the C/D rocker, upper-to-lower order in drawing 801 111.
+Rcd1 lefttop 0 {DUAL ? 1m : 1e15}
+Rcd2 from_ab lefttop {DUAL ? 1e15 : 1m}
+Rcd3 from_ab righttop {DUAL ? 1m : 1e15}
+* A/B rocker, one pole at red and the other at ground.
+Rab1 red righttop {B_THROW ? 1e15 : 1m}
+Rab2 red rightbottom {B_THROW ? 1m : 1e15}
+Rab3 0 rightbottom {B_THROW ? 1e15 : 1m}
+Rab4 0 from_ab {B_THROW ? 1m : 1e15}
+.param SOFT=1 MEDIUM=1 TREBLE=1 BRILLIANT=1 VOL=1
+Rprimary red primary 70
+Lprimary primary 0 6
+Lsecondary secondary 0 1350
+Ktr Lprimary Lsecondary 0.99999999999
+Rsecondary secondary blue 10k
+
+Vbattery battery 0 9
+* Closed power switch. The 8.2 V knee and transistor parameters are nominal.
+Rfeed battery ref 1.8k
+Dref 0 ref ZPD82
+.model ZPD82 D(IS=10p BV=8.2 IBV=5m RS=5 N=1.5)
+Qpass battery ref rail BC238
+.model BC238 NPN(IS=10f BF=200 VAF=100)
+Crail rail 0 100u
+Cin blue base1 10n
+Rfb base1 collector1 1meg
+Cfb base1 collector1 8.2p
+Rcollector1 rail collector1 12k
+Q1 collector1 base1 0 BC550C
+.model BC550C NPN(IS=10f BF=420 VAF=100)
+
+Cinter collector1 tones 220n
+Rsoft tones lo 30k
+Csoft tones lo 100n
+Rmedium lo mid 10k
+Cmedium lo mid 15n
+Ltreble mid treblecoil 2
+Rtreblecoil treblecoil hi 43
+Ctreble mid hi 4.7n
+Lbrilliant hi brilliantcoil 0.6
+Rbrilliantcoil brilliantcoil 0 20
+* Pressing a tone tab opens its shunt contact.
+Rtab1 tones lo {SOFT ? 1e15 : 1m}
+Rtab2 lo mid {MEDIUM ? 1e15 : 1m}
+Rtab3 mid hi {TREBLE ? 1e15 : 1m}
+Rtab4 hi 0 {BRILLIANT ? 1e15 : 1m}
+
+Rtobase tones coupled 30k
+Ctobase coupled base2 10n
+Rupper rail base2 620k
+Rlower base2 0 100k
+Q2 collector2 base2 emitter BC550C
+Remitter emitter bypass 2.2k
+Rdegenerate bypass 0 1k
+Cbypass bypass 0 6.8u
+Rcollector2 rail collector2 10k
+Cout collector2 pot 220n
+* Audio taper estimate: 10% electrical at 50% mechanical travel.
+.param WIPER=(pow(81,VOL)-1)/80
+Rpotupper pot jack {max(1u,100k*(1-WIPER))}
+Rpotlower jack 0 {max(1u,100k*WIPER)}
+Rjack jack 0 1meg
+.temp 27
+.end

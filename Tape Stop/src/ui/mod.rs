@@ -63,6 +63,7 @@ pub enum KnobId {
     RestartThresh,
     OverrideCc,
     OverrideNote,
+    PositionCc,
     Tempo,
 }
 

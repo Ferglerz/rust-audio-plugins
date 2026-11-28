@@ -22,9 +22,10 @@ pub const GRAPH_MIN_DB: f64 = -20.0;
 pub const GRAPH_MAX_DB: f64 = 0.0;
 
 pub const COMP_LUT_MIN_DB: f64 = -120.0;
-pub const COMP_LUT_MAX_DB: f64 = 20.0;
+pub const COMP_LUT_MAX_DB: f64 = MAX_CURVE_INPUT_DB;
 pub const COMP_LUT_GRANULARITY: f64 = 0.25;
-pub const COMP_LUT_SIZE: usize = 560;
+pub const COMP_LUT_SIZE: usize =
+    ((COMP_LUT_MAX_DB - COMP_LUT_MIN_DB) / COMP_LUT_GRANULARITY) as usize + 1;
 pub const COMP_LUT_MAX_REDUCTION_DB: f64 = 80.0;
 /// LUT onset: first entry where |out − in| exceeds this (JSFX: 0.08).
 pub const COMP_LUT_THRESHOLD_ONSET_DB: f64 = 0.08;

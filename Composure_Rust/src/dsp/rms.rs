@@ -72,7 +72,7 @@ impl RmsDetector {
     }
 
     pub fn coefficients_converged(&self) -> bool {
-        (self.smoothing_coeff - self.target_coeff).abs() < 0.001
+        self.smoothing_coeff == self.target_coeff
     }
 
     pub fn detect_level(
@@ -133,7 +133,6 @@ impl RmsDetector {
         flush_denormal(&mut self.rms_max);
         flush_denormal(&mut self.peak_for_normalize_smooth);
         flush_denormal(&mut self.smoothed_squared);
-        self.reset();
     }
 }
 
@@ -159,6 +158,45 @@ mod tests {
             det.detect_level(1.0, 1.0, false);
         }
         assert!(det.smoothed_squared > 0.9);
+    }
+
+    #[test]
+    fn close_rms_window_coefficients_slew_to_the_new_target() {
+        let mut det = RmsDetector::new(192000.0);
+        det.update_rms_targets(500.0);
+        let old_coeff = det.smoothing_coeff;
+        det.update_rms_targets(1000.0);
+        assert!(!det.coefficients_converged());
+        det.smooth_coefficients();
+        assert!(old_coeff < det.smoothing_coeff && det.smoothing_coeff < det.target_coeff);
+        for _ in 0..4096 {
+            det.smooth_coefficients();
+        }
+        assert!(det.coefficients_converged());
+        assert_eq!(det.smoothing_one_minus, det.target_one_minus);
+    }
+
+    #[test]
+    fn flushing_tiny_rms_states_preserves_detector_history() {
+        let mut det = RmsDetector::new(48000.0);
+        det.update_rms_targets(100.0);
+        for _ in 0..4800 {
+            det.detect_level(0.9, 0.7, true);
+        }
+        let mut reference = det.clone();
+        det.flush_line_state();
+        assert_eq!(
+            det.detect_level(0.0, 0.0, true),
+            reference.detect_level(0.0, 0.0, true)
+        );
+
+        det.rms_max = 1e-20;
+        det.peak_for_normalize_smooth = 1e-20;
+        det.smoothed_squared = 1e-20;
+        det.flush_line_state();
+        assert_eq!(det.rms_max, 0.0);
+        assert_eq!(det.peak_for_normalize_smooth, 0.0);
+        assert_eq!(det.smoothed_squared, 0.0);
     }
 
     #[test]

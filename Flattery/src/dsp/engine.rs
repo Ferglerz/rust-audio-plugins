@@ -18,7 +18,7 @@ use std::sync::{atomic::Ordering, Arc};
 
 const FFT_SIZES: [usize; 7] = [128, 256, 512, 1024, 2048, 4096, 8192];
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EngineSettings {
     pub fft_size: usize,
     pub bypassed: bool,
@@ -73,6 +73,7 @@ pub struct Engine {
     display_enabled: bool,
     display_fresh_samples_remaining: usize,
     spectrum_reset_pending: bool,
+    last_analysis_settings: Option<EngineSettings>,
     last_output_gain_db: f64,
     output_gain_linear: f64,
     mid_side: bool,
@@ -127,6 +128,7 @@ impl Engine {
             display_enabled: true,
             display_fresh_samples_remaining: 0,
             spectrum_reset_pending: true,
+            last_analysis_settings: None,
             last_output_gain_db: 0.0,
             output_gain_linear: 1.0,
             mid_side: false,
@@ -140,6 +142,7 @@ impl Engine {
         self.ring_r.reset();
         self.analyzer.reset();
         self.leveler.reset();
+        self.last_analysis_settings = None;
         self.filter_bank.reset();
         self.filter_bank_r.reset();
         self.hop_counter = 0;
@@ -167,7 +170,7 @@ impl Engine {
         self.display_enabled = enabled;
     }
 
-    fn update_strength_curves(&mut self, default_radius: usize) {
+    fn update_strength_curves(&mut self, default_radius: usize) -> bool {
         let boost_changed = self
             .shared
             .refresh_node_snapshot(true, &mut self.boost_nodes);
@@ -202,6 +205,7 @@ impl Engine {
         }
         self.curve_grid = Some(grid);
         self.curve_default_radius = Some(default_radius);
+        boost_changed || cut_changed
     }
 
     pub fn set_fft_size(&mut self, new_size: usize) {
@@ -217,6 +221,7 @@ impl Engine {
         };
         std::mem::swap(&mut self.analyzer, &mut self.prepared_analyzers[index]);
         self.analyzer.reset();
+        self.last_analysis_settings = None;
         self.fft_size = new_size;
         self.spectrum_reset_pending = true;
         self.display_fresh_samples_remaining = new_size;
@@ -235,6 +240,7 @@ impl Engine {
             self.spectrum_reset_pending = true;
             self.display_fresh_samples_remaining = self.fft_size;
         }
+        self.last_analysis_settings = None;
         self.sample_rate = srate;
         self.filter_bank.init_frequencies(self.fft_size, srate);
         self.filter_bank_r.init_frequencies(self.fft_size, srate);
@@ -251,6 +257,7 @@ impl Engine {
             self.mid_side = settings.mid_side;
             self.analyzer.reset();
             self.leveler.reset();
+            self.last_analysis_settings = None;
             self.filter_bank.reset();
             self.filter_bank_r.reset();
         }
@@ -314,7 +321,19 @@ impl Engine {
             let att_ms = settings.attack_ms;
             let rel_ms = settings.release_ms;
 
-            self.update_strength_curves(default_radius);
+            let nodes_changed = self.update_strength_curves(default_radius);
+            // The analyzer produces one filter design per hop. Interpolate its
+            // audible response when a control moves, keeping the fixed-control
+            // attack and release behavior of the leveler.
+            let analysis_settings = EngineSettings {
+                output_gain_db: 0.0,
+                ..*settings
+            };
+            let moved = self
+                .last_analysis_settings
+                .replace(analysis_settings)
+                .is_some_and(|old| old != analysis_settings || nodes_changed);
+            let ramp_samples = if moved { self.hop_size } else { 0 };
 
             self.leveler.process(
                 &self.analyzer.mag_l,
@@ -379,17 +398,19 @@ impl Engine {
                 self.target_gains_r[..filter_count].fill(1.0);
             }
 
-            self.filter_bank.set_filter_gains(
+            self.filter_bank.set_filter_gains_ramped(
                 &self.target_gains[..filter_count],
                 self.sample_rate,
                 low_cut_hz,
                 high_cut_hz,
+                ramp_samples,
             );
-            self.filter_bank_r.set_filter_gains(
+            self.filter_bank_r.set_filter_gains_ramped(
                 &self.target_gains_r[..filter_count],
                 self.sample_rate,
                 low_cut_hz,
                 high_cut_hz,
+                ramp_samples,
             );
 
             // Only display publication is optional: the FFT above drives the audio.

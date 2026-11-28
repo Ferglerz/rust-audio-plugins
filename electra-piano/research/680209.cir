@@ -1,0 +1,52 @@
+Hohner Electra-Piano, drawing 680209, four speaker load, linear AC fixture
+* Assumed BC147, BC140, AD149 model cards. Bias trims are fitted to a
+* plausible midpoint and standing current, not to measurements from a unit.
+.param MIDTRIM=67798.29566104 BIAS1=104.43288765 BIAS2=1000
+Vrail rail 0 35
+Rfeed rail pre 6.8k
+Cpre pre 0 500u
+Cin jack b1 1u
+Rb1 pre b1 2MEG
+Rlo1 b1 0 120k
+Rc1 pre c1 30k
+Re1 e1 0 2.4k
+Q1 c1 b1 e1 bc147
+Cc12 c1 b2 1u
+Rb2 pre b2 2MEG
+Rlo2 b2 0 75k
+Rc2 pre c2 12k
+Re2 e2 0 51
+Q2 c2 b2 e2 bc147
+Cc23 c2 b3 0.47u
+Rbt rail bt 510
+Cbt bt mid 10u
+Rdrive bt drive 1k
+Rbm mid b3 {MIDTRIM}
+Rlo3 b3 0 12k
+Ccomp b3 drive 300p
+Re3 e3 0 200
+Q3 drive b3 e3 bc147
+Rbe4 drive mid 200
+Rbu rail top 51
+Q4 top drive mid bc140
+Re6 rail e6 0.5
+Q6 mid top e6 ad149
+Cfollower e3 b5 1u
+Rz rail z 2.4k
+Dz 0 z z75
+Rbias z b5 1k
+Rbiaslo1 b5 0 {BIAS1}
+Rbiaslo2 b5 0 {BIAS2}
+Rbl mid bottom 51
+Q5 bottom b5 0 bc140
+Re7 mid e7 0.5
+Q7 0 bottom e7 ad149
+Cout mid spk 2500u
+Rload spk 0 4
+Rfb spk e2 1k
+Cfb spk e2 300p
+.model bc147 npn (is=1e-14 bf=200 vaf=90)
+.model bc140 npn (is=1e-13 bf=90 vaf=75)
+.model ad149 pnp (is=1e-7 bf=60 vaf=60)
+.model z75 d (bv=7.5 ibv=0.01 rs=3)
+* pickup/transformer harness and analysis appended by reference.py

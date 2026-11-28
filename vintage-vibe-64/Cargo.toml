@@ -1,0 +1,11 @@
+[package]
+name = "vintage-vibe-64"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+pleasant-dsp = { path = "../pleasant-dsp" }
+
+[dev-dependencies]
+hound = "3.5"

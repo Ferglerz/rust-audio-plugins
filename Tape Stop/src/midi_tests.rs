@@ -68,7 +68,7 @@ fn half_speed_delays_events_across_blocks_and_bends_an_octave() {
             if at == 9 {
                 tape.push(off(i, 3, 60), &mut |_| {});
             }
-            tape.sample(i, 0.5, true, false, &mut |e| output.push((block, e)));
+            tape.sample(i, 0.5, at == 0, false, &mut |e| output.push((block, e)));
         }
     }
     assert!(
@@ -106,7 +106,7 @@ fn stopped_tape_holds_events_and_return_releases_in_order() {
         if i == 3 {
             tape.push(on(i, 1, 64), &mut |_| {});
         }
-        tape.sample(i, 0.0, true, false, &mut |e| output.push(e));
+        tape.sample(i, 0.0, false, false, &mut |e| output.push(e));
     }
     assert!(!output
         .iter()
@@ -241,7 +241,7 @@ fn retrigger_rejoins_live_tape_and_pitch_output_is_rate_limited() {
     tape.push(on(0, 0, 60), &mut |_| {});
     let mut bends = 0;
     for i in 0..48_000 {
-        tape.sample(i, 1.0 - i as f32 / 48_000.0, true, false, &mut |e| {
+        tape.sample(i, 1.0 - i as f32 / 48_000.0, i == 0, false, &mut |e| {
             if matches!(e, NoteEvent::MidiPitchBend { .. }) {
                 bends += 1;
             }

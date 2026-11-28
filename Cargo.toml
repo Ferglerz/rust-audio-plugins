@@ -25,6 +25,20 @@ members = [
     "Tape Stop/xtask",
     "openwurli-ui",
     "openwurli-ui/xtask",
+    "stage73",
+    "stage73/xtask",
+    "clavinet-d6",
+    "hohner-duo",
+    "electra-piano",
+    "storytone",
+    "neo-bechstein",
+    "vintage-vibe-64",
+    "rhodes-mk8",
+    "roadmaster",
+    "baldwin-electropiano",
+    "pianet-n",
+    "cp80",
+    "cp80/xtask",
 ]
 exclude = ["scd-rust", "openwurli-ui/vendor/openwurli-dsp"]
 resolver = "2"

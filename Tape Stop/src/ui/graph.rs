@@ -98,7 +98,8 @@ impl TapeStopView {
             self.params.tempo.value()
         };
         let drop_time = self.params.timing(bpm as f64).0;
-        let braking = transport.stage == TransportStage::Braking;
+        let position = transport.stage == TransportStage::Position;
+        let braking = transport.stage == TransportStage::Braking || position;
         let [prog_l, prog_r] = transport.brake_progress;
         let [speed_l, speed_r] = transport.speed;
 
@@ -136,7 +137,11 @@ impl TapeStopView {
         let curve_color = if is_bypassed { MUTED } else { GOLD };
         let mut fill = curve_color;
         fill.a = 0.12;
-        let div = self.params.stereo_div.value();
+        let div = if position {
+            0.0
+        } else {
+            self.params.stereo_div.value()
+        };
         {
             // Retain the same high-density sampling while transport and reels animate.
             let mut geometry = self.curve_geometry.borrow_mut();
@@ -195,7 +200,11 @@ impl TapeStopView {
             }
         }
 
-        d.finish_panel((gx, gy, gw, gh), pleasant_ui::BG, if braking { TEAL } else { LINE });
+        d.finish_panel(
+            (gx, gy, gw, gh),
+            pleasant_ui::BG,
+            if braking { TEAL } else { LINE },
+        );
         self.draw_drop_time(d, transport.stage == TransportStage::Returning);
     }
 }

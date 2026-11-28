@@ -1,0 +1,11 @@
+[package]
+name = "neo-bechstein"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+pleasant-dsp = { path = "../pleasant-dsp", features = ["struck-string"] }
+
+[dev-dependencies]
+hound = "3.5"

@@ -34,7 +34,7 @@ macro_rules! envelope_converged_scalar_fields {
 
 #[inline]
 pub fn smooth_step(current: f64, target: f64, one_minus: f64) -> f64 {
-    if (target - current).abs() < 1e-15 {
+    if one_minus == 1.0 || (target - current).abs() < 1e-15 {
         target
     } else {
         current + (target - current) * one_minus

@@ -1,0 +1,23 @@
+1976-style Stage 73 - AC reference, Hertz and ohms
+* Each pickup branch has a series induced voltage, copper R and estimated L.
+.subckt pickup hi lo params: amplitude=0
+Vemf source lo DC 0 AC {amplitude}
+Rcoil source coil 180
+Lcoil coil hi 75m
+.ends
+* The verification driver inserts all 73 branches, four in parallel then 23 triplets.
+@HARP@
+* R2 wiper is tied to the harp hot terminal; C1 bridges the same two terminals.
+R2 harp top @BASS@
+C1 harp top 47n
+R1upper top jack @UPPER@
+R1lower jack 0 @LOWER@
+Rinput jack 0 1meg
+Ccable jack 0 @CABLE_PF@p
+.control
+set wr_singlescale
+ac dec 96 40 10k
+wrdata sweep.txt vdb(jack)
+quit
+.endc
+.end

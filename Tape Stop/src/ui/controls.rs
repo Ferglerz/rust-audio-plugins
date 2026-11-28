@@ -108,8 +108,18 @@ pub(super) fn midi_value_rect() -> (f32, f32, f32, f32) {
     (label.0 + label.2, slot.1, slot.2 - label.2, slot.3)
 }
 
-pub(super) fn axis_slot(index: usize) -> (f32, f32, f32, f32) {
+pub(super) fn position_cc_slot() -> (f32, f32, f32, f32) {
     let midi = midi_slot();
+    (midi.0 + midi.2 + AXIS_GAP, SETTINGS_Y, 92.0, midi.3)
+}
+
+pub(super) fn position_cc_value_rect() -> (f32, f32, f32, f32) {
+    let r = position_cc_slot();
+    (r.0 + 59.0, r.1, r.2 - 59.0, r.3)
+}
+
+pub(super) fn axis_slot(index: usize) -> (f32, f32, f32, f32) {
+    let midi = position_cc_slot();
     let start = midi.0 + midi.2 + AXIS_GAP;
     // Give the trigger extra room for its power button and label.
     let trigger_extra = 40.0;
@@ -174,6 +184,9 @@ impl TapeStopView {
         if Self::inside(x, y, midi_value_rect()) {
             return Some(self.midi_number_id());
         }
+        if Self::inside(x, y, position_cc_value_rect()) {
+            return Some(KnobId::PositionCc);
+        }
         [KnobId::Xfade, KnobId::StereoDiv]
             .into_iter()
             .find(|id| Self::inside(x, y, axis_value_rect(Self::slider_rect(*id))))
@@ -213,7 +226,9 @@ impl TapeStopView {
             KnobId::StereoDiv => &self.params.stereo_div,
             KnobId::RestartThresh => &self.params.auto_restart_thresh,
             KnobId::Tempo => &self.params.tempo,
-            KnobId::OverrideCc | KnobId::OverrideNote => unreachable!("MIDI numbers are IntParams"),
+            KnobId::OverrideCc | KnobId::OverrideNote | KnobId::PositionCc => {
+                unreachable!("MIDI numbers are IntParams")
+            }
         }
     }
 
@@ -254,40 +269,29 @@ impl TapeStopView {
             self.emit_param_norm(cx, p.as_ptr(), p.default_normalized_value());
             return;
         }
+        if let Some(p) = self.midi_param(id) {
+            self.emit_param_norm(cx, p.as_ptr(), p.default_normalized_value());
+        } else {
+            self.emit_knob_norm(cx, id, self.param(id).default_normalized_value());
+        }
+    }
+
+    pub(super) fn midi_param(&self, id: KnobId) -> Option<&IntParam> {
         match id {
-            KnobId::OverrideCc => self.emit_param_norm(
-                cx,
-                self.params.override_cc.as_ptr(),
-                self.params.override_cc.default_normalized_value(),
-            ),
-            KnobId::OverrideNote => self.emit_param_norm(
-                cx,
-                self.params.override_note.as_ptr(),
-                self.params.override_note.default_normalized_value(),
-            ),
-            _ => self.emit_knob_norm(cx, id, self.param(id).default_normalized_value()),
+            KnobId::OverrideCc => Some(&self.params.override_cc),
+            KnobId::OverrideNote => Some(&self.params.override_note),
+            KnobId::PositionCc => Some(&self.params.position_cc),
+            _ => None,
         }
     }
 
     pub(super) fn emit_knob_norm(&self, cx: &mut EventContext, id: KnobId, norm: f32) {
-        if let Some(p) = self.division_param(id) {
-            self.emit_param_norm(cx, p.as_ptr(), norm);
-        } else if id == KnobId::OverrideCc {
-            self.emit_param_norm(cx, self.params.override_cc.as_ptr(), norm);
-        } else if id == KnobId::OverrideNote {
-            self.emit_param_norm(cx, self.params.override_note.as_ptr(), norm);
-        } else {
-            self.emit_param_norm(cx, self.param(id).as_ptr(), norm);
-        }
+        self.emit_param_norm(cx, self.knob_ptr(id), norm);
     }
 
     pub(super) fn get_knob_norm(&self, id: KnobId) -> f32 {
-        if let Some(p) = self.division_param(id) {
+        if let Some(p) = self.division_param(id).or_else(|| self.midi_param(id)) {
             p.unmodulated_normalized_value()
-        } else if id == KnobId::OverrideCc {
-            self.params.override_cc.unmodulated_normalized_value()
-        } else if id == KnobId::OverrideNote {
-            self.params.override_note.unmodulated_normalized_value()
         } else {
             self.param(id).unmodulated_normalized_value()
         }
@@ -341,6 +345,7 @@ impl TapeStopView {
                 format!("{:.1}dB", self.params.auto_restart_thresh.value()),
                 COLORS[2],
             ),
+            KnobId::PositionCc => ("Pos CC", self.params.position_cc.to_string(), COLORS[4]),
             KnobId::OverrideCc => (
                 "CC:",
                 format!("{}", self.params.override_cc.value()),
@@ -364,26 +369,25 @@ impl TapeStopView {
                 }
                 return;
             }
+            if let Some(p) = self.midi_param(target) {
+                if let Some(norm) = p.string_to_normalized_value(&text) {
+                    self.emit_param_norm(cx, p.as_ptr(), norm);
+                }
+                return;
+            }
             let parsed = match target {
                 KnobId::DropTime => parse_number_with_units(&text, &[("ms", 1.0), ("s", 1000.0)]),
                 KnobId::Return => parse_number_with_units(&text, &[("ms", 1.0), ("s", 1000.0)]),
                 KnobId::Xfade => parse_number_with_units(&text, &[("ms", 1.0), ("s", 1000.0)]),
                 KnobId::StereoDiv => parse_number_with_units(&text, &[("%", 1.0)]),
                 KnobId::RestartThresh => parse_number_with_units(&text, &[("db", 1.0)]),
-                KnobId::OverrideCc => parse_number_with_units(&text, &[]),
-                KnobId::OverrideNote => parse_number_with_units(&text, &[]),
+                KnobId::OverrideCc | KnobId::OverrideNote | KnobId::PositionCc => unreachable!(),
                 KnobId::Curve => parse_number_with_units(&text, &[]),
                 KnobId::Tempo => parse_number_with_units(&text, &[("bpm", 1.0)]),
             };
 
             if let Some(v) = parsed.filter(|v| v.is_finite()) {
-                if target == KnobId::OverrideCc {
-                    let norm = self.params.override_cc.preview_normalized(v as i32);
-                    self.emit_param_norm(cx, self.params.override_cc.as_ptr(), norm);
-                } else if target == KnobId::OverrideNote {
-                    let norm = self.params.override_note.preview_normalized(v as i32);
-                    self.emit_param_norm(cx, self.params.override_note.as_ptr(), norm);
-                } else if target == KnobId::DropTime {
+                if target == KnobId::DropTime {
                     let norm = self.params.drop_time.preview_normalized(v as f32 / 1000.0);
                     self.emit_param_norm(cx, self.params.drop_time.as_ptr(), norm);
                 } else if target == KnobId::Return {
@@ -498,17 +502,34 @@ impl TapeStopView {
     }
 
     pub(super) fn draw_midi_slot(&self, d: &mut Draw) {
-        let slot = midi_slot();
-        let label_r = midi_label_rect();
-        let val_r = midi_value_rect();
-        let midi_id = self.midi_number_id();
+        self.draw_midi_number(
+            d,
+            self.midi_number_id(),
+            midi_label_rect(),
+            midi_value_rect(),
+        );
+        self.draw_midi_number(
+            d,
+            KnobId::PositionCc,
+            position_cc_slot(),
+            position_cc_value_rect(),
+        );
+    }
+
+    fn draw_midi_number(
+        &self,
+        d: &mut Draw,
+        midi_id: KnobId,
+        label_r: (f32, f32, f32, f32),
+        val_r: (f32, f32, f32, f32),
+    ) {
         let (midi_label, midi_val, midi_color) = self.knob_info(midi_id);
         let label_hover = self
             .idle_hover()
             .is_some_and(|(hx, hy)| Self::inside(hx, hy, label_r));
         d.text(
-            slot.0 + 10.0,
-            slot.1 + slot.3 * 0.5 + 4.0,
+            label_r.0 + 10.0,
+            label_r.1 + label_r.3 * 0.5 + 4.0,
             midi_label,
             10.0,
             if label_hover { GOLD } else { MUTED },

@@ -52,7 +52,10 @@ impl Reels {
         }
         if self.frame.stage == TransportStage::Crossfading {
             self.last_crossfade = Some(now);
-        } else if self.frame.stage == TransportStage::Braking {
+        } else if matches!(
+            self.frame.stage,
+            TransportStage::Braking | TransportStage::Position
+        ) {
             self.last_crossfade = None;
         }
         let average_speed = (self.frame.speed[0] + self.frame.speed[1]) * 0.5;
@@ -67,13 +70,14 @@ impl Reels {
             TransportStage::Idle if !enabled => "BYPASSED",
             TransportStage::Idle => "IDLE",
             TransportStage::Live => "LIVE",
+            TransportStage::Position => "POSITION CC",
             TransportStage::Braking if frame.speed.iter().all(|&value| value <= 0.005) => "STOPPED",
             TransportStage::Braking => "BRAKING",
             TransportStage::Returning => "RETURNING",
             TransportStage::Crossfading => "CROSSFADE",
         };
         let accent = match frame.stage {
-            TransportStage::Braking => GOLD,
+            TransportStage::Braking | TransportStage::Position => GOLD,
             TransportStage::Returning => COLORS[0],
             TransportStage::Crossfading => TEAL,
             _ => MUTED,

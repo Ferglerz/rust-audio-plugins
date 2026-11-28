@@ -42,6 +42,7 @@ struct VoiceSlot {
     voice: Option<Voice>,
     state: VoiceState,
     midi_note: u8,
+    audition: bool,
     age: u64,
     /// Voice being faded out from stealing (5 ms linear crossfade).
     steal_voice: Option<Voice>,
@@ -55,6 +56,7 @@ impl Default for VoiceSlot {
             voice: None,
             state: VoiceState::Free,
             midi_note: 0,
+            audition: false,
             age: 0,
             steal_voice: None,
             steal_fade: 0,
@@ -420,7 +422,7 @@ pub struct WurliEngine {
     sustain_held: bool,
     mlp_enabled: bool,
     voice_character: VoiceCharacter,
-    tremolo_response: f64,
+    pickup_distance_mm: f64,
     /// Per-voice calibration handed to each note-on. Only the hammer-contact and damper
     /// multipliers are host-settable; the rest stays at the shipping defaults.
     voicing: tables::CalibrationConfig,
@@ -497,7 +499,7 @@ impl WurliEngine {
             sustain_held: false,
             mlp_enabled: false,
             voice_character: VoiceCharacter::default(),
-            tremolo_response: 1.0,
+            pickup_distance_mm: 0.0,
             voicing: tables::CalibrationConfig::default(),
             volume: LinearSmoother::new(0.8, ramp),
             tremolo_depth: LinearSmoother::new(0.5, ramp),
@@ -543,13 +545,18 @@ impl WurliEngine {
         self.circuits.mode
     }
 
-    pub fn reset(&mut self) {
+    pub fn clear_keys(&mut self) {
         for slot in &mut self.voices {
             slot.state = VoiceState::Free;
             slot.voice = None;
             slot.steal_voice = None;
             slot.steal_fade = 0;
         }
+        self.sustain_held = false;
+    }
+
+    pub fn reset(&mut self) {
+        self.clear_keys();
         #[cfg(not(feature = "runtime-models"))]
         {
             self.preamp.reset();
@@ -617,8 +624,9 @@ impl WurliEngine {
             // a host render reuses that previously reserved block size.
             self.circuits.ensure_buffer_capacity(self.sum_buf.len());
         }
+        let response = self.tremolo.response_multiplier();
         self.tremolo = Tremolo::new(self.tremolo_depth.target, self.os_sample_rate);
-        self.tremolo.set_response_multiplier(self.tremolo_response);
+        self.tremolo.set_response_multiplier(response);
         #[cfg(not(feature = "runtime-models"))]
         {
             self.oversampler = Oversampler::new();
@@ -653,6 +661,31 @@ impl WurliEngine {
 
     /// Play a full-range MIDI pitch without folding it onto an end reed.
     pub fn note_on_extended(&mut self, note: u8, velocity: f32) {
+        self.strike(note, velocity, false);
+    }
+
+    /// Move the editor's finger independently of host voices at the same pitch.
+    pub fn audition(&mut self, note: Option<u8>, velocity: f32) {
+        if let Some(idx) = self
+            .voices
+            .iter()
+            .position(|s| s.audition && s.state == VoiceState::Held)
+        {
+            self.release_slot(idx);
+        }
+        if let Some(note) = note {
+            self.strike(note, velocity, true);
+        }
+    }
+
+    pub fn playing_notes(&self) -> u128 {
+        self.voices
+            .iter()
+            .filter(|s| matches!(s.state, VoiceState::Held | VoiceState::Sustained))
+            .fold(0, |mask, s| mask | (1 << s.midi_note))
+    }
+
+    fn strike(&mut self, note: u8, velocity: f32, audition: bool) {
         if note > 127 {
             return;
         }
@@ -686,10 +719,15 @@ impl WurliEngine {
             self.sample_rate,
             self.mlp_enabled,
             &self.voicing,
-            self.voice_character,
+            VoiceCharacter {
+                pickup_height_mm: self.voice_character.pickup_height_mm
+                    + crate::pickup::pickup_band_sign(note) * self.pickup_distance_mm,
+                ..self.voice_character
+            },
         ));
         slot.state = VoiceState::Held;
         slot.midi_note = note;
+        slot.audition = audition;
         slot.age = self.age_counter;
     }
 
@@ -703,17 +741,22 @@ impl WurliEngine {
             .voices
             .iter()
             .enumerate()
-            .filter(|(_, s)| s.state == VoiceState::Held && s.midi_note == note)
+            .filter(|(_, s)| !s.audition && s.state == VoiceState::Held && s.midi_note == note)
             .min_by_key(|(_, s)| s.age)
             .map(|(i, _)| i);
         if let Some(idx) = oldest_idx {
-            if self.sustain_held {
-                self.voices[idx].state = VoiceState::Sustained;
-            } else {
-                self.voices[idx].state = VoiceState::Releasing;
-                if let Some(ref mut voice) = self.voices[idx].voice {
-                    voice.note_off();
-                }
+            self.release_slot(idx);
+        }
+    }
+
+    fn release_slot(&mut self, idx: usize) {
+        let slot = &mut self.voices[idx];
+        if self.sustain_held {
+            slot.state = VoiceState::Sustained;
+        } else {
+            slot.state = VoiceState::Releasing;
+            if let Some(voice) = &mut slot.voice {
+                voice.note_off();
             }
         }
     }
@@ -907,11 +950,46 @@ impl WurliEngine {
         self.voice_character.pickup_drive = bounded_multiplier(multiplier);
     }
 
+    /// Move the comb on sounding reeds and start subsequent strikes at the new height.
+    pub fn set_pickup_height_mm(&mut self, height_mm: f64) {
+        let limit = crate::pickup::MAX_HEIGHT_TRIM_MM;
+        let height_mm = if height_mm.is_finite() {
+            height_mm.clamp(-limit, limit)
+        } else {
+            0.0
+        };
+        if self.voice_character.pickup_height_mm != height_mm {
+            self.voice_character.pickup_height_mm = height_mm;
+            self.sync_pickup_geometry();
+        }
+    }
+
+    /// Offset the reed's rest distance from the near face of its comb fingers.
+    /// Positive travel opens the gap in both registers, whose combs face opposite ways.
+    pub fn set_pickup_distance_mm(&mut self, distance_mm: f64) {
+        let distance_mm = if distance_mm.is_finite() {
+            distance_mm.clamp(-0.08, 0.30)
+        } else {
+            0.0
+        };
+        if distance_mm != self.pickup_distance_mm {
+            self.pickup_distance_mm = distance_mm;
+            self.sync_pickup_geometry();
+        }
+    }
+
+    fn sync_pickup_geometry(&mut self) {
+        for slot in &mut self.voices {
+            for voice in slot.voice.iter_mut().chain(&mut slot.steal_voice) {
+                voice.set_pickup_geometry(self.voice_character.pickup_height_mm, self.pickup_distance_mm);
+            }
+        }
+    }
+
     /// Scales the CdS cell's attack and release response time. The Twin-T
     /// oscillator frequency and waveform remain circuit-derived.
     pub fn set_tremolo_response(&mut self, multiplier: f64) {
-        self.tremolo_response = bounded_multiplier(multiplier);
-        self.tremolo.set_response_multiplier(self.tremolo_response);
+        self.tremolo.set_response_multiplier(multiplier);
     }
 
     pub fn set_noise_enabled(&mut self, on: bool) {

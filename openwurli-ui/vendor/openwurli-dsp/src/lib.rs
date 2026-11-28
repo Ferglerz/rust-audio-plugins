@@ -16,12 +16,14 @@ pub mod voice;
 // Preamp circuit simulation (melange-generated DK solver)
 pub mod dk_preamp;
 pub mod dk_preamp_legacy;
+#[cfg(any(test, feature = "melange-preamp", feature = "runtime-models"))]
 pub mod gen_preamp;
 pub mod oversampler;
 pub mod preamp;
 pub mod tremolo;
 
 // Output stage
+#[cfg(any(test, not(feature = "legacy-power-amp"), feature = "runtime-models"))]
 pub mod gen_power_amp;
 pub mod gen_tremolo;
 pub mod power_amp;

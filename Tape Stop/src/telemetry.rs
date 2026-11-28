@@ -11,6 +11,7 @@ pub(crate) enum TransportStage {
     Braking,
     Returning,
     Crossfading,
+    Position,
 }
 
 impl TransportStage {
@@ -20,6 +21,7 @@ impl TransportStage {
             2 => Self::Braking,
             3 => Self::Returning,
             4 => Self::Crossfading,
+            5 => Self::Position,
             _ => Self::Idle,
         }
     }

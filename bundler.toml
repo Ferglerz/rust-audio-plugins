@@ -8,7 +8,7 @@ name = "Flattery"
 name = "Tape Stop"
 
 [openwurli-ui]
-name = "OpenWurli UI"
+name = "Electric Pianos"
 
 [chordboard]
 name = "Chordboard"
@@ -21,3 +21,9 @@ name = "Dereverb"
 
 [automixer]
 name = "Automixer"
+
+[stage73]
+name = "Stage 73"
+
+[cp80]
+name = "Electric Grand 80"

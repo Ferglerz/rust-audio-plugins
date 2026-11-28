@@ -18,6 +18,10 @@ pub trait GuiContext: Send + Sync + 'static {
     /// about screen.
     fn plugin_api(&self) -> PluginApi;
 
+    /// Wake a host that suspends silent processing, for example after the
+    /// editor queues an audition note. Only CLAP has a dedicated callback.
+    fn request_process(&self) {}
+
     /// Ask the host to resize the editor window to the size specified by
     /// [`Editor::size()`][crate::prelude::Editor::size()]. This will return false if the host
     /// somehow didn't like this and rejected the resize, in which case the window should revert to

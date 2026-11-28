@@ -3,7 +3,6 @@
 //! Cross-platform CLAP/VST3 plugin built with nih-plug.
 
 use nih_plug::prelude::*;
-#[cfg(test)]
 use nih_plug::wrapper::state::ParamValue;
 use std::sync::Arc;
 
@@ -23,6 +22,9 @@ pub struct TapeStop {
     midi: midi::MidiTape,
     pub telemetry: Arc<TapeStopTelemetry>,
     last_midi_assign: MidiAssign,
+    position_cc: Option<u8>,
+    position_msb: [Option<u8>; 16],
+    position_lsb: [Option<u8>; 16],
 }
 
 impl Default for TapeStop {
@@ -33,18 +35,54 @@ impl Default for TapeStop {
             midi: midi::MidiTape::new(),
             telemetry: TapeStopTelemetry::new(),
             last_midi_assign: MidiAssign::Cc,
+            position_cc: None,
+            position_msb: [None; 16],
+            position_lsb: [None; 16],
         }
     }
 }
 
 impl TapeStop {
+    fn tape_settings(
+        &self,
+        host_bpm: Option<f64>,
+        read: impl Fn(&FloatParam) -> f32,
+    ) -> (f64, f32, f32, dsp::PreparedTapeSettings) {
+        let bpm = pleasant_dsp::tempo::resolve_bpm(
+            self.params.tempo_sync.value(),
+            host_bpm,
+            read(&self.params.tempo) as f64,
+        );
+        let (display_drop, return_sec) = self.params.timing_with(bpm, &read);
+        let drop_time = if self.params.time_sync.value() {
+            display_drop * dsp::DROP_RATE_SCALE
+        } else {
+            display_drop
+        };
+        let prepared = self
+            .engine
+            .prepare_block(
+                drop_time,
+                read(&self.params.stereo_div),
+                read(&self.params.auto_restart_thresh),
+            )
+            .with_processing_settings(
+                read(&self.params.xfade_ms),
+                return_sec,
+                read(&self.params.drop_curve),
+                self.params.auto_restart.value(),
+                self.params.power.value(),
+            );
+        (bpm, display_drop, return_sec, prepared)
+    }
+
     fn handle_midi_event(
         &mut self,
         event: NoteEvent<()>,
         assign: MidiAssign,
         note_assignment: u8,
         cc_assignment: u8,
-    ) {
+    ) -> bool {
         match event {
             NoteEvent::NoteOn { note, velocity, .. }
                 if assign == MidiAssign::Cc || note == note_assignment =>
@@ -55,12 +93,36 @@ impl TapeStop {
                 // Release the accepted note even if its assignment changed while held.
                 self.engine.note_off(note);
             }
+            NoteEvent::MidiCC {
+                channel, cc, value, ..
+            } if self
+                .position_cc
+                .is_some_and(|n| n == cc || (n < 32 && n + 32 == cc)) =>
+            {
+                let ch = usize::from(channel);
+                if ch < 16 {
+                    let bytes = (value.clamp(0.0, 1.0) * 127.0).round() as u8;
+                    if Some(cc) == self.position_cc {
+                        self.position_msb[ch] = Some(bytes);
+                    } else {
+                        self.position_lsb[ch] = Some(bytes);
+                    }
+                    if let Some(msb) = self.position_msb[ch] {
+                        let position = self.position_lsb[ch].map_or(msb as f32 / 127.0, |lsb| {
+                            (u16::from(msb) * 128 + u16::from(lsb)) as f32 / 16383.0
+                        });
+                        self.engine.set_curve_position(position);
+                    }
+                }
+                return true;
+            }
             NoteEvent::MidiCC { cc, value, .. } if assign == MidiAssign::Cc => {
                 let cc_val = (value * 127.0).round() as u8;
                 self.engine.handle_midi_cc(cc, cc_val, cc_assignment);
             }
             _ => {}
         }
+        false
     }
 }
 
@@ -96,6 +158,27 @@ impl Plugin for TapeStop {
         self.params.clone()
     }
 
+    fn filter_state(state: &mut PluginState) {
+        use pleasant_dsp::tempo::QUARTER_NOTE;
+
+        // An older preset may be loaded into an instance with these controls set.
+        for (id, default) in [
+            ("position_cc", ParamValue::I32(-1)),
+            ("affect_midi", ParamValue::Bool(true)),
+            ("time_sync", ParamValue::Bool(false)),
+            ("tempo_sync", ParamValue::Bool(true)),
+            ("tempo", ParamValue::F32(120.0)),
+            ("drop_division", ParamValue::I32(QUARTER_NOTE)),
+            ("return_division", ParamValue::I32(QUARTER_NOTE)),
+            ("xy_x_axis", ParamValue::I32(0)),
+            ("xy_mode", ParamValue::I32(0)),
+        ] {
+            if !state.params.contains_key(id) {
+                state.params.insert(id.to_owned(), default);
+            }
+        }
+    }
+
     fn initialize(
         &mut self,
         _audio_io_layout: &AudioIOLayout,
@@ -109,6 +192,8 @@ impl Plugin for TapeStop {
 
     fn reset(&mut self) {
         self.engine.reset();
+        self.position_msb.fill(None);
+        self.position_lsb.fill(None);
         self.midi.reset();
         self.telemetry.publish_transport(TransportFrame::default());
     }
@@ -128,17 +213,10 @@ impl Plugin for TapeStop {
             .set_manual_trigger(self.telemetry.get_manual_trigger());
 
         // 2. Fetch parameter values
-        let bpm = pleasant_dsp::tempo::resolve_bpm(
-            self.params.tempo_sync.value(),
-            context.transport().tempo,
-            self.params.tempo.value() as f64,
-        );
-        let (display_drop, return_sec) = self.params.timing(bpm);
-        let drop_time = if self.params.time_sync.value() {
-            display_drop * dsp::DROP_RATE_SCALE
-        } else {
-            display_drop
-        };
+        let host_bpm = context.transport().tempo;
+        let (bpm, display_drop, return_sec, settled_settings) =
+            self.tape_settings(host_bpm, FloatParam::value);
+        let smoothing_samples = self.params.smoothing_samples();
         self.telemetry
             .tempo
             .store(bpm as f32, std::sync::atomic::Ordering::Relaxed);
@@ -148,24 +226,13 @@ impl Plugin for TapeStop {
         self.telemetry
             .effective_return
             .store(return_sec, std::sync::atomic::Ordering::Relaxed);
-        let xfade_ms = self.params.xfade_ms.value();
-        let drop_curve = self.params.drop_curve.value();
-        let stereo_div = self.params.stereo_div.value();
         let midi_assign = self.params.midi_assign.value();
         let override_cc = self.params.override_cc.value() as u8;
         let override_note = self.params.override_note.value() as u8;
-        let auto_restart = self.params.auto_restart.value();
-        let auto_restart_thresh = self.params.auto_restart_thresh.value();
         let power = self.params.power.value();
-        self.midi.begin_block(
-            self.params.affect_midi.value() && power && !self.params.bypass.value(),
-            &mut |event| context.send_event(event),
-        );
-        let prepared_tape_settings = self
-            .engine
-            .prepare_block(drop_time, stereo_div, auto_restart_thresh)
-            .with_processing_settings(xfade_ms, return_sec, drop_curve, auto_restart, power);
-
+        let affect_midi = self.params.affect_midi.value() && power && !self.params.bypass.value();
+        self.midi
+            .begin_block(affect_midi, &mut |event| context.send_event(event));
         let mut max_in_peak: f32 = 0.0;
         let mut max_out_peak: f32 = 0.0;
 
@@ -179,6 +246,14 @@ impl Plugin for TapeStop {
             self.last_midi_assign = midi_assign;
         }
 
+        let position_cc = u8::try_from(self.params.position_cc.value()).ok();
+        if position_cc != self.position_cc {
+            self.engine.set_curve_position(0.0);
+            self.position_msb.fill(None);
+            self.position_lsb.fill(None);
+            self.position_cc = position_cc;
+        }
+
         let mut next_event = context.next_event();
 
         for sample_idx in 0..num_samples {
@@ -188,8 +263,12 @@ impl Plugin for TapeStop {
                     break;
                 }
 
-                self.handle_midi_event(event, midi_assign, override_note, override_cc);
-                self.midi.push(event, &mut |event| context.send_event(event));
+                let position_event =
+                    self.handle_midi_event(event, midi_assign, override_note, override_cc);
+                if !position_event || !affect_midi {
+                    self.midi
+                        .push(event, &mut |event| context.send_event(event));
+                }
 
                 next_event = context.next_event();
             }
@@ -205,6 +284,11 @@ impl Plugin for TapeStop {
             max_in_peak = max_in_peak.max(in_l.abs()).max(in_r.abs());
 
             // Process through tape stop DSP engine
+            let prepared_tape_settings = if sample_idx < smoothing_samples {
+                self.tape_settings(host_bpm, |p| p.smoothed.next()).3
+            } else {
+                settled_settings
+            };
             let (out_l, out_r) = self
                 .engine
                 .process_sample_prepared([in_l, in_r], prepared_tape_settings);
@@ -213,7 +297,7 @@ impl Plugin for TapeStop {
             self.midi.sample(
                 sample_idx as u32,
                 (self.engine.speed_left() + self.engine.speed_right()) * 0.5,
-                self.engine.is_braking(),
+                self.engine.take_live_jump(),
                 !self.engine.is_braking() && !self.engine.is_returning(),
                 &mut |event| context.send_event(event),
             );
@@ -230,7 +314,9 @@ impl Plugin for TapeStop {
         // 4. Update UI telemetry
         if num_samples > 0 {
             self.telemetry.publish_transport(TransportFrame {
-                stage: if self.engine.is_braking() {
+                stage: if self.engine.position_active() {
+                    TransportStage::Position
+                } else if self.engine.is_braking() {
                     TransportStage::Braking
                 } else if self.engine.is_returning() {
                     TransportStage::Returning
@@ -349,6 +435,68 @@ mod tests {
                 assert!(engine.speed_right() < 1e-6);
             }
         }
+    }
+
+    #[test]
+    fn expression_takes_over_a_stopped_head_and_holds_the_selected_pitch() {
+        let mut plugin = TapeStop {
+            position_cc: Some(11),
+            ..Default::default()
+        };
+        plugin.engine.set_sample_rate(1000.0);
+        let settings = plugin
+            .engine
+            .prepare_block(0.05, 0.0, -18.0)
+            .with_processing_settings(10.0, 0.1, 2.0, false, true);
+        let cc = |plugin: &mut TapeStop, channel, cc, byte: u8| {
+            plugin.handle_midi_event(
+                NoteEvent::MidiCC {
+                    timing: 0,
+                    channel,
+                    cc,
+                    value: byte as f32 / 127.0,
+                },
+                MidiAssign::Note,
+                60,
+                3,
+            )
+        };
+        let tick = |plugin: &mut TapeStop| {
+            plugin.engine.process_sample_prepared([0.3; 2], settings);
+            plugin.engine.speed_left()
+        };
+        plugin.engine.note_on(60, 1.0);
+        for _ in 0..1000 {
+            tick(&mut plugin);
+        }
+        assert_eq!(plugin.engine.speed_left(), 0.0);
+        assert!(!cc(&mut plugin, 0, 10, 80));
+        assert!(cc(&mut plugin, 1, 43, 100)); // fine byte from another channel
+        assert_eq!(tick(&mut plugin), 0.0);
+        assert!(cc(&mut plugin, 0, 11, 32));
+        let speed = 1.0 - dsp::s_curve(32.0 / 127.0, 2.0);
+        let first = tick(&mut plugin);
+        assert!(first > 0.0 && first < speed);
+        plugin.engine.note_off(60);
+        for _ in 0..10 {
+            tick(&mut plugin);
+        }
+        assert_eq!(tick(&mut plugin), speed);
+        assert!(cc(&mut plugin, 0, 43, 64));
+        for _ in 0..5 {
+            tick(&mut plugin);
+        }
+        assert_eq!(
+            tick(&mut plugin),
+            1.0 - dsp::s_curve((32.0 * 128.0 + 64.0) / 16383.0, 2.0)
+        );
+        assert!(plugin.engine.position_active());
+        plugin.engine.set_curve_position(0.0);
+        for _ in 0..20 {
+            tick(&mut plugin);
+        }
+        assert!(!plugin.engine.is_braking());
+        assert_eq!(plugin.engine.speed_left(), 1.0);
     }
 
     #[test]

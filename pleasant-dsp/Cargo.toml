@@ -8,5 +8,7 @@ description = "Host-independent numerical and DSP primitives for Pleasant Audio 
 
 [features]
 default = []
+struck-string = ["dep:wide"]
 
 [dependencies]
+wide = { version = "0.7", optional = true }

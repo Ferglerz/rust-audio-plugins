@@ -13,6 +13,49 @@ pub fn linear_f32(start: f32, end: f32, fraction: f32) -> f32 {
     start + (end - start) * fraction
 }
 
+/// A finite linear ramp shared by the continuous controls of a DSP stage.
+/// A new target starts from the current interpolated values, even mid-ramp.
+pub struct ControlRamp {
+    length: u32,
+    remaining: u32,
+    running: bool,
+}
+
+impl ControlRamp {
+    pub fn new(sample_rate: f64) -> Self {
+        Self {
+            length: (0.005 * sample_rate).round().max(1.) as u32,
+            remaining: 0,
+            running: false,
+        }
+    }
+
+    /// Returns true when the target should be applied immediately (before
+    /// rendering starts, or after a transport reset).
+    pub fn retarget(&mut self) -> bool {
+        if self.running {
+            self.remaining = self.length;
+        }
+        !self.running
+    }
+
+    pub fn reset(&mut self) {
+        self.running = false;
+        self.remaining = 0;
+    }
+
+    /// Apply value += (target - value) * fraction, once per sample.
+    pub fn step(&mut self) -> Option<f64> {
+        self.running = true;
+        if self.remaining == 0 {
+            return None;
+        }
+        let fraction = 1. / f64::from(self.remaining);
+        self.remaining -= 1;
+        Some(fraction)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,0 +1,19 @@
+Jordan AU-0598 / AU-0599 phase shift oscillator, figure 11-17
+Vcc supply 0 13.5
+Rdepth supply collector 100k
+Q1 collector base 0 N
+.model N NPN(IS=1e-14 BF=200)
+R1 collector midpoint 820k
+R2 midpoint base 820k
+Cshunt midpoint 0 .22u
+C1 collector tapped .15u
+C2 tapped base .15u
+Rrate tapped 0 @RATE@
+.ic v(collector)=8 v(base)=.55
+.control
+set wr_singlescale
+tran .00025 6 uic
+wrdata oscillator.txt v(collector)
+quit
+.endc
+.end

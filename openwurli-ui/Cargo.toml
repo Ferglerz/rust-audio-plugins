@@ -1,10 +1,10 @@
 [package]
 name = "openwurli-ui"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 authors = ["Fergler"]
 license = "GPL-3.0-or-later"
-description = "Pleasant UI wrapper for the OpenWurli electric piano"
+description = "Physically modeled electromechanical keyboards"
 
 [lib]
 crate-type = ["cdylib", "lib"]
@@ -13,7 +13,23 @@ crate-type = ["cdylib", "lib"]
 nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" }
 nih_plug_vizia = { git = "https://github.com/robbert-vdh/nih-plug.git" }
 pleasant-ui = { path = "../pleasant-ui" }
-openwurli-dsp = { path = "vendor/openwurli-dsp", features = ["runtime-models"] }
+openwurli-dsp = { path = "vendor/openwurli-dsp" }
+
+stage73 = { path = "../stage73" }
+cp80 = { path = "../cp80" }
+clavinet-d6 = { path = "../clavinet-d6" }
+pianet-n = { path = "../pianet-n" }
+electra-piano = { path = "../electra-piano" }
+neo-bechstein = { path = "../neo-bechstein" }
+roadmaster = { path = "../roadmaster" }
+baldwin-electropiano = { path = "../baldwin-electropiano" }
+rhodes-mk8 = { path = "../rhodes-mk8" }
+vintage-vibe-64 = { path = "../vintage-vibe-64" }
+storytone = { path = "../storytone" }
+hohner-duo = { path = "../hohner-duo" }
+
+[features]
+heavy-reference = ["openwurli-dsp/runtime-models"]
 
 [dev-dependencies]
 # Retained original SIMD experiment and scalar-reference regression tests.

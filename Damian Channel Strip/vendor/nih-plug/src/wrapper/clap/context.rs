@@ -132,6 +132,10 @@ impl<P: ClapPlugin> GuiContext for WrapperGuiContext<P> {
         PluginApi::Clap
     }
 
+    fn request_process(&self) {
+        self.wrapper.request_process();
+    }
+
     fn request_resize(&self) -> bool {
         self.wrapper.request_resize()
     }

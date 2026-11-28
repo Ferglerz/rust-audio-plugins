@@ -17,6 +17,74 @@ pub struct BiquadCoefficients {
     pub a: [f64; 2],
 }
 
+/// Linearly interpolates normalized biquad coefficients between filter designs.
+#[derive(Clone, Copy, Debug)]
+pub struct CoefficientRamp {
+    current: BiquadCoefficients,
+    target: BiquadCoefficients,
+    step: BiquadCoefficients,
+    remaining: usize,
+}
+
+impl CoefficientRamp {
+    pub const fn new(initial: BiquadCoefficients) -> Self {
+        Self {
+            current: initial,
+            target: initial,
+            step: BiquadCoefficients {
+                a: [0.0; 2],
+                b: [0.0; 3],
+            },
+            remaining: 0,
+        }
+    }
+
+    pub fn current(&self) -> BiquadCoefficients {
+        self.current
+    }
+
+    pub fn is_smoothing(&self) -> bool {
+        self.remaining > 0
+    }
+
+    pub fn set_target(&mut self, target: BiquadCoefficients, samples: usize) {
+        if samples == 0 {
+            *self = Self::new(target);
+        } else if self.target != target {
+            self.target = target;
+            if self.current == target {
+                self.remaining = 0;
+                return;
+            }
+            self.remaining = samples;
+            let fraction = 1.0 / samples as f64;
+            self.step = BiquadCoefficients {
+                b: std::array::from_fn(|i| (target.b[i] - self.current.b[i]) * fraction),
+                a: std::array::from_fn(|i| (target.a[i] - self.current.a[i]) * fraction),
+            };
+        }
+    }
+
+    /// Advance once per audio frame. One set of coefficients serves all channels.
+    #[allow(clippy::should_implement_trait)]
+    pub fn next(&mut self) -> BiquadCoefficients {
+        if self.remaining > 0 {
+            self.remaining -= 1;
+            if self.remaining == 0 {
+                self.current = self.target;
+            } else {
+                for (value, step) in self.current.b.iter_mut().zip(self.step.b) {
+                    *value += step;
+                }
+                for (value, step) in self.current.a.iter_mut().zip(self.step.a) {
+                    *value += step;
+                }
+            }
+        }
+        self.current
+    }
+}
+
 impl BiquadCoefficients {
     pub const IDENTITY: Self = Self {
         b: [1.0, 0.0, 0.0],
@@ -202,6 +270,27 @@ impl DirectForm1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn coefficient_ramp_retargets_from_the_last_sample_and_settles_exactly() {
+        let initial = BiquadCoefficients::IDENTITY;
+        let target = BiquadCoefficients {
+            a: [0.25, 0.5],
+            b: [2.0, 3.0, 4.0],
+        };
+        let mut ramp = CoefficientRamp::new(initial);
+        ramp.set_target(target, 4);
+        assert_eq!(ramp.next().b[0], 1.25);
+        ramp.set_target(target, 4);
+        assert_eq!(ramp.next().b[0], 1.5);
+        ramp.set_target(initial, 2);
+        assert_eq!(ramp.next().b[0], 1.25);
+        assert_eq!(ramp.next(), initial);
+        assert!(!ramp.is_smoothing());
+        ramp.set_target(target, 0);
+        assert_eq!(ramp.current(), target);
+        assert!(!ramp.is_smoothing());
+    }
 
     #[test]
     fn bell_center_matches_requested_gain() {

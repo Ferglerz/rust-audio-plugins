@@ -113,21 +113,6 @@ impl ReleaseCoeffs {
         (blend_fast, blend_slow)
     }
 
-    pub fn release_gr_dependent(&self, p: &EnvelopeParams, gr_amount: f64) -> f64 {
-        let (blend_fast, blend_slow) = Self::gr_dependent_blend_weights(
-            gr_amount,
-            p.gr_blend_threshold_reduction_db,
-            p.gr_blend_threshold_reduction_knee_db,
-            false,
-        );
-        normalized_blend(
-            blend_fast,
-            blend_slow,
-            self.rel_fast_cached,
-            self.rel_slow_cached,
-        )
-    }
-
     pub fn release_gr_dependent_dual(
         &self,
         p: &EnvelopeParams,
@@ -270,12 +255,19 @@ impl ReleaseCoeffs {
         p: &EnvelopeParams,
         current_gr_abs: f64,
         release_curve: f64,
-        gr_threshold: f64,
         is_negative_gr: bool,
+        inverse: bool,
     ) -> f64 {
+        let base_gr_release =
+            self.release_gr_dependent_dual(p, current_gr_abs, is_negative_gr, inverse);
         if release_curve.abs() < EPS {
-            return self.release_gr_dependent(p, current_gr_abs);
+            return base_gr_release;
         }
+        let gr_threshold = if is_negative_gr {
+            p.gr_blend_threshold_reduction_db
+        } else {
+            p.gr_blend_threshold_addition_db
+        };
         let distance_from_threshold = (current_gr_abs - gr_threshold).abs();
         let normalized_pos = if gr_threshold > EPS {
             (distance_from_threshold / gr_threshold).min(2.0)
@@ -287,16 +279,21 @@ impl ReleaseCoeffs {
         } else {
             clamp_coeff(1.0 - (normalized_pos * 0.5) * (normalized_pos * 0.5))
         };
+        // At full curve amount, the curve endpoint supplies the entire coefficient.
+        let curve_shape = if inverse {
+            1.0 - curve_shape
+        } else {
+            curve_shape
+        };
         let blended_coeff =
             self.blend_curve_with_base(curve_shape, self.release_coeff, release_curve > 0.0);
         let curve_amount = release_curve.abs();
-        let base_gr_release =
-            self.release_gr_dependent_dual(p, current_gr_abs, is_negative_gr, false);
         apply_curve_amount_blending(base_gr_release, blended_coeff, curve_amount)
     }
 
     /// Each source blends its own release law. Normalize overlapping influences
     /// above 100% so coefficients remain between the fixed and source endpoints.
+    /// Returns the fixed coefficient, each weighted delta, and the combined coefficient.
     pub fn release_response(
         &self,
         p: &EnvelopeParams,
@@ -341,17 +338,12 @@ impl ReleaseCoeffs {
         let gr = if gr_weight == 0.0 {
             fixed
         } else if curved {
-            let threshold = if is_cut {
-                p.gr_blend_threshold_reduction_db
-            } else {
-                p.gr_blend_threshold_addition_db
-            };
             self.calculate_gr_dependent_curve_release_coeff(
                 p,
                 gr_abs,
                 p.release_curve,
-                threshold,
                 is_cut,
+                gr_inverse,
             )
         } else {
             self.release_gr_dependent_dual(p, gr_abs, is_cut, gr_inverse)
@@ -360,8 +352,8 @@ impl ReleaseCoeffs {
         let gr_effect = (gr - fixed) * gr_weight;
         (
             fixed,
-            fixed + input_effect,
-            fixed + gr_effect,
+            input_effect,
+            gr_effect,
             fixed + input_effect + gr_effect,
         )
     }
@@ -491,6 +483,25 @@ mod tests {
         let inverted_rate = c.apply_input_rate(&p, base, 0.1);
         assert!(normal_rate < base);
         assert!(inverted_rate > base);
+    }
+
+    #[test]
+    fn inverse_gr_dependence_changes_curved_release_for_cuts_and_boosts() {
+        let c = coeffs();
+        for curve in [-2.0, -0.5, 0.5, 2.0] {
+            for is_cut in [false, true] {
+                let mut p = EnvelopeParams {
+                    release_curve: curve,
+                    gr_dependence: 100.0,
+                    ..EnvelopeParams::default()
+                };
+                let current = if is_cut { -6.0 } else { 6.0 };
+                let normal = c.release_response(&p, current, 0.0, -60.0, 6.0, is_cut).3;
+                p.gr_dependence = -100.0;
+                let inverse = c.release_response(&p, current, 0.0, -60.0, 6.0, is_cut).3;
+                assert_ne!(normal, inverse, "curve={curve}, is_cut={is_cut}");
+            }
+        }
     }
 
     #[test]

@@ -16,7 +16,7 @@ abi = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(abi)
 
 
-def run_midi(harness, events=(), frames=256):
+def run_midi(harness, events=(), frames=256, audio_trace=None):
     """Process silent audio so a triggered tape can be checked without a DAW."""
     C = abi.C
     captured = []
@@ -28,11 +28,17 @@ def run_midi(harness, events=(), frames=256):
         return True
     outputs = abi.OutEvents(None, abi.F(abi.B, abi.P, abi.P)(push))
     samples = [(C.c_float * frames)() for _ in range(2)]
+    if audio_trace is not None:
+        for channel in samples:
+            for i in range(frames):
+                channel[i] = (harness.time + i) / 8192
     pointers = (C.POINTER(C.c_float) * 2)(*samples)
     audio = abi.Audio(pointers, None, 2, 0, 0)
     process = abi.Process(harness.time, frames, None, C.pointer(audio), C.pointer(audio),
                           1, 1, C.pointer(inputs), C.pointer(outputs))
     assert harness.plugin.process(harness.ptr, C.byref(process)) != 0
+    if audio_trace is not None:
+        audio_trace.extend(samples[0])
     harness.time += frames
     result = list(map(abi.decode, captured))
     assert all(0 <= e[1] < frames for e in result), 'out-of-block MIDI output'
@@ -68,6 +74,37 @@ def verify_midi_tape(harness, defaults):
     assert any(e[0] == 'on' and e[1] == 100 and e[3] == 67 for e in events), events
 
 
+def verify_expression(harness, defaults):
+    state = json.loads(json.dumps(defaults))
+    for key, value in {'position_cc': 11, 'drop_curve': 2.0, 'xfade_ms': 5.0,
+                       'auto_restart': False}.items():
+        abi.state_value(state, key, value)
+    # A linear audio input lets the sample-to-sample output difference measure
+    # playback speed directly. Move the pedal before any note or stop trigger.
+    source = [(97, 11, 32), (720, 11, 127), (1321, 11, 0)]
+    traces = []
+    for block in (64, 233):
+        harness.load_state(state)
+        audio = []
+        for start in range(0, 2200, block):
+            end = min(start + block, 2200)
+            events = [abi.midi(at - start, 0xb0, cc, value) for at, cc, value in source
+                      if start <= at < end]
+            out = run_midi(harness, events, end - start, audio)
+            assert not any(e[0] == 'midi' and e[2:4] == (0xb0, 11) for e in out)
+        traces.append(audio)
+    assert traces[0] == traces[1], 'expression timing depends on host block size'
+    audio = traces[0]
+    speed = lambda at: 8192 * (audio[at] - audio[at - 1])
+    assert all(audio[i] == i / 8192 for i in range(97))
+    # Avoid the Hermite interpolator's forward-neighbor guard right at the live edge.
+    expected = 1.0 - 0.5 * (2 * 32 / 127) ** 2
+    assert expected < speed(190) < 1.0, speed(190)
+    assert abs(speed(500) - expected) < 0.0001, speed(500)
+    assert speed(1200) == 0.0
+    assert audio[-1] == 2199 / 8192, 'pedal zero did not rejoin live audio'
+
+
 def verify(path):
     if path.is_dir():
         path = path / 'Contents/MacOS/Tape Stop'
@@ -83,7 +120,7 @@ def verify(path):
         settings = {'affect_midi': False, 'time_sync': True, 'tempo_sync': False, 'tempo': 87.0,
                     'drop_division': 8, 'return_division': 15,
                     'xy_x_axis': 1, 'xy_mode': 1,
-                    'drop_time': 0.1374, 'return_sec': 0.9231}
+                    'drop_time': 0.1374, 'return_sec': 0.9231, 'position_cc': 11}
         for key, value in settings.items():
             abi.state_value(state, key, value)
         harness.load_state(state)
@@ -116,9 +153,10 @@ def verify(path):
             assert [(e[0], e[1]) for e in events] == [('on', 12), ('midi', 24), ('off', 80)], events
             assert events[0][2:4] == (2, 60) and events[-1][2:4] == (2, 60), events
         verify_midi_tape(harness, defaults)
+        verify_expression(harness, defaults)
     finally:
         harness.close()
-    print('Tape Stop CLAP passed: state, legacy defaults, audio/MIDI passthrough, tape timing, pitch, and toggle cleanup.')
+    print('Tape Stop CLAP passed: state, legacy defaults, audio/MIDI passthrough, tape timing, pitch, toggle cleanup, and expression-controlled audio.')
 
 
 if __name__ == '__main__':

@@ -138,6 +138,34 @@ impl Draw<'_> {
         self.button_aligned(r, label, on, color, true);
     }
 
+    /// Labeled on/off switch for a module header, with the Open Wurli pill and state readout.
+    pub fn toggle_switch(&mut self, r: (f32, f32, f32, f32), label: &str, on: bool, color: Color) {
+        let (x, y, w, h) = r;
+        let cy = y + h * 0.5;
+        let track_x = x + w - 56.0;
+        let accent_text = if self.light { TEXT } else { color };
+        self.text_middle(x, cy, label, 11.0, accent_text);
+        self.rounded_rect(
+            track_x,
+            cy - 6.5,
+            28.0,
+            13.0,
+            6.5,
+            if on { color } else { LINE },
+        );
+        self.circle(track_x + if on { 21.5 } else { 6.5 }, cy, 4.5, TEXT, true);
+        self.text_middle(
+            track_x + 35.0,
+            cy,
+            if on { "ON" } else { "OFF" },
+            11.0,
+            if on { accent_text } else { MUTED },
+        );
+        if self.is_hovered(r) {
+            self.line(x, y + h - 1.0, x + w, y + h - 1.0, color, 1.0);
+        }
+    }
+
     pub fn appearance_button(&mut self, r: (f32, f32, f32, f32), label: &str) {
         self.with_label_font(|d| d.draw_appearance_button(r, label));
     }

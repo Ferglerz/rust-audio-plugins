@@ -42,7 +42,6 @@ pub(crate) struct MidiTape {
     overflow: bool,
     pitch_interval: u32,
     pitch_countdown: u32,
-    braking: bool,
     last_semitones: f32,
 }
 
@@ -58,7 +57,6 @@ impl MidiTape {
             overflow: false,
             pitch_interval: 192,
             pitch_countdown: 0,
-            braking: false,
             last_semitones: 0.0,
         }
     }
@@ -81,7 +79,6 @@ impl MidiTape {
             self.overflow = false;
             self.pitch_countdown = 0;
             self.reset_pending = false;
-            self.braking = false;
         }
         self.enabled = enabled;
     }
@@ -105,7 +102,7 @@ impl MidiTape {
         &mut self,
         timing: u32,
         speed: f32,
-        braking: bool,
+        jumped_to_live: bool,
         live: bool,
         out: &mut impl FnMut(NoteEvent<()>),
     ) {
@@ -121,10 +118,9 @@ impl MidiTape {
         };
         // A new brake re-aligns the audio read head to live input, including
         // retriggers during return. MIDI must make the same jump.
-        if live || !active || (braking && !self.braking) {
+        if live || !active || jumped_to_live {
             self.read = self.write as f64;
         }
-        self.braking = braking;
         // Emit at most 250 pitch updates/sec/channel, plus exact note/controller
         // initialization and restoration. Keep this cadence across host blocks.
         if (self.pitch_countdown == 0 && semitones != 0.0)

@@ -32,8 +32,7 @@ pub struct Voice {
     damper_scale: f64,
 }
 
-/// Optional note-on voicing controls. Unity values reproduce the original
-/// OpenWurli voice exactly; settings are captured when a note starts.
+/// Initial voicing for a strike. Pickup height can also move while the reed rings.
 #[derive(Clone, Copy, Debug)]
 pub struct VoiceCharacter {
     /// Higher values lengthen the natural reed decay.
@@ -42,6 +41,8 @@ pub struct VoiceCharacter {
     pub hammer_hardness: f64,
     /// Scales reed motion at the nonlinear pickup.
     pub pickup_drive: f64,
+    /// Physical upward offset of the pickup fingers from stock, in millimetres.
+    pub pickup_height_mm: f64,
 }
 
 impl Default for VoiceCharacter {
@@ -50,6 +51,7 @@ impl Default for VoiceCharacter {
             reed_decay: 1.0,
             hammer_hardness: 1.0,
             pickup_drive: 1.0,
+            pickup_height_mm: 0.0,
         }
     }
 }
@@ -125,7 +127,7 @@ impl Voice {
             None,
             character,
         );
-        let pickup = Pickup::new_for_note(sample_rate, midi_note, swing_mm);
+        let pickup = Pickup::with_height_trim(sample_rate, midi_note, swing_mm, character.pickup_height_mm);
 
         // Post-pickup gain: technician voicing (gap adjustment) affects volume
         // without changing the reed's swing.
@@ -319,6 +321,11 @@ impl Voice {
     /// Damper-rate multiplier for this voice's next note-off (1.0 = shipping).
     pub fn set_damper_scale(&mut self, damper_scale: f64) {
         self.damper_scale = damper_scale;
+    }
+
+    pub(crate) fn set_pickup_geometry(&mut self, height_mm: f64, distance_mm: f64) {
+        let side = crate::pickup::pickup_band_sign(self.midi_note);
+        self.pickup.set_height_trim(height_mm + side * distance_mm);
     }
 
     /// Start the damper (called on note_off).

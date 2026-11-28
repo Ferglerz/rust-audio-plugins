@@ -75,6 +75,10 @@ pub struct TapeStopParams {
     #[id = "override_cc"]
     pub override_cc: IntParam,
 
+    /// Optional controller for direct playback position on the brake curve.
+    #[id = "position_cc"]
+    pub position_cc: IntParam,
+
     /// MIDI note that triggers the tape brake when assigned to Note [0 to 127]
     #[id = "override_note"]
     pub override_note: IntParam,
@@ -110,6 +114,7 @@ impl Default for TapeStopParams {
                     max: 400.0,
                 },
             )
+            .with_smoother(SmoothingStyle::Linear(10.0))
             .with_value_to_string(formatters::v2s_f32_rounded(1)),
             drop_division: division_param("Drop division"),
             return_division: division_param("Return division"),
@@ -125,6 +130,7 @@ impl Default for TapeStopParams {
                     factor: FloatRange::skew_factor(-1.5),
                 },
             )
+            .with_smoother(SmoothingStyle::Linear(10.0))
             .with_unit(" s")
             .with_value_to_string(formatters::v2s_f32_rounded(4)),
 
@@ -137,6 +143,7 @@ impl Default for TapeStopParams {
                     factor: FloatRange::skew_factor(-1.5),
                 },
             )
+            .with_smoother(SmoothingStyle::Linear(10.0))
             .with_unit(" ms")
             .with_value_to_string(formatters::v2s_f32_rounded(1)),
 
@@ -149,10 +156,12 @@ impl Default for TapeStopParams {
                     factor: FloatRange::skew_factor(-1.5),
                 },
             )
+            .with_smoother(SmoothingStyle::Linear(10.0))
             .with_unit(" s")
             .with_value_to_string(formatters::v2s_f32_rounded(4)),
 
             drop_curve: FloatParam::new("Curve", 1.0, FloatRange::Linear { min: 0.1, max: 4.0 })
+                .with_smoother(SmoothingStyle::Linear(10.0))
                 .with_value_to_string(formatters::v2s_f32_rounded(2)),
 
             stereo_div: FloatParam::new(
@@ -163,6 +172,7 @@ impl Default for TapeStopParams {
                     max: 100.0,
                 },
             )
+            .with_smoother(SmoothingStyle::Linear(10.0))
             .with_unit(" %")
             .with_value_to_string(formatters::v2s_f32_rounded(1)),
 
@@ -170,6 +180,22 @@ impl Default for TapeStopParams {
             affect_midi: BoolParam::new("Affect MIDI", true),
 
             override_cc: IntParam::new("CC #", 3, IntRange::Linear { min: 0, max: 127 }),
+
+            position_cc: IntParam::new(
+                "Curve Position CC",
+                -1,
+                IntRange::Linear { min: -1, max: 127 },
+            )
+            .with_value_to_string(Arc::new(
+                |n| if n < 0 { "Off".into() } else { n.to_string() },
+            ))
+            .with_string_to_value(Arc::new(|s| {
+                if s.trim().eq_ignore_ascii_case("off") {
+                    Some(-1)
+                } else {
+                    s.trim().parse().ok()
+                }
+            })),
 
             override_note: IntParam::new("Note #", 60, IntRange::Linear { min: 0, max: 127 }),
 
@@ -183,6 +209,7 @@ impl Default for TapeStopParams {
                     max: 0.0,
                 },
             )
+            .with_smoother(SmoothingStyle::Linear(10.0))
             .with_unit(" dB")
             .with_value_to_string(formatters::v2s_f32_rounded(1)),
 
@@ -209,6 +236,29 @@ fn division_param(name: &'static str) -> IntParam {
 impl TapeStopParams {
     /// UI durations: nominal full-stop time in sync, legacy drop rate in free.
     pub fn timing(&self, bpm: f64) -> (f32, f32) {
+        self.timing_with(bpm, FloatParam::value)
+    }
+
+    pub(crate) fn smoothing_samples(&self) -> usize {
+        [
+            &self.tempo,
+            &self.drop_time,
+            &self.return_sec,
+            &self.xfade_ms,
+            &self.drop_curve,
+            &self.stereo_div,
+            &self.auto_restart_thresh,
+        ]
+        .into_iter()
+        .map(|p| p.smoothed.steps_left())
+        .max()
+        .unwrap_or(0)
+        .max(0) as usize
+    }
+
+    pub(crate) fn timing_with(&self, bpm: f64, read: impl Fn(&FloatParam) -> f32) -> (f32, f32) {
+        // Advance free-time ramps even while sync is selected.
+        let free = (read(&self.drop_time), read(&self.return_sec));
         if self.time_sync.value() {
             (
                 tempo::beats_to_seconds(tempo::division(self.drop_division.value()).beats, bpm)
@@ -217,7 +267,7 @@ impl TapeStopParams {
                     as f32,
             )
         } else {
-            (self.drop_time.value(), self.return_sec.value())
+            free
         }
     }
 }

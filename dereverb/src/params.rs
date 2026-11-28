@@ -108,6 +108,13 @@ impl DereverbParams {
             nodes: self.weights().map(|p| p.value() * 0.01),
         }
     }
+
+    pub fn next_weighting(&self) -> Weighting {
+        Weighting {
+            mode: self.level_mode.value(),
+            nodes: self.weights().map(|p| p.smoothed.next() * 0.01),
+        }
+    }
 }
 
 impl Default for DereverbParams {
@@ -121,6 +128,7 @@ impl Default for DereverbParams {
                     max: 100.0,
                 },
             )
+            .with_smoother(SmoothingStyle::Linear(20.0))
             .with_unit(" %")
             .with_value_to_string(formatters::v2s_f32_rounded(1))
         };
@@ -146,6 +154,26 @@ impl Default for DereverbParams {
             weight_2: weight("Weight: middle"),
             weight_3: weight("Weight: loud"),
             weight_4: weight("Weight: loudest"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn monitoring_a_weight_ramp_leaves_its_audio_timing_intact() {
+        let params = DereverbParams::default();
+        for param in params.weights() {
+            param.smoothed.reset(100.0);
+        }
+        params.weight_2.smoothed.set_target(1_000.0, 0.0);
+        for sample in 1..=20 {
+            assert_eq!(params.weighting().nodes[2], 1.0);
+            let nodes = params.next_weighting().nodes;
+            assert!((nodes[2] - (1.0 - 0.05 * sample as f32)).abs() < 1e-6);
+            assert_eq!(nodes[1], 1.0);
         }
     }
 }

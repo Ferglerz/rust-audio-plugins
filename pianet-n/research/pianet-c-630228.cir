@@ -1,0 +1,44 @@
+Pianet C, 28.2.63, full knee, lamp held on, 100k amplifier and 200 ohm phones
+Isrc sensor 0 AC 1n
+Rfeed1 feed 0 2meg
+Cfeed feed 0 22n
+Rfeed2 feed sensor 20meg
+Cbank sensor 0 180p
+Cin sensor b1 22n
+Rfeedback1 b1 c1 1meg
+Rpi1 b1 0 6363.6363636
+G1 c1 0 b1 0 11m
+Rcol1 c1 supply1 39k
+Rdrop supply1 0 6.8k
+Rdivider supply1 0 2.4k
+Cdecouple1 supply1 0 50u
+Rintensity c1 cellout 250k
+Rlit c1 cellout 2198.38784891
+Cknee cellout kneetop 10u
+Rswell kneetop kneeout 0.01
+Cline kneeout line 33n
+Rline line 0 100k
+Rin2 kneeout b2 39k
+Rfeedback2 b2 c2 100k
+Rpi2 b2 0 2307.6923077
+G2 c2 0 b2 0 26m
+Rc2 c2 supply1 10k
+Chp c2 b3 25u
+RdropHP vhp 0 50
+CdecoupleHP vhp 0 50u
+RbiasTop vhp b3 7.4k
+RbiasBottom b3 0 5k
+Rpi3 b3 e3 472.7272727
+G3 c3 e3 b3 e3 0.11
+Rc3 c3 vhp 1k
+Re3 e3 0 50
+Ce3 e3 0 100u
+CoutHP c3 phones 100u
+Rphones phones 0 200
+.control
+set wr_singlescale
+ac dec 30 20 20000
+wrdata response.txt v(line) v(phones)
+quit
+.endc
+.end

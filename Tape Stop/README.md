@@ -2,6 +2,22 @@
 
 An audio tape brake with MIDI-triggered slowdown and return.
 
+## Play pitch with expression
+
+Set **Pos CC** in the bottom row to your controller number, such as **11** for an
+expression pedal. Click the value to type a number or drag to adjust it. The
+assignment is saved with the preset and defaults to **Off**.
+
+With audio playing, move the pedal to take over the brake curve, even during a
+stop or return. Higher values move toward the stopped end. The midpoint plays
+at half speed (one octave down). The Curve control sets how pitch responds
+between the endpoints. The head holds its pitch until you move again. Returning
+to zero releases the pedal and crossfades back to live audio, or starts a new
+timed brake if its trigger is still held. A standard 7-bit controller works immediately.
+Controllers 0–31 also accept their matching 14-bit fine messages. With Affect MIDI
+enabled, Tape Stop consumes the position CC so an expression pedal controls
+pitch without also changing the downstream instrument’s volume.
+
 ## Affect MIDI
 
 **Affect MIDI** in the bottom settings row is on by default and saved with the preset. Place

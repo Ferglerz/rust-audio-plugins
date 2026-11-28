@@ -7,19 +7,26 @@ and its unchanged melange dependency pin.
 
 Local integration changes:
 
-- `runtime-models` compiles both upstream circuit pairs. `engine.rs` retains the
+- The scalar modal rotation now calls the workspace’s `pleasant-dsp` primitive, also used by Stage 73. The operand order is preserved. The local DSP manifest resolves that crate by relative path.
+
+- The shipping host compiles only the Fast preamp and power amplifier. The regression feature `runtime-models` compiles both upstream circuit pairs. `engine.rs` retains the
   shared voice bank, 100 ms live-input settling and 20 ms crossfade. Each chain
   owns its C-9 filter history; physical volume/trim coefficients are advanced
   once per base-rate sample and shared during transitions.
 - `engine.rs` keeps explicit full-MIDI note-on/off/choke methods alongside upstream's
-  clamped methods. The UI owns note-range selection. Buffer capacity survives
+  clamped methods. It tracks editor audition voices independently of host MIDI
+  and exposes held and pedal-sustained pitches for the keyboard display.
+  The host can clear the key bank when changing pianos while keeping the Wurli circuit warm.
+  The UI owns note-range selection. Buffer capacity survives
   sample-rate changes. Reed-bar trim smoothing resets with the other controls.
 - `voice.rs` retains unity-neutral note-on Reed Decay, Hammer Hardness and Pickup
   Drive controls. Pickup Drive now scales upstream's physical swing and the
   corresponding air drag, rather than the removed parallel-plate displacement
   model. Upstream calibration and build-reed entry points remain available.
-- `tremolo.rs` retains the response multiplier and its neutral-preserving
-  coefficient caching. `gen_tremolo.rs` retains reuse of an unchanged final
+- `pickup.rs` accepts a global height trim in millimetres. Sounding voices follow the comb over 10 ms. Both
+  the overlap lookup and the resting capacitance use the new finger position.
+  The bass and treble orientations follow the existing pickup law.
+- `tremolo.rs` scales the photocell time constants from ⅛× to 8× and caches the coefficients. `gen_tremolo.rs` retains reuse of an unchanged final
   transistor evaluation after early convergence. `dk_preamp/mod.rs`, `power_amp.rs` and `lib.rs` expose the
   circuit pairs for runtime selection. The generated preamp and power-amplifier
   BJT helpers also reuse their last pure evaluation on early exits that leave
@@ -29,7 +36,7 @@ Local integration changes:
   Their test-only `reuse_tests` modules share the frozen original helper in
   `../../tests/support/bjt_reuse_cases.rs`, loaded by the wrapper integration test.
   Preserve these small local changes and test hooks when regenerating the solvers.
-  Pickup, tables and learned weights are unmodified upstream source.
+  The field-solved pickup tables and learned weights are unmodified upstream source.
 
 The v0.9.1 upstream note-control APIs and hammer-contact/damper calibration
 entry points are retained. The engine combines that calibration with local

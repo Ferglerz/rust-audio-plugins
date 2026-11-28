@@ -84,7 +84,8 @@ The original plugins and `pleasant-ui` use the root Cargo workspace.
 `scd-rust/`.
 
 All plugins use the shared `pleasant-ui/` directory. Standalone plugin checkouts
-currently require a sibling `pleasant-ui/` checkout. Root Cargo dependency
+currently require a sibling `pleasant-ui/` checkout. OpenWurli UI and Stage 73
+also use the sibling `pleasant-dsp/` crate for instrument DSP and MIDI events. Root Cargo dependency
 patches also remain part of the integrated build configuration; subtree export
 does not automatically include them in standalone plugin repositories.
 

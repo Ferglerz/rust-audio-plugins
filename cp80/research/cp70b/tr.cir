@@ -1,0 +1,101 @@
+CP-70B TR IN to PO, JO1/2 and BO1/2, tremolo off. Yamaha owner pp.14-15.
+* Supplies and bias. JFET curves, photocell rest R and transformer are estimates.
+.param bass=1 mid=1 treble=1 volume=1 trim=0.5 cell=40k
+.param patchlink=0.01
+.param pinch=-1.8 beta=0.8m primary=3
+.model fet NJF(vto={pinch} beta={beta} lambda=0.012)
+Vrail rail 0 12
+Vin in 0 0 AC 1
+C101 in g1 100n
+R102 g1 0 470k
+J1 d1 g1 s1 fet
+R103 s1 0 1k
+R104 rail d1 10k
+R116 d1 tone 10k
+C110 tone br3 470n
+C111 tone br7 470n
+R134 br7 0 3.9k
+* Wipers of VR2/VR3 are tied to the corresponding pot ends; VR4 feeds C103.
+Rvr2 br3 br7 {0.1+50k*bass}
+Rvr3 br7 0 {0.1+1k*mid}
+C102 d1 t1 2.2n
+R107 t1 bright 3.3k
+Rvr4a bright wiper {0.1+10k*(1-treble)}
+Rvr4b wiper br3 {0.1+10k*treble}
+C103 wiper g2 100n
+R105 rail bias2 47k
+R108 bias2 0 5.6k
+R106 bias2 g2 470k
+R110 rail d2 8.2k
+J2 d2 g2 s2 fet
+R109 s2 0 2.2k
+C105 s2 0 220u
+C104 d2 fb1 47n
+R111 fb1 fb2 39k
+R112 fb2 g3 39k
+C106 fb2 s3 2.2n
+R113 rail g3 180k
+R114 g3 0 220k
+C108 g3 0 1n
+J3 rail g3 s3 fet
+R115 s3 0 27k
+C107 s3 vr12 1u
+Rvr12a vr12 trimout {0.1+10k*(1-trim)}
+Rvr12b trimout 0 {0.1+10k*trim}
+C109 trimout patch 1u
+R117 patch 0 100k
+R118 patch po 330
+* Switched jack contact opens when PATCH OUT is occupied. A cable restores it.
+Rnormal po ret {patchlink}
+R124 ret pi 330
+R119 pi 0 100k
+C112 pi g4 100n
+R125 rail bias4 47k
+R120 bias4 0 2.2k
+R121 bias4 g4 470k
+R126 rail d4 5.6k
+J4 d4 g4 s4 fet
+R122 s4 0 1k
+C113 d4 g5 100n
+R127 rail g5 180k
+R123 g5 0 220k
+J5 rail g5 s5 fet
+R129 s5 0 27k
+C114 s5 split 1u
+R130 split 0 100k
+* Two identical branches at rest. FET6/7 feed LT1/2, FET9/8 feed jacks.
+.subckt channel split jack line rail
+R135 split mod 22k
+Rphoto mod 0 {cell}
+Rvr1a mod wiper {0.1+100k*(1-volume)}
+Rvr1b wiper 0 {0.1+100k*volume}
+C115 mod g6 100n
+R128 rail g6 180k
+R131 g6 0 220k
+J6 rail g6 s6 fet
+R132 s6 0 27k
+C116 s6 primary 10u
+R133 primary 0 100k
+* Unity turns ratio, primary copper and magnetizing inductance are provisional.
+Rcu primary line 55
+Lmag line 0 {primary}
+Rtload line 0 10k
+C119 wiper g9 100n
+R141 rail g9 180k
+R142 g9 0 220k
+J9 rail g9 s9 fet
+R143 s9 0 27k
+C121 s9 out9 1u
+R144 out9 0 100k
+R150 out9 jack 330
+Rrec jack 0 100k
+.ends channel
+X1 split jo1 bo1 rail channel
+X2 split jo2 bo2 rail channel
+.control
+set wr_singlescale
+ac dec 80 1 1meg
+wrdata response.txt v(po) v(jo1) v(bo1)
+quit
+.endc
+.end

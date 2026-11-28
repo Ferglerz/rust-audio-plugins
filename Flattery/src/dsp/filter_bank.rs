@@ -86,7 +86,19 @@ impl FilterBank {
         low_cut_hz: f64,
         high_cut_hz: f64,
     ) {
+        self.set_filter_gains_ramped(target_gains, srate, low_cut_hz, high_cut_hz, 0);
+    }
+
+    pub(super) fn set_filter_gains_ramped(
+        &mut self,
+        target_gains: &[f64],
+        srate: f64,
+        low_cut_hz: f64,
+        high_cut_hz: f64,
+        ramp_samples: usize,
+    ) {
         self.update_active_range(low_cut_hz, high_cut_hz);
+        let mut audible = self.filters.len()..0;
         let mut all_unity = true;
 
         for (i, filter) in self.filters.iter_mut().enumerate() {
@@ -115,12 +127,16 @@ impl FilterBank {
                 filter.gain_linear = 1.0;
             }
 
-            if (filter.gain_linear - 1.0).abs() >= 0.001 {
+            filter.update_coeffs_ramped(srate, self.q, ramp_samples);
+            if (filter.gain_linear - 1.0).abs() >= 0.001 || filter.ramp.is_smoothing() {
+                audible.start = audible.start.min(i);
+                audible.end = i + 1;
                 all_unity = false;
             }
-            filter.update_coeffs(srate, self.q);
         }
 
+        self.active_start = audible.start.min(audible.end);
+        self.active_end = audible.end;
         self.all_unity = all_unity;
     }
 
@@ -131,8 +147,8 @@ impl FilterBank {
         }
         let mut sum = 0.0;
         for filter in &mut self.filters[self.active_start..self.active_end] {
-            if (filter.gain_linear - 1.0).abs() >= 0.001 {
-                sum += filter.state_l.process(input, filter.coeffs) - input;
+            if (filter.gain_linear - 1.0).abs() >= 0.001 || filter.ramp.is_smoothing() {
+                sum += filter.state_l.process(input, filter.ramp.next()) - input;
             }
         }
         input + sum
@@ -153,5 +169,30 @@ impl FilterBank {
         }
 
         (in_l + sum_l, in_r + sum_r)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn moving_the_cutoff_ramps_a_band_all_the_way_to_unity() {
+        let mut bank = FilterBank::new();
+        bank.init_frequencies(512, 48_000.0);
+        let frequency = bank.filters[3].center_hz;
+        let targets = vec![4.0; bank.filters.len()];
+        bank.set_filter_gains(&targets, 48_000.0, frequency, frequency);
+        let start = bank.filters[3].ramp.current();
+        bank.set_filter_gains_ramped(&targets, 48_000.0, 1.0, 2.0, 32);
+        assert!(!bank.all_unity);
+        bank.process_mono(0.5);
+        let first = bank.filters[3].ramp.current();
+        assert!((first.b[0] - (start.b[0] + (1.0 - start.b[0]) / 32.0)).abs() < 1e-12);
+        for _ in 1..32 {
+            bank.process_mono(0.5);
+        }
+        assert_eq!(bank.process_mono(0.5), 0.5);
+        assert!(!bank.filters[3].ramp.is_smoothing());
     }
 }

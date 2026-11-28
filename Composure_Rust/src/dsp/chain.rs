@@ -10,9 +10,7 @@ use crate::dsp::harmonics::{
     apply_harmonic_stereo, compute_harmonic_modulation, HarmonicParams, HarmonicProcessor,
 };
 use crate::dsp::lookahead::LookaheadBuffer;
-use crate::dsp::param_smooth::{
-    smooth_envelope_params, smooth_one_minus, smooth_step, PARAM_SMOOTH_MS,
-};
+use crate::dsp::param_smooth::{smooth_envelope_params, smooth_step, PARAM_SMOOTH_MS};
 use crate::dsp::param_sync::BlockParamState;
 use crate::dsp::rms::RmsDetector;
 
@@ -97,12 +95,11 @@ pub struct ProcessingChain {
     cached_gr_lin: f64,
     target_envelope_params: EnvelopeParams,
     smoothed_envelope_params: EnvelopeParams,
-    param_smooth_one_minus: f64,
     target_makeup_gain_linear: f64,
     target_strength_multiplier: f64,
     target_input_offset_db: f64,
-    target_lookahead_ms: f64,
-    smooth_lookahead_ms: f64,
+    target_harmonics: HarmonicParams,
+    harmonic_ramp_left: usize,
     cached_block_params: Option<BlockParamState>,
     reported_latency_samples: u32,
     param_smooth_counter: usize,
@@ -143,12 +140,11 @@ impl ProcessingChain {
             cached_gr_lin: 1.0,
             target_envelope_params: EnvelopeParams::default(),
             smoothed_envelope_params: EnvelopeParams::default(),
-            param_smooth_one_minus: smooth_one_minus(srate, PARAM_SMOOTH_MS),
             target_makeup_gain_linear: 1.0,
             target_strength_multiplier: 1.0,
             target_input_offset_db: 0.0,
-            target_lookahead_ms: 0.0,
-            smooth_lookahead_ms: 0.0,
+            target_harmonics: ChainParams::default().harmonic_params,
+            harmonic_ramp_left: 0,
             cached_block_params: None,
             reported_latency_samples: 0,
             param_smooth_counter: 0,
@@ -180,7 +176,11 @@ impl ProcessingChain {
         self.target_makeup_gain_linear = p.makeup_gain_linear;
         self.target_strength_multiplier = p.strength_multiplier;
         self.target_input_offset_db = p.input_offset_db;
-        self.target_lookahead_ms = p.lookahead_ms;
+        self.target_harmonics = p.harmonic_params;
+        self.lookahead.update_delay_ms(p.lookahead_ms);
+        if self.params.mid_side_mode != p.mid_side_mode {
+            self.harmonics.reset();
+        }
         self.params = p;
         self.rms.update_rms_targets(p.rms_size_ms);
         self.snap_smoothed_params();
@@ -200,67 +200,59 @@ impl ProcessingChain {
         self.params.makeup_gain_linear = self.target_makeup_gain_linear;
         self.params.strength_multiplier = self.target_strength_multiplier;
         self.params.input_offset_db = self.target_input_offset_db;
+        self.params.harmonic_params = self.target_harmonics;
+        self.harmonic_ramp_left = 0;
         self.params.hold_ms = self.smoothed_envelope_params.hold_ms;
-        self.smooth_lookahead_ms = self.target_lookahead_ms;
-        self.lookahead.update_delay_ms(self.smooth_lookahead_ms);
-        self.reported_latency_samples = self.lookahead.latency_samples();
     }
 
     fn tick_param_smoothing(&mut self) {
+        if self.harmonic_ramp_left > 0 {
+            let step = 1.0 / self.harmonic_ramp_left as f64;
+            let current = &mut self.params.harmonic_params;
+            let target = self.target_harmonics;
+            current.drive = smooth_step(current.drive, target.drive, step);
+            current.mix = smooth_step(current.mix, target.mix, step);
+            current.even_boost = smooth_step(current.even_boost, target.even_boost, step);
+            current.odd_boost = smooth_step(current.odd_boost, target.odd_boost, step);
+            current.harmonic_amount =
+                smooth_step(current.harmonic_amount, target.harmonic_amount, step);
+            self.harmonic_ramp_left -= 1;
+        }
         if self.param_smooth_counter == 0 {
             return;
         }
+        let step = 1.0 / self.param_smooth_counter as f64;
         self.param_smooth_counter -= 1;
 
-        let om = self.param_smooth_one_minus;
-        // Influence knobs must reach exact zero when their automation ramp ends.
-        let finite_step = 1.0 / (self.param_smooth_counter + 1) as f64;
-        let input = smooth_step(
-            self.smoothed_envelope_params.input_dependence,
-            self.target_envelope_params.input_dependence,
-            finite_step,
-        );
-        let gr = smooth_step(
-            self.smoothed_envelope_params.gr_dependence,
-            self.target_envelope_params.gr_dependence,
-            finite_step,
-        );
-        let rate = smooth_step(
-            self.smoothed_envelope_params.input_rate_amount,
-            self.target_envelope_params.input_rate_amount,
-            finite_step,
-        );
         smooth_envelope_params(
             &mut self.smoothed_envelope_params,
             &self.target_envelope_params,
-            om,
+            step,
         );
-        self.smoothed_envelope_params.input_dependence = input;
-        self.smoothed_envelope_params.gr_dependence = gr;
-        self.smoothed_envelope_params.input_rate_amount = rate;
         self.envelope
-            .update_runtime_params(&self.smoothed_envelope_params, self.srate, om);
-        if !self.filters.coefficients_converged() {
-            self.filters.smooth_coefficients(om);
+            .update_runtime_params(&self.smoothed_envelope_params, self.srate, step);
+        if self.param_smooth_counter == 0 {
+            self.filters.snap_coefficients();
+        } else if !self.filters.coefficients_converged() {
+            self.filters.smooth_coefficients(step);
         }
 
         self.params.makeup_gain_linear = smooth_step(
             self.params.makeup_gain_linear,
             self.target_makeup_gain_linear,
-            om,
+            step,
         );
         self.params.strength_multiplier = smooth_step(
             self.params.strength_multiplier,
             self.target_strength_multiplier,
-            om,
+            step,
         );
-        self.params.input_offset_db =
-            smooth_step(self.params.input_offset_db, self.target_input_offset_db, om);
+        self.params.input_offset_db = smooth_step(
+            self.params.input_offset_db,
+            self.target_input_offset_db,
+            step,
+        );
         self.params.hold_ms = self.smoothed_envelope_params.hold_ms;
-
-        self.smooth_lookahead_ms =
-            smooth_step(self.smooth_lookahead_ms, self.target_lookahead_ms, om);
-        self.lookahead.update_delay_ms(self.smooth_lookahead_ms);
     }
 
     /// Load a prepared graph snapshot supplied by the plugin adapter.
@@ -278,30 +270,49 @@ impl ProcessingChain {
 
     fn apply_block_params(&mut self, block: &BlockParamState) {
         self.detector_eq.update(&block.detector_eq);
-        self.filters.set_target_coefficients(
-            block.hp_freq as f64,
-            block.lp_freq as f64,
-            self.srate,
-        );
-
-        self.target_envelope_params = block.envelope;
-        self.envelope
-            .set_target_coefficients(&block.envelope, self.srate);
-        self.target_makeup_gain_linear = block.target_makeup_gain_linear;
-        self.target_strength_multiplier = block.target_strength_multiplier;
-        self.target_input_offset_db = block.target_input_offset_db;
-        self.target_lookahead_ms = block.target_lookahead_ms;
+        // Audition switches, detector EQ edits and lookahead have independent
+        // transitions. They must not restart an in-flight parameter ramp.
+        let ramp_changed = self.cached_block_params.as_ref().is_none_or(|previous| {
+            previous.hp_freq != block.hp_freq
+                || previous.lp_freq != block.lp_freq
+                || previous.envelope != block.envelope
+                || previous.target_makeup_gain_linear != block.target_makeup_gain_linear
+                || previous.target_strength_multiplier != block.target_strength_multiplier
+                || previous.target_input_offset_db != block.target_input_offset_db
+        });
+        if ramp_changed {
+            self.filters.set_target_coefficients(
+                block.hp_freq as f64,
+                block.lp_freq as f64,
+                self.srate,
+            );
+            self.target_envelope_params = block.envelope;
+            self.envelope
+                .set_target_coefficients(&block.envelope, self.srate);
+            self.target_makeup_gain_linear = block.target_makeup_gain_linear;
+            self.target_strength_multiplier = block.target_strength_multiplier;
+            self.target_input_offset_db = block.target_input_offset_db;
+            self.param_smooth_counter = (PARAM_SMOOTH_MS * self.srate / 1000.0).ceil() as usize;
+        }
+        self.lookahead.update_delay_ms(block.target_lookahead_ms);
 
         self.params.detection_feedback = block.detection_feedback;
         self.params.rms_normalization = block.rms_normalization;
         self.params.rms_size_ms = block.rms_size_ms;
+        if self.params.mid_side_mode != block.mid_side_mode {
+            self.harmonics.reset();
+        }
         self.params.mid_side_mode = block.mid_side_mode;
         self.params.sc_adjust_preview = block.sc_adjust_preview;
         self.params.use_sidechain = block.use_sidechain;
-        self.params.harmonic_params = block.harmonic_params;
+        self.params.harmonic_params.harmonic_type = block.harmonic_params.harmonic_type;
+        self.target_harmonics.harmonic_type = block.harmonic_params.harmonic_type;
+        if self.target_harmonics != block.harmonic_params {
+            self.target_harmonics = block.harmonic_params;
+            self.harmonic_ramp_left = (PARAM_SMOOTH_MS * self.srate / 1000.0).ceil() as usize;
+        }
         self.params.harmonics_on = block.harmonics_on;
         self.rms.update_rms_targets(self.params.rms_size_ms);
-        self.param_smooth_counter = (PARAM_SMOOTH_MS * self.srate / 1000.0).ceil() as usize;
     }
 
     pub fn update_settings(&mut self, block: BlockParamState, snapshot: Arc<GraphSnapshot>) {
@@ -320,8 +331,13 @@ impl ProcessingChain {
     /// Force block param refresh (init / preset load).
     pub fn force_update_settings(&mut self, block: BlockParamState, snapshot: Arc<GraphSnapshot>) {
         self.force_sync_graph(snapshot);
+        self.cached_block_params = None;
         self.apply_block_params(&block);
         self.cached_block_params = Some(block);
+    }
+
+    pub(crate) fn set_activity_metering(&mut self, enabled: bool) {
+        self.envelope.set_activity_metering(enabled);
     }
 
     pub fn begin_process_block(&mut self) {
@@ -423,22 +439,37 @@ impl ProcessingChain {
         self.listen_crossfade += (target - self.listen_crossfade) * self.listen_fade_coeff;
     }
 
+    fn processing_channels(mid_side: bool, left: f64, right: f64) -> (f64, f64) {
+        if mid_side {
+            ((left + right) * 0.5, (left - right) * 0.5)
+        } else {
+            (left, right)
+        }
+    }
+
     fn prepare_detection_inputs(
         &mut self,
-        spl0: f64,
-        spl1: f64,
+        left: f64,
+        right: f64,
         sidechain: Option<(f64, f64)>,
-    ) -> (f64, f64, f64, f64) {
-        let p = &self.params;
-        let (mut proc_l, mut proc_r) = (spl0, spl1);
-        if p.mid_side_mode {
-            proc_l = (spl0 + spl1) * 0.5;
-            proc_r = (spl0 - spl1) * 0.5;
-        }
-
-        let proc_peak = proc_l.abs().max(proc_r.abs());
-        if proc_peak < 1e-10 {
-            self.denormal_quiet_i += 1;
+    ) -> (f64, f64) {
+        let internal = if self.params.detection_feedback {
+            (self.final_prev_l, self.final_prev_r)
+        } else {
+            Self::processing_channels(self.params.mid_side_mode, left, right)
+        };
+        let detector = if self.params.use_sidechain {
+            sidechain.unwrap_or(internal)
+        } else {
+            internal
+        };
+        let peak = left
+            .abs()
+            .max(right.abs())
+            .max(detector.0.abs())
+            .max(detector.1.abs());
+        if peak < 1e-10 {
+            self.denormal_quiet_i = self.denormal_quiet_i.saturating_add(1);
             if self.denormal_quiet_i >= self.denormal_flush_hold_samples
                 && !self.denormal_flush_done
             {
@@ -453,20 +484,7 @@ impl ProcessingChain {
             self.denormal_flush_done = false;
         }
 
-        let (mut detect_l, mut detect_r) = if p.detection_feedback {
-            (self.final_prev_l, self.final_prev_r)
-        } else {
-            (proc_l, proc_r)
-        };
-
-        if p.use_sidechain {
-            if let Some((sc_l, sc_r)) = sidechain {
-                detect_l = sc_l;
-                detect_r = sc_r;
-            }
-        }
-
-        (proc_l, proc_r, detect_l, detect_r)
+        detector
     }
 
     fn detect_and_apply_gr(&mut self, mut detect_l: f64, mut detect_r: f64) -> f64 {
@@ -476,9 +494,7 @@ impl ProcessingChain {
         [detect_l, detect_r] = self.detector_eq.process([detect_l, detect_r]);
         self.preview_detect_l = detect_l;
         self.preview_detect_r = detect_r;
-        if !self.rms.coefficients_converged() {
-            self.rms.smooth_coefficients();
-        }
+        self.rms.smooth_coefficients();
 
         let (_detector_level, detector_level_db) =
             self.rms
@@ -498,8 +514,9 @@ impl ProcessingChain {
         let target_gr_db = gr_result.target_gr_db;
         self.last_target_gr_db = target_gr_db;
 
-        let can_skip_envelope =
-            target_gr_db.abs() < 0.01 && self.envelope.global_smoothed_gain_db.abs() < 0.01;
+        let can_skip_envelope = target_gr_db.abs() < 0.01
+            && self.envelope.global_smoothed_gain_db.abs() < 0.01
+            && !self.envelope.has_pending_hold();
         if can_skip_envelope {
             self.envelope.input_rate_activity = 0.0;
             self.envelope.input_dependence_activity = 0.0;
@@ -515,16 +532,19 @@ impl ProcessingChain {
             );
         }
 
-        if self.envelope.input_rate_activity.abs() > self.block_input_rate_activity.abs() {
-            self.block_input_rate_activity = self.envelope.input_rate_activity;
-        }
-        if self.envelope.input_dependence_activity.abs()
-            > self.block_input_dependence_activity.abs()
-        {
-            self.block_input_dependence_activity = self.envelope.input_dependence_activity;
-        }
-        if self.envelope.gr_dependence_activity.abs() > self.block_gr_dependence_activity.abs() {
-            self.block_gr_dependence_activity = self.envelope.gr_dependence_activity;
+        if self.envelope.activity_metering() {
+            if self.envelope.input_rate_activity.abs() > self.block_input_rate_activity.abs() {
+                self.block_input_rate_activity = self.envelope.input_rate_activity;
+            }
+            if self.envelope.input_dependence_activity.abs()
+                > self.block_input_dependence_activity.abs()
+            {
+                self.block_input_dependence_activity = self.envelope.input_dependence_activity;
+            }
+            if self.envelope.gr_dependence_activity.abs() > self.block_gr_dependence_activity.abs()
+            {
+                self.block_gr_dependence_activity = self.envelope.gr_dependence_activity;
+            }
         }
         self.envelope.prev_detector_db = detector_level_db;
 
@@ -539,13 +559,14 @@ impl ProcessingChain {
 
     fn apply_gain_and_output(
         &mut self,
-        proc_l: f64,
-        proc_r: f64,
+        left: f64,
+        right: f64,
         current_gr_db: f64,
         target_gr_db: f64,
     ) -> (f64, f64) {
         let p = &self.params;
-        let (audio_l, audio_r) = self.lookahead.process(proc_l, proc_r);
+        let (left, right) = self.lookahead.process(left, right);
+        let (audio_l, audio_r) = Self::processing_channels(p.mid_side_mode, left, right);
 
         let (mut processed_l, mut processed_r) = if current_gr_db.abs() < 1e-6 {
             self.cached_gr_db = 0.0;
@@ -571,6 +592,8 @@ impl ProcessingChain {
                 combined_factor,
                 intensity,
             );
+        } else {
+            self.harmonics.track_dry(processed_l, processed_r);
         }
 
         let final_l = processed_l * p.makeup_gain_linear;
@@ -582,15 +605,15 @@ impl ProcessingChain {
             (final_l, final_r)
         };
 
+        self.final_prev_l = out_l;
+        self.final_prev_r = out_r;
+
         let lf = self.listen_crossfade;
         if lf > 0.001 {
             let om = 1.0 - lf;
             out_l = out_l * om + self.preview_detect_l * lf;
             out_r = out_r * om + self.preview_detect_r * lf;
         }
-
-        self.final_prev_l = out_l;
-        self.final_prev_r = out_r;
 
         (out_l, out_r)
     }
@@ -604,11 +627,10 @@ impl ProcessingChain {
         self.tick_listen_crossfade();
         self.tick_param_smoothing();
 
-        let (proc_l, proc_r, detect_l, detect_r) =
-            self.prepare_detection_inputs(spl0, spl1, sidechain);
+        let (detect_l, detect_r) = self.prepare_detection_inputs(spl0, spl1, sidechain);
         let current_gr_db = self.detect_and_apply_gr(detect_l, detect_r);
         let target_gr_db = self.last_target_gr_db;
-        self.apply_gain_and_output(proc_l, proc_r, current_gr_db, target_gr_db)
+        self.apply_gain_and_output(spl0, spl1, current_gr_db, target_gr_db)
     }
 
     pub fn process_block(
@@ -695,6 +717,149 @@ mod tests {
     use super::*;
     use crate::dsp::envelope::EnvelopeParams;
     use crate::dsp::graph::CompressionGraph;
+
+    fn host_settings() -> BlockParamState {
+        crate::parameter_adapter::capture_block_state(&crate::params::ComposureParams::default())
+    }
+
+    #[test]
+    fn harmonic_mix_retargets_from_its_current_sample() {
+        let mut chain = ProcessingChain::new(1000.0);
+        let mut block = host_settings();
+        block.harmonic_params.mix = 0.0;
+        chain.update_block_params(block.clone());
+        chain.snap_runtime_params();
+        block.harmonic_params.mix = 1.0;
+        chain.update_block_params(block.clone());
+        for _ in 0..5 {
+            chain.process_sample(0.0, 0.0, None);
+        }
+        assert!((chain.params.harmonic_params.mix - 0.5).abs() < 1e-12);
+        block.harmonic_params.mix = 0.0;
+        chain.update_block_params(block);
+        for frame in 1..=10 {
+            chain.process_sample(0.0, 0.0, None);
+            let expected = 0.5 - 0.05 * frame as f64;
+            assert!((chain.params.harmonic_params.mix - expected).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn live_automation_reaches_requested_gain_timing_filters_and_latency() {
+        for rate in [44_100.0, 48_000.0, 96_000.0] {
+            let mut chain = ProcessingChain::new(rate);
+            let mut block = host_settings();
+            chain.update_block_params(block.clone());
+            chain.snap_runtime_params();
+            for _ in 0..(rate * 0.15) as usize {
+                chain.process_sample(0.125, -0.25, None);
+            }
+
+            block.target_makeup_gain_linear = db_to_linear(12.0);
+            block.target_strength_multiplier = 0.25;
+            block.target_input_offset_db = 13.5;
+            block.target_lookahead_ms = 100.0;
+            block.envelope.attack = 9000.0;
+            block.envelope.release_ms = 220.0;
+            block.envelope.hold_ms = 100.0;
+            block.lp_freq = 8000.0;
+            chain.update_block_params(block.clone());
+            assert_eq!(chain.latency_changed(), Some((rate / 10.0) as u32));
+            assert_eq!(chain.latency_changed(), None);
+
+            let ramp = (PARAM_SMOOTH_MS * rate / 1000.0).ceil() as usize;
+            for i in 0..ramp * 3 {
+                if i == ramp / 2 {
+                    block.sc_adjust_preview = !block.sc_adjust_preview;
+                    chain.update_block_params(block.clone());
+                }
+                let (left, right) = chain.process_sample(0.125, -0.25, None);
+                assert!(left >= 0.125 - 1e-14 && right <= -0.25 + 1e-14);
+                if i + 1 >= ramp {
+                    assert!((left - 0.125 * block.target_makeup_gain_linear).abs() < 1e-14);
+                    assert_eq!(chain.params.strength_multiplier, 0.25);
+                    assert_eq!(chain.params.input_offset_db, 13.5);
+                    assert_eq!(chain.smoothed_envelope_params, block.envelope);
+                    assert!(chain.filters.coefficients_converged());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn feedback_detector_ignores_the_audition_mix() {
+        let mut block = host_settings();
+        block.detection_feedback = true;
+        block.sc_adjust_preview = true;
+        block.detector_eq[0] = pleasant_eq::BandSettings {
+            enabled: true,
+            shape: pleasant_eq::EqShape::LowShelf,
+            frequency_hz: 1000.0,
+            gain_db: 6.0,
+            ..Default::default()
+        };
+        let mut clean = ProcessingChain::new(48_000.0);
+        let mut audition = ProcessingChain::new(48_000.0);
+        for chain in [&mut clean, &mut audition] {
+            chain.update_block_params(block.clone());
+            chain.snap_runtime_params();
+        }
+        audition.set_filter_preview_drag(true);
+        let mut heard_eq = false;
+        for i in 0..4800 {
+            let x = if i < 800 {
+                0.01 * (std::f64::consts::TAU * 440.0 * i as f64 / 48_000.0).sin()
+            } else {
+                0.0
+            };
+            let dry = clean.process_sample(x, x, None);
+            let monitored = audition.process_sample(x, x, None);
+            assert_eq!(clean.meter_detector_db(), audition.meter_detector_db());
+            assert!(monitored.0.abs() < 0.03);
+            heard_eq |= (dry.0 - monitored.0).abs() > 1e-4;
+            if i == 4799 {
+                assert!(monitored.0.abs() < 1e-12);
+            }
+        }
+        assert!(heard_eq);
+    }
+
+    #[test]
+    fn silent_program_keeps_an_active_external_rms_key() {
+        let mut chain = ProcessingChain::new(48_000.0);
+        chain.set_chain_params(ChainParams {
+            rms_size_ms: 100.0,
+            use_sidechain: true,
+            ..ChainParams::default()
+        });
+        for _ in 0..96_000 {
+            chain.process_sample(0.25, 0.25, Some((1.0, 1.0)));
+        }
+        for _ in 0..4800 {
+            chain.process_sample(0.0, 0.0, Some((1.0, 1.0)));
+            assert!(chain.meter_detector_db().abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn queued_stereo_audio_survives_mid_side_switches_in_both_directions() {
+        let mut chain = ProcessingChain::new(48_000.0);
+        let mut block = host_settings();
+        block.target_lookahead_ms = 10.0;
+        chain.update_block_params(block.clone());
+        chain.snap_runtime_params();
+        let frame = (0.125, 0.5);
+        for _ in 0..480 {
+            assert_eq!(chain.process_sample(frame.0, frame.1, None), (0.0, 0.0));
+        }
+        for mode in [true, false] {
+            block.mid_side_mode = mode;
+            chain.update_block_params(block.clone());
+            for _ in 0..481 {
+                assert_eq!(chain.process_sample(frame.0, frame.1, None), frame);
+            }
+        }
+    }
 
     #[test]
     fn independent_influences_reach_zero_after_automation_ramp() {

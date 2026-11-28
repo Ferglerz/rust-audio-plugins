@@ -1,5 +1,6 @@
 /target
 .DS_Store
+__pycache__/
 
 # Original Composure repository metadata, preserved during workspace migration.
 /.composure-git-backup/

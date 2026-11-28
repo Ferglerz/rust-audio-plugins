@@ -1,0 +1,48 @@
+Pianet L, original E71 mains version, 100k external amplifier and two series nominal 5 ohm speakers
+Isrc sensor 0 AC 1n
+Rfeed1 supply 0 2meg
+Cfeed supply 0 100n
+Rfeed2 supply sensor 20meg
+Cbank sensor 0 180p
+Cin sensor b1 22n
+Cshunt b1 0 10n
+Rfb1 b1 c1 100k
+Rpi1 b1 0 6500
+G1 c1 0 b1 0 .01
+Rc1 c1 v1 39k
+Rf1 v1 v2 500
+Rf2 v2 v3 500
+Rf3 v3 0 120
+Cdec1 v1 0 50u
+Cdec2 v2 0 50u
+Cdec3 v3 0 50u
+Cknee c1 kneetop 5u
+Rswell kneetop b2 .01
+Rfb2 b2 c2 50k
+Rpi2 b2 0 1500
+G2 c2 0 b2 0 .04
+Rc2 c2 v2 2.4k
+Cline c2 line 22n
+Rline line 0 100k
+Cdrive c2 b3 50u
+Rfb3 b3 c3 2.4k
+Rpi3 b3 0 333.33333333
+G3 c3 0 b3 0 .12
+Rc3 c3 v3 500
+Cpower c3 b4 100u
+Rb4 b4 v3 1k
+Rpi4 b4 0 11.25
+G4 terminal 0 b4 0 4
+Ro4 terminal 0 180
+Rcoil terminal internal 8.2
+Lcoil internal motion 320u
+Rmotion motion 0 5.25454545
+Cmotion motion 0 .00065743945
+Lmotion motion 0 .001445
+.control
+set wr_singlescale
+ac dec 30 20 20000
+wrdata response.txt v(line) v(terminal) v(motion)
+quit
+.endc
+.end

@@ -62,7 +62,7 @@ impl Plugin for ScdPlugin {
     ];
 
     const MIDI_INPUT: MidiConfig = MidiConfig::MidiCCs;
-    const SAMPLE_ACCURATE_AUTOMATION: bool = false;
+    const SAMPLE_ACCURATE_AUTOMATION: bool = true;
 
     type BackgroundTask = ();
     type SysExMessage = ();
@@ -116,9 +116,15 @@ impl Plugin for ScdPlugin {
         aux: &mut AuxiliaryBuffers,
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
-        let mix_gains = self.params.mix_gain_table();
-        let sub_vol = self.params.sub_kick.vol.value();
-        let master_gain = self.params.master_gain.value();
+        let mut mix_gains = self.params.mix_gain_table();
+        let mut moving_strips = [KitPieceId::Kick; KitPieceId::COUNT];
+        let mut moving_count = 0;
+        for piece in KitPieceId::ALL {
+            if self.params.get_strip(piece).mix_is_smoothing() {
+                moving_strips[moving_count] = piece;
+                moving_count += 1;
+            }
+        }
         let mut kit_peaks = [0.0f32; KitPieceId::COUNT];
         let mut mic_peaks = [[0.0f32; 2]; MicChannel::COUNT];
         let mut master_peaks = [0.0f32; 2];
@@ -136,11 +142,16 @@ impl Plugin for ScdPlugin {
                 next_event = context.next_event();
             }
 
+            for &piece in &moving_strips[..moving_count] {
+                mix_gains[piece as usize] = self.params.get_strip(piece).next_mix_gains(piece);
+            }
             let mut mic_accum = [[0.0f32; 2]; MicChannel::COUNT];
             self.voice_pool
                 .process_sample(&mut mic_accum, &mix_gains, &mut kit_peaks);
 
-            let sub_sample = self.kick_sine.process_sample(sub_vol);
+            let sub_sample = self
+                .kick_sine
+                .process_sample(self.params.sub_kick.vol.smoothed.next());
 
             for (mic_idx, aux_buf) in aux.outputs.iter_mut().enumerate() {
                 if mic_idx >= MicChannel::COUNT {
@@ -164,6 +175,7 @@ impl Plugin for ScdPlugin {
             let [mut left, mut right] = dsp::simd::sum_stereo_pairs(&mic_accum);
             left += sub_sample;
             right += sub_sample;
+            let master_gain = self.params.master_gain.smoothed.next();
             left *= master_gain;
             right *= master_gain;
 

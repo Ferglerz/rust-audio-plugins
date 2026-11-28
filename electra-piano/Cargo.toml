@@ -1,0 +1,9 @@
+[package]
+name = "electra-piano"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+pleasant-dsp = { path = "../pleasant-dsp" }
+hound = "3.5"

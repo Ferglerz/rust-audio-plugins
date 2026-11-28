@@ -578,98 +578,78 @@ impl ChordboardView {
         } else {
             None
         };
-        for black in [false, true] {
-            for note in (0..128u8).filter(|&n| piano_black(n) == black) {
-                let r = piano_key_rect(note);
-                let control = base >= 0 && (base..base + 12).contains(&(note as i32));
-                let fill = if black {
-                    if d.light {
-                        TEXT
-                    } else {
-                        BG
-                    }
-                } else if d.light {
-                    BG
-                } else {
-                    alpha(TEXT, 0.65)
-                };
-                d.rect(r.0, r.1, r.2, r.3, fill);
-                if learn_hover == Some(note) {
-                    d.rect(r.0 + 0.5, r.1, r.2 - 1.0, r.3, self.learn_highlight_color());
-                } else if control {
-                    d.rect(
-                        r.0 + 0.5,
-                        r.1,
-                        r.2 - 1.0,
-                        r.3,
-                        alpha(COLORS[4], if black { 0.5 } else { 0.35 }),
-                    );
-                }
-                d.outline(r, if black || d.light { LINE } else { BG });
-                if voicing.as_slice().contains(&note) {
-                    d.rounded_rect(
-                        r.0 + 1.5,
-                        r.1 + 2.0,
-                        (r.2 - 3.0).max(1.0),
-                        r.3 - 4.0,
-                        1.0,
-                        alpha(GOLD, if black { 0.7 } else { 0.6 }),
-                    );
-                    d.outline_rounded(
-                        r.0 + 1.5,
-                        r.1 + 2.0,
-                        (r.2 - 3.0).max(1.0),
-                        r.3 - 4.0,
-                        1.0,
-                        GOLD,
-                        1.5,
-                    );
-                }
-                let input = self.snapshot.held_notes[note as usize];
-                let output = self.snapshot.sounding_notes[note as usize];
-                let pulse = self.note_anim[note as usize];
-                if input || output || pulse > 0.01 {
-                    d.rounded_rect(
-                        r.0 + 1.0,
-                        r.1 + 1.0,
-                        (r.2 - 2.0).max(1.0),
-                        r.3 - 2.0,
-                        1.0,
-                        alpha(
-                            if output || pulse > 0.01 { GOLD } else { TEAL },
-                            if input || output { 0.75 } else { pulse * 0.6 },
-                        ),
-                    );
-                }
-                if theory_pitch == Some(note % 12) && voicing.as_slice().contains(&note) {
-                    // A separate purple marker identifies the altered tone without
-                    // obscuring held-input and sounding-output indicators.
-                    d.rounded_rect(
-                        r.0 + 1.5,
-                        r.1 + r.3 - 31.0,
-                        (r.2 - 3.0).max(1.0),
-                        4.0,
-                        1.0,
-                        COLORS[1],
-                    );
-                }
-                let center = r.0 + r.2 / 2.0;
-                if self.snapshot.sounding_notes[note as usize] {
-                    d.circle(center, r.1 + r.3 - 20.0, 3.1, BG, true);
-                    d.circle(center, r.1 + r.3 - 20.0, 2.4, GOLD, true);
-                }
-                if self.snapshot.held_notes[note as usize] {
-                    d.rounded_rect(r.0 + 2.0, r.1 + 4.0, r.2 - 4.0, 5.0, 1.5, TEAL);
-                }
-                if note % 12 == 0 {
-                    d.text_centered(
-                        center,
-                        r.1 + r.3 - 4.0,
-                        &self.note_label(note),
-                        10.0,
-                        if d.light { TEXT } else { BG },
-                    );
-                }
+        for note in PIANO.keys() {
+            let black = piano_black(note);
+            let r = piano_key_rect(note);
+            let control = base >= 0 && (base..base + 12).contains(&(note as i32));
+            let tint = if learn_hover == Some(note) {
+                Some(self.learn_highlight_color())
+            } else if control {
+                Some(alpha(COLORS[4], if black { 0.5 } else { 0.35 }))
+            } else {
+                None
+            };
+            pleasant_ui::piano::Piano::draw_key(d, r, black, tint);
+            if voicing.as_slice().contains(&note) {
+                d.rounded_rect(
+                    r.0 + 1.5,
+                    r.1 + 2.0,
+                    (r.2 - 3.0).max(1.0),
+                    r.3 - 4.0,
+                    1.0,
+                    alpha(GOLD, if black { 0.7 } else { 0.6 }),
+                );
+                d.outline_rounded(
+                    r.0 + 1.5,
+                    r.1 + 2.0,
+                    (r.2 - 3.0).max(1.0),
+                    r.3 - 4.0,
+                    1.0,
+                    GOLD,
+                    1.5,
+                );
+            }
+            let input = self.snapshot.held_notes[note as usize];
+            let output = self.snapshot.sounding_notes[note as usize];
+            let pulse = self.note_anim[note as usize];
+            if input || output || pulse > 0.01 {
+                pleasant_ui::piano::Piano::highlight(
+                    d,
+                    r,
+                    alpha(
+                        if output || pulse > 0.01 { GOLD } else { TEAL },
+                        if input || output { 0.75 } else { pulse * 0.6 },
+                    ),
+                );
+            }
+            if theory_pitch == Some(note % 12) && voicing.as_slice().contains(&note) {
+                // A separate purple marker identifies the altered tone without
+                // obscuring held-input and sounding-output indicators.
+                d.rounded_rect(
+                    r.0 + 1.5,
+                    r.1 + r.3 - 31.0,
+                    (r.2 - 3.0).max(1.0),
+                    4.0,
+                    1.0,
+                    COLORS[1],
+                );
+            }
+            let center = r.0 + r.2 / 2.0;
+            if self.snapshot.sounding_notes[note as usize] {
+                d.circle(center, r.1 + r.3 - 20.0, 3.1, BG, true);
+                d.circle(center, r.1 + r.3 - 20.0, 2.4, GOLD, true);
+            }
+            if self.snapshot.held_notes[note as usize] {
+                d.rounded_rect(r.0 + 2.0, r.1 + 4.0, r.2 - 4.0, 5.0, 1.5, TEAL);
+            }
+            if note % 12 == 0 {
+                d.text_centered(
+                    center,
+                    r.1 + r.3 - 4.0,
+                    &self.note_label(note),
+                    10.0,
+                    if d.light { TEXT } else { BG },
+                );
             }
         }
         // Paths land on the keys; split handles and their rails paint over them.

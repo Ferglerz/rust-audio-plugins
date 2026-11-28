@@ -4,8 +4,11 @@ pub mod editor;
 pub mod envelope;
 pub mod graph;
 pub mod handles;
+pub mod instrument_action;
 pub mod page_slide;
 pub mod param;
+pub mod piano;
+pub mod playable_keyboard;
 pub mod pointer;
 pub mod preferences;
 #[cfg(target_os = "macos")]

@@ -42,6 +42,8 @@ impl TapeStopView {
                         }
                         let step = if self.division_param(id).is_some() {
                             dy.signum() / (pleasant_dsp::tempo::DIVISIONS.len() - 1) as f32
+                        } else if id == KnobId::PositionCc {
+                            dy.signum() / 128.0
                         } else if matches!(id, KnobId::OverrideCc | KnobId::OverrideNote) {
                             dy.signum() / 127.0
                         } else {
@@ -239,6 +241,16 @@ impl TapeStopView {
                     if Self::inside(mouse_x, mouse_y, midi_value_rect()) {
                         let id = self.midi_number_id();
                         self.press_value(cx, id, midi_value_rect(), (mouse_x, mouse_y));
+                        cx.needs_redraw();
+                        return;
+                    }
+                    if Self::inside(mouse_x, mouse_y, position_cc_value_rect()) {
+                        self.press_value(
+                            cx,
+                            KnobId::PositionCc,
+                            position_cc_value_rect(),
+                            (mouse_x, mouse_y),
+                        );
                         cx.needs_redraw();
                         return;
                     }

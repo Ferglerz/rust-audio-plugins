@@ -226,10 +226,9 @@ impl ModalReed {
 
             let i = 0;
             sum += self.amplitude[i] * self.s[i] * onset * self.envelope[i];
-            let s_new = self.s[i] * self.cos_inc[i] + self.c[i] * self.sin_inc[i];
-            let c_new = self.c[i] * self.cos_inc[i] - self.s[i] * self.sin_inc[i];
-            self.s[i] = s_new;
-            self.c[i] = c_new;
+            (self.s[i], self.c[i]) = pleasant_dsp::instrument::rotate(
+                self.s[i], self.c[i], self.sin_inc[i], self.cos_inc[i],
+            );
             self.envelope[i] *= self.decay_mult[i];
 
             // Preserve each lane's arithmetic and reduce in mode order.

@@ -93,7 +93,7 @@ impl Plugin for Composure {
         self.last_graph_generation = self.params.graph_store.generation();
         self.last_range_mode = graph_range_mode;
         self.chain.snap_runtime_params();
-        context.set_latency_samples(self.chain.latency_samples());
+        context.set_latency_samples(self.chain.latency_changed().unwrap_or(0));
         true
     }
 
@@ -143,6 +143,7 @@ impl Plugin for Composure {
             (None, None)
         };
 
+        self.chain.set_activity_metering(editor_open);
         self.chain.begin_process_block();
 
         let channels = buffer.as_slice();

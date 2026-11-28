@@ -4,6 +4,7 @@ use super::dsp_utils::{flush_denormal, linear_oversample_avg};
 
 const HARMONIC_OVERSAMPLE: usize = 2;
 const DC_BLOCK_HZ: f64 = 8.0;
+const MAX_HARMONIC_EXCITATION: f64 = 1.0;
 
 #[derive(Debug, Clone, Default)]
 pub struct HarmonicProcessor {
@@ -30,6 +31,11 @@ impl HarmonicProcessor {
 
     pub fn reset(&mut self) {
         self.prev = [0.0; 2];
+        self.dc_state = [0.0; 2];
+    }
+
+    pub(crate) fn track_dry(&mut self, left: f64, right: f64) {
+        self.prev = [left, right];
         self.dc_state = [0.0; 2];
     }
 
@@ -68,7 +74,7 @@ const TRANSFORMER_COEFFS: HarmonicModelCoeffs = HarmonicModelCoeffs {
     x5: 0.0,
 };
 
-fn apply_harmonic_model(
+fn harmonic_residual(
     driven: f64,
     amount: f64,
     combined_factor: f64,
@@ -77,8 +83,16 @@ fn apply_harmonic_model(
     coeffs: HarmonicModelCoeffs,
 ) -> f64 {
     let scaled_saturation = amount * combined_factor;
-    let x = driven;
-    let odd_boost_factor = 1.0 + odd_boost * 0.01;
+    // Post-gain expansion can exceed full scale. Limit only the input to the
+    // polynomial so its higher powers cannot overwhelm the clean signal.
+    let x = driven.clamp(-MAX_HARMONIC_EXCITATION, MAX_HARMONIC_EXCITATION);
+    // Zero disables the odd component. Interpolate to the first selectable
+    // setting (1%) so a smoothed control crossing zero fades it in.
+    let odd_boost_factor = if odd_boost < 1.0 {
+        odd_boost * 1.01
+    } else {
+        1.0 + odd_boost * 0.01
+    };
     let even_boost_factor = 1.0 + even_boost * 0.01;
     let asymmetric_factor = if x > 0.0 {
         coeffs.pos_asym
@@ -91,7 +105,7 @@ fn apply_harmonic_model(
     let x4 = x2 * x2;
     let x5 = x3 * x2;
 
-    let mut result = x + x2 * scaled_saturation * coeffs.x2 * even_boost_factor * asymmetric_factor;
+    let mut result = x2 * scaled_saturation * coeffs.x2 * even_boost_factor * asymmetric_factor;
 
     if coeffs.x4 > 0.0 {
         result += x4 * scaled_saturation * coeffs.x4 * even_boost_factor;
@@ -115,14 +129,15 @@ pub fn apply_enhanced_tube_processing(
     even_boost: f64,
     odd_boost: f64,
 ) -> f64 {
-    apply_harmonic_model(
-        driven,
-        amount,
-        combined_factor,
-        even_boost,
-        odd_boost,
-        TUBE_COEFFS,
-    )
+    driven
+        + harmonic_residual(
+            driven,
+            amount,
+            combined_factor,
+            even_boost,
+            odd_boost,
+            TUBE_COEFFS,
+        )
 }
 
 /// Iron-transformer saturation: even-heavy (2nd/4th), light odd from core asymmetry.
@@ -133,14 +148,15 @@ pub fn apply_enhanced_transformer_processing(
     even_boost: f64,
     odd_boost: f64,
 ) -> f64 {
-    apply_harmonic_model(
-        driven,
-        amount,
-        combined_factor,
-        even_boost,
-        odd_boost,
-        TRANSFORMER_COEFFS,
-    )
+    driven
+        + harmonic_residual(
+            driven,
+            amount,
+            combined_factor,
+            even_boost,
+            odd_boost,
+            TRANSFORMER_COEFFS,
+        )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -153,83 +169,10 @@ pub struct HarmonicParams {
     pub harmonic_amount: f64,
 }
 
-fn saturate_sample(
-    x: f64,
-    harmonic_type: u8,
-    harmonic_amount_driven: f64,
-    combined_factor: f64,
-    even_boost: f64,
-    odd_boost: f64,
-) -> f64 {
-    if harmonic_type == 0 {
-        apply_enhanced_tube_processing(
-            x,
-            harmonic_amount_driven,
-            combined_factor,
-            even_boost,
-            odd_boost,
-        )
-    } else {
-        apply_enhanced_transformer_processing(
-            x,
-            harmonic_amount_driven,
-            combined_factor,
-            even_boost,
-            odd_boost,
-        )
-    }
-}
-
-fn oversample_saturate(
-    input: f64,
-    prev: f64,
-    harmonic_type: u8,
-    harmonic_amount_driven: f64,
-    combined_factor: f64,
-    even_boost: f64,
-    odd_boost: f64,
-) -> f64 {
-    linear_oversample_avg(prev, input, HARMONIC_OVERSAMPLE, |x| {
-        saturate_sample(
-            x,
-            harmonic_type,
-            harmonic_amount_driven,
-            combined_factor,
-            even_boost,
-            odd_boost,
-        )
-    })
-}
-
 fn dc_block_sample(input: f64, state: &mut f64, coeff: f64) -> f64 {
     let out = input - *state;
     *state = input - out * coeff;
     out
-}
-
-fn apply_harmonic_channel(
-    input: f64,
-    prev: f64,
-    dc_state: &mut f64,
-    dc_coeff: f64,
-    params: &HarmonicParams,
-    harmonic_amount_driven: f64,
-    combined_factor: f64,
-    intensity: f64,
-) -> f64 {
-    let processed = oversample_saturate(
-        input,
-        prev,
-        params.harmonic_type,
-        harmonic_amount_driven,
-        combined_factor,
-        params.even_boost,
-        params.odd_boost,
-    );
-
-    let wet_delta = intensity * (processed - input);
-    let wet = dc_block_sample(input + wet_delta, dc_state, dc_coeff);
-    params.mix * wet + (1.0 - params.mix) * input
 }
 
 pub fn apply_harmonic_stereo(
@@ -240,30 +183,10 @@ pub fn apply_harmonic_stereo(
     combined_factor: f64,
     intensity: f64,
 ) -> (f64, f64) {
-    if params.mix <= 0.0001 {
-        return (input_l, input_r);
-    }
-
-    let drive_factor = (params.drive / 100.0) * 0.5;
-    let harmonic_amount_driven = params.harmonic_amount * drive_factor;
-    let inputs = [input_l, input_r];
-    let mut outputs = [0.0_f64; 2];
-
-    for ch in 0..2 {
-        outputs[ch] = apply_harmonic_channel(
-            inputs[ch],
-            processor.prev[ch],
-            &mut processor.dc_state[ch],
-            processor.dc_coeff,
-            params,
-            harmonic_amount_driven,
-            combined_factor,
-            intensity,
-        );
-        processor.prev[ch] = inputs[ch];
-    }
-
-    (outputs[0], outputs[1])
+    (
+        apply_harmonic_processing(processor, 0, input_l, params, combined_factor, intensity),
+        apply_harmonic_processing(processor, 1, input_r, params, combined_factor, intensity),
+    )
 }
 
 pub fn apply_harmonic_processing(
@@ -274,28 +197,44 @@ pub fn apply_harmonic_processing(
     combined_factor: f64,
     intensity: f64,
 ) -> f64 {
-    if params.mix <= 0.0001 {
+    let ch = channel as usize;
+    let prev = processor.prev[ch];
+    processor.prev[ch] = input;
+
+    let drive_factor = (params.drive / 100.0) * 0.5;
+    let harmonic_amount_driven = params.harmonic_amount * drive_factor;
+    if params.mix <= 0.0001
+        || harmonic_amount_driven == 0.0
+        || combined_factor == 0.0
+        || intensity == 0.0
+    {
+        processor.dc_state[ch] = 0.0;
         return input;
     }
 
-    let prev = processor.prev[channel as usize];
-    let drive_factor = (params.drive / 100.0) * 0.5;
-    let harmonic_amount_driven = params.harmonic_amount * drive_factor;
-    let ch = channel as usize;
-    let out = apply_harmonic_channel(
-        input,
-        prev,
+    let coeffs = if params.harmonic_type == 0 {
+        TUBE_COEFFS
+    } else {
+        TRANSFORMER_COEFFS
+    };
+    // Integrate just the nonlinear terms. This cancels the matching
+    // interpolated clean reference at every oversampling point.
+    let residual = linear_oversample_avg(prev, input, HARMONIC_OVERSAMPLE, |x| {
+        harmonic_residual(
+            x,
+            harmonic_amount_driven,
+            combined_factor,
+            params.even_boost,
+            params.odd_boost,
+            coeffs,
+        )
+    });
+    let wet_delta = dc_block_sample(
+        intensity * residual,
         &mut processor.dc_state[ch],
         processor.dc_coeff,
-        params,
-        harmonic_amount_driven,
-        combined_factor,
-        intensity,
     );
-
-    processor.prev[ch] = input;
-
-    out
+    input + params.mix * wet_delta
 }
 
 pub fn compute_harmonic_modulation(
@@ -313,6 +252,12 @@ pub fn compute_harmonic_modulation(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn odd_harmonics_fade_in_across_the_first_control_step() {
+        let residual = |odd| harmonic_residual(0.8, 1.0, 1.0, 0.0, odd, TUBE_COEFFS);
+        assert!((residual(0.5) - 0.5 * (residual(0.0) + residual(1.0))).abs() < 1e-12);
+    }
 
     #[test]
     fn zero_mix_passthrough() {
@@ -344,10 +289,121 @@ mod tests {
 
     #[test]
     fn oversample_matches_helper() {
-        let out = oversample_saturate(0.8, 0.1, 0, 0.5, 1.0, 100.0, 100.0);
-        let avg = linear_oversample_avg(0.1, 0.8, HARMONIC_OVERSAMPLE, |x| {
+        let mut processor = HarmonicProcessor::new(48_000.0);
+        processor.prev[0] = 0.1;
+        let out = apply_harmonic_processing(&mut processor, 0, 0.8, &params(0), 1.0, 1.0);
+        let wet_avg = linear_oversample_avg(0.1, 0.8, HARMONIC_OVERSAMPLE, |x| {
             apply_enhanced_tube_processing(x, 0.5, 1.0, 100.0, 100.0)
         });
-        assert!((out - avg).abs() < 1e-9);
+        let clean_avg = linear_oversample_avg(0.1, 0.8, HARMONIC_OVERSAMPLE, |x| x);
+        let expected = 0.8 + (wet_avg - clean_avg);
+        assert!((out - expected).abs() < 1e-9);
+    }
+
+    fn params(harmonic_type: u8) -> HarmonicParams {
+        HarmonicParams {
+            harmonic_type,
+            drive: 100.0,
+            mix: 1.0,
+            even_boost: 100.0,
+            odd_boost: 100.0,
+            harmonic_amount: 1.0,
+        }
+    }
+
+    #[test]
+    fn disabled_harmonics_preserve_clean_signal_after_coloration() {
+        for harmonic_type in [0, 1] {
+            let enabled = params(harmonic_type);
+            for disabled in [
+                HarmonicParams {
+                    mix: 0.0,
+                    ..enabled
+                },
+                HarmonicParams {
+                    drive: 0.0,
+                    ..enabled
+                },
+                HarmonicParams {
+                    harmonic_amount: 0.0,
+                    ..enabled
+                },
+            ] {
+                let mut processor = HarmonicProcessor::new(48_000.0);
+                let colored = apply_harmonic_stereo(&mut processor, 0.8, -0.8, &enabled, 4.0, 2.0);
+                assert_ne!(colored, (0.8, -0.8));
+
+                for dry in [(0.3, -0.4), (0.3, -0.4), (-0.5, 0.9), (-0.0_f64, 0.0_f64)] {
+                    let out =
+                        apply_harmonic_stereo(&mut processor, dry.0, dry.1, &disabled, 4.0, 2.0);
+                    assert_eq!(
+                        (out.0.to_bits(), out.1.to_bits()),
+                        (dry.0.to_bits(), dry.1.to_bits())
+                    );
+                }
+
+                let mut fresh = HarmonicProcessor::new(48_000.0);
+                let out = apply_harmonic_stereo(&mut processor, 0.6, -0.9, &enabled, 4.0, 2.0);
+                let fresh_out = apply_harmonic_stereo(&mut fresh, 0.6, -0.9, &enabled, 4.0, 2.0);
+                assert_eq!(out, fresh_out);
+            }
+        }
+    }
+
+    #[test]
+    fn harmonic_residual_stays_bounded_after_fifty_db_expansion() {
+        let (combined_factor, intensity, _) = compute_harmonic_modulation(50.0, 50.0);
+        let input = 0.25 * 10.0_f64.powf(50.0 / 20.0);
+        for harmonic_type in [0, 1] {
+            let mut processor = HarmonicProcessor::new(48_000.0);
+            let params = params(harmonic_type);
+            for sample in [input, input, -input, input, -input, 0.0] {
+                let (left, right) = apply_harmonic_stereo(
+                    &mut processor,
+                    sample,
+                    -sample,
+                    &params,
+                    combined_factor,
+                    intensity,
+                );
+                assert!((left - sample).abs() < 3.0);
+                assert!((right + sample).abs() < 3.0);
+            }
+        }
+    }
+
+    #[test]
+    fn oversamples_nonlinear_residual_and_preserves_clean_center_sample() {
+        let input = 0.8;
+        let previous = 0.1;
+        for (harmonic_type, coeffs) in [(0, TUBE_COEFFS), (1, TRANSFORMER_COEFFS)] {
+            let mut processor = HarmonicProcessor::new(48_000.0);
+            processor.prev[0] = previous;
+            let params = HarmonicParams {
+                mix: 0.5,
+                ..params(harmonic_type)
+            };
+            let residual = [0.275_f64, 0.625].map(|x| {
+                coeffs.x2 * x.powi(2)
+                    + coeffs.x3 * x.powi(3)
+                    + coeffs.x4 * x.powi(4)
+                    + coeffs.x5 * x.powi(5)
+            });
+            let expected = input + params.mix * (residual[0] + residual[1]) * 0.5;
+            let out = apply_harmonic_processing(&mut processor, 0, input, &params, 1.0, 1.0);
+            assert!((out - expected).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn dc_blocker_removes_only_steady_state_harmonic_residual() {
+        let mut processor = HarmonicProcessor::new(48_000.0);
+        let params = params(0);
+        let input = 0.6;
+        let mut output = input;
+        for _ in 0..24_000 {
+            output = apply_harmonic_processing(&mut processor, 0, input, &params, 4.0, 2.0);
+        }
+        assert!((output - input).abs() < 1e-10);
     }
 }

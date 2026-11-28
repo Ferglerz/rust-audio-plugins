@@ -15,6 +15,7 @@ cargo check -p flattery
 cargo check -p tape_stop
 cargo check -p composure
 cargo check -p chordboard
+cargo check -p stage73
 cargo check -p openwurli-ui
 cargo check -p automixer
 cargo check -p dereverb
@@ -30,6 +31,7 @@ cargo test -p flattery --quiet
 cargo test -p tape_stop --quiet
 cargo test -p composure --quiet
 cargo test -p chordboard --quiet
+cargo test -p stage73 --quiet
 cargo test -p openwurli-ui --quiet
 cargo test -p automixer --quiet
 if [ "$(uname -s)" = "Darwin" ] || [ -n "${ORT_DYLIB_PATH:-}" ]; then

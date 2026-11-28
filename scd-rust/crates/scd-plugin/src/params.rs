@@ -26,6 +26,7 @@ fn db_param(name: impl Into<String>, def_db: f32, min_db: f32, max_db: f32) -> F
             factor: FloatRange::gain_skew_factor(min_db, max_db),
         },
     )
+    .with_smoother(SmoothingStyle::Linear(10.0))
     .with_unit(" dB")
     .with_value_to_string(formatters::v2s_f32_gain_to_db(1))
     .with_string_to_value(formatters::s2v_f32_gain_to_db())
@@ -276,6 +277,26 @@ impl ChannelStripParams {
             self.gain.value() * self.send_for(mic).value()
         }
     }
+
+    pub(crate) fn mix_is_smoothing(&self) -> bool {
+        self.gain.smoothed.is_smoothing()
+            || MicChannel::ALL
+                .iter()
+                .any(|&mic| self.send_for(mic).smoothed.is_smoothing())
+    }
+
+    pub(crate) fn next_mix_gains(&self, piece: KitPieceId) -> [f32; MicChannel::COUNT] {
+        // Every send shares this strip gain at the same sample.
+        let gain = self.gain.smoothed.next();
+        MicChannel::ALL.map(|mic| {
+            let send = self.send_for(mic).smoothed.next();
+            if piece.omits_mic(mic) {
+                0.0
+            } else {
+                gain * send
+            }
+        })
+    }
 }
 
 #[derive(Params)]
@@ -425,6 +446,41 @@ impl ScdParams {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strip_gain_ramps_once_per_frame_across_mic_sends_and_blocks() {
+        fn render(blocks: &[usize]) -> Vec<[f32; MicChannel::COUNT]> {
+            let strip = ChannelStripParams::new("Crash", 0.0, 0.0);
+            for mic in MicChannel::ALL {
+                let send = strip.send_for(mic);
+                send.smoothed.reset(send.value());
+            }
+            strip.gain.smoothed.reset(0.0);
+            strip.gain.smoothed.set_target(1_000.0, 1.0);
+            let mut gains = Vec::new();
+            for &len in blocks {
+                let moving = strip.mix_is_smoothing();
+                for _ in 0..len {
+                    gains.push(if moving {
+                        strip.next_mix_gains(KitPieceId::LCrash)
+                    } else {
+                        MicChannel::ALL.map(|mic| strip.mix_gain(KitPieceId::LCrash, mic))
+                    });
+                }
+            }
+            gains
+        }
+        let rows = render(&[12]);
+        assert_eq!(rows, render(&[3, 4, 3, 2]));
+        for (frame, row) in rows.iter().enumerate() {
+            assert_eq!(row[MicChannel::Close as usize], 0.0);
+            let expected = ((frame + 1) as f32 * 0.1).min(1.0);
+            for mic in MicChannel::ALL.into_iter().skip(1) {
+                let send = util::db_to_gain(default_send_db(mic));
+                assert!((row[mic as usize] - expected * send).abs() < 1.0e-6);
+            }
+        }
+    }
 
     #[test]
     fn editor_state_round_trip_keeps_continuous_scale() {

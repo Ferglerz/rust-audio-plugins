@@ -107,6 +107,7 @@ impl Plugin for Damian {
             if frame.len() == 1 {
                 x[1] = x[0];
             }
+            let pse_depth = self.params.pse_depth.smoothed.next() as f64;
             let settings = dsp::CompSettings {
                 threshold: self.params.threshold.smoothed.next() as f64,
                 ratio: self.params.comp_ratio.smoothed.next() as f64,
@@ -119,7 +120,7 @@ impl Plugin for Damian {
                 gate: self.params.gate.smoothed.next() as f64,
                 pse: dsp::PseSettings {
                     depth: if self.params.pse_on.value() {
-                        self.params.pse_depth.smoothed.next() as f64
+                        pse_depth
                     } else {
                         0.0
                     },

@@ -1,0 +1,19 @@
+[package]
+name = "cp80"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Physical Yamaha CP-80 electric grand piano"
+
+[lib]
+crate-type = ["lib"]
+
+[dependencies]
+pleasant-dsp = { path = "../pleasant-dsp", features = ["struck-string"] }
+wide = "0.7"
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+nih_plug_vizia = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+pleasant-ui = { path = "../pleasant-ui" }
+
+[dev-dependencies]
+hound = "3.5"

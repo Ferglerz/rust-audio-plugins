@@ -9,6 +9,7 @@ impl TapeStopView {
             return "Hover a control for help · Drag to adjust · Shift for fine adjustment";
         };
         for (rect, text) in [
+            (position_cc_slot(), "Drag or type a CC (11 for expression). Move it to play the curve. Zero releases to live. Type Off to disable."),
             (midi_slot(), "Click the MIDI label to switch CC / Note; drag its number or click the value to type."),
             (axis_slot(0), "Crossfade: smooth the transition between live and slowed audio."),
             (axis_slot(1), "Stereo divergence: offset the left and right tape curves."),

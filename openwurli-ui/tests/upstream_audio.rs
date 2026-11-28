@@ -1,4 +1,23 @@
-use openwurli_dsp::{CircuitMode, WurliEngine};
+#[cfg(feature = "heavy-reference")]
+use openwurli_dsp::CircuitMode;
+use openwurli_dsp::WurliEngine;
+#[cfg(not(feature = "heavy-reference"))]
+#[derive(Clone, Copy, Debug)]
+enum CircuitMode {
+    Fast,
+}
+
+fn reference_engine(rate: f64, mode: CircuitMode) -> WurliEngine {
+    #[cfg(feature = "heavy-reference")]
+    {
+        WurliEngine::new_with_circuit_mode(rate, mode)
+    }
+    #[cfg(not(feature = "heavy-reference"))]
+    {
+        let CircuitMode::Fast = mode;
+        WurliEngine::new(rate)
+    }
+}
 
 fn circuit_test(test: impl FnOnce() + Send + 'static) {
     std::thread::Builder::new()
@@ -10,9 +29,9 @@ fn circuit_test(test: impl FnOnce() + Send + 'static) {
 }
 
 #[test]
-fn neutral_controls_match_upstream_v091_in_both_circuits() {
+fn neutral_controls_match_upstream_v091() {
     circuit_test(|| {
-        let cases: [(CircuitMode, u32, &[u8]); 6] = [
+        let cases: &[(CircuitMode, u32, &[u8])] = &[
             (
                 CircuitMode::Fast,
                 44100,
@@ -28,24 +47,27 @@ fn neutral_controls_match_upstream_v091_in_both_circuits() {
                 96000,
                 include_bytes!("fixtures/upstream-0.9.1/fast-96000.f32le"),
             ),
+            #[cfg(feature = "heavy-reference")]
             (
                 CircuitMode::Heavy,
                 44100,
                 include_bytes!("fixtures/upstream-0.9.1/heavy-44100.f32le"),
             ),
+            #[cfg(feature = "heavy-reference")]
             (
                 CircuitMode::Heavy,
                 48000,
                 include_bytes!("fixtures/upstream-0.9.1/heavy-48000.f32le"),
             ),
+            #[cfg(feature = "heavy-reference")]
             (
                 CircuitMode::Heavy,
                 96000,
                 include_bytes!("fixtures/upstream-0.9.1/heavy-96000.f32le"),
             ),
         ];
-        for (mode, rate, bytes) in cases {
-            let mut engine = WurliEngine::new_with_circuit_mode(rate as f64, mode);
+        for &(mode, rate, bytes) in cases {
+            let mut engine = reference_engine(rate as f64, mode);
             engine.set_mlp_enabled(true);
             engine.set_speaker_character(0.65);
             engine.set_tremolo_depth(0.7);
@@ -86,6 +108,7 @@ fn neutral_controls_match_upstream_v091_in_both_circuits() {
     });
 }
 
+#[cfg(feature = "heavy-reference")]
 #[test]
 fn live_circuit_switch_preserves_held_notes_at_large_host_block_sizes() {
     circuit_test(|| {
@@ -111,9 +134,13 @@ fn live_circuit_switch_preserves_held_notes_at_large_host_block_sizes() {
 #[test]
 fn character_controls_reach_the_v091_audio_path() {
     circuit_test(|| {
-        for mode in [CircuitMode::Fast, CircuitMode::Heavy] {
+        for mode in [
+            CircuitMode::Fast,
+            #[cfg(feature = "heavy-reference")]
+            CircuitMode::Heavy,
+        ] {
             let render = |control| {
-                let mut engine = WurliEngine::new_with_circuit_mode(44100.0, mode);
+                let mut engine = reference_engine(44100.0, mode);
                 engine.set_mlp_enabled(true);
                 match control {
                     1 => engine.set_hammer_hardness(2.0),

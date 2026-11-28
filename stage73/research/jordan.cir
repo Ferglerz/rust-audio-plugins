@@ -1,0 +1,58 @@
+Jordan 1966-68 fig 11-17 / dry path with original pickup grouping.
+.subckt pickup hi lo params: amplitude=0
+Vemf source lo dc 0 ac {amplitude}
+Rcoil source coil 180
+Lcoil coil hi 75m
+.ends
+@HARP@
+Vcc supply 0 13.5
+Rin harp fet 33k
+* Q7 is open for zero tremolo depth.
+Rin2 fet cinput 10k
+Cin cinput b1 .15u
+Q2 o1 b1 e2 N
+Q3 o1 e2 0 N
+Rbase1 b1 0 220k
+Rf1 o1 b1 1meg
+Rc1 supply o1 12k
+Rbi o1 bl 6.8k
+Rb1 bl bw @BLEFT@
+Rb2 bw br @BRIGHT@
+Cb1 bl bw .1u
+Cb2 bw br .1u
+Rbf br o2 6.8k
+Rsum bw sum 22k
+Rti o1 tl 6.8k
+Rt1 tl tw @TLEFT@
+Rt2 tw tr @TRIGHT@
+Rtf tr o2 6.8k
+Ct tw sum 5n
+Ccouple sum b4 47n
+Q4 o2 b4 e4 N
+Q5 o2 e4 0 N
+Rbase4 b4 0 220k
+Rf4 o2 b4 1meg
+Rc4 supply o2 12k
+Rlp1 o2 lp 6.8k
+Rlp2 lp base6 68k
+Clp1 lp follower 5n
+Clp2 base6 0 470p
+Q6 supply base6 follower N
+Re6 follower 0 6.8k
+Rvol1 follower jack @UPPER@
+Rvol2 jack foot @LOWER@
+Rloud follower loud 100k
+Cloud loud foot .01u
+Rfoot foot acfoot 100
+Cfoot acfoot 0 1u
+Ccab jack load 1u
+Rcab load 0 10k
+* Generic silicon devices. Nominal beta is an assumption for these vintage parts.
+.model N NPN(IS=1e-14 BF=200)
+.control
+set wr_singlescale
+ac dec 64 40 10k
+wrdata sweep.txt vdb(jack)
+quit
+.endc
+.end

@@ -1,8 +1,10 @@
 use crate::{BandSettings, EqShape};
 #[cfg(feature = "dynamic")]
 use pleasant_dsp::{filters::BiquadKind, units::linear_to_db_with_floor};
-use pleasant_dsp::filters::{BiquadCoefficients, TransposedDirectForm2};
+use pleasant_dsp::filters::{BiquadCoefficients, CoefficientRamp, TransposedDirectForm2};
 use std::f64::consts::PI;
+
+const DESIGN_INTERVAL: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BandCoefficients {
@@ -111,6 +113,8 @@ pub struct BandProcessor {
     filters: [Cascade; 2],
     detectors: [TransposedDirectForm2; 2],
     coefficients: BandCoefficients,
+    coefficient_ramps: [CoefficientRamp; 4],
+    ramping: bool,
     #[cfg(feature = "dynamic")]
     detector_coefficients: BiquadCoefficients,
     envelope: f64,
@@ -131,10 +135,13 @@ pub struct BandProcessor {
 impl BandProcessor {
     pub fn new(mut settings: BandSettings, sample_rate: f64) -> Self {
         settings.sanitize();
+        let coefficients = BandCoefficients::prepare(&settings, sample_rate);
         Self {
             filters: [Cascade::default(); 2],
             detectors: [TransposedDirectForm2::default(); 2],
-            coefficients: BandCoefficients::prepare(&settings, sample_rate),
+            coefficients,
+            coefficient_ramps: coefficients.stages.map(CoefficientRamp::new),
+            ramping: false,
             #[cfg(feature = "dynamic")]
             detector_coefficients: BiquadCoefficients::design(
                 BiquadKind::BandPass,
@@ -193,6 +200,10 @@ impl BandProcessor {
             self.current_frequency_hz = previous.current_frequency_hz;
             self.current_q = previous.current_q;
             self.coefficients = previous.coefficients;
+            self.coefficient_ramps = previous.coefficient_ramps;
+            self.ramping = previous.ramping;
+            self.coefficient_phase = previous.coefficient_phase;
+            self.coefficient_sample_rate = previous.coefficient_sample_rate;
             // A new processor may use a different sample rate or settings.
             self.coefficients_dirty = true;
         }
@@ -250,7 +261,8 @@ impl BandProcessor {
             self.uncapped_reduction_db = 0.0;
         }
 
-        if self.coefficient_phase == 0 {
+        let rate_changed = self.coefficient_sample_rate != sample_rate;
+        if self.coefficient_phase == 0 || rate_changed {
             #[cfg(feature = "dynamic")]
             let time_varying = self.settings.dynamic && self.settings.shape.has_gain();
             #[cfg(not(feature = "dynamic"))]
@@ -262,10 +274,10 @@ impl BandProcessor {
                 && (self.current_q - self.settings.q).abs() <= 1.0e-9;
             if time_varying
                 || self.coefficients_dirty
-                || self.coefficient_sample_rate != sample_rate
+                || rate_changed
                 || !settled
             {
-                let smoothing = (-32.0 / (sample_rate * 0.015)).exp();
+                let smoothing = (-(DESIGN_INTERVAL as f64) / (sample_rate * 0.015)).exp();
                 self.current_gain_db =
                     smoothing * self.current_gain_db + (1.0 - smoothing) * target_gain_db;
                 self.current_frequency_hz = smoothing * self.current_frequency_hz
@@ -284,12 +296,34 @@ impl BandProcessor {
                 smoothed.frequency_hz = self.current_frequency_hz;
                 smoothed.gain_db = self.current_gain_db;
                 smoothed.q = self.current_q;
-                self.coefficients = BandCoefficients::prepare(&smoothed, sample_rate);
+                let design = BandCoefficients::prepare(&smoothed, sample_rate);
+                let steps = if rate_changed { 0 } else { DESIGN_INTERVAL };
+                self.ramping = false;
+                for (ramp, target) in self.coefficient_ramps[..design.length]
+                    .iter_mut()
+                    .zip(design.stages)
+                {
+                    ramp.set_target(target, steps);
+                    self.ramping |= ramp.is_smoothing();
+                }
+                if rate_changed {
+                    self.coefficients = design;
+                }
                 self.coefficients_dirty = false;
                 self.coefficient_sample_rate = sample_rate;
             }
         }
-        self.coefficient_phase = (self.coefficient_phase + 1) % 32;
+        self.coefficient_phase = (self.coefficient_phase + 1) % DESIGN_INTERVAL;
+        if self.ramping {
+            self.ramping = false;
+            for (current, ramp) in self.coefficients.stages[..self.coefficients.length]
+                .iter_mut()
+                .zip(&mut self.coefficient_ramps)
+            {
+                *current = ramp.next();
+                self.ramping |= ramp.is_smoothing();
+            }
+        }
         for (channel, sample) in input.iter_mut().enumerate() {
             *sample = self.filters[channel].process(*sample, self.coefficients);
         }
@@ -429,6 +463,28 @@ mod tests {
         let actual = current.coefficients.response_db(1_200.0, 96_000.0);
         assert!((actual - expected.response_db(1_200.0, 96_000.0)).abs() < 1.0e-9);
         assert!(!current.coefficients_dirty);
+    }
+
+    #[test]
+    fn edited_bands_interpolate_between_filter_designs() {
+        let rate = 48_000.0;
+        let previous = BandProcessor::new(BandSettings::default(), rate);
+        let mut next = BandProcessor::new(
+            BandSettings {
+                gain_db: 12.0,
+                ..previous.settings().clone()
+            },
+            rate,
+        );
+        next.inherit_state_from(&previous);
+        let mut last = next.coefficients.stages[0].b[0];
+        for _ in 0..DESIGN_INTERVAL {
+            next.process([0.0; 2], rate);
+            let current = next.coefficients.stages[0].b[0];
+            assert!(current > last);
+            last = current;
+        }
+        assert!(!next.ramping);
     }
 
     #[test]

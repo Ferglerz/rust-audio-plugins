@@ -1,0 +1,103 @@
+Hohner Pianet/Clavinet Duo: transformer, two branches, stereo recording and active mixed jack
+* Terminal numbers follow the Duo sheet: TA1 (4,6), TA2 (5,3).
+* Red is permanently tied to pin 5. The four-pole keyboard selector shorts
+* a sub-bank; its active EMF and number of turns are the source parameters.
+.param DUAL=0 B_THROW=0 CBANK=60 PBANK=60
+.param MC=0 MP=0 CV=1 PV=1
+.param EC=1 EP=0
+Vcentre pin4 centre DC 0 AC {EC}
+Rcentre centre pin6 {200*CBANK/60}
+Vbridge red bridge DC 0 AC {0.37*EC}
+Rbridge bridge pin3 {200*CBANK/60}
+* C/D rocker. One unused throw of the ground contact is strapped to common.
+Rcd1 link pin3 {DUAL ? 1e15 : 1m}
+Rcd2 link pin4 {DUAL ? 1m : 1e15}
+Rcd3 pin3 0 {DUAL ? 1m : 1e15}
+* A/B rocker. Ground and red are the two moving contacts.
+Rab1 0 pin6 {B_THROW ? 1e15 : 1m}
+Rab2 0 link {B_THROW ? 1m : 1e15}
+Rab3 red pin4 {B_THROW ? 1e15 : 1m}
+Rab4 red pin6 {B_THROW ? 1m : 1e15}
+.param SOFT=1 MEDIUM=1 TREBLE=1 BRILLIANT=1
+Rprimary red primary 70
+Lprimary primary 0 6
+Lsecondary secondary 0 1350
+Ktr Lprimary Lsecondary 0.99999999999
+Rsecondary secondary blue 10k
+
+Vbattery battery 0 9
+* Closed power switch. The 8.2 V knee and transistor parameters are nominal.
+Rfeed battery ref 1.8k
+Dref 0 ref ZPD82
+.model ZPD82 D(IS=10p BV=8.2 IBV=5m RS=5 N=1.5)
+Qpass battery ref rail BC238
+.model BC238 NPN(IS=10f BF=200 VAF=100)
+Crail rail 0 100u
+Cin blue base1 15n
+Rfb base1 collector1 1meg
+Cfb base1 collector1 8.2p
+Rcollector1 rail collector1 12k
+Q1 collector1 base1 0 BC550C
+.model BC550C NPN(IS=10f BF=420 VAF=100)
+
+Cinter collector1 tones 220n
+Rsoft tones lo 30k
+Csoft tones lo 100n
+Rmedium lo mid 10k
+Cmedium lo mid 15n
+Ltreble mid treblecoil 2
+Rtreblecoil treblecoil hi 43
+Ctreble mid hi 4.7n
+Lbrilliant hi brilliantcoil 0.6
+Rbrilliantcoil brilliantcoil 0 20
+* Pressing a tone tab opens its shunt contact.
+Rtab1 tones lo {SOFT ? 1e15 : 1m}
+Rtab2 lo mid {MEDIUM ? 1e15 : 1m}
+Rtab3 mid hi {TREBLE ? 1e15 : 1m}
+Rtab4 hi 0 {BRILLIANT ? 1e15 : 1m}
+
+Ctobase tones base2 15n
+Rupper rail base2 620k
+Rlower base2 0 100k
+Q2 collector2 base2 emitter BC550C
+Remitter emitter bypass 2.2k
+Rdegenerate bypass 0 1k
+Cbypass bypass 0 4.7u
+Rcollector2 rail collector2 10k
+Cout collector2 cpot 220n
+* The mechanical preset/foot contacts short a pot's top terminal when muted.
+RcutC cpot 0 {MC ? 1u : 1e15}
+.param CW=(pow(81,CV)-1)/80 PW=(pow(81,PV)-1)/80
+Rcupper cpot cjack {max(1u,100k*(1-CW))}
+Rclower cjack 0 {max(1u,100k*CW)}
+Rcload cjack 0 1meg
+
+* The reed bank feeds the transistor directly on this instrument.
+Vreed reed 0 DC 0 AC {EP}
+Rcoil reed winding {18*PBANK}
+Lcoil winding reedbank {0.0011*PBANK}
+CinP reedbank pbase 0.1u
+Rpb pbase 0 470k
+Rpf pbase pcollector 1meg
+Qp pcollector pbase pemitter BC550C
+Rpe pemitter 0 820
+Rpc pcollector rail 20k
+Cpc pcollector 0 10n
+CoutP pcollector ppot 0.1u
+RcutP ppot 0 {MP ? 1u : 1e15}
+Rpupper ppot pjack {max(1u,100k*(1-PW))}
+Rplower pjack 0 {max(1u,100k*PW)}
+Rpload pjack 0 1meg
+
+RmixC cjack sum 470k
+RmixP pjack sum 470k
+Cmix sum mbase 0.1u
+Rmb mbase 0 620k
+Rmf mbase mcollector 1meg
+Qm mcollector mbase memitter BC550C
+Rme memitter 0 1.5k
+Rmc mcollector rail 20k
+Cmixout mcollector mix 0.1u
+Rmixload mix 0 1meg
+.temp 27
+.end

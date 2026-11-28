@@ -76,6 +76,8 @@ impl BiquadFilter {
 
 /// Filter type: 0 = highpass, 1 = lowpass (matches JSFX `calc_biquad`).
 pub fn calc_biquad(filter_type: u8, freq: f64, srate: f64) -> BiquadCoeffs {
+    // Leave room below Nyquist so the poles stay inside the unit circle.
+    let freq = freq.min(0.49 * srate);
     let w = 2.0 * std::f64::consts::PI * freq / srate;
     let cosw = w.cos();
     let alpha = w.sin() / std::f64::consts::SQRT_2;
@@ -212,6 +214,26 @@ mod tests {
         let c = calc_biquad(0, 1000.0, 48000.0);
         assert!(c.b0 > 0.0);
         assert!(c.a2.abs() < 1.0);
+    }
+
+    #[test]
+    fn legacy_cutoffs_above_nyquist_stay_stable() {
+        for filter_type in [0, 1] {
+            for srate in [8000.0, 16000.0, 22050.0, 40000.0] {
+                let coeffs = calc_biquad(filter_type, 20000.0, srate);
+                assert!(coeffs.a2.abs() < 1.0);
+                assert!(1.0 + coeffs.a1 + coeffs.a2 > 0.0);
+                assert!(1.0 - coeffs.a1 + coeffs.a2 > 0.0);
+
+                let mut filter = BiquadFilter::new();
+                filter.set_coeffs(coeffs);
+                assert!(filter.process(1.0).is_finite());
+                for _ in 0..1024 {
+                    assert!(filter.process(0.0).abs() < 1.0);
+                }
+                assert!(filter.process(0.0).abs() < 1e-12);
+            }
+        }
     }
 
     #[test]

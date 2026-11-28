@@ -4,6 +4,7 @@ use super::trajectory::{
     lag_samples, minimum_return_len, return_coeff, return_speed_at, LiveReturn, MAX_RETURN_SPEED,
     SEMI_DROP,
 };
+use nih_plug::prelude::{Smoother, SmoothingStyle};
 
 /// Shortest crossfade when pre/post channels do not match.
 const XFADE_FLOOR_MS: f32 = 5.0;
@@ -163,6 +164,14 @@ pub struct TapeStopEngine {
     last_cc_msb: Option<u8>,
     last_cc_lsb: Option<u8>,
     configured_cc: Option<u8>,
+    // A position controller owns the head while displaced. Smooth each channel
+    // from its actual speed so it can take over a divergent brake or a return.
+    position: Option<f32>,
+    position_speeds: [Smoother<f32>; 2],
+    position_speed_target: Option<f32>,
+    position_curve: f32,
+    jumped_to_live: bool,
+    cc_coeff: f64,
     match_live_l: [f32; 1024],
     match_live_r: [f32; 1024],
     match_stopped_l: [f32; 1024],
@@ -215,6 +224,12 @@ impl TapeStopEngine {
             last_cc_msb: None,
             last_cc_lsb: None,
             configured_cc: None,
+            position: None,
+            position_speeds: std::array::from_fn(|_| Smoother::new(SmoothingStyle::Linear(5.0))),
+            position_speed_target: None,
+            position_curve: 1.0,
+            jumped_to_live: false,
+            cc_coeff: pleasant_dsp::envelope::coefficient(0.0045, 1.0 / sample_rate as f64),
             match_live_l: [0.0; 1024],
             match_live_r: [0.0; 1024],
             match_stopped_l: [0.0; 1024],
@@ -226,6 +241,7 @@ impl TapeStopEngine {
         self.sample_rate = sample_rate.max(1000.0);
         self.attack_coeff = 1.0 - (-1.0 / (0.001 * self.sample_rate)).exp();
         self.release_coeff = 1.0 - (-1.0 / (0.050 * self.sample_rate)).exp();
+        self.cc_coeff = pleasant_dsp::envelope::coefficient(0.0045, 1.0 / self.sample_rate as f64);
         self.reset();
     }
 
@@ -270,6 +286,36 @@ impl TapeStopEngine {
         self.last_cc_msb = None;
         self.last_cc_lsb = None;
         self.configured_cc = None;
+        self.position = None;
+        self.jumped_to_live = false;
+    }
+
+    pub(crate) fn take_live_jump(&mut self) -> bool {
+        std::mem::take(&mut self.jumped_to_live)
+    }
+
+    pub(crate) fn position_active(&self) -> bool {
+        self.position.is_some()
+    }
+
+    pub(crate) fn set_curve_position(&mut self, position: f32) {
+        if self.position.is_none() {
+            if position == 0.0 {
+                return;
+            }
+            if !self.is_braking && !self.is_returning && !self.is_crossfading {
+                self.play_pos_l = self.ring_buffer.live_head() as f64;
+                self.play_pos_r = self.play_pos_l;
+            }
+            self.position_speeds[0].reset(self.speed_left());
+            self.position_speeds[1].reset(self.speed_right());
+            self.position_speed_target = None;
+        }
+        self.position = Some(position);
+        self.is_braking = true;
+        self.is_crossfading = false;
+        self.is_returning = false;
+        self.pending_release = false;
     }
 
     // --- MIDI Trigger Handling ---
@@ -316,6 +362,9 @@ impl TapeStopEngine {
     }
 
     fn evaluate_trigger_state(&mut self) {
+        if self.position.is_some() {
+            return;
+        }
         let should_brake = self.active_note_count > 0 || self.manual_trigger;
 
         if should_brake && !self.is_braking {
@@ -326,6 +375,7 @@ impl TapeStopEngine {
             self.is_returning = false;
             self.pending_release = false;
             self.lockout_samples = 0.06 * self.sample_rate;
+            self.jumped_to_live = true;
             // Align playhead to current live write head
             let head = self.ring_buffer.live_head() as f64;
             self.play_pos_l = head;
@@ -362,9 +412,10 @@ impl TapeStopEngine {
     }
 
     fn update_14bit_cc(&mut self) {
-        if let (Some(msb), Some(lsb)) = (self.last_cc_msb, self.last_cc_lsb) {
-            let combined = ((msb as u32) << 7) | (lsb as u32);
-            let normalized = combined as f64 / 16383.0; // 0.0 = stopped, 1.0 = normal
+        if let Some(msb) = self.last_cc_msb {
+            let normalized = self.last_cc_lsb.map_or(msb as f64 / 127.0, |lsb| {
+                (((msb as u32) << 7) | lsb as u32) as f64 / 16383.0
+            });
             self.target_cc_speed = (1.0 - normalized).clamp(0.0, 1.0);
             self.cc_override_active = true;
         }
@@ -429,8 +480,54 @@ impl TapeStopEngine {
 
         // 3. Update continuous CC speed smoothing if active
         if self.cc_override_active {
-            let coeff = 0.005; // one-pole smoothing
-            self.smoothed_cc_speed += coeff * (self.target_cc_speed - self.smoothed_cc_speed);
+            self.smoothed_cc_speed = pleasant_dsp::envelope::smooth(
+                self.smoothed_cc_speed,
+                self.target_cc_speed,
+                self.cc_coeff,
+                self.cc_coeff,
+            );
+        }
+
+        if let Some(position) = self.position {
+            self.position_curve = prepared.drop_curve;
+            let speed = 1.0 - s_curve(position, prepared.drop_curve);
+            if self.position_speed_target != Some(speed) {
+                for ramp in &self.position_speeds {
+                    ramp.set_target(self.sample_rate, speed);
+                }
+                self.position_speed_target = Some(speed);
+            }
+            self.speed_l = self.position_speeds[0].next() as f64;
+            self.speed_r = self.position_speeds[1].next() as f64;
+            // A takeover late in an overspeed return can run out of recorded audio.
+            if self.speed_l > 1.0 || self.speed_r > 1.0 {
+                let head = (self.ring_buffer.live_head() + BUFFER_SIZE - 1) % BUFFER_SIZE;
+                self.speed_l = self
+                    .speed_l
+                    .min(1.0 + lag_samples(head, self.play_pos_l, BUFFER_SIZE));
+                self.speed_r = self
+                    .speed_r
+                    .min(1.0 + lag_samples(head, self.play_pos_r, BUFFER_SIZE));
+            }
+            self.play_pos_l += self.speed_l;
+            self.play_pos_r += self.speed_r;
+            if position == 0.0 && !self.position_speeds[0].is_smoothing() {
+                self.position = None;
+                self.brake_pos_samples = 0.0;
+                self.lockout_samples = 0.06 * self.sample_rate;
+                if self.active_note_count == 0 && !self.manual_trigger {
+                    // At unity pitch, join the live signal without a pitch overshoot.
+                    self.is_braking = false;
+                    self.is_crossfading = true;
+                    self.xfade_pos_samples = 0.0;
+                    self.xfade_len_samples =
+                        (prepared.xfade_ms * 0.001 * self.sample_rate).max(1.0) as f64;
+                }
+            }
+            return (
+                self.ring_buffer.read_left(self.play_pos_l),
+                self.ring_buffer.read_right(self.play_pos_r),
+            );
         }
 
         // 4. Auto-Restart Transient Detection
@@ -674,6 +771,12 @@ impl TapeStopEngine {
 
     #[inline(always)]
     pub fn brake_progress(&self) -> f32 {
+        if self.position.is_some() {
+            return inv_s_curve(
+                1.0 - ((self.speed_left() + self.speed_right()) * 0.5),
+                self.position_curve,
+            );
+        }
         if self.max_stop_samples > 0.0 {
             (self.brake_pos_samples / self.max_stop_samples).clamp(0.0, 1.0) as f32
         } else {
@@ -683,6 +786,9 @@ impl TapeStopEngine {
 
     #[inline(always)]
     pub fn brake_progress_l(&self) -> f32 {
+        if self.position.is_some() {
+            return inv_s_curve(1.0 - self.speed_left(), self.position_curve);
+        }
         if self.stop_samples_l > 0.0 {
             (self.brake_pos_samples / self.stop_samples_l).clamp(0.0, 1.0) as f32
         } else {
@@ -692,6 +798,9 @@ impl TapeStopEngine {
 
     #[inline(always)]
     pub fn brake_progress_r(&self) -> f32 {
+        if self.position.is_some() {
+            return inv_s_curve(1.0 - self.speed_right(), self.position_curve);
+        }
         if self.stop_samples_r > 0.0 {
             (self.brake_pos_samples / self.stop_samples_r).clamp(0.0, 1.0) as f32
         } else {

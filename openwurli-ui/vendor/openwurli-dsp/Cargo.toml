@@ -34,6 +34,7 @@ erasing_op = "allow"
 unnecessary_cast = "allow"
 
 [dependencies]
+pleasant-dsp = { path = "../../../pleasant-dsp" }
 wide = "=0.7.33"
 melange-primitives = { git = "https://github.com/hal0zer0/melange", rev = "7ecb36c" }
 

@@ -1,0 +1,84 @@
+RCA Storytone audio path: Radio-Craft Feb 1940 fig. 1 / fig. 3
+* Voltages are AC deviation about printed socket DC points. Rail ripple and
+* the optional phono/radio source are absent. Two 9-ohm pickup inputs.
+.param OPT=.7 MAN=.7 SW=0 AMP=.0001
+Va a 0 dc 0 ac 1 sin(0 {AMP} 400)
+Vb b 0 0
+Rlead1 a la 8.36
+Lcoil1 la p1 12m
+Rlead2 b lb 8.49
+Lcoil2 lb p2 12m
+* Each ideal transformer uses a controlled voltage and reflected current.
+Epri1 pp1 0 core 0 0.02857142857142857
+Epri2 pp2 0 core 0 0.02857142857142857
+Rwire1 p1 pp1 0.000000816326530612245
+Rwire2 p2 pp2 0.000000816326530612245
+Freflect1 core 0 Epri1 -0.02857142857142857
+Freflect2 core 0 Epri2 -0.02857142857142857
+Lmag1 core 0 22
+Rsecondary core sec 670
+Csecondary sec 0 100p
+R1hi sec grid {max((1-OPT)*250000,.001)}
+R1lo grid 0 {max(OPT*250000,.001)}
+R2 cath 0 1250
+C1 cath 0 20u
+R7 an1 pre 220k
+R6 pre 0 56k
+C3 pre 0 .25u
+R5 screen 0 1.2MEG
+C2 screen 0 .1u
+G6J7 an1 cath grid cath .00122
+Gscreen an1 cath screen cath .000028
+Rscreen screen cath 160k
+Rpent an1 cath 800k
+C4 an1 acnode .25u
+R15 acnode manual_top 220k
+R16hi manual_top manual_w {max((1-MAN)*250000,.001)}
+R16lo manual_w 0 {max(MAN*250000,.001)}
+R17lo manual_w swell_w {max(SW*250000,.001)}
+R17hi swell_w acnode {max((1-SW)*250000,.001)}
+R8 swell_w gdrv 470k
+R9 gdrv 0 360k
+R13 gdrv ext 390k
+R11 ext jack 150k
+R12 ext tone_w 125k
+C6 tone_w 0 .0025u
+R10 kdrv 0 820
+C5 kdrv 0 20u
+G6C5 an2 kdrv gdrv kdrv .002
+R6C5 an2 kdrv 10k
+Rprimary2 an2 core2 2200
+Lmag2 core2 0 40
+Cstray2 core2 0 80p
+Eupper a2 bias core2 0 .85
+Elower b2 bias core2 0 -.85
+Fupper core2 0 Eupper -.85
+Flower core2 0 Elower .85
+Rcu2a a2 gtop 800
+Rcu2b b2 gbot 800
+R19 bias 0 100k
+C15 bias 0 16u
+R14 gbot rc14 270k
+C18 rc14 gtop .01u
+C7top gtop 0 300p
+C9bottom gbot 0 360p
+* Two 2A3s in parallel on each side. Relative current is evaluated from the
+* printed 300V / 40mA and an extrapolated data-sheet grid slope and anode knee.
+.func threehalf(x) {max(0,x)*sqrt(max(0,x))}
+.func ipair(vg,vp) {2*(.040*min(threehalf(1+(vg+vp/4.2)*.0046/.060),threehalf((300+vp)/30))-0.040)}
+Btop atop 0 I=ipair(v(gtop),v(atop))
+Bbottom abot 0 I=ipair(v(gbot),v(abot))
+R3a atop h1 63.5
+R3b abot h2 63.5
+Et3a h1 0 core3 0 4.79
+Et3b h2 0 core3 0 -4.79
+Ft3a core3 0 Et3a -4.79
+Ft3b core3 0 Et3b 4.79
+Lmag3 core3 0 .18
+Cstray3 core3 0 .40n
+Rsecondary3 core3 spk .6
+C11 atop abot .002u
+C12 abot 0 .005u
+Rspk spk 0 15
+Raux1 spk aux 3900
+Raux2 aux 0 220

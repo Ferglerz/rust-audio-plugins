@@ -18,6 +18,13 @@ const NO_INJECT: [[f64; gen_tremolo::NUM_INJECT]; gen_tremolo::OVERSAMPLING_FACT
 /// Datasheet range: rise ~2.5 ms, fall ~35 ms; power-law exponent ~0.7–0.9.
 const ATTACK_TAU: f64 = 0.0025;
 const RELEASE_TAU: f64 = 0.035;
+/// Voicing range around the nominal LG-1 cell. The oscillator runs at its circuit rate.
+pub const RESPONSE_MIN: f64 = 0.125;
+pub const RESPONSE_MAX: f64 = 8.0;
+
+pub fn release_ms(multiplier: f64) -> f64 {
+    RELEASE_TAU * 1000.0 * multiplier
+}
 const GAMMA: f64 = 0.9;
 /// CdS photoresistance range under the 200A's *actual* LED drive. The LED
 /// path is +15 V → R-18 (680 Ω) → LED → R-17 (4.7 kΩ trimmer) → the
@@ -240,11 +247,14 @@ impl Tremolo {
         }
     }
 
-    /// Scale the CdS cell's attack/release time constants without changing
-    /// the Twin-T oscillator. Unity retains the circuit's nominal response.
+    pub(crate) fn response_multiplier(&self) -> f64 {
+        self.response_multiplier
+    }
+
+    /// Scale the CdS cell's attack and release. Unity gives the nominal LG-1 timing.
     pub fn set_response_multiplier(&mut self, multiplier: f64) {
         let multiplier = if multiplier.is_finite() {
-            multiplier.clamp(0.5, 2.0)
+            multiplier.clamp(RESPONSE_MIN, RESPONSE_MAX)
         } else {
             1.0
         };

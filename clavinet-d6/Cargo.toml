@@ -1,0 +1,13 @@
+[package]
+name = "clavinet-d6"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+pleasant-dsp = { path = "../pleasant-dsp" }
+hound = "3.5"
+
+[[example]]
+name = "d6_panel_impulses"
+path = "research/electronics/impulses.rs"

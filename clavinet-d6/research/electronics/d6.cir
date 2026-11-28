@@ -1,0 +1,58 @@
+Hohner Clavinet D6 small-signal preamp, drawing 710314
+* Inputs are open circuit pickup EMFs. E1/E2 set amplitude and polarity.
+.param RBASE=1e15
+.param E1=1 E2=0 RC=200 RB=1e15
+.param SOFT=1 MEDIUM=1 TREBLE=1 BRILLIANT=1 VOL=1
+Vcentre centre 0 DC 0 AC {abs(E1)} {E1<0 ? 180 : 0}
+Vbridge bridge 0 DC 0 AC {abs(E2)} {E2<0 ? 180 : 0}
+Rcentre centre red {RC}
+Rbridge bridge red {RB}
+Rprimary red primary 70
+Lprimary primary 0 6
+Lsecondary secondary 0 1350
+Ktr Lprimary Lsecondary 0.99999999999
+Rsecondary secondary blue 10k
+
+Vbattery battery 0 9
+Cbattery battery 0 100u
+Cin blue base1 10n
+* The 100k base shunt on 710314 is absent on the documented BC550C board.
+Rin base1 0 {RBASE}
+Rfb base1 collector1 3.9meg
+Cfb base1 collector1 8.2p
+Rcollector1 battery collector1 51k
+Q1 collector1 base1 0 BC550C
+.model BC550C NPN(IS=10f BF=420 VAF=100)
+
+Cinter collector1 tones 220n
+Rsoft tones lo 30k
+Csoft tones lo 100n
+Rmedium lo mid 10k
+Cmedium lo mid 15n
+Ltreble mid treblecoil 2
+Rtreblecoil treblecoil hi 43
+Ctreble mid hi 4.7n
+Lbrilliant hi brilliantcoil 0.6
+Rbrilliantcoil brilliantcoil 0 20
+* Pressing a tone tab opens its shunt contact.
+Rtab1 tones lo {SOFT ? 1e15 : 1m}
+Rtab2 lo mid {MEDIUM ? 1e15 : 1m}
+Rtab3 mid hi {TREBLE ? 1e15 : 1m}
+Rtab4 hi 0 {BRILLIANT ? 1e15 : 1m}
+
+Rtobase tones coupled 30k
+Ctobase coupled base2 10n
+Rupper battery base2 120k
+Rlower base2 0 20k
+Q2 collector2 base2 emitter BC148B
+.model BC148B NPN(IS=10f BF=200 VAF=100)
+Remitter emitter bypass 820
+Rdegenerate bypass 0 1k
+Cbypass bypass 0 6.8u
+Rcollector2 battery collector2 10k
+Cout collector2 pot 220n
+Rpotupper pot jack {max(1u,100k*(1-VOL))}
+Rpotlower jack 0 {max(1u,100k*VOL)}
+Rjack jack 0 1meg
+.temp 27
+.end
